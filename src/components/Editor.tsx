@@ -1,9 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -37,7 +32,10 @@ export interface SelectionInfo {
 }
 
 const QuillEditor = forwardRef<EditorRef, EditorProps>(
-  ({ initialContent = '', isSuggesting, authorID, onUpdate, onSelectionChange, onEditorReady }, ref) => {
+  (
+    { initialContent = '', isSuggesting, authorID, onUpdate, onSelectionChange, onEditorReady },
+    ref,
+  ) => {
     const onUpdateRef = useRef(onUpdate);
     const onSelectionRef = useRef(onSelectionChange);
     const onReadyRef = useRef(onEditorReady);
@@ -100,7 +98,9 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       () => ({
         getMarkdown() {
           if (!editor) return '';
-          return ((editor.storage as unknown as Record<string, { getMarkdown: () => string }>)['markdown']).getMarkdown();
+          return (editor.storage as unknown as Record<string, { getMarkdown: () => string }>)[
+            'markdown'
+          ].getMarkdown();
         },
         setContent(md: string) {
           if (!editor) return;

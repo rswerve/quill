@@ -72,7 +72,11 @@ export default function CommentCard({
           title={comment.resolved ? 'Unresolve' : 'Resolve'}
           onClick={(e) => {
             e.stopPropagation();
-            comment.resolved ? onUnresolve(comment.id) : onResolve(comment.id);
+            if (comment.resolved) {
+              onUnresolve(comment.id);
+            } else {
+              onResolve(comment.id);
+            }
           }}
         >
           {comment.resolved ? '↺' : '✓'}
@@ -89,7 +93,12 @@ export default function CommentCard({
         </button>
       </div>
 
-      <div className="comment-anchor-text">"{comment.anchorText.slice(0, 60)}{comment.anchorText.length > 60 ? '…' : ''}"</div>
+      <div className="comment-anchor-text">
+        {'"'}
+        {comment.anchorText.slice(0, 60)}
+        {comment.anchorText.length > 60 ? '…' : ''}
+        {'"'}
+      </div>
 
       {comment.replies.map((reply) => (
         <div key={reply.id} className="comment-reply">
