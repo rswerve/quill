@@ -1,0 +1,11 @@
+npx lint-staged
+npx tsc --noEmit
+npx vitest run
+
+# cargo fmt --check does not require system libraries (no compilation)
+# cargo clippy and cargo test run in CI where GTK headers are available
+if git diff --cached --name-only | grep -q '^src-tauri/'; then
+  cd src-tauri
+  cargo fmt --check
+  cd ..
+fi

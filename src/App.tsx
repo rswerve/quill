@@ -20,7 +20,9 @@ export default function App() {
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-  const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(null);
+  const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
+    null,
+  );
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
@@ -29,14 +31,20 @@ export default function App() {
 
   const { filePath, isDirty, markDirty, openFile, saveFile, saveFileAs, newFile } =
     useFileManager();
-  const { comments, setComments, addComment, addReply, resolveComment, unresolveComment, deleteComment } =
-    useComments();
-  const { suggestions, setSuggestions } =
-    useSuggestions();
+  const {
+    comments,
+    setComments,
+    addComment,
+    addReply,
+    resolveComment,
+    unresolveComment,
+    deleteComment,
+  } = useComments();
+  const { suggestions, setSuggestions } = useSuggestions();
 
   // Update macOS title bar dirty indicator
   useEffect(() => {
-    const name = filePath ? filePath.split('/').pop() ?? 'Untitled' : 'Untitled';
+    const name = filePath ? (filePath.split('/').pop() ?? 'Untitled') : 'Untitled';
     document.title = isDirty ? `${name} •` : name;
   }, [filePath, isDirty]);
 
@@ -111,7 +119,9 @@ export default function App() {
     const refresh = () => setTrackedChanges(getTrackedChanges(editor));
     editor.on('update', refresh);
     refresh();
-    return () => editor.off('update', refresh);
+    return () => {
+      editor.off('update', refresh);
+    };
   }, [editor]);
 
   function handleToggleSuggesting() {
@@ -126,13 +136,19 @@ export default function App() {
     editor?.commands.rejectAllChanges();
   }
 
-  const handleAcceptChange = useCallback((id: string) => {
-    editor?.commands.acceptChange(id);
-  }, [editor]);
+  const handleAcceptChange = useCallback(
+    (id: string) => {
+      editor?.commands.acceptChange(id);
+    },
+    [editor],
+  );
 
-  const handleRejectChange = useCallback((id: string) => {
-    editor?.commands.rejectChange(id);
-  }, [editor]);
+  const handleRejectChange = useCallback(
+    (id: string) => {
+      editor?.commands.rejectChange(id);
+    },
+    [editor],
+  );
 
   const handleAddComment = useCallback(
     (text: string) => {
@@ -141,12 +157,7 @@ export default function App() {
       const { from, to, text: anchorText } = sel;
       const comment = addComment(anchorText, from, to, AUTHOR);
       // Apply comment mark
-      editor
-        .chain()
-        .focus()
-        .setTextSelection({ from, to })
-        .setComment(comment.id)
-        .run();
+      editor.chain().focus().setTextSelection({ from, to }).setComment(comment.id).run();
       // Add the initial "comment body" as the first reply if user typed text
       if (text) {
         // The comment has no body field — treat the text as the first reply

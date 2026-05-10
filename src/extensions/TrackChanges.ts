@@ -1,6 +1,7 @@
 import { Extension, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
+import type { Node as PmNode, Mark as PmMark, Schema, Slice } from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
 import type { TrackedChangeInfo } from '../types';
 
@@ -24,7 +25,6 @@ declare module '@tiptap/core' {
 
 const TRACK_PLUGIN_KEY = new PluginKey<TrackChangesStorage>('trackChanges');
 const SKIP_TRACKING_META = 'skipTracking';
-
 
 export const TrackedInsert = Mark.create({
   name: 'tracked_insert',
@@ -113,17 +113,15 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
   },
 
   addProseMirrorPlugins() {
-    const ext = this;
-
     return [
       new Plugin({
         key: TRACK_PLUGIN_KEY,
 
-        view(editorView) {
+        view: (editorView) => {
           const origDispatch = editorView.dispatch.bind(editorView);
 
-          editorView.dispatch = function (tr) {
-            const { enabled, authorID } = ext.storage as TrackChangesStorage;
+          editorView.dispatch = (tr) => {
+            const { enabled, authorID } = this.storage as TrackChangesStorage;
 
             if (
               enabled &&
@@ -151,19 +149,15 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
 
   addCommands() {
     return {
-      setTrackChangesEnabled:
-        (enabled: boolean) =>
-        () => {
-          this.storage.enabled = enabled;
-          return true;
-        },
+      setTrackChangesEnabled: (enabled: boolean) => () => {
+        this.storage.enabled = enabled;
+        return true;
+      },
 
-      setTrackChangesAuthor:
-        (authorID: string) =>
-        () => {
-          this.storage.authorID = authorID;
-          return true;
-        },
+      setTrackChangesAuthor: (authorID: string) => () => {
+        this.storage.authorID = authorID;
+        return true;
+      },
 
       acceptChange:
         (id: string) =>
@@ -317,7 +311,9 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
   },
 });
 
-export function getTrackedChanges(editor: { state: { doc: any; schema: any } }): TrackedChangeInfo[] {
+export function getTrackedChanges(editor: {
+  state: { doc: PmNode; schema: Schema };
+}): TrackedChangeInfo[] {
   const { doc, schema } = editor.state;
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
@@ -325,8 +321,8 @@ export function getTrackedChanges(editor: { state: { doc: any; schema: any } }):
 
   if (!insertType || !deleteType) return [];
 
-  doc.descendants((node: any, pos: number) => {
-    node.marks.forEach((mark: any) => {
+  doc.descendants((node: PmNode, pos: number) => {
+    node.marks.forEach((mark: PmMark) => {
       if ((mark.type === insertType || mark.type === deleteType) && mark.attrs.dataTracked) {
         const { id, operation, authorID, status, createdAt } = mark.attrs.dataTracked;
         if (!changes.has(id)) {
@@ -378,7 +374,7 @@ function transformForTracking(
       continue;
     }
 
-    const rs = step as unknown as { from: number; to: number; slice: any };
+    const rs = step as unknown as { from: number; to: number; slice: Slice };
     const from = rs.from + offset;
     const to = rs.to + offset;
     const slice = rs.slice;
@@ -420,7 +416,10 @@ function transformForTracking(
         newTr.addMark(
           r.from,
           r.to,
-          deleteType.create({ dataTracked: { ...dataTrackedBase, operation: 'delete' }, changeId: id }),
+          deleteType.create({
+            dataTracked: { ...dataTrackedBase, operation: 'delete' },
+            changeId: id,
+          }),
         );
       }
 
@@ -438,7 +437,10 @@ function transformForTracking(
         newTr.addMark(
           from,
           to,
-          deleteType.create({ dataTracked: { ...dataTrackedBase, operation: 'delete' }, changeId: id }),
+          deleteType.create({
+            dataTracked: { ...dataTrackedBase, operation: 'delete' },
+            changeId: id,
+          }),
         );
         offset += to - from;
       } else {
@@ -455,7 +457,10 @@ function transformForTracking(
       newTr.addMark(
         insertAt,
         insertEnd,
-        insertType.create({ dataTracked: { ...dataTrackedBase, operation: 'insert' }, changeId: id }),
+        insertType.create({
+          dataTracked: { ...dataTrackedBase, operation: 'insert' },
+          changeId: id,
+        }),
       );
     }
   }
@@ -463,11 +468,12 @@ function transformForTracking(
   // Set cursor to end of last insert or at `from` of last delete
   const lastStep = tr.steps[tr.steps.length - 1];
   if (lastStep instanceof ReplaceStep) {
-    const rs = lastStep as unknown as { from: number; to: number; slice: any };
+    const rs = lastStep as unknown as { from: number; to: number; slice: Slice };
     const hasInsert = rs.slice && rs.slice.size > 0;
     if (hasInsert) {
       const insertAt = rs.to + offset - (rs.to - rs.from);
       try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const sel = state.selection.constructor as any;
         if (sel.near) {
           newTr.setSelection(sel.near(newTr.doc.resolve(insertAt + rs.slice.size)));

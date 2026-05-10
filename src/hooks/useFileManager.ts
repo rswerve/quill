@@ -1,12 +1,7 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { SidecarFile, Comment, Suggestion } from '../types';
-
-function sidecarPath(filePath: string): string {
-  // Strip .md extension if present, append .comments.json
-  const base = filePath.replace(/\.md$/i, '');
-  return `${base}.comments.json`;
-}
+import { sidecarPath } from '../utils/sidecarPath';
 
 function emptySidecar(): SidecarFile {
   return { version: 1, comments: [], suggestions: [] };
