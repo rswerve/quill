@@ -2,12 +2,13 @@ import { useState, useRef } from 'react';
 
 interface AddCommentButtonProps {
   top: number;
+  left?: number;
   visible: boolean;
   author: string;
   onAdd: (text: string) => void;
 }
 
-export default function AddCommentButton({ top, visible, author, onAdd }: AddCommentButtonProps) {
+export default function AddCommentButton({ top, left, visible, author, onAdd }: AddCommentButtonProps) {
   const [composing, setComposing] = useState(false);
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -37,7 +38,7 @@ export default function AddCommentButton({ top, visible, author, onAdd }: AddCom
     return (
       <button
         className="add-comment-btn"
-        style={{ top }}
+        style={{ position: 'fixed', top, ...(left !== undefined ? { left } : {}) }}
         title="Add comment"
         onClick={() => {
           setComposing(true);
@@ -50,7 +51,7 @@ export default function AddCommentButton({ top, visible, author, onAdd }: AddCom
   }
 
   return (
-    <div className="add-comment-compose" style={{ top }}>
+    <div className="add-comment-compose" style={{ position: 'fixed', top: top - 12, ...(left !== undefined ? { left } : {}) }}>
       <div className="comment-header">
         <span className="comment-author">{author}</span>
       </div>

@@ -1,0 +1,95 @@
+/* ============================================
+   DESIGN TOKENS
+   Text editor — MCM / Seattle aesthetic
+   Last updated: April 2026
+   ============================================ */
+
+:root {
+
+  /* --- Color: Chrome & Background --- */
+  --color-bg:           #B8C2BA;  /* page canvas background */
+  --color-chrome:       #AEBAB1;  /* toolbar, comment panel */
+  --color-chrome-dark:  #A6B2A9;  /* status bar */
+
+  /* --- Color: Page --- */
+  --color-page:         #F8F9F6;  /* document surface */
+
+  /* --- Color: Ink (text) --- */
+  --color-ink:          #222722;  /* headings, primary text */
+  --color-ink-mid:      #4E564E;  /* body copy */
+  --color-ink-light:    #838E83;  /* metadata, timestamps, hints */
+
+  /* --- Color: Borders --- */
+  --color-border:       #9EAB9F;  /* chrome borders */
+  --color-border-light: #C4CEC5;  /* page-level borders, card borders */
+
+  /* --- Color: Accent — Sage --- */
+  --color-sage:         #5C7A62;  /* primary accent: buttons, active states, editing dot */
+  --color-sage-light:   #DDE6DE;  /* hover states on toolbar buttons */
+  --color-sage-mid:     #8EAD93;  /* active comment card border */
+  --color-sage-dark:    #3A5C3F;  /* hover text on sage-light bg */
+
+  /* --- Color: AI --- */
+  --color-ai-bg:        #E8ECF0;  /* AI reply background in comment thread */
+  --color-ai-text:      #5A6E82;  /* AI label, AI avatar */
+
+  /* --- Color: Human avatar --- */
+  --color-human-avatar-bg:   #DDD8CE;
+  --color-human-avatar-text: #6B5E4A;
+
+  /* --- Color: Track Changes --- */
+  --color-track-add-bg:     #DFF0E1;
+  --color-track-add-text:   #285E30;
+  --color-track-add-line:   #4E8F56;
+  --color-track-del-bg:     #F0E4E3;
+  --color-track-del-text:   #7A3530;
+  --color-track-del-line:   #A05850;
+
+  /* --- Color: Highlight --- */
+  --color-highlight-bg:     #EAE8C8;
+  --color-highlight-border: #B0AC6A;
+
+  /* --- Typography --- */
+  --font-serif: 'Playfair Display', Georgia, serif;  /* headings, doc titles */
+  --font-sans:  'Lato', system-ui, sans-serif;        /* body, UI, comments */
+
+  --font-weight-light:  300;
+  --font-weight-regular: 400;
+  --font-weight-bold:   700;
+
+  /* type scale */
+  --text-doc-title:   26px;
+  --text-doc-h2:      16px;
+  --text-body:        13.5px;
+  --text-ui:          12px;
+  --text-meta:        11px;
+  --text-label:       10px;
+
+  --leading-tight:    1.25;
+  --leading-body:     1.85;
+  --leading-ui:       1.6;
+
+  /* --- Spacing --- */
+  --space-xs:   4px;
+  --space-sm:   8px;
+  --space-md:   12px;
+  --space-lg:   16px;
+  --space-xl:   24px;
+  --space-2xl:  36px;
+  --space-3xl:  52px;
+
+  /* --- Border Radius --- */
+  --radius-sm:   3px;   /* document page surface */
+  --radius-md:   5px;   /* toolbar buttons */
+  --radius-lg:   8px;   /* comment cards, input cards */
+  --radius-full: 50%;   /* avatars */
+
+  /* --- Layout --- */
+  --toolbar-height:    42px;
+  --statusbar-height:  28px;
+  --comment-panel-width: 260px;
+  --page-max-width:    600px;
+  --page-padding-x:    60px;
+  --page-padding-y:    52px;
+
+}

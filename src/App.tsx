@@ -5,6 +5,7 @@ import type { EditorRef, SelectionInfo } from './components/Editor';
 import Toolbar from './components/Toolbar';
 import Footer from './components/Footer';
 import CommentLayer from './components/CommentLayer';
+import AddCommentButton from './components/AddCommentButton';
 import { useFileManager } from './hooks/useFileManager';
 import { useComments } from './hooks/useComments';
 import { useSuggestions } from './hooks/useSuggestions';
@@ -23,7 +24,10 @@ export default function App() {
   const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
+  const zoomWrapperRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const [, setScrollTick] = useState(0);
 
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
 
@@ -33,6 +37,15 @@ export default function App() {
     useComments();
   const { suggestions, setSuggestions } =
     useSuggestions();
+
+// Re-render on scroll so button top tracks live coordsAtPos
+  useEffect(() => {
+    const el = scrollAreaRef.current?.querySelector('.editor-scroll-area');
+    if (!el) return;
+    const onScroll = () => setScrollTick((t) => t + 1);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   // Update macOS title bar dirty indicator
   useEffect(() => {
@@ -64,6 +77,21 @@ export default function App() {
       if (e.key === 'n') {
         e.preventDefault();
         handleNew();
+        return;
+      }
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        setZoom((z) => Math.min(2.4, Math.round((z + 0.12) * 100) / 100));
+        return;
+      }
+      if (e.key === '-') {
+        e.preventDefault();
+        setZoom((z) => Math.max(0.6, Math.round((z - 0.12) * 100) / 100));
+        return;
+      }
+      if (e.key === '0') {
+        e.preventDefault();
+        setZoom(1);
         return;
       }
     }
@@ -111,7 +139,7 @@ export default function App() {
     const refresh = () => setTrackedChanges(getTrackedChanges(editor));
     editor.on('update', refresh);
     refresh();
-    return () => editor.off('update', refresh);
+    return () => { editor.off('update', refresh); };
   }, [editor]);
 
   function handleToggleSuggesting() {
@@ -202,6 +230,7 @@ export default function App() {
 
       <div className="workspace" ref={scrollAreaRef}>
         <div className="editor-scroll-area">
+          <div className="editor-page-zoom-wrapper" ref={zoomWrapperRef} style={{ zoom }}>
           <QuillEditor
             key={editorKey}
             ref={editorRef}
@@ -212,18 +241,37 @@ export default function App() {
             onSelectionChange={handleSelectionChange}
             onEditorReady={setEditor}
           />
+          </div>
         </div>
+
+        {selectionInfo && (() => {
+          const commentLayer = commentLayerRef.current;
+          const commentLayerRect = commentLayer?.getBoundingClientRect();
+          // Fixed positioning: use viewport coordinates directly, no zoom math needed
+          const rawTop = editor ? editor.view.coordsAtPos(selectionInfo.from).top : selectionInfo.top;
+          const wrapperRect = zoomWrapperRef.current?.getBoundingClientRect();
+          const top = wrapperRect
+            ? wrapperRect.top + (rawTop - wrapperRect.top) / zoom
+            : rawTop;
+          const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
+          return (
+            <AddCommentButton
+              top={top}
+              left={left}
+              visible
+              author={AUTHOR}
+              onAdd={handleAddComment}
+            />
+          );
+        })()}
 
         <CommentLayer
           editor={editor}
           comments={comments}
           activeCommentId={activeCommentId}
-          selectionInfo={selectionInfo}
-          author={AUTHOR}
           containerRef={commentLayerRef}
           trackedChanges={trackedChanges}
           isSuggesting={isSuggesting}
-          onAddComment={handleAddComment}
           onReply={(id, text) => addReply(id, text, AUTHOR)}
           onResolve={resolveComment}
           onUnresolve={unresolveComment}
@@ -234,7 +282,7 @@ export default function App() {
         />
       </div>
 
-      <Footer editor={editor} filePath={filePath} isSuggesting={isSuggesting} />
+      <Footer editor={editor} filePath={filePath} isSuggesting={isSuggesting} isDirty={isDirty} zoom={zoom} onZoomChange={setZoom} />
     </div>
   );
 }

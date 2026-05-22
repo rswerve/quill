@@ -2,20 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { Comment, TrackedChangeInfo } from '../types';
 import CommentCard from './CommentCard';
-import AddCommentButton from './AddCommentButton';
 import SuggestionCard from './SuggestionCard';
-import type { SelectionInfo } from './Editor';
 
 interface CommentLayerProps {
   editor: Editor | null;
   comments: Comment[];
   activeCommentId: string | null;
-  selectionInfo: SelectionInfo | null;
-  author: string;
   containerRef: React.RefObject<HTMLDivElement | null>;
   trackedChanges: TrackedChangeInfo[];
   isSuggesting: boolean;
-  onAddComment: (text: string) => void;
   onReply: (commentId: string, text: string) => void;
   onResolve: (commentId: string) => void;
   onUnresolve: (commentId: string) => void;
@@ -85,12 +80,9 @@ export default function CommentLayer({
   editor,
   comments,
   activeCommentId,
-  selectionInfo,
-  author,
   containerRef,
   trackedChanges,
   isSuggesting,
-  onAddComment,
   onReply,
   onResolve,
   onUnresolve,
@@ -158,15 +150,6 @@ export default function CommentLayer({
     rafRef.current = requestAnimationFrame(reflow);
   }, [comments, trackedChanges, reflow]);
 
-  const addBtnTop = selectionInfo
-    ? (() => {
-        if (!containerRef.current) return selectionInfo.top;
-        const rect = containerRef.current.getBoundingClientRect();
-        const scrollTop = containerRef.current.scrollTop;
-        return selectionInfo.top - rect.top + scrollTop;
-      })()
-    : 0;
-
   return (
     <div className="comment-layer" ref={containerRef as React.RefObject<HTMLDivElement>}>
       {resolvedComments.length > 0 && (
@@ -177,13 +160,6 @@ export default function CommentLayer({
           {showResolved ? 'Hide' : 'Show'} {resolvedComments.length} resolved
         </button>
       )}
-
-      <AddCommentButton
-        top={addBtnTop}
-        visible={!!selectionInfo}
-        author={author}
-        onAdd={onAddComment}
-      />
 
       {displayComments.map((comment) => {
         const pos = cardPositions.find((p) => p.cardId === comment.id);

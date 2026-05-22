@@ -65,6 +65,7 @@ export default function CommentCard({
       <div className="comment-thread-line" />
 
       <div className="comment-header">
+        <span className="comment-avatar">{comment.author[0].toUpperCase()}</span>
         <span className="comment-author">{comment.author}</span>
         <span className="comment-time">{timeAgo(comment.createdAt)}</span>
         <button

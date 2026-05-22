@@ -13,6 +13,11 @@ import { CommentMark } from '../extensions/Comment';
 import { TrackedInsert, TrackedDelete, TrackChanges } from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 
+export const toolbarSelectionStore = {
+  value: null as { from: number; to: number; editor: TiptapEditor } | null,
+  liveEditor: null as TiptapEditor | null,
+};
+
 export interface EditorRef {
   getMarkdown: () => string;
   setContent: (md: string) => void;
@@ -73,7 +78,6 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           onSelectionRef.current(null);
           return;
         }
-        // Get DOM position of the selection
         try {
           const view = editor.view;
           const start = view.coordsAtPos(from);
@@ -84,6 +88,16 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         }
       },
       onCreate({ editor }) {
+        toolbarSelectionStore.liveEditor = editor;
+        document.addEventListener('mousedown', (e) => {
+          const target = e.target as HTMLElement;
+          if (target?.closest('[data-toolbar-button]')) {
+            const { from, to } = editor.state.selection;
+            if (from !== to && !toolbarSelectionStore.value) {
+              toolbarSelectionStore.value = { from, to, editor };
+            }
+          }
+        }, true);
         onReadyRef.current(editor);
       },
     });
