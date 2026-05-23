@@ -1,4 +1,5 @@
 import type { Editor } from '@tiptap/react';
+import type { AISessionBinding } from '../types';
 
 interface FooterProps {
   editor: Editor | null;
@@ -7,6 +8,9 @@ interface FooterProps {
   isDirty?: boolean;
   zoom?: number;
   onZoomChange?: (z: number) => void;
+  aiSession: AISessionBinding | null;
+  onOpenSessionPicker: () => void;
+  onUnlinkSession: () => void;
 }
 
 function countWords(text: string): number {
@@ -16,7 +20,17 @@ function countWords(text: string): number {
     .filter((w) => w.length > 0).length;
 }
 
-export default function Footer({ editor, filePath, isSuggesting, isDirty, zoom = 1, onZoomChange }: FooterProps) {
+export default function Footer({
+  editor,
+  filePath,
+  isSuggesting,
+  isDirty,
+  zoom = 1,
+  onZoomChange,
+  aiSession,
+  onOpenSessionPicker,
+  onUnlinkSession,
+}: FooterProps) {
   if (!editor) return <div className="footer" />;
 
   const text = editor.state.doc.textContent;
@@ -62,6 +76,35 @@ export default function Footer({ editor, filePath, isSuggesting, isDirty, zoom =
           {Math.round(zoom * 100)}%
         </span>
       </div>
+
+      <span className="toolbar-spacer" />
+
+      {aiSession ? (
+        <span className="footer-ai-binding linked">
+          <button
+            className="footer-ai-binding-label"
+            onClick={onOpenSessionPicker}
+            title={`Linked to Claude session ${aiSession.sessionId} (cwd ${aiSession.cwd})`}
+          >
+            🔗 Claude {aiSession.sessionId.slice(0, 8)}
+          </button>
+          <button
+            className="footer-ai-binding-unlink"
+            onClick={onUnlinkSession}
+            title="Unlink Claude session"
+          >
+            ×
+          </button>
+        </span>
+      ) : (
+        <button
+          className="footer-ai-binding"
+          onClick={onOpenSessionPicker}
+          title="Link this doc to a Claude Code session"
+        >
+          🔗 Link to Claude session…
+        </button>
+      )}
     </div>
   );
 }
