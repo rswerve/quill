@@ -9,25 +9,25 @@
  * dispatches through that shim, and event-bus listen()/emit() are simulated
  * by the same dispatcher (Tauri's listen() itself goes through invoke()).
  */
-import { test, expect, chromium } from '@playwright/test';
-import type { Browser, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
 type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
 
-async function setupWithIPC(opts: {
-  handler: InvokeHandler;
-  // Optional: inject a fake aiSession so the @claude path runs.
-  testSession?: Record<string, unknown>;
-  // Optional: capture invoke calls for later assertions.
-  captureKey?: string;
-}): Promise<{ browser: Browser; page: Page }> {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-
+async function setupWithIPC(
+  page: Page,
+  opts: {
+    handler: InvokeHandler;
+    // Optional: inject a fake aiSession so the @claude path runs.
+    testSession?: Record<string, unknown>;
+    // Optional: capture invoke calls for later assertions.
+    captureKey?: string;
+  },
+): Promise<void> {
   await page.addInitScript(
     ({ handlerSrc, testSession, captureKey }) => {
       // Reconstruct the handler from its source so it can be serialized.
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+
       const handler = new Function('cmd', 'args', 'ctx', `return (${handlerSrc})(cmd, args, ctx);`);
 
       type Listener = { event: string; cb: (payload: unknown) => void };
@@ -41,9 +41,8 @@ async function setupWithIPC(opts: {
           const id = nextCbId++;
           callbacks.set(id, cb);
           // Tauri also registers a global function it can call by id; mirror that.
-          (window as unknown as Record<string | number, unknown>)[`_${id}`] = (
-            payload: unknown,
-          ) => cb(payload);
+          (window as unknown as Record<string | number, unknown>)[`_${id}`] = (payload: unknown) =>
+            cb(payload);
           return id;
         },
         unregisterCallback: (id: number) => {
@@ -103,16 +102,15 @@ async function setupWithIPC(opts: {
     },
   );
 
-  await page.goto('http://localhost:1420');
+  await page.goto('/');
   await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
-  return { browser, page };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // 1. Auto-bind on stray .md open
 // ────────────────────────────────────────────────────────────────────────────
 
-test('auto-bind: stray .md with no sidecar links to matching Claude session', async () => {
+test('auto-bind: stray .md with no sidecar links to matching Claude session', async ({ page }) => {
   // The handler must be self-contained — no closure variables.
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_open_dialog') return '/tmp/stray.md';
@@ -132,7 +130,7 @@ test('auto-bind: stray .md with no sidecar links to matching Claude session', as
     return null;
   };
 
-  const { browser, page } = await setupWithIPC({ handler });
+  await setupWithIPC(page, { handler });
 
   // Trigger File → Open via Cmd+O (App.tsx wires this to handleOpen → openFile).
   await page.keyboard.down('Meta');
@@ -146,10 +144,9 @@ test('auto-bind: stray .md with no sidecar links to matching Claude session', as
   // Title should show dirty bullet because auto-bind marks the file dirty.
   await page.waitForTimeout(150);
   expect(await page.title()).toContain('•');
-  await browser.close();
 });
 
-test('auto-bind: no match leaves session unbound (no false link)', async () => {
+test('auto-bind: no match leaves session unbound (no false link)', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_open_dialog') return '/tmp/orphan.md';
     if (cmd === 'read_file') {
@@ -161,7 +158,7 @@ test('auto-bind: no match leaves session unbound (no false link)', async () => {
     return null;
   };
 
-  const { browser, page } = await setupWithIPC({ handler });
+  await setupWithIPC(page, { handler });
 
   await page.keyboard.down('Meta');
   await page.keyboard.press('o');
@@ -172,7 +169,6 @@ test('auto-bind: no match leaves session unbound (no false link)', async () => {
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
   // The unlinked "Link to Claude session…" affordance should be present.
   await expect(page.locator('.footer-ai-binding').first()).toContainText(/Link to Claude/i);
-  await browser.close();
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -198,11 +194,15 @@ async function fireAIReplyAndCaptureCompactionCall(
   await page.locator('.comment-card .btn-primary').click();
   await page.waitForTimeout(400);
   return page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__capturedCalls as { cmd: string; args: Record<string, unknown> }[],
+    () =>
+      (window as unknown as Record<string, unknown>).__capturedCalls as {
+        cmd: string;
+        args: Record<string, unknown>;
+      }[],
   );
 }
 
-test('compaction: non-compacted session sends diff form to claude', async () => {
+test('compaction: non-compacted session sends diff form to claude', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'check_session_compacted') {
       return { compacted: false, originalMarkdown: 'original baseline text' };
@@ -215,7 +215,7 @@ test('compaction: non-compacted session sends diff form to claude', async () => 
     return null;
   };
 
-  const { browser, page } = await setupWithIPC({
+  await setupWithIPC(page, {
     handler,
     testSession: {
       provider: 'claude-code',
@@ -241,10 +241,9 @@ test('compaction: non-compacted session sends diff form to claude', async () => 
   expect(prompt).toContain('Your context is intact');
   expect(prompt).toContain('diff between what you originally wrote');
   expect(prompt).not.toContain('Your context was compacted');
-  await browser.close();
 });
 
-test('compaction: compacted session sends full doc with compaction note', async () => {
+test('compaction: compacted session sends full doc with compaction note', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'check_session_compacted') {
       return { compacted: true, originalMarkdown: null };
@@ -257,7 +256,7 @@ test('compaction: compacted session sends full doc with compaction note', async 
     return null;
   };
 
-  const { browser, page } = await setupWithIPC({
+  await setupWithIPC(page, {
     handler,
     testSession: {
       provider: 'claude-code',
@@ -275,14 +274,13 @@ test('compaction: compacted session sends full doc with compaction note', async 
   );
   expect(prompt).toContain('Your context was compacted');
   expect(prompt).not.toContain('Your context is intact');
-  await browser.close();
 });
 
 // ────────────────────────────────────────────────────────────────────────────
 // 3. quill:// deep-link → openFilePath
 // ────────────────────────────────────────────────────────────────────────────
 
-test('deep-link: deep-link-open event opens the file at the payload path', async () => {
+test('deep-link: deep-link-open event opens the file at the payload path', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'read_file') {
       const path = args.path as string;
@@ -293,7 +291,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     return null;
   };
 
-  const { browser, page } = await setupWithIPC({ handler, captureKey: '__capturedCalls' });
+  await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
   // Give App.tsx's useEffect a tick to register its listen('deep-link-open').
   await page.waitForTimeout(200);
@@ -312,12 +310,11 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
   });
   // Footer filename should reflect the opened file.
   await expect(page.locator('.footer-filename')).toContainText('linked.md');
-  await browser.close();
 });
 
-test('deep-link: empty payload is ignored (no crash, no file load)', async () => {
-  const handler = (_cmd: string, _args: Record<string, unknown>) => null;
-  const { browser, page } = await setupWithIPC({ handler });
+test('deep-link: empty payload is ignored (no crash, no file load)', async ({ page }) => {
+  const handler = () => null;
+  await setupWithIPC(page, { handler });
   await page.waitForTimeout(200);
 
   await page.evaluate(() => {
@@ -330,5 +327,4 @@ test('deep-link: empty payload is ignored (no crash, no file load)', async () =>
 
   // Filename stays at Untitled.
   await expect(page.locator('.footer-filename')).toContainText('Untitled');
-  await browser.close();
 });

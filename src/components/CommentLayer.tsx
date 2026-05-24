@@ -213,10 +213,7 @@ export default function CommentLayer({
   return (
     <div className="comment-layer" ref={containerRef as React.RefObject<HTMLDivElement>}>
       {resolvedComments.length > 0 && (
-        <button
-          className="show-resolved-btn"
-          onClick={() => setShowResolved((v) => !v)}
-        >
+        <button className="show-resolved-btn" onClick={() => setShowResolved((v) => !v)}>
           {showResolved ? 'Hide' : 'Show'} {resolvedComments.length} resolved
         </button>
       )}

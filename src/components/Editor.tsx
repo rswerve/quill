@@ -1,9 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -43,7 +38,10 @@ export interface SelectionInfo {
 }
 
 const QuillEditor = forwardRef<EditorRef, EditorProps>(
-  ({ initialContent = '', isSuggesting, authorID, onUpdate, onSelectionChange, onEditorReady }, ref) => {
+  (
+    { initialContent = '', isSuggesting, authorID, onUpdate, onSelectionChange, onEditorReady },
+    ref,
+  ) => {
     const onUpdateRef = useRef(onUpdate);
     const onSelectionRef = useRef(onSelectionChange);
     const onReadyRef = useRef(onEditorReady);
@@ -110,18 +108,29 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       },
       onCreate({ editor }) {
         toolbarSelectionStore.liveEditor = editor;
-        document.addEventListener('mousedown', (e) => {
-          const target = e.target as HTMLElement;
-          if (target?.closest('[data-toolbar-button]')) {
-            const { from, to } = editor.state.selection;
-            if (from !== to && !toolbarSelectionStore.value) {
-              toolbarSelectionStore.value = { from, to, editor };
+        document.addEventListener(
+          'mousedown',
+          (e) => {
+            const target = e.target as HTMLElement;
+            if (target?.closest('[data-toolbar-button]')) {
+              const { from, to } = editor.state.selection;
+              if (from !== to && !toolbarSelectionStore.value) {
+                toolbarSelectionStore.value = { from, to, editor };
+              }
             }
-          }
-        }, true);
-        onReadyRef.current(editor);
+          },
+          true,
+        );
       },
     });
+
+    // Hand the live editor instance to the parent. Driven by an effect (not
+    // onCreate) so that if useEditor recreates the editor — e.g. StrictMode's
+    // dev double-mount — the parent always re-binds to the current instance
+    // rather than holding a reference to a destroyed one.
+    useEffect(() => {
+      if (editor) onReadyRef.current(editor);
+    }, [editor]);
 
     // Sync suggesting mode / author with extension storage
     useEffect(() => {
@@ -135,7 +144,9 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       () => ({
         getMarkdown() {
           if (!editor) return '';
-          return ((editor.storage as unknown as Record<string, { getMarkdown: () => string }>)['markdown']).getMarkdown();
+          return (editor.storage as unknown as Record<string, { getMarkdown: () => string }>)[
+            'markdown'
+          ].getMarkdown();
         },
         setContent(md: string) {
           if (!editor) return;

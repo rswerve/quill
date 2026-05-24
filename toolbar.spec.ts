@@ -1,7 +1,8 @@
-import { test, expect, chromium } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
-async function setupEditor(page: import('@playwright/test').Page) {
-  await page.goto('http://localhost:1420');
+async function setupEditor(page: Page) {
+  await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
@@ -9,9 +10,7 @@ async function setupEditor(page: import('@playwright/test').Page) {
   return editor;
 }
 
-test('bold button applies formatting to selected text', async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+test('bold button applies formatting to selected text', async ({ page }) => {
   const editor = await setupEditor(page);
 
   await page.keyboard.type('hello world');
@@ -29,13 +28,9 @@ test('bold button applies formatting to selected text', async () => {
   const html = await editor.innerHTML();
   expect(html).toContain('<strong>');
   expect(html).toContain('hello world');
-
-  await browser.close();
 });
 
-test('italic button applies formatting to selected text', async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+test('italic button applies formatting to selected text', async ({ page }) => {
   const editor = await setupEditor(page);
 
   await page.keyboard.type('hello world');
@@ -49,13 +44,9 @@ test('italic button applies formatting to selected text', async () => {
 
   const html = await editor.innerHTML();
   expect(html).toContain('<em>');
-
-  await browser.close();
 });
 
-test('bold button with partial selection', async () => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+test('bold button with partial selection', async ({ page }) => {
   const editor = await setupEditor(page);
 
   await page.keyboard.type('hello world');
@@ -71,6 +62,4 @@ test('bold button with partial selection', async () => {
 
   const html = await editor.innerHTML();
   expect(html).toContain('<strong>world</strong>');
-
-  await browser.close();
 });

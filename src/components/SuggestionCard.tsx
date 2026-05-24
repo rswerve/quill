@@ -38,7 +38,11 @@ export default function SuggestionCard({ change, top, onAccept, onReject }: Sugg
       </div>
 
       {preview && (
-        <div className="comment-anchor-text">"{preview}"</div>
+        <div className="comment-anchor-text">
+          {'"'}
+          {preview}
+          {'"'}
+        </div>
       )}
 
       <div className="suggestion-actions">

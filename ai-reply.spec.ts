@@ -6,8 +6,8 @@
  * mounts. The mock plays scripted ChunkEvents and `window.__quillTestSession`
  * seeds a fake binding so the @claude code path runs without a SessionPicker.
  */
-import { test, expect, chromium } from '@playwright/test';
-import type { Browser, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
 type MockScriptStep =
   | { kind: 'delta'; text: string }
@@ -16,9 +16,7 @@ type MockScriptStep =
   | { kind: 'cancelled' }
   | { kind: 'pause' }; // hold open until cancel
 
-async function setupWithMock(script: MockScriptStep[]): Promise<{ browser: Browser; page: Page }> {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+async function setupWithMock(page: Page, script: MockScriptStep[]): Promise<void> {
   await page.addInitScript((steps: MockScriptStep[]) => {
     type Ev =
       | { kind: 'delta'; text: string }
@@ -70,12 +68,11 @@ async function setupWithMock(script: MockScriptStep[]): Promise<{ browser: Brows
     };
   }, script);
 
-  await page.goto('http://localhost:1420');
+  await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await page.waitForTimeout(100);
-  return { browser, page };
 }
 
 async function addCommentWithAIReply(page: Page, anchor: string, replyText: string) {
@@ -96,8 +93,8 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await page.locator('.comment-card .btn-primary').click();
 }
 
-test('AI reply: pending → delta → done streams chunks and clears spinner', async () => {
-  const { browser, page } = await setupWithMock([
+test('AI reply: pending → delta → done streams chunks and clears spinner', async ({ page }) => {
+  await setupWithMock(page, [
     { kind: 'delta', text: 'Sure — ' },
     { kind: 'delta', text: 'the answer ' },
     { kind: 'delta', text: 'is 42.' },
@@ -116,11 +113,10 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
-  await browser.close();
 });
 
-test('AI reply: pending → error shows Re-link button', async () => {
-  const { browser, page } = await setupWithMock([
+test('AI reply: pending → error shows Re-link button', async ({ page }) => {
+  await setupWithMock(page, [
     { kind: 'delta', text: 'partial...' },
     { kind: 'error', message: 'Session no longer available' },
   ]);
@@ -135,14 +131,10 @@ test('AI reply: pending → error shows Re-link button', async () => {
   );
   await expect(aiReply.getByRole('button', { name: /Re-link session/i })).toBeVisible();
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
-  await browser.close();
 });
 
-test('AI reply: pending → cancel resolves without leaving spinner', async () => {
-  const { browser, page } = await setupWithMock([
-    { kind: 'delta', text: 'starting...' },
-    { kind: 'pause' },
-  ]);
+test('AI reply: pending → cancel resolves without leaving spinner', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'delta', text: 'starting...' }, { kind: 'pause' }]);
 
   await addCommentWithAIReply(page, 'hello world', '@claude long task');
 
@@ -158,5 +150,4 @@ test('AI reply: pending → cancel resolves without leaving spinner', async () =
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
   // Partial text retained.
   await expect(aiReply.locator('.comment-reply-text')).toContainText('starting...');
-  await browser.close();
 });

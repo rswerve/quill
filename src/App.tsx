@@ -23,7 +23,9 @@ export default function App() {
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-  const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(null);
+  const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
+    null,
+  );
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
   const zoomWrapperRef = useRef<HTMLDivElement>(null);
@@ -61,7 +63,7 @@ export default function App() {
     getDocMarkdown,
   });
 
-// Re-render on scroll so button top tracks live coordsAtPos
+  // Re-render on scroll so button top tracks live coordsAtPos
   useEffect(() => {
     const el = scrollAreaRef.current?.querySelector('.editor-scroll-area');
     if (!el) return;
@@ -72,7 +74,7 @@ export default function App() {
 
   // Update macOS title bar dirty indicator
   useEffect(() => {
-    const name = filePath ? filePath.split('/').pop() ?? 'Untitled' : 'Untitled';
+    const name = filePath ? (filePath.split('/').pop() ?? 'Untitled') : 'Untitled';
     document.title = isDirty ? `${name} •` : name;
   }, [filePath, isDirty]);
 
@@ -92,7 +94,9 @@ export default function App() {
         // Non-Tauri context (e.g. plain dev server) — ignore.
       }
     })();
-    return () => { unlisten?.(); };
+    return () => {
+      unlisten?.();
+    };
   }, [openFilePath]);
 
   // Test escape hatch: bind an AI session without going through SessionPicker.
@@ -189,7 +193,9 @@ export default function App() {
     const refresh = () => setTrackedChanges(getTrackedChanges(editor));
     editor.on('update', refresh);
     refresh();
-    return () => { editor.off('update', refresh); };
+    return () => {
+      editor.off('update', refresh);
+    };
   }, [editor]);
 
   function handleToggleSuggesting() {
@@ -204,13 +210,19 @@ export default function App() {
     editor?.commands.rejectAllChanges();
   }
 
-  const handleAcceptChange = useCallback((id: string) => {
-    editor?.commands.acceptChange(id);
-  }, [editor]);
+  const handleAcceptChange = useCallback(
+    (id: string) => {
+      editor?.commands.acceptChange(id);
+    },
+    [editor],
+  );
 
-  const handleRejectChange = useCallback((id: string) => {
-    editor?.commands.rejectChange(id);
-  }, [editor]);
+  const handleRejectChange = useCallback(
+    (id: string) => {
+      editor?.commands.rejectChange(id);
+    },
+    [editor],
+  );
 
   const handleAddComment = useCallback(
     (text: string) => {
@@ -219,12 +231,7 @@ export default function App() {
       const { from, to, text: anchorText } = sel;
       const comment = addComment(anchorText, from, to, AUTHOR);
       // Apply comment mark
-      editor
-        .chain()
-        .focus()
-        .setTextSelection({ from, to })
-        .setComment(comment.id)
-        .run();
+      editor.chain().focus().setTextSelection({ from, to }).setComment(comment.id).run();
       // Add the initial "comment body" as the first reply if user typed text
       if (text) {
         // The comment has no body field — treat the text as the first reply
@@ -276,11 +283,14 @@ export default function App() {
     [aiSession, comments, claudeReply],
   );
 
-  const handlePickSession = useCallback((binding: AISessionBinding) => {
-    setAISession(binding);
-    setPickerOpen(false);
-    markDirty();
-  }, [markDirty]);
+  const handlePickSession = useCallback(
+    (binding: AISessionBinding) => {
+      setAISession(binding);
+      setPickerOpen(false);
+      markDirty();
+    },
+    [markDirty],
+  );
 
   const handleUnlinkSession = useCallback(() => {
     setAISession(null);
@@ -301,39 +311,40 @@ export default function App() {
       <div className="workspace" ref={scrollAreaRef}>
         <div className="editor-scroll-area">
           <div className="editor-page-zoom-wrapper" ref={zoomWrapperRef} style={{ zoom }}>
-          <QuillEditor
-            key={editorKey}
-            ref={editorRef}
-            initialContent=""
-            isSuggesting={isSuggesting}
-            authorID={AUTHOR}
-            onUpdate={markDirty}
-            onSelectionChange={handleSelectionChange}
-            onEditorReady={setEditor}
-          />
+            <QuillEditor
+              key={editorKey}
+              ref={editorRef}
+              initialContent=""
+              isSuggesting={isSuggesting}
+              authorID={AUTHOR}
+              onUpdate={markDirty}
+              onSelectionChange={handleSelectionChange}
+              onEditorReady={setEditor}
+            />
           </div>
         </div>
 
-        {selectionInfo && (() => {
-          const commentLayer = commentLayerRef.current;
-          const commentLayerRect = commentLayer?.getBoundingClientRect();
-          // Fixed positioning: use viewport coordinates directly, no zoom math needed
-          const rawTop = editor ? editor.view.coordsAtPos(selectionInfo.from).top : selectionInfo.top;
-          const wrapperRect = zoomWrapperRef.current?.getBoundingClientRect();
-          const top = wrapperRect
-            ? wrapperRect.top + (rawTop - wrapperRect.top) / zoom
-            : rawTop;
-          const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
-          return (
-            <AddCommentButton
-              top={top}
-              left={left}
-              visible
-              author={AUTHOR}
-              onAdd={handleAddComment}
-            />
-          );
-        })()}
+        {selectionInfo &&
+          (() => {
+            const commentLayer = commentLayerRef.current;
+            const commentLayerRect = commentLayer?.getBoundingClientRect();
+            // Fixed positioning: use viewport coordinates directly, no zoom math needed
+            const rawTop = editor
+              ? editor.view.coordsAtPos(selectionInfo.from).top
+              : selectionInfo.top;
+            const wrapperRect = zoomWrapperRef.current?.getBoundingClientRect();
+            const top = wrapperRect ? wrapperRect.top + (rawTop - wrapperRect.top) / zoom : rawTop;
+            const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
+            return (
+              <AddCommentButton
+                top={top}
+                left={left}
+                visible
+                author={AUTHOR}
+                onAdd={handleAddComment}
+              />
+            );
+          })()}
 
         <CommentLayer
           editor={editor}

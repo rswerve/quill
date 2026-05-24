@@ -54,6 +54,132 @@ async fn show_save_dialog(
     Ok(path.map(|p| p.to_string()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    // --- read_file ---
+
+    #[test]
+    fn read_file_returns_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        fs::write(&path, "# Hello Quill").unwrap();
+
+        let result = read_file(path.to_str().unwrap().to_string());
+        assert_eq!(result.unwrap(), "# Hello Quill");
+    }
+
+    #[test]
+    fn read_file_returns_err_for_missing_file() {
+        let result = read_file("/tmp/quill_test_nonexistent_xyz_abc.md".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_file_returns_empty_string_for_empty_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty.md");
+        fs::write(&path, "").unwrap();
+
+        let result = read_file(path.to_str().unwrap().to_string());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    // --- write_file ---
+
+    #[test]
+    fn write_file_creates_file_with_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("output.md");
+
+        write_file(path.to_str().unwrap().to_string(), "# Written".to_string()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "# Written");
+    }
+
+    #[test]
+    fn write_file_creates_intermediate_directories() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("file.md");
+
+        write_file(
+            path.to_str().unwrap().to_string(),
+            "deep content".to_string(),
+        )
+        .unwrap();
+
+        assert!(path.exists());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "deep content");
+    }
+
+    #[test]
+    fn write_file_overwrites_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("overwrite.md");
+        fs::write(&path, "old content").unwrap();
+
+        write_file(
+            path.to_str().unwrap().to_string(),
+            "new content".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn write_file_handles_unicode_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unicode.md");
+
+        write_file(
+            path.to_str().unwrap().to_string(),
+            "# 日本語\nHello 🌍".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# 日本語\nHello 🌍");
+    }
+
+    // --- delete_file ---
+
+    #[test]
+    fn delete_file_removes_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("to_delete.md");
+        fs::write(&path, "bye").unwrap();
+        assert!(path.exists());
+
+        delete_file(path.to_str().unwrap().to_string()).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_file_is_ok_when_file_does_not_exist() {
+        let result = delete_file("/tmp/quill_test_never_existed_xyz_abc.md".to_string());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn delete_file_does_not_affect_other_files_in_directory() {
+        let dir = tempdir().unwrap();
+        let path1 = dir.path().join("file1.md");
+        let path2 = dir.path().join("file2.md");
+        fs::write(&path1, "one").unwrap();
+        fs::write(&path2, "two").unwrap();
+
+        delete_file(path1.to_str().unwrap().to_string()).unwrap();
+
+        assert!(!path1.exists());
+        assert!(path2.exists());
+    }
+}
+
 // ─── Claude Code session integration ────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -173,7 +299,20 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
         year += 1;
     }
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let month_lengths = [31u32, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_lengths = [
+        31u32,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1u32;
     let mut d = days as u32;
     for &ml in month_lengths.iter() {
@@ -205,7 +344,11 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
 
     let mut candidates: Vec<(std::path::PathBuf, u64)> = Vec::new();
     for project_entry in read.flatten() {
-        if !project_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        if !project_entry
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
             continue;
         }
         let session_iter = match std::fs::read_dir(project_entry.path()) {
@@ -291,7 +434,10 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
     let read = match std::fs::read_dir(&dir) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(CompactionInfo { compacted: false, original_markdown: None });
+            return Ok(CompactionInfo {
+                compacted: false,
+                original_markdown: None,
+            });
         }
         Err(e) => return Err(e.to_string()),
     };
@@ -320,7 +466,10 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
     }
 
     let Some(path) = target else {
-        return Ok(CompactionInfo { compacted: false, original_markdown: None });
+        return Ok(CompactionInfo {
+            compacted: false,
+            original_markdown: None,
+        });
     };
 
     let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -350,7 +499,11 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
 
     Ok(CompactionInfo {
         compacted,
-        original_markdown: if compacted { None } else { last_assistant_markdown },
+        original_markdown: if compacted {
+            None
+        } else {
+            last_assistant_markdown
+        },
     })
 }
 
@@ -366,7 +519,11 @@ fn list_claude_sessions() -> Result<Vec<SessionSummary>, String> {
     };
 
     for project_entry in read.flatten() {
-        if !project_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        if !project_entry
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
             continue;
         }
         let project_path = project_entry.path();
@@ -529,7 +686,9 @@ fn spawn_claude_resume(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn claude: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
     let stdout = child
         .stdout
         .take()
@@ -546,7 +705,11 @@ fn spawn_claude_resume(
     });
     {
         let registry = app.state::<ChildRegistry>();
-        registry.0.lock().unwrap().insert(token.clone(), handle.clone());
+        registry
+            .0
+            .lock()
+            .unwrap()
+            .insert(token.clone(), handle.clone());
     }
 
     let token_for_thread = token.clone();
@@ -566,10 +729,7 @@ fn spawn_claude_resume(
             // Partial messages: { type: "stream_event", event: { type: "content_block_delta",
             //                     delta: { type: "text_delta", text: "..." } } }
             if parsed.get("type").and_then(|t| t.as_str()) == Some("stream_event") {
-                if let Some(text) = parsed
-                    .pointer("/event/delta/text")
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(text) = parsed.pointer("/event/delta/text").and_then(|v| v.as_str()) {
                     any_delta = true;
                     let _ = on_event.send(ChunkEvent::Delta {
                         text: text.to_string(),
@@ -579,7 +739,9 @@ fn spawn_claude_resume(
             }
             // Final assistant message — only emit if we never saw deltas (fallback).
             if !any_delta && parsed.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-                if let Some(content) = parsed.pointer("/message/content").and_then(|c| c.as_array())
+                if let Some(content) = parsed
+                    .pointer("/message/content")
+                    .and_then(|c| c.as_array())
                 {
                     for block in content {
                         if block.get("type").and_then(|t| t.as_str()) == Some("text") {
@@ -612,7 +774,14 @@ fn spawn_claude_resume(
             let message = if msg.is_empty() {
                 "claude exited with a non-zero status".to_string()
             } else {
-                msg.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+                msg.lines()
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
             };
             let _ = on_event.send(ChunkEvent::Error { message });
         }
