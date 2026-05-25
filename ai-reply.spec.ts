@@ -93,6 +93,29 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await page.locator('.comment-card .btn-primary').click();
 }
 
+// Mounts the app WITHOUT seeding a session, so @claude has nothing to talk to.
+// Used to verify the prompt-to-link behavior.
+async function setupWithoutSession(page: Page): Promise<void> {
+  await page.goto('/');
+  const editor = page.locator('.ProseMirror');
+  await editor.waitFor({ timeout: 5000 });
+  await editor.click();
+  await page.waitForTimeout(100);
+}
+
+// Adds a comment whose initial composer body itself contains @claude (no reply
+// step). Exercises the "tag Claude in the first comment" path.
+async function addCommentTaggingClaude(page: Page, anchor: string, body: string) {
+  await page.keyboard.type(anchor);
+  await page.keyboard.down('Meta');
+  await page.keyboard.press('a');
+  await page.keyboard.up('Meta');
+  await page.waitForTimeout(50);
+  await page.locator('.add-comment-btn').click();
+  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.locator('.add-comment-compose .btn-primary').click();
+}
+
 test('AI reply: pending → delta → done streams chunks and clears spinner', async ({ page }) => {
   await setupWithMock(page, [
     { kind: 'delta', text: 'Sure — ' },
@@ -113,6 +136,34 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
+});
+
+test('AI reply: @claude in the initial comment triggers a reply', async ({ page }) => {
+  await setupWithMock(page, [
+    { kind: 'delta', text: 'On it — ' },
+    { kind: 'delta', text: 'done.' },
+    { kind: 'done' },
+  ]);
+
+  await addCommentTaggingClaude(page, 'hello world', '@claude please review this');
+
+  const aiReply = page.locator('.comment-reply-ai').first();
+  await expect(aiReply).toBeVisible({ timeout: 2000 });
+  await expect(aiReply.locator('.comment-reply-text')).toContainText('On it — done.', {
+    timeout: 3000,
+  });
+  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+});
+
+test('AI reply: @claude with no linked session opens the session picker', async ({ page }) => {
+  await setupWithoutSession(page);
+  // Session picker must not be open yet.
+  await expect(page.locator('.session-picker')).toHaveCount(0);
+
+  await addCommentTaggingClaude(page, 'hello world', '@claude take a look');
+
+  // Tagging Claude with no session prompts the user to link one.
+  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
 });
 
 test('AI reply: pending → error shows Re-link button', async ({ page }) => {

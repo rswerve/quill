@@ -32,10 +32,14 @@ export default function App() {
   const [editorKey] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [, setScrollTick] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
 
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // A @claude request made before a session was linked; fired once the user
+  // picks a session via the picker we open for them.
+  const pendingAIRequestRef = useRef<{ commentId: string; userText: string } | null>(null);
 
   const { filePath, isDirty, markDirty, openFile, openFilePath, saveFile, saveFileAs, newFile } =
     useFileManager();
@@ -67,7 +71,10 @@ export default function App() {
   useEffect(() => {
     const el = scrollAreaRef.current?.querySelector('.editor-scroll-area');
     if (!el) return;
-    const onScroll = () => setScrollTick((t) => t + 1);
+    const onScroll = () => {
+      setScrollTick((t) => t + 1);
+      setScrollTop((el as HTMLElement).scrollTop);
+    };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
@@ -241,12 +248,24 @@ export default function App() {
         setTimeout(() => {
           addReply(comment.id, text, AUTHOR);
         }, 0);
+        // Tagging @claude in the initial comment should ask Claude too — same
+        // as tagging it in a later reply. We pass the just-created comment
+        // directly rather than going through handleAIReplyRequest, which looks
+        // up `comments` (the new comment isn't in that array until next render).
+        if (/@claude\b/i.test(text)) {
+          if (aiSession) {
+            void claudeReply.ask(comment, text, aiSession);
+          } else {
+            pendingAIRequestRef.current = { commentId: comment.id, userText: text };
+            setPickerOpen(true);
+          }
+        }
       }
       setActiveCommentId(comment.id);
       setPendingCommentSelection(null);
       setSelectionInfo(null);
     },
-    [pendingCommentSelection, selectionInfo, editor, addComment, addReply],
+    [pendingCommentSelection, selectionInfo, editor, addComment, addReply, aiSession, claudeReply],
   );
 
   const handleSelectionChange = useCallback((info: SelectionInfo | null) => {
@@ -277,9 +296,15 @@ export default function App() {
 
   const handleAIReplyRequest = useCallback(
     (commentId: string, userText: string) => {
-      if (!aiSession) return;
       const comment = comments.find((c) => c.id === commentId);
       if (!comment) return;
+      if (!aiSession) {
+        // No session linked yet — stash the request and prompt the user to
+        // link one. handlePickSession fires the stashed request afterwards.
+        pendingAIRequestRef.current = { commentId, userText };
+        setPickerOpen(true);
+        return;
+      }
       // Fire-and-forget; useClaudeReply handles errors via failAIReply.
       void claudeReply.ask(comment, userText, aiSession);
     },
@@ -291,8 +316,16 @@ export default function App() {
       setAISession(binding);
       setPickerOpen(false);
       markDirty();
+      // If the picker was opened because of a @claude request with no session,
+      // fire that request now against the freshly-linked session.
+      const pending = pendingAIRequestRef.current;
+      pendingAIRequestRef.current = null;
+      if (pending) {
+        const comment = comments.find((c) => c.id === pending.commentId);
+        if (comment) void claudeReply.ask(comment, pending.userText, binding);
+      }
     },
-    [markDirty],
+    [markDirty, comments, claudeReply],
   );
 
   const handleUnlinkSession = useCallback(() => {
@@ -355,6 +388,7 @@ export default function App() {
           activeCommentId={activeCommentId}
           containerRef={commentLayerRef}
           trackedChanges={trackedChanges}
+          scrollTop={scrollTop}
           aiSession={aiSession}
           onReply={(id, text) => addReply(id, text, AUTHOR)}
           onAIReplyRequest={handleAIReplyRequest}

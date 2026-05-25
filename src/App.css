@@ -1,5 +1,11 @@
 /* ── Reset ──────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 /* ── Design tokens ──────────────────────────────────────────────── */
 /* Default theme = "sage" (the original look). Override colors per theme
@@ -8,159 +14,159 @@
    play. */
 :root,
 :root.theme-sage {
-  --color-bg:           #B8C2BA;
-  --color-chrome:       #AEBAB1;
-  --color-chrome-dark:  #A6B2A9;
-  --color-page:         #F8F9F6;
-  --color-ink:          #222722;
-  --color-ink-mid:      #4E564E;
-  --color-ink-light:    #838E83;
-  --color-border:       #9EAB9F;
-  --color-border-light: #C4CEC5;
-  --color-accent:        #5C7A62;
-  --color-accent-light:  #DDE6DE;
-  --color-accent-mid:    #8EAD93;
-  --color-accent-dark:   #3A5C3F;
-  --color-ai-bg:        #E8ECF0;
-  --color-ai-text:      #5A6E82;
-  --color-human-avatar-bg:   #DDD8CE;
-  --color-human-avatar-text: #6B5E4A;
-  --color-track-add-bg:     #DDE6DE;  /* accent-light sage wash */
-  --color-track-add-text:   #3A5C3F;
-  --color-track-add-line:   #5C7A62;
-  --color-track-del-bg:     #E6D8D2;  /* muted clay against sage */
-  --color-track-del-text:   #6B4A3F;
-  --color-track-del-line:   #8E6857;
-  --color-highlight-bg:     #EAE8C8;
-  --color-highlight-border: #B0AC6A;
+  --color-bg: #b8c2ba;
+  --color-chrome: #aebab1;
+  --color-chrome-dark: #a6b2a9;
+  --color-page: #f8f9f6;
+  --color-ink: #222722;
+  --color-ink-mid: #4e564e;
+  --color-ink-light: #838e83;
+  --color-border: #9eab9f;
+  --color-border-light: #c4cec5;
+  --color-accent: #5c7a62;
+  --color-accent-light: #dde6de;
+  --color-accent-mid: #8ead93;
+  --color-accent-dark: #3a5c3f;
+  --color-ai-bg: #e8ecf0;
+  --color-ai-text: #5a6e82;
+  --color-human-avatar-bg: #ddd8ce;
+  --color-human-avatar-text: #6b5e4a;
+  --color-track-add-bg: #dde6de; /* accent-light sage wash */
+  --color-track-add-text: #3a5c3f;
+  --color-track-add-line: #5c7a62;
+  --color-track-del-bg: #e6d8d2; /* muted clay against sage */
+  --color-track-del-text: #6b4a3f;
+  --color-track-del-line: #8e6857;
+  --color-highlight-bg: #eae8c8;
+  --color-highlight-border: #b0ac6a;
 }
 
 /* Warm neutral + Dragonfly accent (Behr 2026: Mocha Ice / Dainty Lace /
    Hidden Gem / Dragonfly / Urban Nature / Terra Cotta Urn / Wheat Bread). */
 :root.theme-warm {
-  --color-bg:           #C9BFAE;  /* Mocha Ice, slightly deeper */
-  --color-chrome:       #E2DACD;  /* Dainty Lace */
-  --color-chrome-dark:  #D4CBBC;
-  --color-page:         #F1ECE2;  /* Blank Canvas */
-  --color-ink:          #2C3438;  /* Hidden Gem ink */
-  --color-ink-mid:      #555E61;
-  --color-ink-light:    #8A8E8A;
-  --color-border:       #C0B5A2;
-  --color-border-light: #DED5C5;
-  --color-accent:        #6B8682;  /* Dragonfly */
-  --color-accent-light:  #DCE3E0;
-  --color-accent-mid:    #9AB1AC;
-  --color-accent-dark:   #4A615E;
-  --color-ai-bg:        #ECE5D6;
-  --color-ai-text:      #6B5E4A;
-  --color-human-avatar-bg:   #DDD0BB;
-  --color-human-avatar-text: #6B5239;
-  --color-track-add-bg:     #DCE3E0;  /* Dragonfly wash */
-  --color-track-add-text:   #4A615E;
-  --color-track-add-line:   #6B8682;
-  --color-track-del-bg:     #E8D6CE;  /* Terra Cotta wash */
-  --color-track-del-text:   #6E4232;
-  --color-track-del-line:   #9C5E4A;
-  --color-highlight-bg:     #E8DEC0;  /* Wheat Bread */
-  --color-highlight-border: #B59E66;
+  --color-bg: #c9bfae; /* Mocha Ice, slightly deeper */
+  --color-chrome: #e2dacd; /* Dainty Lace */
+  --color-chrome-dark: #d4cbbc;
+  --color-page: #f1ece2; /* Blank Canvas */
+  --color-ink: #2c3438; /* Hidden Gem ink */
+  --color-ink-mid: #555e61;
+  --color-ink-light: #8a8e8a;
+  --color-border: #c0b5a2;
+  --color-border-light: #ded5c5;
+  --color-accent: #6b8682; /* Dragonfly */
+  --color-accent-light: #dce3e0;
+  --color-accent-mid: #9ab1ac;
+  --color-accent-dark: #4a615e;
+  --color-ai-bg: #ece5d6;
+  --color-ai-text: #6b5e4a;
+  --color-human-avatar-bg: #ddd0bb;
+  --color-human-avatar-text: #6b5239;
+  --color-track-add-bg: #dce3e0; /* Dragonfly wash */
+  --color-track-add-text: #4a615e;
+  --color-track-add-line: #6b8682;
+  --color-track-del-bg: #e8d6ce; /* Terra Cotta wash */
+  --color-track-del-text: #6e4232;
+  --color-track-del-line: #9c5e4a;
+  --color-highlight-bg: #e8dec0; /* Wheat Bread */
+  --color-highlight-border: #b59e66;
 }
 
 /* Cool slate + Watery accent (Behr 2026: Watery / Blank Canvas / Nocturne
    Blue / Adirondack Blue / Urban Nature / Rumors / Beehive). */
 :root.theme-cool {
-  --color-bg:           #BFCED1;  /* Watery, a hair deeper for chrome contrast */
-  --color-chrome:       #D6E0E2;
-  --color-chrome-dark:  #C7D2D5;
-  --color-page:         #FBFBF8;
-  --color-ink:          #1F2A36;  /* Nocturne Blue */
-  --color-ink-mid:      #475866;
-  --color-ink-light:    #8593A0;
-  --color-border:       #A8B7BC;
-  --color-border-light: #CCD8DC;
-  --color-accent:        #4F6B82;  /* Adirondack Blue */
-  --color-accent-light:  #DCE4EC;
-  --color-accent-mid:    #7E94A8;
-  --color-accent-dark:   #2F4A60;
-  --color-ai-bg:        #DCE4EC;
-  --color-ai-text:      #2F4A60;
-  --color-human-avatar-bg:   #D7CFCC;
-  --color-human-avatar-text: #5A4244;
-  --color-track-add-bg:     #DCE4EC;  /* Adirondack wash */
-  --color-track-add-text:   #2F4A60;
-  --color-track-add-line:   #4F6B82;
-  --color-track-del-bg:     #E8D6D9;  /* Rumors wash */
-  --color-track-del-text:   #5C2A33;
-  --color-track-del-line:   #8B4453;
-  --color-highlight-bg:     #ECDDB4;  /* Beehive */
-  --color-highlight-border: #B89344;
+  --color-bg: #bfced1; /* Watery, a hair deeper for chrome contrast */
+  --color-chrome: #d6e0e2;
+  --color-chrome-dark: #c7d2d5;
+  --color-page: #fbfbf8;
+  --color-ink: #1f2a36; /* Nocturne Blue */
+  --color-ink-mid: #475866;
+  --color-ink-light: #8593a0;
+  --color-border: #a8b7bc;
+  --color-border-light: #ccd8dc;
+  --color-accent: #4f6b82; /* Adirondack Blue */
+  --color-accent-light: #dce4ec;
+  --color-accent-mid: #7e94a8;
+  --color-accent-dark: #2f4a60;
+  --color-ai-bg: #dce4ec;
+  --color-ai-text: #2f4a60;
+  --color-human-avatar-bg: #d7cfcc;
+  --color-human-avatar-text: #5a4244;
+  --color-track-add-bg: #dce4ec; /* Adirondack wash */
+  --color-track-add-text: #2f4a60;
+  --color-track-add-line: #4f6b82;
+  --color-track-del-bg: #e8d6d9; /* Rumors wash */
+  --color-track-del-text: #5c2a33;
+  --color-track-del-line: #8b4453;
+  --color-highlight-bg: #ecddb4; /* Beehive */
+  --color-highlight-border: #b89344;
 }
 
 /* Earthy desert (Behr 2026: Iced Copper / Rodeo Tan / Baronial Brown /
    Ecological / Terra Cotta Urn / Beehive). */
 :root.theme-earth {
-  --color-bg:           #C2A988;  /* Rodeo Tan, deeper */
-  --color-chrome:       #D2B999;  /* Iced Copper, lightened */
-  --color-chrome-dark:  #C2A988;
-  --color-page:         #EFE5D3;  /* Dainty Lace warm */
-  --color-ink:          #3A2A1F;  /* Baronial Brown */
-  --color-ink-mid:      #5F4636;
-  --color-ink-light:    #8E7B68;
-  --color-border:       #B19A7B;
-  --color-border-light: #D6C2A6;
-  --color-accent:        #7A8466;  /* Ecological */
-  --color-accent-light:  #DDE2CF;
-  --color-accent-mid:    #A2AC8C;
-  --color-accent-dark:   #56603F;
-  --color-ai-bg:        #E2D7C0;
-  --color-ai-text:      #5F4636;
-  --color-human-avatar-bg:   #D6B89A;
-  --color-human-avatar-text: #4A2F1E;
-  --color-track-add-bg:     #DDE2CF;  /* Ecological wash */
-  --color-track-add-text:   #56603F;
-  --color-track-add-line:   #7A8466;
-  --color-track-del-bg:     #E8D2C5;  /* Iced Copper wash */
-  --color-track-del-text:   #6E3F2A;
-  --color-track-del-line:   #A06A4A;
-  --color-highlight-bg:     #EAD49A;  /* Beehive */
-  --color-highlight-border: #B89344;
+  --color-bg: #c2a988; /* Rodeo Tan, deeper */
+  --color-chrome: #d2b999; /* Iced Copper, lightened */
+  --color-chrome-dark: #c2a988;
+  --color-page: #efe5d3; /* Dainty Lace warm */
+  --color-ink: #3a2a1f; /* Baronial Brown */
+  --color-ink-mid: #5f4636;
+  --color-ink-light: #8e7b68;
+  --color-border: #b19a7b;
+  --color-border-light: #d6c2a6;
+  --color-accent: #7a8466; /* Ecological */
+  --color-accent-light: #dde2cf;
+  --color-accent-mid: #a2ac8c;
+  --color-accent-dark: #56603f;
+  --color-ai-bg: #e2d7c0;
+  --color-ai-text: #5f4636;
+  --color-human-avatar-bg: #d6b89a;
+  --color-human-avatar-text: #4a2f1e;
+  --color-track-add-bg: #dde2cf; /* Ecological wash */
+  --color-track-add-text: #56603f;
+  --color-track-add-line: #7a8466;
+  --color-track-del-bg: #e8d2c5; /* Iced Copper wash */
+  --color-track-del-text: #6e3f2a;
+  --color-track-del-line: #a06a4a;
+  --color-highlight-bg: #ead49a; /* Beehive */
+  --color-highlight-border: #b89344;
 }
 
 /* ── Non-color tokens (shared across themes) ────────────────────── */
 :root {
   --font-serif: 'Playfair Display', Georgia, serif;
-  --font-sans:  'Lato', system-ui, sans-serif;
+  --font-sans: 'Lato', system-ui, sans-serif;
 
   --text-doc-title: 26px;
-  --text-doc-h2:    16px;
-  --text-body:      13.5px;
-  --text-ui:        12px;
-  --text-meta:      11px;
-  --text-label:     10px;
+  --text-doc-h2: 16px;
+  --text-body: 13.5px;
+  --text-ui: 12px;
+  --text-meta: 11px;
+  --text-label: 10px;
 
   --leading-tight: 1.25;
-  --leading-body:  1.85;
-  --leading-ui:    1.6;
+  --leading-body: 1.85;
+  --leading-ui: 1.6;
 
-  --space-xs:  4px;
-  --space-sm:  8px;
-  --space-md:  12px;
-  --space-lg:  16px;
-  --space-xl:  24px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
   --space-2xl: 36px;
   --space-3xl: 52px;
 
-  --radius-sm:   3px;
-  --radius-md:   5px;
-  --radius-lg:   8px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
   --radius-full: 50%;
 
-  --toolbar-height:      42px;
-  --statusbar-height:    28px;
+  --toolbar-height: 42px;
+  --statusbar-height: 28px;
   --comment-panel-width: 260px;
-  --page-max-width:      816px;
-  --page-padding-x:      96px;
-  --page-padding-y:      72px;
-  --page-break-gap:      40px;
+  --page-max-width: 816px;
+  --page-padding-x: 96px;
+  --page-padding-y: 72px;
+  --page-break-gap: 40px;
 
   font-family: var(--font-sans);
   font-size: var(--text-ui);
@@ -171,7 +177,12 @@
   text-rendering: optimizeLegibility;
 }
 
-html, body, #root { height: 100%; overflow: hidden; }
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
 
 /* ── App shell ──────────────────────────────────────────────────── */
 .app {
@@ -211,14 +222,33 @@ html, body, #root { height: 100%; overflow: hidden; }
   font-weight: 700;
   color: var(--color-ink-mid);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, transform 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s,
+    transform 0.1s;
   white-space: nowrap;
 }
 
-.toolbar-btn:hover { background: var(--color-accent-light); color: var(--color-accent-dark); }
-.toolbar-btn:active { transform: scale(0.97); }
-.toolbar-btn.disabled { opacity: 0.4; cursor: default; }
-.toolbar-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar-btn:hover {
+  background: var(--color-accent-light);
+  color: var(--color-accent-dark);
+}
+.toolbar-btn:active {
+  transform: scale(0.97);
+}
+.toolbar-btn.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.toolbar-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 .toolbar-divider {
   width: 0.5px;
@@ -228,7 +258,9 @@ html, body, #root { height: 100%; overflow: hidden; }
   flex-shrink: 0;
 }
 
-.toolbar-spacer { flex: 1; }
+.toolbar-spacer {
+  flex: 1;
+}
 
 /* ── Mode switch (Editing / Suggesting) ─────────────────────────── */
 .mode-switch {
@@ -248,7 +280,9 @@ html, body, #root { height: 100%; overflow: hidden; }
   transition: background 0.1s;
 }
 
-.mode-switch:hover { background: var(--color-accent-light); }
+.mode-switch:hover {
+  background: var(--color-accent-light);
+}
 
 .mode-switch-track {
   position: relative;
@@ -273,10 +307,16 @@ html, body, #root { height: 100%; overflow: hidden; }
   transition: transform 0.15s;
 }
 
-.mode-switch.on .mode-switch-track { background: var(--color-accent); }
-.mode-switch.on .mode-switch-thumb { transform: translateX(14px); }
+.mode-switch.on .mode-switch-track {
+  background: var(--color-accent);
+}
+.mode-switch.on .mode-switch-thumb {
+  transform: translateX(14px);
+}
 
-.mode-switch.on { color: var(--color-accent-dark); }
+.mode-switch.on {
+  color: var(--color-accent-dark);
+}
 
 .mode-switch-label {
   white-space: nowrap;
@@ -302,7 +342,9 @@ html, body, #root { height: 100%; overflow: hidden; }
   font-family: var(--font-sans);
   font-size: var(--text-meta);
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
 }
 
 .theme-selector-trigger:hover {
@@ -414,7 +456,9 @@ html, body, #root { height: 100%; overflow: hidden; }
 }
 
 /* ── TipTap / ProseMirror ───────────────────────────────────────── */
-.editor-content { outline: none; }
+.editor-content {
+  outline: none;
+}
 
 .ProseMirror {
   outline: none;
@@ -436,8 +480,12 @@ html, body, #root { height: 100%; overflow: hidden; }
   word-break: break-word;
 }
 
-.ProseMirror p { margin-bottom: 0.65em; }
-.ProseMirror strong { font-weight: 600; }
+.ProseMirror p {
+  margin-bottom: 0.65em;
+}
+.ProseMirror strong {
+  font-weight: 600;
+}
 
 .ProseMirror h1 {
   font-family: var(--font-serif);
@@ -469,13 +517,19 @@ html, body, #root { height: 100%; overflow: hidden; }
   margin-bottom: 8px;
 }
 
-.ProseMirror ul, .ProseMirror ol {
+.ProseMirror ul,
+.ProseMirror ol {
   padding-left: 1.5em;
   margin-bottom: 14px;
   font-weight: 400;
 }
-.ProseMirror li { margin-bottom: 0; line-height: 1.35; }
-.ProseMirror li p { margin-bottom: 0; }
+.ProseMirror li {
+  margin-bottom: 0;
+  line-height: 1.35;
+}
+.ProseMirror li p {
+  margin-bottom: 0;
+}
 
 .ProseMirror blockquote {
   border-left: 0.5px solid var(--color-border);
@@ -514,8 +568,13 @@ html, body, #root { height: 100%; overflow: hidden; }
   margin: var(--space-2xl) 0;
 }
 
-.ProseMirror a { color: var(--color-accent); text-decoration: underline; }
-.ProseMirror a:hover { color: var(--color-accent-dark); }
+.ProseMirror a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.ProseMirror a:hover {
+  color: var(--color-accent-dark);
+}
 
 .ProseMirror p.is-editor-empty:first-child::before {
   content: 'Start writing...';
@@ -534,8 +593,14 @@ mark.comment-mark {
   padding: 1px 0;
   cursor: pointer;
 }
-mark.comment-active { background: var(--color-highlight-bg); }
-mark.comment-resolved { background: transparent; border-bottom: none; text-decoration: underline dotted var(--color-ink-light); }
+mark.comment-active {
+  background: var(--color-highlight-bg);
+}
+mark.comment-resolved {
+  background: transparent;
+  border-bottom: none;
+  text-decoration: underline dotted var(--color-ink-light);
+}
 
 /* ── Track changes ──────────────────────────────────────────────── */
 ins.track-insert {
@@ -559,10 +624,27 @@ del.track-delete {
 }
 
 /* Accept/reject toolbar buttons */
-.toolbar-btn-accept { background: var(--color-accent) !important; color: #fff !important; font-size: var(--text-meta); font-weight: 700; padding: 0 10px; }
-.toolbar-btn-accept:hover { background: var(--color-accent-dark) !important; color: #fff !important; }
-.toolbar-btn-reject { border: 0.5px solid var(--color-border); color: var(--color-ink-mid); font-size: var(--text-meta); font-weight: 300; padding: 0 10px; }
-.toolbar-btn-reject:hover { background: var(--color-accent-light) !important; }
+.toolbar-btn-accept {
+  background: var(--color-accent) !important;
+  color: #fff !important;
+  font-size: var(--text-meta);
+  font-weight: 700;
+  padding: 0 10px;
+}
+.toolbar-btn-accept:hover {
+  background: var(--color-accent-dark) !important;
+  color: #fff !important;
+}
+.toolbar-btn-reject {
+  border: 0.5px solid var(--color-border);
+  color: var(--color-ink-mid);
+  font-size: var(--text-meta);
+  font-weight: 300;
+  padding: 0 10px;
+}
+.toolbar-btn-reject:hover {
+  background: var(--color-accent-light) !important;
+}
 
 /* ── Comment panel ──────────────────────────────────────────────── */
 .comment-layer {
@@ -573,11 +655,28 @@ del.track-delete {
   height: 100%;
   background: var(--color-chrome);
   border-left: 0.5px solid var(--color-border);
-  overflow-y: auto;
+  overflow: hidden;
   padding-top: var(--space-md);
 }
 
-.comment-layer > * { pointer-events: auto; }
+/* Inner wrapper translated by the editor's scrollTop so cards scroll in
+   lockstep with the document. Cards inside are absolutely positioned. The
+   wrapper spans the whole layer but must not intercept clicks on chrome that
+   sits above it (e.g. the "Show resolved" button) — only its card children
+   are interactive. */
+.comment-layer-scroll {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.comment-layer > .show-resolved-btn {
+  pointer-events: auto;
+}
+.comment-layer-scroll > * {
+  pointer-events: auto;
+}
 
 /* ── Comment card ───────────────────────────────────────────────── */
 .comment-card {
@@ -592,9 +691,15 @@ del.track-delete {
   transition: border-color 0.1s;
 }
 
-.comment-card:hover { border-color: var(--color-accent-mid); }
-.comment-card-active { border-color: var(--color-accent-mid) !important; }
-.comment-card-resolved { opacity: 0.55; }
+.comment-card:hover {
+  border-color: var(--color-accent-mid);
+}
+.comment-card-active {
+  border-color: var(--color-accent-mid) !important;
+}
+.comment-card-resolved {
+  opacity: 0.55;
+}
 
 .comment-header {
   padding: 10px 12px 8px;
@@ -654,7 +759,9 @@ del.track-delete {
   word-break: break-word;
 }
 
-.comment-thread-line { display: none; }
+.comment-thread-line {
+  display: none;
+}
 
 /* ── Comment reply block ────────────────────────────────────────── */
 .comment-reply {
@@ -670,7 +777,8 @@ del.track-delete {
 }
 
 /* ── Comment action buttons ─────────────────────────────────────── */
-.comment-resolve-btn, .comment-delete-btn {
+.comment-resolve-btn,
+.comment-delete-btn {
   background: none;
   border: none;
   cursor: pointer;
@@ -682,8 +790,14 @@ del.track-delete {
   flex-shrink: 0;
   font-weight: 300;
 }
-.comment-resolve-btn:hover { color: var(--color-accent); background: var(--color-accent-light); }
-.comment-delete-btn:hover { color: var(--color-track-del-text); background: var(--color-track-del-bg); }
+.comment-resolve-btn:hover {
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+.comment-delete-btn:hover {
+  color: var(--color-track-del-text);
+  background: var(--color-track-del-bg);
+}
 
 /* ── Reply form ─────────────────────────────────────────────────── */
 .comment-reply-trigger {
@@ -698,9 +812,14 @@ del.track-delete {
   padding: 2px 0;
   text-align: left;
 }
-.comment-reply-trigger:hover { color: var(--color-accent); }
+.comment-reply-trigger:hover {
+  color: var(--color-accent);
+}
 
-.comment-reply-form { margin: 0; border-top: 0.5px solid var(--color-border-light); }
+.comment-reply-form {
+  margin: 0;
+  border-top: 0.5px solid var(--color-border-light);
+}
 
 .comment-reply-input {
   width: 100%;
@@ -738,10 +857,15 @@ del.track-delete {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s, transform 0.1s;
+  transition:
+    background 0.1s,
+    transform 0.1s;
   z-index: 20;
 }
-.add-comment-btn:hover { background: var(--color-accent-dark); transform: scale(1.05); }
+.add-comment-btn:hover {
+  background: var(--color-accent-dark);
+  transform: scale(1.05);
+}
 
 .add-comment-compose {
   width: calc(var(--comment-panel-width) - 20px);
@@ -775,8 +899,13 @@ del.track-delete {
   cursor: pointer;
   font-family: var(--font-sans);
 }
-.btn-primary:hover { background: var(--color-accent-dark); }
-.btn-primary:disabled { opacity: 0.5; cursor: default; }
+.btn-primary:hover {
+  background: var(--color-accent-dark);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .btn-ghost {
   font-size: var(--text-meta);
@@ -789,7 +918,9 @@ del.track-delete {
   cursor: pointer;
   font-family: var(--font-sans);
 }
-.btn-ghost:hover { background: var(--color-accent-light); }
+.btn-ghost:hover {
+  background: var(--color-accent-light);
+}
 
 /* ── Show resolved button ───────────────────────────────────────── */
 .show-resolved-btn {
@@ -807,7 +938,10 @@ del.track-delete {
   font-family: var(--font-sans);
   text-align: center;
 }
-.show-resolved-btn:hover { background: var(--color-accent-light); color: var(--color-accent-dark); }
+.show-resolved-btn:hover {
+  background: var(--color-accent-light);
+  color: var(--color-accent-dark);
+}
 
 /* ── Suggestion cards ──────────────────────────────────────────── */
 .suggestion-card {
@@ -821,9 +955,15 @@ del.track-delete {
   cursor: pointer;
   transition: border-color 0.1s;
 }
-.suggestion-card:hover { border-color: var(--color-accent-mid); }
-.suggestion-card-insert .comment-thread-line { background: var(--color-track-add-line); }
-.suggestion-card-delete .comment-thread-line { background: var(--color-track-del-line); }
+.suggestion-card:hover {
+  border-color: var(--color-accent-mid);
+}
+.suggestion-card-insert .comment-thread-line {
+  background: var(--color-track-add-line);
+}
+.suggestion-card-delete .comment-thread-line {
+  background: var(--color-track-del-line);
+}
 
 .suggestion-type-badge {
   font-size: 11px;
@@ -857,7 +997,9 @@ del.track-delete {
   font-size: 12px;
   font-family: var(--font-sans);
 }
-.suggestion-accept-btn:hover { filter: brightness(0.96); }
+.suggestion-accept-btn:hover {
+  filter: brightness(0.96);
+}
 .suggestion-reject-btn {
   flex: 1;
   padding: 3px 8px;
@@ -869,7 +1011,9 @@ del.track-delete {
   font-size: 12px;
   font-family: var(--font-sans);
 }
-.suggestion-reject-btn:hover { filter: brightness(0.96); }
+.suggestion-reject-btn:hover {
+  filter: brightness(0.96);
+}
 
 /* ── Footer / status bar ────────────────────────────────────────── */
 .footer {
@@ -896,7 +1040,9 @@ del.track-delete {
   font-weight: 700;
 }
 
-.footer-sep { color: var(--color-border); }
+.footer-sep {
+  color: var(--color-border);
+}
 
 .footer-suggesting-badge {
   font-size: var(--text-meta);
@@ -956,7 +1102,9 @@ del.track-delete {
   margin-top: 6px;
   border-top: none;
 }
-.comment-reply-ai .comment-header { align-items: center; }
+.comment-reply-ai .comment-header {
+  align-items: center;
+}
 .ai-badge {
   display: inline-block;
   background: var(--color-accent);
@@ -983,8 +1131,16 @@ del.track-delete {
   animation: ai-spin 0.8s linear infinite;
   vertical-align: middle;
 }
-@keyframes ai-spin { to { transform: rotate(360deg); } }
-.btn-cancel-ai { margin-top: 4px; padding: 2px 8px; font-size: 11px; }
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.btn-cancel-ai {
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
 .comment-reply-error {
   background: var(--color-track-del-bg);
   border: 1px solid var(--color-track-del-line);
@@ -1012,7 +1168,10 @@ del.track-delete {
   color: var(--color-ink-mid);
   cursor: pointer;
 }
-.footer-ai-binding:hover { background: var(--color-chrome); color: var(--color-ink); }
+.footer-ai-binding:hover {
+  background: var(--color-chrome);
+  color: var(--color-ink);
+}
 .footer-ai-binding.linked {
   background: var(--color-ai-bg);
   border-color: var(--color-accent-mid);
@@ -1028,7 +1187,9 @@ del.track-delete {
   font-size: var(--text-meta);
   color: var(--color-accent);
 }
-.footer-ai-binding-label:hover { background: var(--color-accent-light); }
+.footer-ai-binding-label:hover {
+  background: var(--color-accent-light);
+}
 .footer-ai-binding-unlink {
   background: transparent;
   border: none;
@@ -1039,7 +1200,10 @@ del.track-delete {
   color: var(--color-ink-light);
   line-height: 1;
 }
-.footer-ai-binding-unlink:hover { background: var(--color-track-del-bg); color: var(--color-track-del-text); }
+.footer-ai-binding-unlink:hover {
+  background: var(--color-track-del-bg);
+  color: var(--color-track-del-text);
+}
 
 /* ── Session picker modal ──────────────────────────────────────── */
 .session-picker-overlay {
@@ -1081,7 +1245,9 @@ del.track-delete {
   padding: 0 4px;
   line-height: 1;
 }
-.session-picker-close:hover { color: var(--color-ink); }
+.session-picker-close:hover {
+  color: var(--color-ink);
+}
 .session-picker-body {
   flex: 1;
   display: flex;
@@ -1103,8 +1269,12 @@ del.track-delete {
   padding: 8px 10px;
   cursor: pointer;
 }
-.session-row:hover { background: var(--color-chrome); }
-.session-row.selected { background: var(--color-accent-light); }
+.session-row:hover {
+  background: var(--color-chrome);
+}
+.session-row.selected {
+  background: var(--color-accent-light);
+}
 .session-row-title {
   font-size: 13px;
   color: var(--color-ink);
@@ -1127,7 +1297,9 @@ del.track-delete {
   white-space: nowrap;
   flex: 1;
 }
-.session-row-time { flex-shrink: 0; }
+.session-row-time {
+  flex-shrink: 0;
+}
 
 .session-picker-preview {
   flex: 1;
@@ -1183,11 +1355,27 @@ del.track-delete {
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────── */
-.editor-scroll-area::-webkit-scrollbar { width: 6px; }
-.editor-scroll-area::-webkit-scrollbar-track { background: transparent; }
-.editor-scroll-area::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
-.editor-scroll-area::-webkit-scrollbar-thumb:hover { background: var(--color-ink-light); }
+.editor-scroll-area::-webkit-scrollbar {
+  width: 6px;
+}
+.editor-scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+.editor-scroll-area::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+.editor-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-light);
+}
 
-.comment-layer::-webkit-scrollbar { width: 4px; }
-.comment-layer::-webkit-scrollbar-track { background: transparent; }
-.comment-layer::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+.comment-layer::-webkit-scrollbar {
+  width: 4px;
+}
+.comment-layer::-webkit-scrollbar-track {
+  background: transparent;
+}
+.comment-layer::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}

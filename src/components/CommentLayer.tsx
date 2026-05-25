@@ -10,6 +10,7 @@ interface CommentLayerProps {
   activeCommentId: string | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   trackedChanges: TrackedChangeInfo[];
+  scrollTop: number;
   aiSession: AISessionBinding | null;
   onReply: (commentId: string, text: string) => void;
   onAIReplyRequest: (commentId: string, userText: string) => void;
@@ -85,6 +86,7 @@ export default function CommentLayer({
   activeCommentId,
   containerRef,
   trackedChanges,
+  scrollTop,
   aiSession,
   onReply,
   onAIReplyRequest,
@@ -218,41 +220,46 @@ export default function CommentLayer({
         </button>
       )}
 
-      {displayComments.map((comment) => {
-        const pos = cardPositions.find((p) => p.cardId === comment.id);
-        const top = pos?.nudgedTop ?? comment.from * 0.5;
-        return (
-          <CommentCard
-            key={comment.id}
-            comment={comment}
-            isActive={comment.id === activeCommentId}
-            top={top}
-            aiSession={aiSession}
-            onReply={onReply}
-            onAIReplyRequest={onAIReplyRequest}
-            onCancelAIReply={onCancelAIReply}
-            onOpenSessionPicker={onOpenSessionPicker}
-            onResolve={onResolve}
-            onUnresolve={onUnresolve}
-            onDelete={onDelete}
-            onClick={onActivate}
-          />
-        );
-      })}
+      {/* Cards are positioned in document space (anchor offset + scrollTop), so
+          translating this wrapper by -scrollTop makes the comment column scroll
+          in lockstep with the editor — like Google Docs. */}
+      <div className="comment-layer-scroll" style={{ transform: `translateY(${-scrollTop}px)` }}>
+        {displayComments.map((comment) => {
+          const pos = cardPositions.find((p) => p.cardId === comment.id);
+          const top = pos?.nudgedTop ?? comment.from * 0.5;
+          return (
+            <CommentCard
+              key={comment.id}
+              comment={comment}
+              isActive={comment.id === activeCommentId}
+              top={top}
+              aiSession={aiSession}
+              onReply={onReply}
+              onAIReplyRequest={onAIReplyRequest}
+              onCancelAIReply={onCancelAIReply}
+              onOpenSessionPicker={onOpenSessionPicker}
+              onResolve={onResolve}
+              onUnresolve={onUnresolve}
+              onDelete={onDelete}
+              onClick={onActivate}
+            />
+          );
+        })}
 
-      {pendingChanges.map((change) => {
-        const pos = cardPositions.find((p) => p.cardId === change.id);
-        const top = pos?.nudgedTop ?? change.from * 0.5;
-        return (
-          <SuggestionCard
-            key={change.id}
-            change={change}
-            top={top}
-            onAccept={onAcceptChange}
-            onReject={onRejectChange}
-          />
-        );
-      })}
+        {pendingChanges.map((change) => {
+          const pos = cardPositions.find((p) => p.cardId === change.id);
+          const top = pos?.nudgedTop ?? change.from * 0.5;
+          return (
+            <SuggestionCard
+              key={change.id}
+              change={change}
+              top={top}
+              onAccept={onAcceptChange}
+              onReject={onRejectChange}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
