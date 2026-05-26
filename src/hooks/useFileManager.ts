@@ -75,9 +75,6 @@ export function useFileManager(): UseFileManagerReturn {
           if (match) {
             sidecar = { ...sidecar, aiSession: match };
             autoBound = true;
-            console.log(
-              `[quill] auto-linked ${path} to Claude session ${match.sessionId.slice(0, 8)}`,
-            );
           }
         } catch (e) {
           console.warn('Auto-bind scan failed:', e);

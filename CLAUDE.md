@@ -9,20 +9,30 @@ Quill is a Tauri 2 + React 19 desktop app — a Markdown editor with track-chang
 ## Commands
 
 ```bash
-# Frontend dev server only (no Tauri window)
-npm run dev
+npm run dev            # Frontend dev server only (no Tauri window, no file I/O)
+npm run tauri dev      # Full desktop app (Tauri + frontend, hot-reload)
+npm run tauri build    # Production bundle
 
-# Full desktop app (Tauri + frontend, hot-reload)
-npm run tauri dev
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint
+npm run format:check   # prettier --check
+npm test               # vitest (unit + component)
+npx playwright test    # end-to-end specs
 
-# Production build
-npm run tauri build
-
-# TypeScript type-check (only static analysis available — no linter, no tests)
-npm run build
+cd src-tauri && cargo test && cargo clippy -- -D warnings && cargo fmt --check
 ```
 
-No test framework is configured. No ESLint or Prettier configs exist — `tsc` is the only static analysis.
+CI (`.github/workflows/ci.yml`) runs the frontend checks (typecheck, eslint, prettier, vitest) and the Rust checks (fmt, clippy, test) on every push and PR to `main`. Match that bar before pushing.
+
+## Contributing
+
+`main` is the default branch and is **not** committed to directly. To land a change:
+
+1. Branch off `main` (e.g. `git checkout -b fix/short-description`).
+2. Make the change and keep CI green locally: run the full check bar above (typecheck, lint, `format:check`, vitest, and `cargo fmt --check && cargo clippy -- -D warnings && cargo test`). Fix formatting with `npm run format` / `cargo fmt`.
+3. Commit, push the branch, and open a PR against `main` with `gh pr create`. Let CI pass on the PR before merging.
+
+Keep a PR scoped to one coherent theme. Update `PRD.md` and this file when behavior or architecture changes.
 
 ## Architecture
 
@@ -50,10 +60,18 @@ Every saved file produces two files:
 
 The sidecar is deleted automatically on save if it contains no data.
 
-### Tauri Backend (`src-tauri/src/`)
+### Tauri Backend (`src-tauri/src/lib.rs`)
 
-Five commands: `read_file`, `write_file`, `delete_file`, `show_open_dialog`, `show_save_dialog`. These are the only Rust entry points; all file system and dialog operations must go through them.
+The Rust layer (`run()`) registers every IPC command — these are the only Rust entry points, so all file system, dialog, and Claude-process work must go through them:
+
+- **File & dialog:** `read_file`, `write_file`, `delete_file`, `show_open_dialog`, `show_save_dialog`.
+- **Claude session integration:** `list_claude_sessions`, `read_claude_session_preview`, `find_session_for_markdown`, `check_session_compacted`, `spawn_claude_resume`, `cancel_claude_resume`. These read `~/.claude/projects/*.jsonl` to locate and preview sessions, and spawn the `claude` CLI (`--resume … --print --output-format stream-json`) to stream `@claude` replies back over an IPC `Channel`. Spawned children are tracked in a `ChildRegistry` so they can be cancelled.
+- **Deep links:** `handle_deep_link` / `parse_quill_open` parse `quill://open?file=…` URLs.
+
+### `@claude` reply flow (`src/hooks/useClaudeReply.ts` + backend)
+
+`useClaudeReply` builds the prompt (anchor text, comment thread, and either a line diff or the full document depending on `check_session_compacted`), calls `spawn_claude_resume`, and consumes the streamed `ChunkEvent`s (`Delta` / `Done` / `Error` / `Cancelled`) to update the AI reply in place. Streaming parsing (fence holdback for the `quill-edits` block) lives in `utils/trackedEdits.ts`.
 
 ### Core Types (`src/types/index.ts`)
 
-`Comment`, `Reply`, `Suggestion`, `SidecarFile` — the shared data contract between frontend state and the sidecar format. Change these carefully; they affect both runtime state and serialized files.
+`Comment`, `Reply`, `Suggestion`, `AISessionBinding`, `SidecarFile` — the shared data contract between frontend state and the serialized sidecar (`version: 2`). Change these carefully; they affect both runtime state and on-disk files. See `PRD.md` for the full as-built behavior.
