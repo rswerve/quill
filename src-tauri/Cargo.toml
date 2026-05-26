@@ -1,9 +1,11 @@
 [package]
 name = "quill"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "A desktop Markdown editor with tracked changes, inline comments, and AI replies."
+authors = ["Sam Powers <samueldarinpowers@gmail.com>"]
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/sam-powers/quill"
 
 [lib]
 name = "quill_lib"
