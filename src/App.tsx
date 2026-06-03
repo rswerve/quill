@@ -43,6 +43,10 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [, setScrollTick] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+  // Whether a real native menu owns the file-operation accelerators. Defaults
+  // to false so JS handles the shortcuts (dev server / e2e); flipped to true
+  // once the backend confirms a native menu exists (see effect below).
+  const [hasNativeMenu, setHasNativeMenu] = useState(false);
 
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
@@ -155,11 +159,28 @@ export default function App() {
   }, [filePath, isDirty]);
 
   const loadFileResult = useCallback(
-    (result: { content: string; sidecar: SidecarFile; filePath: string }) => {
+    (result: {
+      content: string;
+      sidecar: SidecarFile;
+      filePath: string;
+      sidecarError?: string | null;
+    }) => {
       editorRef.current?.setContent(result.content);
       setComments(result.sidecar.comments ?? []);
       setSuggestions(result.sidecar.suggestions ?? []);
       const session = result.sidecar.aiSession ?? null;
+      // A sidecar that exists but failed to parse means real comments/suggestions
+      // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
+      if (result.sidecarError) {
+        const name = `${result.filePath.replace(/\.md$/i, '')}.comments.json`;
+        window.setTimeout(() => {
+          window.alert(
+            `The comments file for this document could not be read and was left untouched:\n\n${name}\n\n${result.sidecarError}\n\n` +
+              `Your comments and suggestions are NOT loaded, but the file on disk is preserved. ` +
+              `Saving will not overwrite it. Fix or remove the file, then reopen.`,
+          );
+        }, 0);
+      }
       setAISession(session);
       // Force the session choice up front: if we opened a non-empty doc with no
       // linked Claude session, surface the picker so the user binds one (and can
@@ -238,32 +259,82 @@ export default function App() {
     setAISession(null);
   }, [newFile, setComments, setSuggestions]);
 
-  // Keyboard shortcuts
+  // Native application menu (File → New/Open/Save/Save As). The Rust side owns
+  // the accelerators and emits an event per item; we map each to the same
+  // handler the in-app shortcuts use. In a non-Tauri context (plain dev server)
+  // the listeners simply never fire.
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const wire = async (event: string, fn: () => void) => {
+          unlisteners.push(await listen(event, () => fn()));
+        };
+        await wire('menu-new', handleNew);
+        await wire('menu-open', handleOpen);
+        await wire('menu-save', handleSave);
+        await wire('menu-save-as', handleSaveAs);
+      } catch {
+        // Non-Tauri context — no native menu.
+      }
+    })();
+    return () => unlisteners.forEach((u) => u());
+  }, [handleNew, handleOpen, handleSave, handleSaveAs]);
+
+  // Detect whether a real native menu is present. We can't infer this from
+  // `__TAURI_INTERNALS__`: the e2e suite mocks that global but has no native
+  // menu, so it must keep handling shortcuts in JS. The `has_native_menu`
+  // command exists only in the real backend (the e2e IPC mock returns null for
+  // it), making it the authoritative signal.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const native = await invoke<boolean>('has_native_menu');
+        if (!cancelled) setHasNativeMenu(native === true);
+      } catch {
+        // Non-Tauri context, or command absent (e2e) — keep JS shortcuts.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Keyboard shortcuts. Under Tauri the native menu owns the file-operation
+  // accelerators (New/Open/Save/Save As), so we skip them here to avoid
+  // double-firing (e.g. opening two file dialogs). Outside Tauri (plain dev
+  // server / e2e) there is no native menu, so we keep handling them in JS.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) return;
 
-      if (e.key === 's' && e.shiftKey) {
-        e.preventDefault();
-        handleSaveAs();
-        return;
+      if (!hasNativeMenu) {
+        if (e.key === 's' && e.shiftKey) {
+          e.preventDefault();
+          handleSaveAs();
+          return;
+        }
+        if (e.key === 's') {
+          e.preventDefault();
+          handleSave();
+          return;
+        }
+        if (e.key === 'o') {
+          e.preventDefault();
+          handleOpen();
+          return;
+        }
+        if (e.key === 'n') {
+          e.preventDefault();
+          handleNew();
+          return;
+        }
       }
-      if (e.key === 's') {
-        e.preventDefault();
-        handleSave();
-        return;
-      }
-      if (e.key === 'o') {
-        e.preventDefault();
-        handleOpen();
-        return;
-      }
-      if (e.key === 'n') {
-        e.preventDefault();
-        handleNew();
-        return;
-      }
+
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
         setZoom((z) => Math.min(2.4, Math.round((z + 0.12) * 100) / 100));
@@ -282,7 +353,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, handleSaveAs, handleOpen, handleNew]);
+  }, [handleSave, handleSaveAs, handleOpen, handleNew, hasNativeMenu]);
 
   useEffect(() => {
     if (!editor) return;
