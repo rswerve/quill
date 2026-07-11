@@ -1423,6 +1423,33 @@ del.track-delete {
   color: var(--color-ink);
 }
 
+/* Provenance chip: links a Claude suggestion card back to the comment whose
+   @claude request produced it. Muted by design — metadata, not an action. */
+.suggestion-origin-chip {
+  display: inline-block;
+  margin: 6px 12px 0;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--color-ink-light);
+  background: transparent;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.suggestion-origin-chip:hover {
+  color: var(--color-ink-mid);
+  border-color: var(--color-accent-mid);
+}
+
+/* Reverse link: while a comment is the active annotation, its child
+   suggestion cards carry a subtle outline (cards only — the in-document
+   highlight is AnnotationFocus's job). */
+.card-origin-active {
+  outline: 1.5px solid var(--color-accent-mid);
+  outline-offset: 1px;
+}
+
 .suggestion-replace-old {
   text-decoration: line-through;
   color: var(--color-track-del-text);

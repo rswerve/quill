@@ -120,6 +120,112 @@ test.describe('review metadata survives save and reopen', () => {
   });
 });
 
+test.describe('suggestion cards link back to their origin comment', () => {
+  const comment = {
+    id: 'fixture-comment',
+    anchorText: 'hello',
+    from: 1,
+    to: 6,
+    author: 'Reviewer',
+    createdAt: '2026-07-11T18:00:00Z',
+    resolved: false,
+    replies: [],
+  };
+  // The edit targets "world" — OUTSIDE the comment's highlight ("hello") —
+  // exercising the document-scale protocol end to end.
+  const EDIT_REPLY =
+    'Replaced the noun.\n\n```quill-edits\n{"summary":"Replaced the noun.","edits":[{"find":"world","replace":"planet"}]}\n```';
+
+  async function openWithClaudeEdit(page: import('@playwright/test').Page) {
+    await setupMemoryTauri(page, {
+      openPath: DOC_PATH,
+      savePath: DOC_PATH,
+      mockAI: true,
+      aiReplyText: EDIT_REPLY,
+      files: {
+        [DOC_PATH]: 'hello world',
+        [SIDECAR_PATH]: sidecar({
+          comments: [comment],
+          aiSession: ipcFixtures.autoBindSession,
+        }),
+      },
+    });
+    await openMemoryFile(page);
+    await page.locator('.comment-reply-trigger').click();
+    await page.locator('.comment-reply-input').fill('@claude replace the noun');
+    await page.locator('.comment-card .btn-primary').click();
+    await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+  }
+
+  test('a mocked @claude edit stamps the origin and the card chips back to the comment', async ({
+    page,
+  }) => {
+    await openWithClaudeEdit(page);
+
+    const chip = page.locator('.suggestion-card-replace .suggestion-origin-chip');
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveText('↳ comment');
+    // The chip's tooltip carries the origin comment's anchor text.
+    await expect(chip).toHaveAttribute('title', 'hello');
+
+    // Posting the reply may have left the comment active (composer clicks
+    // bubble to the card). Activate the suggestion first so the chip click
+    // below deterministically activates — not toggles — the comment.
+    await page.locator('.suggestion-card-replace').click();
+    await expect(page.locator('.suggestion-card-replace')).not.toHaveClass(/card-origin-active/);
+
+    // Clicking the chip activates the origin comment, which outlines its
+    // child suggestion card (the reverse link).
+    await chip.click();
+    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+
+    // Saving persists the provenance into the sidecar.
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    const suggestions = await page.evaluate(
+      (path) => JSON.parse(window.__quillFiles[path]).suggestions,
+      SIDECAR_PATH,
+    );
+    expect(suggestions.length).toBeGreaterThan(0);
+    for (const s of suggestions as Array<{ originCommentId?: string }>) {
+      expect(s.originCommentId).toBe('fixture-comment');
+    }
+  });
+
+  test('the chip survives save and reopen', async ({ page }) => {
+    await openWithClaudeEdit(page);
+
+    const reopened = await saveNewAndReopen(page);
+    const card = reopened.locator('.suggestion-card-replace');
+    await expect(card).toBeVisible();
+    await expect(card.locator('.suggestion-origin-chip')).toHaveText('↳ comment');
+  });
+
+  test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {
+    await openWithClaudeEdit(page);
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    const files = await page.evaluate(
+      () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
+    );
+
+    // Reopen with the origin comment stripped from the sidecar: the suggestion
+    // still restores, but its provenance points at a deleted comment — no chip.
+    const stripped = JSON.parse(files[SIDECAR_PATH]);
+    stripped.comments = [];
+    const reopened = await page.context().newPage();
+    await setupMemoryTauri(reopened, {
+      files: { ...files, [SIDECAR_PATH]: JSON.stringify(stripped) },
+      openPath: DOC_PATH,
+    });
+    await openMemoryFile(reopened);
+
+    await expect(reopened.locator('.suggestion-card-replace')).toBeVisible();
+    await expect(reopened.locator('.suggestion-origin-chip')).toHaveCount(0);
+    await expect(reopened.locator('.card-origin-active')).toHaveCount(0);
+  });
+});
+
 test.describe('review-only mutations participate in dirty-state safety', () => {
   const comment = {
     id: 'fixture-comment',

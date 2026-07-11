@@ -339,6 +339,14 @@ export default function CommentLayer({
 
         {suggestionGroups.map((group) => {
           const pos = cardPositions.find((p) => p.cardId === group.cardId);
+          // Provenance link: the change's origin comment, only while it still
+          // exists (a deleted comment degrades to no chip and no outline).
+          const originId =
+            group.kind === 'replacement'
+              ? (group.del.originCommentId ?? group.ins.originCommentId)
+              : group.change.originCommentId;
+          const originComment = originId ? (comments.find((c) => c.id === originId) ?? null) : null;
+          const originActive = originComment !== null && originComment.id === activeCommentId;
           if (group.kind === 'replacement') {
             const { del, ins } = group;
             return (
@@ -351,10 +359,13 @@ export default function CommentLayer({
                   activeSuggestionId === del.id ||
                   activeSuggestionId === ins.id
                 }
+                originComment={originComment}
+                originActive={originActive}
                 top={pos?.nudgedTop ?? del.from * 0.5}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
+                onActivateComment={onActivate}
               />
             );
           }
@@ -364,10 +375,13 @@ export default function CommentLayer({
               key={change.id}
               change={change}
               isActive={change.id === activeSuggestionId}
+              originComment={originComment}
+              originActive={originActive}
               top={pos?.nudgedTop ?? change.from * 0.5}
               onAccept={onAcceptChange}
               onReject={onRejectChange}
               onClick={onActivateSuggestion}
+              onActivateComment={onActivate}
             />
           );
         })}

@@ -1,4 +1,4 @@
-import type { TrackedChangeInfo } from '../types';
+import type { Comment, TrackedChangeInfo } from '../types';
 import { timeAgo, clip } from '../utils/format';
 
 interface ReplacementCardProps {
@@ -7,28 +7,38 @@ interface ReplacementCardProps {
   /** The insert half — the replacement text. */
   ins: TrackedChangeInfo;
   isActive: boolean;
+  /** The still-existing comment this replacement originated from, or null
+   *  (no provenance, or the comment was deleted — degrade to no chip). */
+  originComment: Comment | null;
+  /** True while the origin comment is the active annotation — the card gets a
+   *  subtle outline linking it back to its comment. */
+  originActive: boolean;
   top: number;
   /** All callbacks receive the shared pairId, resolving both halves at once. */
   onAccept: (pairId: string) => void;
   onReject: (pairId: string) => void;
   onClick: (pairId: string) => void;
+  onActivateComment: (commentId: string) => void;
 }
 
 export default function ReplacementCard({
   del,
   ins,
   isActive,
+  originComment,
+  originActive,
   top,
   onAccept,
   onReject,
   onClick,
+  onActivateComment,
 }: ReplacementCardProps) {
   const pairId = del.pairId ?? ins.pairId ?? del.id;
   const authorLabel = del.authorID === 'claude' ? 'Claude (AI)' : del.authorID;
 
   return (
     <div
-      className={`suggestion-card suggestion-card-replace${isActive ? ' suggestion-card-active' : ''}`}
+      className={`suggestion-card suggestion-card-replace${isActive ? ' suggestion-card-active' : ''}${originActive ? ' card-origin-active' : ''}`}
       style={{ top }}
       data-card-id={pairId}
       onClick={() => onClick(pairId)}
@@ -54,6 +64,19 @@ export default function ReplacementCard({
           {'"'}
         </span>
       </div>
+
+      {originComment && (
+        <button
+          className="suggestion-origin-chip"
+          title={clip(originComment.anchorText, 80)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onActivateComment(originComment.id);
+          }}
+        >
+          ↳ comment
+        </button>
+      )}
 
       <div className="suggestion-actions">
         <button
