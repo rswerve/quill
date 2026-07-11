@@ -44,9 +44,13 @@ export default function Footer({
   const words = countWords(text);
   const chars = text.length;
 
-  const { from } = editor.state.selection;
-  const resolved = editor.state.doc.resolve(from);
-  const line = Math.max(1, resolved.depth);
+  const { head } = editor.state.selection;
+  const resolved = editor.state.doc.resolve(head);
+  let line = 0;
+  editor.state.doc.nodesBetween(0, head, (node) => {
+    if (node.isTextblock) line += 1;
+  });
+  line = Math.max(1, line);
   const col = resolved.parentOffset + 1;
 
   const fileName = filePath ? basename(filePath) : 'Untitled';
