@@ -109,6 +109,12 @@ describe('buildReviewPrompt', () => {
     expect(prompt).toContain('previously authored');
   });
 
+  it('uses neutral framing for a Quill-created session', () => {
+    const prompt = buildReviewPrompt(BOTH, 'doc', null, true);
+    expect(prompt).not.toContain('previously authored');
+    expect(prompt).toContain('the user is editing in Quill');
+  });
+
   it('lists the reference folder manifest when a context is provided', () => {
     const prompt = buildReviewPrompt(BOTH, 'doc', {
       folder: '/refs/research',

@@ -351,3 +351,39 @@ describe('useClaudeReply cancel during the spawn-await window', () => {
     expect(spies.finishAIReply).not.toHaveBeenCalled();
   });
 });
+
+describe('useClaudeReply Quill-created session contract', () => {
+  afterEach(() => {
+    delete window.__quillMock;
+    delete window.__quillTestSession;
+    vi.clearAllMocks();
+  });
+
+  it('skips compaction, sends the full neutral prompt, and enables backend creation', async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'spawn_claude_resume') return Promise.resolve('fresh-token');
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+    const { opts } = makeOpts(new MockClaude());
+    const { result } = renderHook(() => useClaudeReply(opts));
+
+    await act(async () => {
+      await result.current.ask(makeComment(), 'review this', {
+        ...BINDING,
+        createdByQuill: true,
+      });
+    });
+
+    expect(invokeMock.mock.calls.map(([cmd]) => cmd)).not.toContain('check_session_compacted');
+    const spawn = invokeMock.mock.calls.find(([cmd]) => cmd === 'spawn_claude_resume');
+    expect(spawn?.[1]).toMatchObject({
+      sessionId: 's1',
+      cwd: '/tmp',
+      allowCreate: true,
+    });
+    const prompt = (spawn?.[1] as { prompt: string }).prompt;
+    expect(prompt).not.toContain('previously authored');
+    expect(prompt).toContain('Here is the full current document:');
+    expect(prompt).toContain('doc body');
+  });
+});

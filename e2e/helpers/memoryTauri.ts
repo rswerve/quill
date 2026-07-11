@@ -5,6 +5,7 @@ interface MemoryTauriOptions {
   openPath?: string;
   savePath?: string;
   mockAI?: boolean;
+  newSessionId?: string;
 }
 
 /**
@@ -14,7 +15,7 @@ interface MemoryTauriOptions {
  */
 export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions = {}) {
   await page.addInitScript(
-    ({ files, openPath, savePath, mockAI }) => {
+    ({ files, openPath, savePath, mockAI, newSessionId }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
       const memoryFiles: Record<string, string> = { ...files };
@@ -32,6 +33,12 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       };
       globals.__quillFiles = memoryFiles;
       globals.__quillCalls = calls;
+      if (newSessionId) {
+        Object.defineProperty(crypto, 'randomUUID', {
+          configurable: true,
+          value: () => newSessionId,
+        });
+      }
       globals.__TAURI_INTERNALS__ = {
         transformCallback: (callback: (payload: unknown) => void) => {
           const id = nextCallbackId++;
@@ -73,7 +80,8 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       if (mockAI) {
         globals.__quillMock = {
           compaction: { compacted: true, originalMarkdown: null },
-          spawn: (_args: unknown, onEvent: (event: unknown) => void) => {
+          spawn: (args: unknown, onEvent: (event: unknown) => void) => {
+            globals.__quillLastSpawnArgs = args;
             setTimeout(() => {
               onEvent({ kind: 'delta', text: 'Persist this answer.' });
               onEvent({ kind: 'done' });
@@ -97,6 +105,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       openPath: options.openPath ?? null,
       savePath: options.savePath ?? null,
       mockAI: options.mockAI ?? false,
+      newSessionId: options.newSessionId ?? null,
     },
   );
 

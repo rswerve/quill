@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn claude_resume_args_terminate_variadic_add_dir_before_the_prompt() {
-        let args = claude_resume_args("session-123", "prompt text", Some("/refs"));
+        let args = claude_resume_args("session-123", "prompt text", Some("/refs"), false).unwrap();
         assert_eq!(
             args,
             vec![
@@ -547,12 +547,77 @@ mod tests {
 
     #[test]
     fn claude_resume_args_protect_a_prompt_without_an_additional_directory() {
-        let args = claude_resume_args("session-123", "--prompt-like-text", None);
+        let args = claude_resume_args("session-123", "--prompt-like-text", None, false).unwrap();
         assert_eq!(
             args[args.len() - 2..],
             ["--".to_string(), "--prompt-like-text".to_string()]
         );
         assert!(!args.iter().any(|arg| arg == "--add-dir"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quill_created_session_uses_create_then_resume_and_retries_create_without_transcript() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
+        let project = home.path().join(".claude/projects/-tmp-quill-doc");
+        fs::create_dir_all(&project).unwrap();
+
+        let fake = home.path().join("fake-claude");
+        fs::write(
+            &fake,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" > "$FAKE_ARGV_LOG"
+printf '{"type":"result","is_error":false,"result":"ok"}\n'
+if [ "${FAKE_CREATE_TRANSCRIPT:-1}" = "1" ] && [ "$1" = "--session-id" ]; then
+  printf '{"type":"assistant","sessionId":"%s","cwd":"/tmp/quill-doc"}\n' "$2" > "$FAKE_TRANSCRIPT"
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        let transcript = project.join(format!("{session_id}.jsonl"));
+        let argv_log = home.path().join("argv.log");
+        let create_args =
+            claude_resume_args(session_id, "prompt text", Some("/refs"), true).unwrap();
+        assert_eq!(&create_args[..2], ["--session-id", session_id]);
+        assert_eq!(
+            &create_args[create_args.len() - 4..],
+            ["--add-dir", "/refs", "--", "prompt text"]
+        );
+        let first = Command::new(&fake)
+            .args(&create_args)
+            .env("FAKE_ARGV_LOG", &argv_log)
+            .env("FAKE_TRANSCRIPT", &transcript)
+            .output()
+            .unwrap();
+        assert!(first.status.success());
+        assert!(transcript.is_file());
+
+        let resume_args = claude_resume_args(session_id, "follow-up", Some("/refs"), true).unwrap();
+        assert_eq!(&resume_args[..2], ["--resume", session_id]);
+
+        let failed_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let failed_transcript = project.join(format!("{failed_id}.jsonl"));
+        let failed_args =
+            claude_resume_args(failed_id, "first attempt", Some("/refs"), true).unwrap();
+        let failed = Command::new(&fake)
+            .args(&failed_args)
+            .env("FAKE_ARGV_LOG", &argv_log)
+            .env("FAKE_TRANSCRIPT", &failed_transcript)
+            .env("FAKE_CREATE_TRANSCRIPT", "0")
+            .output()
+            .unwrap();
+        assert!(failed.status.success());
+        assert!(!failed_transcript.exists());
+        let retry_args = claude_resume_args(failed_id, "retry", Some("/refs"), true).unwrap();
+        assert_eq!(&retry_args[..2], ["--session-id", failed_id]);
     }
 
     #[test]
@@ -1537,9 +1602,19 @@ fn classify_claude_outcome(
     Err(message)
 }
 
-fn claude_resume_args(session_id: &str, prompt: &str, add_dir: Option<&str>) -> Vec<String> {
+fn claude_resume_args(
+    session_id: &str,
+    prompt: &str,
+    add_dir: Option<&str>,
+    allow_create: bool,
+) -> Result<Vec<String>, String> {
+    let create_new = allow_create && find_session_jsonl(session_id)?.is_none();
     let mut args = vec![
-        "--resume".to_string(),
+        if create_new {
+            "--session-id".to_string()
+        } else {
+            "--resume".to_string()
+        },
         session_id.to_string(),
         "--print".to_string(),
         "--output-format".to_string(),
@@ -1556,7 +1631,7 @@ fn claude_resume_args(session_id: &str, prompt: &str, add_dir: Option<&str>) -> 
     // causing --print to fail with "Input must be provided".
     args.push("--".to_string());
     args.push(prompt.to_string());
-    args
+    Ok(args)
 }
 
 #[tauri::command]
@@ -1566,13 +1641,20 @@ fn spawn_claude_resume(
     cwd: String,
     prompt: String,
     add_dir: Option<String>,
+    allow_create: bool,
     on_event: Channel<ChunkEvent>,
 ) -> Result<String, String> {
     let claude_bin = resolve_claude_binary()?;
-    // Every binding points at an existing Claude Code session; resume it. An
-    // unknown session fails loudly via --resume.
+    // Quill-minted bindings create their transcript on first contact, then
+    // automatically take the ordinary resume path once the jsonl exists.
+    // Unknown non-Quill sessions still fail loudly via --resume.
     let mut cmd = Command::new(&claude_bin);
-    cmd.args(claude_resume_args(&session_id, &prompt, add_dir.as_deref()));
+    cmd.args(claude_resume_args(
+        &session_id,
+        &prompt,
+        add_dir.as_deref(),
+        allow_create,
+    )?);
     // A packaged .app launched from Finder inherits launchd's minimal PATH,
     // which lacks Node — and `claude` is a node script, so it would die with
     // `env: node: No such file or directory`. Give the child a PATH that

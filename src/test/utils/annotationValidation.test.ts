@@ -5,6 +5,7 @@ import {
   sanitizeAISession,
   sanitizeContextFolder,
 } from '../../utils/annotationValidation';
+import type { AISessionBinding } from '../../types';
 import autoBindSession from '../../../test/fixtures/ipc/auto-bind-session.json';
 
 const validComment = {
@@ -120,10 +121,14 @@ describe('sanitizeAISession', () => {
     expect(sanitizeAISession(valid)).toEqual(valid);
   });
 
-  it('preserves the canonical IPC binding while ignoring compatible extra fields', () => {
+  it('preserves createdByQuill on a Quill-minted binding', () => {
+    const created: AISessionBinding = {
+      ...valid,
+      provider: 'claude-code',
+      createdByQuill: true,
+    };
     const sanitized = sanitizeAISession({ ...valid, createdByQuill: true });
-    expect(sanitized).toEqual(valid);
-    expect(sanitized).not.toHaveProperty('createdByQuill');
+    expect(sanitized).toEqual(created);
   });
 
   it('rejects a binding with the wrong provider', () => {

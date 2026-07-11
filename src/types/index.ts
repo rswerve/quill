@@ -17,6 +17,12 @@ export interface AISessionBinding {
   sessionId: string;
   cwd: string;
   linkedAt: string;
+  /**
+   * True when Quill minted this binding instead of linking an existing
+   * authoring session. The first request creates the session under this ID;
+   * prompts must not claim that Claude authored the document.
+   */
+  createdByQuill?: boolean;
 }
 
 export interface Comment {

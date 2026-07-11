@@ -20,6 +20,8 @@ interface SessionPickerProps {
   open: boolean;
   onClose: () => void;
   onPick: (binding: AISessionBinding) => void;
+  /** Folder used as cwd for a Quill-minted session; null until the doc is saved. */
+  newSessionCwd: string | null;
 }
 
 function formatRelativeTime(unixSeconds: number): string {
@@ -30,7 +32,12 @@ function formatRelativeTime(unixSeconds: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-export default function SessionPicker({ open, onClose, onPick }: SessionPickerProps) {
+export default function SessionPicker({
+  open,
+  onClose,
+  onPick,
+  newSessionCwd,
+}: SessionPickerProps) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -75,6 +82,17 @@ export default function SessionPicker({ open, onClose, onPick }: SessionPickerPr
     });
   }
 
+  function handleStartNew() {
+    if (!newSessionCwd) return;
+    onPick({
+      provider: 'claude-code',
+      sessionId: crypto.randomUUID(),
+      cwd: newSessionCwd,
+      linkedAt: new Date().toISOString(),
+      createdByQuill: true,
+    });
+  }
+
   return (
     <div className="session-picker-overlay" onClick={onClose}>
       <div className="session-picker" onClick={(e) => e.stopPropagation()}>
@@ -91,8 +109,8 @@ export default function SessionPicker({ open, onClose, onPick }: SessionPickerPr
             {!sessions && !loadError && <div className="session-picker-loading">Loading…</div>}
             {sessions?.length === 0 && (
               <div className="session-picker-empty">
-                No Claude Code sessions found under <code>~/.claude/projects/</code>. Start a Claude
-                Code session in this document’s folder, then reopen this picker to link it.
+                No Claude Code sessions found under <code>~/.claude/projects/</code> — you can still
+                give this document a fresh one with “Start new session” below.
               </div>
             )}
             {sessions?.map((s) => (
@@ -141,6 +159,18 @@ export default function SessionPicker({ open, onClose, onPick }: SessionPickerPr
         </div>
 
         <div className="session-picker-footer">
+          <button
+            className="btn-ghost session-picker-new"
+            onClick={handleStartNew}
+            disabled={!newSessionCwd}
+            title={
+              newSessionCwd
+                ? `Bind a fresh Claude session running in ${newSessionCwd}`
+                : 'Save the document first — the new session runs in the document’s folder'
+            }
+          >
+            Start new session
+          </button>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>

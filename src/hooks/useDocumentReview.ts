@@ -88,10 +88,13 @@ export function buildReviewPrompt(
   options: ReviewOptions,
   docMarkdown: string,
   context: PromptContext | null,
+  freshSession = false,
 ): string {
   const guidance = options.guidance.trim();
   const head = [
-    'You are reviewing a markdown document you previously authored, now edited by the user in Quill.',
+    freshSession
+      ? 'You are reviewing a markdown document the user is editing in Quill.'
+      : 'You are reviewing a markdown document you previously authored, now edited by the user in Quill.',
     '',
     'The user asked for a review of the FULL document.',
     guidance
@@ -225,7 +228,8 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
 
       // A review always sends the full document, so the compaction check that
       // gates the comment-reply diff is irrelevant here.
-      const prompt = buildReviewPrompt(options, opts.getDocMarkdown(), context);
+      const fresh = binding.createdByQuill === true;
+      const prompt = buildReviewPrompt(options, opts.getDocMarkdown(), context, fresh);
 
       let rawAccum = '';
 
@@ -324,6 +328,7 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
             cwd: binding.cwd,
             prompt,
             addDir: contextFolder,
+            allowCreate: fresh,
           },
           dispatch,
         );
@@ -341,6 +346,7 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
           cwd: binding.cwd,
           prompt,
           addDir: contextFolder,
+          allowCreate: fresh,
           onEvent: channel,
         });
         // A cancel that landed during the spawn await orphaned this child —

@@ -1251,6 +1251,7 @@ export default function App() {
 
       <SessionPicker
         open={pickerOpen}
+        newSessionCwd={filePath ? dirname(filePath) : null}
         onClose={() => {
           setPickerOpen(false);
           // Closing without picking abandons a stashed review request — the
