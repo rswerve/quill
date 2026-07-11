@@ -100,6 +100,7 @@ function sanitizeSuggestion(raw: unknown): Suggestion | null {
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
     ...(isNonEmptyString(raw.pairId) ? { pairId: raw.pairId } : {}),
+    ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
   };
 }
 

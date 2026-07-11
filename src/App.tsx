@@ -253,10 +253,16 @@ export default function App() {
   );
 
   // Apply Claude's quote-based edits as tracked-change suggestions. Forces
-  // suggesting mode on (under Claude's author id) for the duration, applies each
-  // located edit back-to-front, then restores the user's prior mode/author.
+  // suggesting mode on (under Claude's author id, stamped with the originating
+  // comment when one is given) for the duration, applies each located edit
+  // back-to-front, then restores the user's prior mode/author.
   const applyTrackedEdits = useCallback(
-    (comment: { from: number; to: number }, edits: QuillEdit[], scope: EditScope) => {
+    (
+      comment: { from: number; to: number },
+      edits: QuillEdit[],
+      scope: EditScope,
+      originCommentId?: string,
+    ) => {
       const ed = editor;
       if (!ed) return { applied: 0, skipped: edits.length };
 
@@ -273,6 +279,7 @@ export default function App() {
       try {
         ed.commands.setTrackChangesEnabled(true);
         ed.commands.setTrackChangesAuthor(CLAUDE_AUTHOR_ID);
+        ed.commands.setTrackChangesOrigin(originCommentId ?? null);
         for (const e of placed) {
           // Back-to-front: applying a later edit doesn't shift earlier offsets.
           ed.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
@@ -281,6 +288,7 @@ export default function App() {
       } finally {
         ed.commands.setTrackChangesEnabled(priorEnabled);
         ed.commands.setTrackChangesAuthor(priorAuthor);
+        ed.commands.setTrackChangesOrigin(null);
       }
       return { applied, skipped };
     },
@@ -311,6 +319,12 @@ export default function App() {
     getRangeTexts,
     applyTrackedEdits,
     getContextFolder: useCallback(() => contextFolderRef.current, []),
+    // Read live at ask time (not from the trackedChanges state mirror) so the
+    // prompt's pending-suggestions section can't lag a just-applied edit.
+    getPendingSuggestions: useCallback(
+      () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
+      [editor],
+    ),
   });
 
   // Doc-scoped wrapper for the full-document review: the same tracked-edit

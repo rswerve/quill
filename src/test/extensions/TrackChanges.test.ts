@@ -393,6 +393,70 @@ describe('TrackChanges extension', () => {
     });
   });
 
+  describe('origin comment stamping', () => {
+    beforeEach(() => {
+      editor = makeEditor('<p>Hello world</p>');
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('claude');
+    });
+
+    it('stamps originCommentId on a fresh insertion while an origin is set', () => {
+      editor.commands.setTrackChangesOrigin('comment-1');
+      editor.commands.insertContentAt(7, 'beautiful ');
+
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].originCommentId).toBe('comment-1');
+    });
+
+    it('stamps originCommentId on both halves of a fresh replacement', () => {
+      editor.commands.setTrackChangesOrigin('comment-1');
+      editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('Hi').run();
+
+      const changes = getTrackedChanges(editor);
+      const del = changes.find((c) => c.operation === 'delete');
+      const ins = changes.find((c) => c.operation === 'insert');
+      expect(del?.originCommentId).toBe('comment-1');
+      expect(ins?.originCommentId).toBe('comment-1');
+    });
+
+    it('omits originCommentId when no origin is set (default)', () => {
+      editor.commands.insertContentAt(7, 'beautiful ');
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].originCommentId).toBeUndefined();
+    });
+
+    it('stops stamping once the origin is reset to null', () => {
+      editor.commands.setTrackChangesOrigin('comment-1');
+      editor.commands.insertContentAt(7, 'beautiful ');
+      editor.commands.setTrackChangesOrigin(null);
+      // A fresh change elsewhere in the doc (not adjacent to the first one).
+      editor.commands.deleteRange({ from: 1, to: 3 });
+
+      const changes = getTrackedChanges(editor);
+      const ins = changes.find((c) => c.operation === 'insert');
+      const del = changes.find((c) => c.operation === 'delete');
+      expect(ins?.originCommentId).toBe('comment-1');
+      expect(del?.originCommentId).toBeUndefined();
+    });
+
+    it('a reused (coalesced) change keeps the origin it was minted with', () => {
+      editor.commands.setTrackChangesOrigin('comment-1');
+      editor.commands.insertContentAt(7, 'beautiful');
+      // The origin moves on (new comment / cleared), but continued typing
+      // adjacent to the pending insertion coalesces into the SAME change —
+      // which must keep its original provenance, not adopt the new one.
+      editor.commands.setTrackChangesOrigin('comment-2');
+      editor.commands.insertContentAt(16, ' shiny');
+
+      const inserts = getTrackedChanges(editor).filter((c) => c.operation === 'insert');
+      expect(inserts).toHaveLength(1);
+      expect(inserts[0].text).toBe('beautiful shiny');
+      expect(inserts[0].originCommentId).toBe('comment-1');
+    });
+  });
+
   describe('getTrackedChanges', () => {
     it('returns an empty array when no changes exist', () => {
       editor = makeEditor('<p>Hello world</p>');

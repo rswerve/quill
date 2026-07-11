@@ -207,7 +207,9 @@ async function fireAIReplyAndCaptureCompactionCall(
   );
 }
 
-test('compaction: non-compacted session sends diff form to claude', async ({ page }) => {
+test('compaction: non-compacted session still sends the full document (no diff form)', async ({
+  page,
+}) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'check_session_compacted') {
       return { compacted: false, originalMarkdown: 'original baseline text' };
@@ -238,12 +240,14 @@ test('compaction: non-compacted session sends diff form to claude', async ({ pag
   );
   expect(calls.some((c) => c.cmd === 'check_session_compacted')).toBe(true);
 
-  // Prompt should be the diff form ("here is the diff between…").
+  // The prompt is document-scale: always the full current document. The
+  // compaction probe only picks the note wording — never a diff form.
   const prompt = await page.evaluate(
     () => (window as unknown as Record<string, unknown>).__capturedPrompt as string,
   );
-  expect(prompt).toContain('Your context is intact');
-  expect(prompt).toContain('diff between what you originally wrote');
+  expect(prompt).toContain('Current document (may have been edited since you wrote it):');
+  expect(prompt).toContain('content to comment on');
+  expect(prompt).not.toContain('diff between what you originally wrote');
   expect(prompt).not.toContain('Your context was compacted');
 });
 

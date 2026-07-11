@@ -19,6 +19,7 @@ playwright-report
 # Claude Code local state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # Editor directories and files
 .vscode/*

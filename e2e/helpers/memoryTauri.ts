@@ -5,6 +5,9 @@ interface MemoryTauriOptions {
   openPath?: string;
   savePath?: string;
   mockAI?: boolean;
+  /** Raw text the mockAI spawn streams back (may include a quill-edits fence).
+   *  Defaults to a plain prose reply. */
+  aiReplyText?: string;
   newSessionId?: string;
 }
 
@@ -15,7 +18,7 @@ interface MemoryTauriOptions {
  */
 export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions = {}) {
   await page.addInitScript(
-    ({ files, openPath, savePath, mockAI, newSessionId }) => {
+    ({ files, openPath, savePath, mockAI, aiReplyText, newSessionId }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
       const memoryFiles: Record<string, string> = { ...files };
@@ -83,7 +86,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           spawn: (args: unknown, onEvent: (event: unknown) => void) => {
             globals.__quillLastSpawnArgs = args;
             setTimeout(() => {
-              onEvent({ kind: 'delta', text: 'Persist this answer.' });
+              onEvent({ kind: 'delta', text: aiReplyText });
               onEvent({ kind: 'done' });
             }, 0);
             return 'fixture-token';
@@ -105,6 +108,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       openPath: options.openPath ?? null,
       savePath: options.savePath ?? null,
       mockAI: options.mockAI ?? false,
+      aiReplyText: options.aiReplyText ?? 'Persist this answer.',
       newSessionId: options.newSessionId ?? null,
     },
   );

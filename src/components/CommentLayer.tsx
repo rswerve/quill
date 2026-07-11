@@ -168,6 +168,18 @@ export default function CommentLayer({
 
   const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
 
+  // A provenance chip is a directed jump, not a toggle: clicking it while its
+  // comment is already active must not deactivate the target. Resolved origin
+  // comments are still valid provenance, so reveal them before activating.
+  const activateOriginComment = useCallback(
+    (commentId: string) => {
+      const origin = comments.find((comment) => comment.id === commentId);
+      if (origin?.resolved) setShowResolved(true);
+      if (activeCommentId !== commentId) onActivate(commentId);
+    },
+    [activeCommentId, comments, onActivate],
+  );
+
   // Stable refs so reflow's identity doesn't change on every render
   // (which would otherwise re-run the editor.on effect → setState → loop).
   const editorRef = useRef(editor);
@@ -339,6 +351,14 @@ export default function CommentLayer({
 
         {suggestionGroups.map((group) => {
           const pos = cardPositions.find((p) => p.cardId === group.cardId);
+          // Provenance link: the change's origin comment, only while it still
+          // exists (a deleted comment degrades to no chip and no outline).
+          const originId =
+            group.kind === 'replacement'
+              ? (group.del.originCommentId ?? group.ins.originCommentId)
+              : group.change.originCommentId;
+          const originComment = originId ? (comments.find((c) => c.id === originId) ?? null) : null;
+          const originActive = originComment !== null && originComment.id === activeCommentId;
           if (group.kind === 'replacement') {
             const { del, ins } = group;
             return (
@@ -351,10 +371,13 @@ export default function CommentLayer({
                   activeSuggestionId === del.id ||
                   activeSuggestionId === ins.id
                 }
+                originComment={originComment}
+                originActive={originActive}
                 top={pos?.nudgedTop ?? del.from * 0.5}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
+                onActivateComment={activateOriginComment}
               />
             );
           }
@@ -364,10 +387,13 @@ export default function CommentLayer({
               key={change.id}
               change={change}
               isActive={change.id === activeSuggestionId}
+              originComment={originComment}
+              originActive={originActive}
               top={pos?.nudgedTop ?? change.from * 0.5}
               onAccept={onAcceptChange}
               onReject={onRejectChange}
               onClick={onActivateSuggestion}
+              onActivateComment={activateOriginComment}
             />
           );
         })}

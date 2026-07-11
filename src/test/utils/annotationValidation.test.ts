@@ -132,6 +132,18 @@ describe('sanitizeSuggestions', () => {
   it('returns [] for non-array input', () => {
     expect(sanitizeSuggestions(null)).toEqual([]);
   });
+
+  it('passes originCommentId through when it is a non-empty string', () => {
+    const [s] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: 'c42' }]);
+    expect(s.originCommentId).toBe('c42');
+  });
+
+  it('drops a malformed originCommentId (empty or non-string), like pairId', () => {
+    const [empty] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: '' }]);
+    expect('originCommentId' in empty).toBe(false);
+    const [numeric] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: 7 }]);
+    expect('originCommentId' in numeric).toBe(false);
+  });
 });
 
 describe('sanitizeAISession', () => {

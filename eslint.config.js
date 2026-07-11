@@ -25,6 +25,8 @@ export default tseslint.config(
   {
     // docs/assets/source holds one-off asset-generation scripts (browser +
     // node globals mixed), same category as src-tauri/icons/source.
-    ignores: ['dist/', 'src-tauri/', 'node_modules/', 'docs/assets/source/'],
+    // .claude/ holds agent worktrees — full repo mirrors whose nested paths
+    // dodge the root-relative patterns above and false-fail the lint.
+    ignores: ['dist/', 'src-tauri/', 'node_modules/', 'docs/assets/source/', '.claude/'],
   },
 );

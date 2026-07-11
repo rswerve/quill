@@ -1,6 +1,14 @@
 import { useCallback, useRef } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AISessionBinding, Comment, EditScope, QuillEdit, QuillEditsBlock } from '../types';
+import type {
+  AISessionBinding,
+  Comment,
+  EditScope,
+  QuillEdit,
+  QuillEditsBlock,
+  TrackedChangeInfo,
+} from '../types';
+import { clip } from '../utils/format';
 
 export type ChunkEvent =
   | { kind: 'model'; model: string }
@@ -27,14 +35,19 @@ interface UseClaudeReplyOptions {
   getDocMarkdown: () => string;
   /** Read the current document text for a comment's range + paragraph. */
   getRangeTexts: (comment: Comment) => RangeTexts;
-  /** Apply Claude's proposed edits as tracked-change suggestions. */
+  /** Apply Claude's proposed edits as tracked-change suggestions, stamped
+   *  with the comment that caused them. */
   applyTrackedEdits: (
     comment: Comment,
     edits: QuillEdit[],
     scope: EditScope,
+    originCommentId?: string,
   ) => { applied: number; skipped: number };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
+  /** Pending tracked changes, read at ask time so the prompt can tell Claude
+   *  what is already proposed and awaiting review. */
+  getPendingSuggestions: () => TrackedChangeInfo[];
 }
 
 /** The linked context folder and its file manifest, for the prompt. */
@@ -44,17 +57,6 @@ export interface PromptContext {
 }
 
 const FENCE = '```quill-edits';
-
-/**
- * Decide how far Claude's edits may reach from the user's wording. Defaults to
- * the highlight; only explicit "whole paragraph"/"whole doc" phrasing widens it.
- */
-export function detectScope(userText: string): EditScope {
-  if (/\bwhole doc\b|\bwhole document\b|\bentire doc(ument)?\b/i.test(userText)) return 'doc';
-  if (/\bwhole paragraph\b|\bentire paragraph\b|\bthis paragraph\b/i.test(userText))
-    return 'paragraph';
-  return 'highlight';
-}
 
 /** How a failed @claude reply should be recovered from, derived from its message. */
 export type ReplyErrorKind = 'transient' | 'session' | 'auth' | 'unknown';
@@ -160,37 +162,20 @@ interface CompactionInfo {
   originalMarkdown: string | null;
 }
 
-function lineDiff(original: string, current: string): string {
-  const o = original.split('\n');
-  const c = current.split('\n');
-  const out: string[] = [];
-  const max = Math.max(o.length, c.length);
-  for (let i = 0; i < max; i++) {
-    const a = o[i];
-    const b = c[i];
-    if (a === b) continue;
-    if (a !== undefined) out.push(`- ${a}`);
-    if (b !== undefined) out.push(`+ ${b}`);
-  }
-  return out.length === 0 ? '(no textual diff)' : out.join('\n');
-}
-
-const SCOPE_INSTRUCTION: Record<EditScope, string> = {
-  highlight: 'Edit ONLY the highlighted text. Do not change the rest of the paragraph or document.',
-  paragraph:
-    'The user asked to edit the whole paragraph — you may edit anywhere in the PARAGRAPH section, but not beyond it.',
-  doc: 'The user asked to edit the whole document — you may edit anywhere in the document.',
-};
-
-/** Exported for tests. */
+/**
+ * Exported for tests. The prompt is document-scale: Claude always receives the
+ * full current document (compaction only changes the note wording, never the
+ * shape) plus the pending-review state, and its edits may land anywhere in the
+ * document — the highlight is framing context, not a fence.
+ */
 export function buildPrompt(
   comment: Comment,
   userText: string,
   docMarkdown: string,
   ranges: RangeTexts,
-  scope: EditScope,
   compaction: CompactionInfo | null,
   context: PromptContext | null,
+  pendingSuggestions: TrackedChangeInfo[] = [],
   freshSession = false,
 ): string {
   // `userText` is appended explicitly as the final line below. Depending on
@@ -230,17 +215,31 @@ export function buildPrompt(
     '```',
     '',
     'Rules for the edits block:',
-    `- ${SCOPE_INSTRUCTION[scope]}`,
-    '- Each "find" must be an EXACT substring of the EDIT-ONLY-THIS text below, copied verbatim as PLAIN TEXT. Do NOT include markdown syntax such as leading "- ", "* ", or "#"; match only the visible characters.',
+    '- Each "find" must be an EXACT substring of the DOCUMENT text, copied verbatim as PLAIN TEXT. Do NOT include markdown syntax such as leading "- ", "* ", or "#"; match only the visible characters.',
+    '- Your edits may touch any part of the document the request warrants. Keep changes minimal and relevant — no unrequested rewrites elsewhere.',
     '- Make "find" strings long/unique enough to be unambiguous. To turn a bullet list into prose, set "find" to the run of list-item text and "replace" to the prose.',
     '- To delete text, use an empty "replace". To insert, you may set "find" to a short unique substring and include it at the start of "replace".',
+    '- Formatting-only changes (bold, italics, underline, etc.) CANNOT be expressed as find/replace edits. If the request is purely formatting, reply in prose explaining that Quill cannot apply formatting suggestions yet — do NOT emit an edits block with identical "find" and "replace".',
     '- Keep any prose before the block to one or two sentences; the "summary" is what the user sees, so write it as a human editor would ("Fixed subject-verb agreement and tightened the opening.").',
     '- Output the block only when you actually changed something. If nothing needs changing, omit it.',
     '',
-    `=== EDIT ONLY THIS (highlighted) ===`,
+    `=== USER IS COMMENTING ON (highlighted) ===`,
     ranges.highlightText,
     `=== PARAGRAPH (context) ===`,
     ranges.paragraphText,
+    '',
+  ];
+
+  const pendingSection = [
+    '=== PENDING SUGGESTIONS (already proposed, awaiting review) ===',
+    'Do not re-propose or conflict with these pending tracked changes.',
+    ...(pendingSuggestions.length > 0
+      ? pendingSuggestions.map((s) => {
+          const kind = s.operation === 'insert' ? 'insertion' : 'deletion';
+          const origin = s.originCommentId ? ` (from comment ${s.originCommentId})` : '';
+          return `- [${kind}] "${clip(s.text, 80)}"${origin}`;
+        })
+      : ['(none)']),
     '',
   ];
 
@@ -256,24 +255,12 @@ export function buildPrompt(
       ]
     : [];
 
-  if (compaction && !compaction.compacted && compaction.originalMarkdown) {
-    return [
-      ...head,
-      ...editProtocol,
-      ...contextSection,
-      '=== FULL DOCUMENT (context) ===',
-      'Your context is intact; here is the diff between what you originally wrote and what the doc looks like now:',
-      '---',
-      lineDiff(compaction.originalMarkdown, docMarkdown),
-      '---',
-    ].join('\n');
-  }
-
   return [
     ...head,
     ...editProtocol,
+    ...pendingSection,
     ...contextSection,
-    '=== FULL DOCUMENT (context) ===',
+    '=== FULL DOCUMENT ===',
     freshSession
       ? 'Here is the full current document:'
       : compaction?.compacted
@@ -388,16 +375,15 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         context = { folder: contextFolder, files };
       }
 
-      const scope = detectScope(userText);
       const ranges = opts.getRangeTexts(comment);
       const prompt = buildPrompt(
         comment,
         userText,
         opts.getDocMarkdown(),
         ranges,
-        scope,
         compaction,
         context,
+        opts.getPendingSuggestions(),
         fresh,
       );
 
@@ -450,7 +436,9 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
             visibleEmitted = rawAccum.indexOf(FENCE);
           }
-          const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, scope);
+          // Edits are document-scale: the highlight frames the request but
+          // does not fence where changes may land.
+          const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, 'doc', comment.id);
           if (skipped > 0) {
             const noun = skipped === 1 ? 'change' : 'changes';
             opts.appendAIReplyChunk(

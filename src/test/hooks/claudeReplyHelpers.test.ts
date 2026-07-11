@@ -1,32 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  buildPrompt,
-  classifyReplyError,
-  detectScope,
-  splitVisible,
-} from '../../hooks/useClaudeReply';
-import type { Comment, Reply } from '../../types';
-
-describe('detectScope', () => {
-  it('defaults to highlight', () => {
-    expect(detectScope('fix the grammar here')).toBe('highlight');
-    expect(detectScope('rewrite this')).toBe('highlight');
-  });
-
-  it('widens to paragraph on explicit paragraph wording', () => {
-    expect(detectScope('clean up the whole paragraph')).toBe('paragraph');
-    expect(detectScope('rewrite this paragraph please')).toBe('paragraph');
-  });
-
-  it('widens to doc on explicit document wording', () => {
-    expect(detectScope('restructure the whole doc')).toBe('doc');
-    expect(detectScope('fix tone across the entire document')).toBe('doc');
-  });
-
-  it('prefers doc over paragraph when both appear', () => {
-    expect(detectScope('the whole document, especially this paragraph')).toBe('doc');
-  });
-});
+import { buildPrompt, classifyReplyError, splitVisible } from '../../hooks/useClaudeReply';
+import type { Comment, Reply, TrackedChangeInfo } from '../../types';
 
 function makeComment(replies: Partial<Reply>[]): Comment {
   return {
@@ -55,15 +29,7 @@ describe('buildPrompt thread handling', () => {
       { text: 'What does this mean?', authorKind: 'user' },
       { text: 'It refers to the intro.', authorKind: 'ai', author: 'Claude' },
     ]);
-    const prompt = buildPrompt(
-      comment,
-      'Can you tighten it?',
-      'doc',
-      RANGES,
-      'highlight',
-      null,
-      null,
-    );
+    const prompt = buildPrompt(comment, 'Can you tighten it?', 'doc', RANGES, null, null);
     expect(prompt).toContain('- Sam: What does this mean?');
     expect(prompt).toContain('- Claude: It refers to the intro.');
     expect(prompt.match(/Can you tighten it\?/g)).toHaveLength(1);
@@ -77,15 +43,7 @@ describe('buildPrompt thread handling', () => {
       { text: 'Earlier question', authorKind: 'user' },
       { text: 'Can you tighten it?', authorKind: 'user' },
     ]);
-    const prompt = buildPrompt(
-      comment,
-      'Can you tighten it?',
-      'doc',
-      RANGES,
-      'highlight',
-      null,
-      null,
-    );
+    const prompt = buildPrompt(comment, 'Can you tighten it?', 'doc', RANGES, null, null);
     expect(prompt.match(/Can you tighten it\?/g)).toHaveLength(1);
     expect(prompt).toContain('- Sam: Earlier question');
   });
@@ -95,15 +53,7 @@ describe('buildPrompt thread handling', () => {
       { text: 'Can you tighten it?', authorKind: 'user' },
       { text: 'Done — see the suggestion.', authorKind: 'ai', author: 'Claude' },
     ]);
-    const prompt = buildPrompt(
-      comment,
-      'Can you tighten it?',
-      'doc',
-      RANGES,
-      'highlight',
-      null,
-      null,
-    );
+    const prompt = buildPrompt(comment, 'Can you tighten it?', 'doc', RANGES, null, null);
     // Once as history, once as the new message.
     expect(prompt.match(/Can you tighten it\?/g)).toHaveLength(2);
   });
@@ -112,15 +62,15 @@ describe('buildPrompt thread handling', () => {
     const comment = makeComment([
       { text: 'half-streamed ans', authorKind: 'ai', author: 'Claude', pending: true },
     ]);
-    const prompt = buildPrompt(comment, 'follow-up', 'doc', RANGES, 'highlight', null, null);
+    const prompt = buildPrompt(comment, 'follow-up', 'doc', RANGES, null, null);
     expect(prompt).not.toContain('half-streamed');
   });
 });
 
 describe('buildPrompt effort calibration', () => {
   it('instructs Claude to match deliberation to the request in every prompt variant', () => {
-    const authored = buildPrompt(makeComment([]), 'q', 'doc', RANGES, 'highlight', null, null);
-    const fresh = buildPrompt(makeComment([]), 'q', 'doc', RANGES, 'highlight', null, null, true);
+    const authored = buildPrompt(makeComment([]), 'q', 'doc', RANGES, null, null);
+    const fresh = buildPrompt(makeComment([]), 'q', 'doc', RANGES, null, null, [], true);
     for (const prompt of [authored, fresh]) {
       expect(prompt).toContain('Calibrate your effort to the request');
       expect(prompt).toContain('act immediately without extended deliberation');
@@ -130,7 +80,7 @@ describe('buildPrompt effort calibration', () => {
 
 describe('buildPrompt authorship framing', () => {
   it('frames the doc as one Claude previously authored', () => {
-    const prompt = buildPrompt(makeComment([]), 'question', 'doc', RANGES, 'highlight', null, null);
+    const prompt = buildPrompt(makeComment([]), 'question', 'doc', RANGES, null, null);
     expect(prompt).toContain('you previously authored');
   });
 
@@ -140,9 +90,9 @@ describe('buildPrompt authorship framing', () => {
       'question',
       'full document body',
       RANGES,
-      'highlight',
       null,
       null,
+      [],
       true,
     );
     expect(prompt).not.toContain('previously authored');
@@ -153,10 +103,116 @@ describe('buildPrompt authorship framing', () => {
   });
 });
 
+describe('buildPrompt document-scale edit protocol', () => {
+  it('frames the highlight as what the user is commenting on, not an edit fence', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('=== USER IS COMMENTING ON (highlighted) ===');
+    expect(prompt).toContain('anchor');
+    expect(prompt).toContain('=== PARAGRAPH (context) ===');
+    expect(prompt).not.toContain('EDIT ONLY THIS');
+    expect(prompt).not.toContain('EDIT-ONLY-THIS');
+  });
+
+  it('scopes find strings to the document and allows edits anywhere in it', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('EXACT substring of the DOCUMENT text');
+    expect(prompt).toContain('may touch any part of the document the request warrants');
+    expect(prompt).toContain('no unrequested rewrites elsewhere');
+    expect(prompt).not.toContain('Edit ONLY the highlighted text');
+  });
+
+  it('tells Claude formatting-only changes cannot be expressed as edits', () => {
+    const prompt = buildPrompt(makeComment([]), 'bold this', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('Formatting-only changes');
+    expect(prompt).toContain('CANNOT be expressed as find/replace edits');
+    expect(prompt).toContain('do NOT emit an edits block with identical "find" and "replace"');
+  });
+
+  it('always sends the full document — no diff branch even with intact context', () => {
+    // Pre-document-scale prompts sent a line diff when the session's context
+    // was intact; compaction info now only affects the note wording.
+    const prompt = buildPrompt(
+      makeComment([]),
+      'fix this',
+      'doc v2 body',
+      RANGES,
+      {
+        compacted: false,
+        originalMarkdown: 'doc v1 body',
+      },
+      null,
+    );
+    expect(prompt).toContain('=== FULL DOCUMENT ===');
+    expect(prompt).toContain('doc v2 body');
+    expect(prompt).toContain('Current document (may have been edited since you wrote it):');
+    expect(prompt).not.toContain('diff between what you originally wrote');
+    expect(prompt).not.toContain('doc v1 body');
+  });
+
+  it('notes compaction in the full-document wording when the session was compacted', () => {
+    const prompt = buildPrompt(
+      makeComment([]),
+      'fix this',
+      'doc body',
+      RANGES,
+      {
+        compacted: true,
+        originalMarkdown: null,
+      },
+      null,
+    );
+    expect(prompt).toContain('Your context was compacted since you wrote this');
+    expect(prompt).toContain('doc body');
+  });
+});
+
+describe('buildPrompt pending suggestions', () => {
+  function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
+    return {
+      id: 'ch1',
+      operation: 'insert',
+      from: 1,
+      to: 6,
+      text: 'added text',
+      authorID: 'claude',
+      status: 'pending',
+      createdAt: Date.now(),
+      ...overrides,
+    };
+  }
+
+  it('lists each pending change with its kind, clipped text, and origin comment', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [
+      makeChange({ operation: 'insert', text: 'added text', originCommentId: 'c42' }),
+      makeChange({ id: 'ch2', operation: 'delete', text: 'removed text' }),
+    ]);
+    expect(prompt).toContain('=== PENDING SUGGESTIONS (already proposed, awaiting review) ===');
+    expect(prompt).toContain('- [insertion] "added text" (from comment c42)');
+    expect(prompt).toContain('- [deletion] "removed text"');
+    expect(prompt).toContain('Do not re-propose or conflict with these');
+    expect(prompt).not.toContain('(none)');
+  });
+
+  it('clips long suggestion text to ~80 characters', () => {
+    const long = 'x'.repeat(200);
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [
+      makeChange({ text: long }),
+    ]);
+    expect(prompt).toContain(`- [insertion] "${'x'.repeat(80)}…"`);
+    expect(prompt).not.toContain('x'.repeat(81));
+  });
+
+  it('renders (none) when nothing is pending', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, []);
+    expect(prompt).toContain('=== PENDING SUGGESTIONS (already proposed, awaiting review) ===');
+    expect(prompt).toContain('(none)');
+  });
+});
+
 describe('buildPrompt context folder', () => {
   it('lists the folder and its file manifest when a context is provided', () => {
     const comment = makeComment([]);
-    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, 'highlight', null, {
+    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, null, {
       folder: '/refs/research',
       files: ['sources.md', 'notes/interview.txt'],
     });
@@ -168,7 +224,7 @@ describe('buildPrompt context folder', () => {
 
   it('notes an empty folder instead of listing nothing', () => {
     const comment = makeComment([]);
-    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, 'highlight', null, {
+    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, null, {
       folder: '/refs/empty',
       files: [],
     });
@@ -177,18 +233,17 @@ describe('buildPrompt context folder', () => {
 
   it('omits the section entirely without a context', () => {
     const comment = makeComment([]);
-    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, 'highlight', null, null);
+    const prompt = buildPrompt(comment, 'check my facts', 'doc', RANGES, null, null);
     expect(prompt).not.toContain('REFERENCE FOLDER');
   });
 
-  it('includes the section in the compaction-diff prompt branch too', () => {
+  it('includes the section regardless of compaction state', () => {
     const comment = makeComment([]);
     const prompt = buildPrompt(
       comment,
       'check my facts',
       'doc v2',
       RANGES,
-      'highlight',
       { compacted: false, originalMarkdown: 'doc v1' },
       { folder: '/refs/research', files: ['sources.md'] },
     );
