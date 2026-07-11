@@ -21,7 +21,9 @@ export function rangeText(doc: ProseMirrorNode, from: number, to: number): strin
  * of bounds.
  *
  * The mapping array has length (text.length + 1): index i is the position just
- * before the i-th emitted character, and the final entry is `to` (end of range).
+ * before the i-th emitted character, and the final entry is the boundary just
+ * after the last emitted character (so a match ending at the end of the text
+ * never swallows trailing block-close tokens).
  */
 export function mapRangeTextOffsetToPos(
   doc: ProseMirrorNode,
@@ -29,40 +31,45 @@ export function mapRangeTextOffsetToPos(
   to: number,
   offset: number,
 ): number | null {
-  // Rebuild the same string `rangeText` produces while recording the absolute
-  // position of each emitted character. `textBetween('\n', ' ')` walks text and
-  // text-leaf nodes in document order, inserting one '\n' between leaf blocks
-  // (paragraphs, list items) and a ' ' for non-text leaf nodes. We only need to
-  // know the position of *real* text characters precisely; any injected
-  // separator is anchored to the position just after the preceding text run, so
-  // a `find` that starts on a real character always maps to a valid spot.
+  // This must emit exactly one map entry per character of
+  // doc.textBetween(from, to, '\n', ' ') — same order, same count — or every
+  // offset after the first divergence maps to the wrong position. textBetween's
+  // actual rules (prosemirror-model Fragment.textBetween): a '\n' separator is
+  // emitted on entering every textblock after the first (including EMPTY
+  // textblocks) and before a block-level leaf that renders leaf text; a ' ' is
+  // emitted for every leaf node given the leafText argument; text nodes emit
+  // their (range-clamped) characters. Nothing is emitted at mark boundaries:
+  // adjacent text runs in one block are contiguous in the string.
   const map: number[] = [];
-  let prevTextEnd: number | null = null;
-  let emittedText = false;
+  let first = true;
+  // Boundary just after the most recently emitted character. Separators are
+  // anchored here: they have no width in the document.
+  let lastEnd = from;
 
   doc.nodesBetween(from, to, (node, pos) => {
+    const leafText = node.isText ? '' : node.isLeaf ? ' ' : '';
+    if (node.isBlock && ((node.isLeaf && leafText) || node.isTextblock)) {
+      if (first) {
+        first = false;
+      } else {
+        map.push(lastEnd);
+      }
+    }
     if (node.isText) {
       const start = Math.max(pos, from);
       const end = Math.min(pos + node.nodeSize, to);
-      if (emittedText && prevTextEnd !== null && end > start) {
-        // textBetween inserted a '\n' separator between the previous text run
-        // and this one; map it to the boundary after the previous run.
-        map.push(prevTextEnd);
-      }
       for (let p = start; p < end; p++) {
         map.push(p);
       }
-      if (end > start) {
-        prevTextEnd = end;
-        emittedText = true;
-      }
-      return false;
+      if (end > start) lastEnd = end;
+    } else if (node.isLeaf && leafText) {
+      map.push(Math.max(pos, from));
+      lastEnd = Math.min(pos + node.nodeSize, to);
     }
-    return true;
   });
 
-  // Final boundary: end of range.
-  map.push(to);
+  // Final boundary: just after the last emitted character.
+  map.push(lastEnd);
 
   if (offset < 0 || offset >= map.length) return null;
   return map[offset];
