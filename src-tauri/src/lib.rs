@@ -525,6 +525,37 @@ mod tests {
     }
 
     #[test]
+    fn claude_resume_args_terminate_variadic_add_dir_before_the_prompt() {
+        let args = claude_resume_args("session-123", "prompt text", Some("/refs"));
+        assert_eq!(
+            args,
+            vec![
+                "--resume",
+                "session-123",
+                "--print",
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+                "--verbose",
+                "--add-dir",
+                "/refs",
+                "--",
+                "prompt text",
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_resume_args_protect_a_prompt_without_an_additional_directory() {
+        let args = claude_resume_args("session-123", "--prompt-like-text", None);
+        assert_eq!(
+            args[args.len() - 2..],
+            ["--".to_string(), "--prompt-like-text".to_string()]
+        );
+        assert!(!args.iter().any(|arg| arg == "--add-dir"));
+    }
+
+    #[test]
     fn session_preview_refuses_jsonl_outside_claude_projects() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("attacker-controlled.jsonl");
@@ -1506,6 +1537,28 @@ fn classify_claude_outcome(
     Err(message)
 }
 
+fn claude_resume_args(session_id: &str, prompt: &str, add_dir: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "--resume".to_string(),
+        session_id.to_string(),
+        "--print".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--include-partial-messages".to_string(),
+        "--verbose".to_string(),
+    ];
+    if let Some(dir) = add_dir.filter(|dir| !dir.is_empty()) {
+        args.push("--add-dir".to_string());
+        args.push(dir.to_string());
+    }
+    // `--add-dir` is variadic in Claude Code's CLI. Without an option
+    // terminator it consumes the positional prompt as another directory,
+    // causing --print to fail with "Input must be provided".
+    args.push("--".to_string());
+    args.push(prompt.to_string());
+    args
+}
+
 #[tauri::command]
 fn spawn_claude_resume(
     app: tauri::AppHandle,
@@ -1519,18 +1572,7 @@ fn spawn_claude_resume(
     // Every binding points at an existing Claude Code session; resume it. An
     // unknown session fails loudly via --resume.
     let mut cmd = Command::new(&claude_bin);
-    cmd.arg("--resume")
-        .arg(&session_id)
-        .arg("--print")
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--include-partial-messages")
-        .arg("--verbose");
-    // Grant read access to the document's linked context folder so Claude can
-    // open the files named in the prompt's manifest.
-    if let Some(dir) = add_dir.as_deref().filter(|d| !d.is_empty()) {
-        cmd.arg("--add-dir").arg(dir);
-    }
+    cmd.args(claude_resume_args(&session_id, &prompt, add_dir.as_deref()));
     // A packaged .app launched from Finder inherits launchd's minimal PATH,
     // which lacks Node — and `claude` is a node script, so it would die with
     // `env: node: No such file or directory`. Give the child a PATH that
@@ -1542,8 +1584,7 @@ fn spawn_claude_resume(
         std::env::var("PATH").ok().as_deref(),
         &home,
     );
-    cmd.arg(&prompt)
-        .current_dir(&cwd)
+    cmd.current_dir(&cwd)
         .env("PATH", &child_path)
         // If Quill was launched from a shell with an API key exported, the CLI
         // would silently bill that key instead of the user's `claude` login.
