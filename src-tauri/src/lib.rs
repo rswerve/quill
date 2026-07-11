@@ -418,6 +418,7 @@ mod tests {
     #[test]
     fn auto_bind_result_matches_the_shared_ipc_contract() {
         let actual = serde_json::to_value(AutoBindResult {
+            provider: "claude-code",
             session_id: "fixture-session-1234".to_string(),
             cwd: "/tmp/quill-fixture-project".to_string(),
             linked_at: "2026-07-11T18:00:00Z".to_string(),
@@ -855,6 +856,7 @@ struct JsonlRecord {
 
 #[derive(Serialize)]
 struct AutoBindResult {
+    provider: &'static str,
     #[serde(rename = "sessionId")]
     session_id: String,
     cwd: String,
@@ -1027,6 +1029,7 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
         }
         if found && !sess_id.is_empty() {
             matches.push(AutoBindResult {
+                provider: "claude-code",
                 session_id: sess_id,
                 cwd: sess_cwd,
                 linked_at: iso_now(),
