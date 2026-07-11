@@ -62,7 +62,11 @@ export const CommentMark = Mark.create({
           doc.descendants((node, pos) => {
             node.marks.forEach((mark) => {
               if (mark.type.name === this.name && mark.attrs.commentId === commentId) {
-                tr.removeMark(pos, pos + node.nodeSize, mark.type);
+                // Remove this comment's mark INSTANCE, not the mark type: the
+                // type form strips every comment in the span, destroying an
+                // overlapping neighbor's highlight (comment declares
+                // excludes:'' precisely so comments can overlap).
+                tr.removeMark(pos, pos + node.nodeSize, mark);
               }
             });
           });
