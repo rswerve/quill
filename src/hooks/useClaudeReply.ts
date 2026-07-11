@@ -216,6 +216,9 @@ export function buildPrompt(
 
   const editProtocol = [
     'HOW TO RESPOND:',
+    // Effort calibration: without this, models tend to deliberate at length
+    // even over trivial formatting asks; with it, they match depth to the task.
+    'Calibrate your effort to the request: for simple mechanical edits (formatting, typos, italicizing, punctuation), act immediately without extended deliberation; reserve careful thinking for substantive work (restructuring, argument, tone, accuracy).',
     'If the user is asking a question or for an opinion, reply concisely in prose and do NOT propose edits.',
     'If the user is asking you to rewrite, fix, revise, restructure, shorten, expand, or otherwise change the text (e.g. "fix the grammar", "make this a list", "turn this into prose"), make the changes as tracked suggestions by appending EXACTLY ONE fenced block at the very end of your reply:',
     '',

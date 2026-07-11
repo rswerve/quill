@@ -117,6 +117,17 @@ describe('buildPrompt thread handling', () => {
   });
 });
 
+describe('buildPrompt effort calibration', () => {
+  it('instructs Claude to match deliberation to the request in every prompt variant', () => {
+    const authored = buildPrompt(makeComment([]), 'q', 'doc', RANGES, 'highlight', null, null);
+    const fresh = buildPrompt(makeComment([]), 'q', 'doc', RANGES, 'highlight', null, null, true);
+    for (const prompt of [authored, fresh]) {
+      expect(prompt).toContain('Calibrate your effort to the request');
+      expect(prompt).toContain('act immediately without extended deliberation');
+    }
+  });
+});
+
 describe('buildPrompt authorship framing', () => {
   it('frames the doc as one Claude previously authored', () => {
     const prompt = buildPrompt(makeComment([]), 'question', 'doc', RANGES, 'highlight', null, null);
