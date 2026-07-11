@@ -9,6 +9,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
+import { openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 type MockScriptStep =
   | { kind: 'delta'; text: string }
@@ -214,6 +215,68 @@ test('AI reply: @claude in a reply with no linked session opens the session pick
   await addCommentWithAIReply(page, 'hello world', '@claude take a look');
 
   await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+});
+
+test('Session picker: Start new session is disabled until the document is saved', async ({
+  page,
+}) => {
+  await setupWithoutSession(page);
+  await addCommentTaggingClaude(page, 'hello world', '@claude take a look');
+
+  const startNew = page.locator('.session-picker-new');
+  await expect(startNew).toBeVisible();
+  await expect(startNew).toBeDisabled();
+});
+
+test('Session picker: a saved document mints and fires a canonical Quill binding', async ({
+  page,
+}) => {
+  const sessionId = '11111111-2222-4333-8444-555555555555';
+  const path = '/docs/review.md';
+  await setupMemoryTauri(page, {
+    files: { [path]: 'hello world' },
+    openPath: path,
+    mockAI: true,
+    newSessionId: sessionId,
+  });
+  await openMemoryFile(page);
+  const editor = page.locator('.ProseMirror');
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.locator('.add-comment-btn').click();
+  await page.locator('.add-comment-compose textarea').fill('@claude take a look');
+  await page.locator('.add-comment-compose .btn-primary').click();
+
+  const startNew = page.locator('.session-picker-new');
+  await expect(startNew).toBeEnabled();
+  await startNew.click();
+
+  await expect(page.locator('.comment-reply-ai .comment-reply-text')).toContainText(
+    'Persist this answer.',
+  );
+  const args = await page.evaluate(
+    () => (window as unknown as { __quillLastSpawnArgs: unknown }).__quillLastSpawnArgs,
+  );
+  expect(args).toMatchObject({
+    sessionId,
+    cwd: '/docs',
+    allowCreate: true,
+  });
+  const prompt = (args as { prompt: string }).prompt;
+  expect(prompt).not.toContain('previously authored');
+  expect(prompt).toContain('Here is the full current document:');
+
+  await page.keyboard.press('ControlOrMeta+s');
+  const sidecar = await page.evaluate(() => {
+    const files = (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles;
+    return JSON.parse(files['/docs/review.comments.json']);
+  });
+  expect(sidecar.aiSession).toMatchObject({
+    provider: ipcFixtures.autoBindSession.provider,
+    sessionId,
+    cwd: '/docs',
+    createdByQuill: true,
+  });
 });
 
 test('AI reply: a session-loss error shows Re-link primary plus a secondary Retry', async ({

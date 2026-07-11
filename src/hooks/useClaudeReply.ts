@@ -188,6 +188,7 @@ export function buildPrompt(
   scope: EditScope,
   compaction: CompactionInfo | null,
   context: PromptContext | null,
+  freshSession = false,
 ): string {
   // `userText` is appended explicitly as the final line below. Depending on
   // when React flushed state, the same message may or may not already be the
@@ -204,7 +205,9 @@ export function buildPrompt(
   threadLines.push(`- User just said: ${userText}`);
 
   const head = [
-    'You are responding inline on a markdown document you previously authored.',
+    freshSession
+      ? 'You are responding inline on a markdown document the user is editing in Quill.'
+      : 'You are responding inline on a markdown document you previously authored.',
     '',
     'Comment thread so far:',
     threadLines.join('\n'),
@@ -265,9 +268,11 @@ export function buildPrompt(
     ...editProtocol,
     ...contextSection,
     '=== FULL DOCUMENT (context) ===',
-    compaction?.compacted
-      ? 'Your context was compacted since you wrote this; full current document follows:'
-      : 'Current document (may have been edited since you wrote it):',
+    freshSession
+      ? 'Here is the full current document:'
+      : compaction?.compacted
+        ? 'Your context was compacted since you wrote this; full current document follows:'
+        : 'Current document (may have been edited since you wrote it):',
     '---',
     docMarkdown,
     '---',
@@ -281,6 +286,7 @@ interface QuillMock {
       cwd: string;
       prompt: string;
       addDir: string | null;
+      allowCreate: boolean;
     },
     onEvent: (event: ChunkEvent) => void,
   ) => string; // returns cancel token
@@ -347,8 +353,9 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
 
       const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
 
-      let compaction: CompactionInfo | null = mock?.compaction ?? null;
-      if (!mock) {
+      const fresh = binding.createdByQuill === true;
+      let compaction: CompactionInfo | null = fresh ? null : (mock?.compaction ?? null);
+      if (!mock && !fresh) {
         try {
           compaction = await invoke<CompactionInfo>('check_session_compacted', {
             sessionId: binding.sessionId,
@@ -385,6 +392,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         scope,
         compaction,
         context,
+        fresh,
       );
 
       // Per-ask streaming state. We accumulate the raw text and only surface the
@@ -501,6 +509,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             cwd: binding.cwd,
             prompt,
             addDir: contextFolder,
+            allowCreate: fresh,
           },
           dispatch,
         );
@@ -517,6 +526,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           cwd: binding.cwd,
           prompt,
           addDir: contextFolder,
+          allowCreate: fresh,
           onEvent: channel,
         });
         spawnToken = cancelToken;

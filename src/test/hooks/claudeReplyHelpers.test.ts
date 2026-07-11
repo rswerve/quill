@@ -122,6 +122,24 @@ describe('buildPrompt authorship framing', () => {
     const prompt = buildPrompt(makeComment([]), 'question', 'doc', RANGES, 'highlight', null, null);
     expect(prompt).toContain('you previously authored');
   });
+
+  it('uses neutral framing and the full document for a Quill-created session', () => {
+    const prompt = buildPrompt(
+      makeComment([]),
+      'question',
+      'full document body',
+      RANGES,
+      'highlight',
+      null,
+      null,
+      true,
+    );
+    expect(prompt).not.toContain('previously authored');
+    expect(prompt).not.toContain('since you wrote');
+    expect(prompt).toContain('the user is editing in Quill');
+    expect(prompt).toContain('Here is the full current document:');
+    expect(prompt).toContain('full document body');
+  });
 });
 
 describe('buildPrompt context folder', () => {

@@ -132,6 +132,7 @@ export function sanitizeAISession(raw: unknown): AISessionBinding | undefined {
     sessionId: raw.sessionId,
     cwd: raw.cwd,
     linkedAt: raw.linkedAt,
+    ...(raw.createdByQuill === true ? { createdByQuill: true } : {}),
   };
 }
 
