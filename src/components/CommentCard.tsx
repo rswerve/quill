@@ -88,6 +88,11 @@ function ReplyView({
           {reply.author}
         </span>
         <span className="comment-time">{timeAgo(reply.createdAt)}</span>
+        {isAI && reply.model && (
+          <span className="comment-reply-model" title={`Model: ${reply.model}`}>
+            {reply.model}
+          </span>
+        )}
       </div>
       {reply.error ? (
         <div className="comment-reply-error">

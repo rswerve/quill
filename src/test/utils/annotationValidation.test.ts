@@ -84,6 +84,26 @@ describe('sanitizeComments', () => {
     expect(c.replies[0].id).toBe('r1');
   });
 
+  it('preserves a non-empty model on a persisted AI reply', () => {
+    const [c] = sanitizeComments([
+      {
+        ...validComment,
+        replies: [
+          {
+            id: 'r-model',
+            author: 'Claude',
+            text: 'Reply',
+            createdAt: '2026-07-11T18:00:00Z',
+            authorKind: 'ai',
+            model: 'claude-fable-5',
+          },
+        ],
+      },
+    ]);
+
+    expect(c.replies[0].model).toBe('claude-fable-5');
+  });
+
   it('keeps the good comments and drops the bad in a mixed array', () => {
     const result = sanitizeComments([validComment, { id: 'bad', from: -5, to: 2 }]);
     expect(result).toHaveLength(1);

@@ -64,7 +64,14 @@ function makeOpts() {
   const getContextFolder = vi.fn(() => null);
   const applyTrackedEdits = vi.fn(() => ({ applied: 0, skipped: 0 }));
   const addClaudeComment = vi.fn(() => true);
-  return { getDocMarkdown, getContextFolder, applyTrackedEdits, addClaudeComment };
+  const onModelObserved = vi.fn();
+  return {
+    getDocMarkdown,
+    getContextFolder,
+    applyTrackedEdits,
+    addClaudeComment,
+    onModelObserved,
+  };
 }
 
 describe('useDocumentReview cancel (generation guard)', () => {
@@ -167,6 +174,28 @@ describe('useDocumentReview cancel (generation guard)', () => {
 
     expect(result.current.phase.status).toBe('done');
     expect(opts.addClaudeComment).toHaveBeenCalledWith('doc', 'x');
+  });
+
+  it('reports the stream model and stamps generated review comments with it', async () => {
+    const opts = makeOpts();
+    const { result } = renderHook(() => useDocumentReview(opts));
+
+    await act(async () => {
+      await result.current.start(OPTIONS, BINDING);
+    });
+    const token = mock.lastToken;
+
+    act(() => {
+      mock.emit(token, { kind: 'model', model: 'claude-fable-5' });
+      mock.emit(token, {
+        kind: 'delta',
+        text: '```quill-comments\n{"comments":[{"find":"doc","comment":"x"}]}\n```',
+      });
+      mock.emit(token, { kind: 'done' });
+    });
+
+    expect(opts.onModelObserved).toHaveBeenCalledWith('claude-fable-5');
+    expect(opts.addClaudeComment).toHaveBeenCalledWith('doc', 'x', 'claude-fable-5');
   });
 
   it('supersedes the first run when start is called again (generation bump)', async () => {

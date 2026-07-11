@@ -4,6 +4,8 @@ export interface Reply {
   text: string;
   createdAt: string;
   authorKind?: 'user' | 'ai';
+  /** Model reported by Claude Code's stream init event for this exact reply. */
+  model?: string;
   pending?: boolean;
   error?: string;
   /** User stopped this @claude reply before it finished — a neutral, retryable

@@ -211,6 +211,7 @@ describe('useComments', () => {
       expect(r.error).toBeUndefined();
       expect(r.text).toBe(''); // streamed text cleared
       expect(r.authorKind).toBe('ai');
+      expect(r.model).toBeUndefined();
     });
 
     it('is a no-op for an unknown replyId', () => {
@@ -223,6 +224,43 @@ describe('useComments', () => {
 
       expect(result.current.comments[0].replies).toHaveLength(1);
       expect(result.current.comments[0].replies[0]).toEqual(before);
+    });
+  });
+
+  describe('setAIReplyModel', () => {
+    it('stamps only the targeted AI reply with the stream-reported model', () => {
+      const { result } = renderHook(() => useComments());
+      let commentId = '';
+      let replyId = '';
+      act(() => {
+        commentId = result.current.addComment('text', 0, 4, 'Alice').id;
+      });
+      act(() => {
+        replyId = result.current.startAIReply(commentId);
+      });
+      act(() => {
+        result.current.setAIReplyModel(commentId, replyId, 'claude-fable-5');
+      });
+
+      expect(result.current.comments[0].replies[0].model).toBe('claude-fable-5');
+    });
+
+    it('clears the old model before a retry can report a different one', () => {
+      const { result } = renderHook(() => useComments());
+      let commentId = '';
+      let replyId = '';
+      act(() => {
+        commentId = result.current.addComment('text', 0, 4, 'Alice').id;
+      });
+      act(() => {
+        replyId = result.current.startAIReply(commentId);
+        result.current.setAIReplyModel(commentId, replyId, 'claude-fable-5');
+      });
+      act(() => {
+        result.current.retryAIReply(commentId, replyId);
+      });
+
+      expect(result.current.comments[0].replies[0].model).toBeUndefined();
     });
   });
 
