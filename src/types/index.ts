@@ -49,6 +49,12 @@ export interface Suggestion {
   author: string;
   createdAt: string;
   status: SuggestionStatus;
+  /**
+   * Shared by the deletion and insertion halves of a replacement so they
+   * reload as one paired card. Optional and backward compatible: sidecars
+   * written before suggestions persisted don't have it.
+   */
+  pairId?: string;
 }
 
 export interface SidecarFile {

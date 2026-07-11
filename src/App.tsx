@@ -26,6 +26,11 @@ import { detectLossyConstructs } from './utils/markdownFidelity';
 import { findAnnotationRange } from './extensions/AnnotationFocus';
 import type { AnnotationKind } from './extensions/AnnotationFocus';
 import { locateEdit, planEdits, rangeText, resolveScopeRange } from './utils/trackedEdits';
+import {
+  refreshCommentRanges,
+  restoreReviewMarks,
+  suggestionsFromTrackedChanges,
+} from './utils/reviewPersistence';
 import { basename, dirname } from './utils/path';
 import {
   addRecentFile,
@@ -164,23 +169,38 @@ export default function App() {
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
+  // Marks are the runtime truth for review data. Everything persisted (sidecar
+  // and draft) is derived from them at write time: comments' stored from/to are
+  // creation-time snapshots that go stale as the doc is edited, and tracked
+  // changes exist only as marks until captured here.
+  const getLiveReviewState = useCallback(() => {
+    const ed = editorRef.current?.getEditor();
+    if (!ed) return { comments, suggestions };
+    return {
+      comments: refreshCommentRanges(comments, (id) =>
+        findAnnotationRange(ed.state.doc, 'comment', id),
+      ),
+      suggestions: suggestionsFromTrackedChanges(getTrackedChanges(ed)),
+    };
+  }, [comments, suggestions]);
+
   // Crash-recovery autosave: while dirty, the document (plus annotations and
   // links) is snapshotted to draft.json every few seconds; a clean state
   // deletes it. On launch we offer any leftover draft for recovery below.
-  const getDraftSnapshot = useCallback(
-    (): DraftSnapshot => ({
+  const getDraftSnapshot = useCallback((): DraftSnapshot => {
+    const live = getLiveReviewState();
+    return {
       filePath,
       content: getDocMarkdown(),
       // draft.json is a second on-disk persistence path, so it needs the same
       // transient-reply strip the sidecar gets — otherwise a crash mid-stream
       // recovers a stuck spinner / dead-Retry card the fresh hook can't drive.
-      comments: stripTransientReplyState(comments),
-      suggestions,
+      comments: stripTransientReplyState(live.comments),
+      suggestions: live.suggestions,
       aiSession,
       contextFolder,
-    }),
-    [filePath, getDocMarkdown, comments, suggestions, aiSession, contextFolder],
-  );
+    };
+  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
   const { readDraft, deleteDraft } = useDraftAutosave({
     isDirty,
     getSnapshot: getDraftSnapshot,
@@ -253,10 +273,21 @@ export default function App() {
     [editor],
   );
 
+  // Review-only mutations (replies, AI completions, resolve state) change no
+  // document text, so no editor transaction fires onUpdate for them — they
+  // must mark the document dirty themselves or quitting silently drops them.
+  const finishAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string) => {
+      finishAIReply(commentId, replyId);
+      markDirty();
+    },
+    [finishAIReply, markDirty],
+  );
+
   const claudeReply = useClaudeReply({
     startAIReply,
     appendAIReplyChunk,
-    finishAIReply,
+    finishAIReply: finishAIReplyAndDirty,
     failAIReply,
     cancelAIReply,
     retryAIReply,
@@ -292,10 +323,10 @@ export default function App() {
       ed.chain().setTextSelection({ from: range.from, to: range.to }).setComment(comment.id).run();
       const replyId = startAIReply(comment.id);
       appendAIReplyChunk(comment.id, replyId, body);
-      finishAIReply(comment.id, replyId);
+      finishAIReplyAndDirty(comment.id, replyId);
       return true;
     },
-    [editor, addComment, startAIReply, appendAIReplyChunk, finishAIReply],
+    [editor, addComment, startAIReply, appendAIReplyChunk, finishAIReplyAndDirty],
   );
 
   const docReview = useDocumentReview({
@@ -367,8 +398,20 @@ export default function App() {
       setImageBaseDir(dirname(result.filePath));
       void syncRecentMenu(addRecentFile(result.filePath));
       editorRef.current?.setContent(result.content);
-      setComments(result.sidecar.comments ?? []);
-      setSuggestions(result.sidecar.suggestions ?? []);
+      const loadedComments = result.sidecar.comments ?? [];
+      const loadedSuggestions = result.sidecar.suggestions ?? [];
+      setComments(loadedComments);
+      setSuggestions(loadedSuggestions);
+      // Stamp the marks back onto the parsed document: highlights, click
+      // linking, and suggestion cards all read live marks, which Markdown
+      // serialization dropped at save time. The restore suppresses the update
+      // event (a load must not look dirty), so the tracked-changes state that
+      // normally follows update events is refreshed by hand.
+      const ed = editorRef.current?.getEditor();
+      if (ed) {
+        restoreReviewMarks(ed, loadedComments, loadedSuggestions);
+        setTrackedChanges(getTrackedChanges(ed));
+      }
       const session = result.sidecar.aiSession ?? null;
       // A sidecar that exists but failed to parse means real comments/suggestions
       // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
@@ -454,7 +497,14 @@ export default function App() {
   }
 
   const handleSaveAs = useCallback(async () => {
-    const path = await saveFileAs(getMarkdown(), comments, suggestions, aiSession, contextFolder);
+    const live = getLiveReviewState();
+    const path = await saveFileAs(
+      getMarkdown(),
+      live.comments,
+      live.suggestions,
+      aiSession,
+      contextFolder,
+    );
     // The document gained (or moved) a directory — relative image paths now
     // resolve against it for anything drawn from here on.
     if (path) {
@@ -462,14 +512,15 @@ export default function App() {
       void syncRecentMenu(addRecentFile(path));
     }
     return path;
-  }, [saveFileAs, comments, suggestions, aiSession, contextFolder]);
+  }, [saveFileAs, getLiveReviewState, aiSession, contextFolder]);
 
   const handleSave = useCallback(async () => {
     if (!filePath) {
       return handleSaveAs();
     }
-    return saveFile(getMarkdown(), comments, suggestions, aiSession, contextFolder);
-  }, [filePath, saveFile, comments, suggestions, aiSession, contextFolder, handleSaveAs]);
+    const live = getLiveReviewState();
+    return saveFile(getMarkdown(), live.comments, live.suggestions, aiSession, contextFolder);
+  }, [filePath, saveFile, getLiveReviewState, aiSession, contextFolder, handleSaveAs]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
   // the chrome and the track-changes/comment markup, leaving a clean copy of
@@ -514,8 +565,19 @@ export default function App() {
     restoreDraft(draft.filePath);
     setImageBaseDir(draft.filePath ? dirname(draft.filePath) : null);
     editorRef.current?.setContent(draft.content);
-    setComments(draft.comments ?? []);
-    setSuggestions(draft.suggestions ?? []);
+    const draftComments = draft.comments ?? [];
+    const draftSuggestions = draft.suggestions ?? [];
+    setComments(draftComments);
+    setSuggestions(draftSuggestions);
+    // The draft's annotations need their marks stamped back just like a file
+    // load — the snapshot's content is serialized Markdown, which drops them
+    // (and the same manual tracked-changes refresh, since the restore
+    // suppresses the update event).
+    const ed = editorRef.current?.getEditor();
+    if (ed) {
+      restoreReviewMarks(ed, draftComments, draftSuggestions);
+      setTrackedChanges(getTrackedChanges(ed));
+    }
     setAISession(draft.aiSession ?? null);
     setContextFolder(draft.contextFolder ?? null);
   }, [recoveryDraft, restoreDraft, setComments, setSuggestions]);
@@ -948,8 +1010,12 @@ export default function App() {
       deleteComment(commentId);
       editor?.commands.unsetComment(commentId);
       clearActiveIf('comment', commentId);
+      // Deleting a RESOLVED comment dispatches a zero-step transaction (its
+      // mark was already stripped on resolve), so onUpdate never fires — dirty
+      // must be set explicitly or the deletion is lost on quit.
+      markDirty();
     },
-    [deleteComment, editor, clearActiveIf],
+    [deleteComment, editor, clearActiveIf, markDirty],
   );
 
   // Resolving hides the card (unless "Show resolved" is on), so it also drops
@@ -961,8 +1027,9 @@ export default function App() {
       resolveComment(commentId);
       editor?.commands.unsetComment(commentId);
       clearActiveIf('comment', commentId);
+      markDirty();
     },
-    [resolveComment, editor, clearActiveIf],
+    [resolveComment, editor, clearActiveIf, markDirty],
   );
 
   const handleUnresolveComment = useCallback(
@@ -972,8 +1039,9 @@ export default function App() {
       // so there's no live mark to read the range from anymore.
       const comment = comments.find((c) => c.id === commentId);
       if (comment) editor?.commands.setCommentRange(commentId, comment.from, comment.to);
+      markDirty();
     },
-    [unresolveComment, editor, comments],
+    [unresolveComment, editor, comments, markDirty],
   );
 
   // Scroll the editor's scroll area so a comment/suggestion card is fully
@@ -1217,7 +1285,10 @@ export default function App() {
           trackedChanges={trackedChanges}
           scrollTop={scrollTop}
           zoom={zoom}
-          onReply={(id, text) => addReply(id, text, AUTHOR)}
+          onReply={(id, text) => {
+            addReply(id, text, AUTHOR);
+            markDirty();
+          }}
           onAIReplyRequest={handleAIReplyRequest}
           onCancelAIReply={claudeReply.cancel}
           onRetryAIReply={claudeReply.retry}

@@ -212,7 +212,10 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         setContent(md: string) {
           if (!editor) return;
-          editor.commands.setContent(md);
+          // Tiptap v3 flipped setContent's emitUpdate default to true; letting
+          // it emit would fire onUpdate -> markDirty and flag every freshly
+          // opened document as dirty. Programmatic loads are not user edits.
+          editor.commands.setContent(md, { emitUpdate: false });
         },
         getEditor() {
           return editor;
