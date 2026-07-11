@@ -119,7 +119,8 @@ export interface PlacedEdit {
 /**
  * Pure planning step: turn quote-based edits into absolute-position edits,
  * sorted back-to-front so applying them in order keeps earlier positions valid.
- * Edits whose `find` can't be located are reported via `skipped`.
+ * Edits whose `find` can't be located — and text-identical edits, which the
+ * protocol cannot express — are reported via `skipped`.
  */
 export function planEdits(
   doc: ProseMirrorNode,
@@ -130,6 +131,15 @@ export function planEdits(
   const placed: PlacedEdit[] = [];
   let skipped = 0;
   for (const edit of edits) {
+    // A text-identical replacement can only be a formatting-only ask, which
+    // find/replace cannot express: applying it would mint a fake suggestion
+    // whose accept either no-ops or silently strips formatting (inserted text
+    // inherits marks via marksAcross). Skip it so the done-phase summary
+    // reports it honestly instead.
+    if (edit.find === edit.replace) {
+      skipped++;
+      continue;
+    }
     const at = locateEdit(doc, rangeFrom, rangeTo, edit.find);
     if (!at) {
       skipped++;

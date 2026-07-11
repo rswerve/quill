@@ -15,7 +15,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { invoke } from '@tauri-apps/api/core';
 import { useClaudeReply } from '../../hooks/useClaudeReply';
 import type { ChunkEvent, RangeTexts } from '../../hooks/useClaudeReply';
-import type { AISessionBinding, Comment, EditScope, QuillEdit } from '../../types';
+import type {
+  AISessionBinding,
+  Comment,
+  EditScope,
+  QuillEdit,
+  TrackedChangeInfo,
+} from '../../types';
 
 const invokeMock = vi.mocked(invoke);
 
@@ -84,6 +90,7 @@ function makeOpts(mock: MockClaude) {
     skipped: 0,
   }));
   const getContextFolder = vi.fn(() => null);
+  const getPendingSuggestions = vi.fn((): TrackedChangeInfo[] => []);
   return {
     opts: {
       startAIReply,
@@ -96,6 +103,7 @@ function makeOpts(mock: MockClaude) {
       getRangeTexts,
       applyTrackedEdits,
       getContextFolder,
+      getPendingSuggestions,
     },
     spies: {
       startAIReply,

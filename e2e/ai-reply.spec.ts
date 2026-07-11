@@ -344,7 +344,8 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
 
 // Selects the first `count` characters of the current line (from its start),
 // then opens the comment composer and posts an @claude reply. Used to exercise
-// edit scope: only the highlighted substring should be editable.
+// document-scale edits: the highlight frames the request, but edits may land
+// anywhere in the document.
 async function addCommentOnPrefix(page: Page, anchor: string, count: number, replyText: string) {
   await page.keyboard.type(anchor);
   await page.keyboard.press('Home'); // to line start (platform-agnostic; Cmd/Ctrl+Left differ across OSes)
@@ -396,11 +397,13 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   await expect(page.locator('.ProseMirror')).toContainText('cats are');
 });
 
-test('AI edits: an edit outside the highlight is skipped and surfaced', async ({ page }) => {
-  // Highlight only "alpha" (first 5 chars). The edit targeting "gamma" lies
-  // outside the highlight, so it must be skipped — not applied.
+test('AI edits: an edit outside the highlight applies (edits are document-scale)', async ({
+  page,
+}) => {
+  // Highlight only "alpha" (first 5 chars). The edit targets "gamma", outside
+  // the highlight — edits are document-scale, so it must apply anyway.
   await setupWithMock(page, [
-    { kind: 'delta', text: 'Capitalized the opening word.\n\n```quill-edits\n' },
+    { kind: 'delta', text: 'Capitalized the closing word.\n\n```quill-edits\n' },
     {
       kind: 'delta',
       text: '{"summary":"x","edits":[{"find":"gamma","replace":"GAMMA"}]}\n```',
@@ -412,32 +415,32 @@ test('AI edits: an edit outside the highlight is skipped and surfaced', async ({
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  // The out-of-range edit is reported as skipped, and the document is unchanged.
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('skipped', { timeout: 3000 });
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).not.toContainText('GAMMA');
-});
-
-test('AI edits: "whole paragraph" widens scope beyond the highlight', async ({ page }) => {
-  // Highlight only "alpha" but ask for the whole paragraph; an edit on "gamma"
-  // (elsewhere in the paragraph) should now apply.
-  await setupWithMock(page, [
-    { kind: 'delta', text: 'Revised across the paragraph.\n\n```quill-edits\n' },
-    {
-      kind: 'delta',
-      text: '{"summary":"x","edits":[{"find":"gamma","replace":"GAMMA"}]}\n```',
-    },
-    { kind: 'done' },
-  ]);
-
-  await addCommentOnPrefix(page, 'alpha beta gamma', 5, '@claude rewrite the whole paragraph');
-
-  const aiReply = page.locator('.comment-reply-ai').first();
-  await expect(aiReply).toBeVisible({ timeout: 2000 });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0, { timeout: 3000 });
   // The edit landed even though it was outside the highlight.
   await expect(page.locator('.suggestion-card').first()).toBeVisible({ timeout: 2000 });
   await expect(page.locator('.ProseMirror')).toContainText('GAMMA');
+});
+
+test('AI edits: an edit whose find is nowhere in the document is skipped and surfaced', async ({
+  page,
+}) => {
+  await setupWithMock(page, [
+    { kind: 'delta', text: 'Tried to fix a word.\n\n```quill-edits\n' },
+    {
+      kind: 'delta',
+      text: '{"summary":"x","edits":[{"find":"delta","replace":"DELTA"}]}\n```',
+    },
+    { kind: 'done' },
+  ]);
+
+  await addCommentOnPrefix(page, 'alpha beta gamma', 5, '@claude tidy this up');
+
+  const aiReply = page.locator('.comment-reply-ai').first();
+  await expect(aiReply).toBeVisible({ timeout: 2000 });
+  // The unlocatable edit is reported as skipped, and the document is unchanged.
+  await expect(aiReply.locator('.comment-reply-text')).toContainText('skipped', { timeout: 3000 });
+  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('.ProseMirror')).not.toContainText('DELTA');
 });
 
 test('AI reply: cancel resolves to a neutral Re-run, and Re-run succeeds in place', async ({

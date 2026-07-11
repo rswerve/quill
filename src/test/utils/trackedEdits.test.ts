@@ -144,6 +144,31 @@ describe('trackedEdits helpers', () => {
       expect(placed[0].from).toBeGreaterThan(placed[1].from);
       expect(placed[0].replace).toBe('G');
     });
+
+    it('skips a text-identical edit (formatting-only ask) instead of placing it', () => {
+      // find === replace can only be a formatting change, which find/replace
+      // cannot express — placing it would mint a fake tracked pair whose
+      // accept no-ops or strips formatting. It must count as skipped.
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'beta', replace: 'beta' },
+      ]);
+      expect(skipped).toBe(1);
+      expect(placed).toHaveLength(0);
+    });
+
+    it('still places a real edit alongside a skipped text-identical one', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'alpha', replace: 'alpha' },
+        { find: 'gamma', replace: 'G' },
+      ]);
+      expect(skipped).toBe(1);
+      expect(placed).toHaveLength(1);
+      expect(placed[0].replace).toBe('G');
+    });
   });
 
   describe('applying planned edits as tracked changes', () => {

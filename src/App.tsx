@@ -303,6 +303,12 @@ export default function App() {
     getRangeTexts,
     applyTrackedEdits,
     getContextFolder: useCallback(() => contextFolderRef.current, []),
+    // Read live at ask time (not from the trackedChanges state mirror) so the
+    // prompt's pending-suggestions section can't lag a just-applied edit.
+    getPendingSuggestions: useCallback(
+      () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
+      [editor],
+    ),
   });
 
   // Doc-scoped wrapper for the full-document review: the same tracked-edit
