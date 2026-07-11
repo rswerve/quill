@@ -39,7 +39,7 @@ interface ToolbarProps {
   hasPendingChanges: boolean;
 }
 
-type ThemeId = 'sage' | 'warm' | 'cool' | 'earth';
+type ThemeId = 'paper' | 'gruvbox';
 
 interface ThemeDef {
   id: ThemeId;
@@ -50,17 +50,20 @@ interface ThemeDef {
 }
 
 const THEMES: ThemeDef[] = [
-  { id: 'sage', label: 'Sage', swatches: ['#B8C2BA', '#5C7A62', '#222722'] },
-  { id: 'warm', label: 'Mocha · Dragonfly', swatches: ['#C9BFAE', '#6B8682', '#2C3438'] },
-  { id: 'cool', label: 'Watery · Adirondack', swatches: ['#BFCED1', '#4F6B82', '#1F2A36'] },
-  { id: 'earth', label: 'Rodeo · Ecological', swatches: ['#C2A988', '#7A8466', '#3A2A1F'] },
+  { id: 'paper', label: 'Paper', swatches: ['#FFFEFA', '#315F7D', '#202124'] },
+  { id: 'gruvbox', label: 'Gruvbox', swatches: ['#282828', '#83A598', '#EBDBB2'] },
 ];
 
 const THEME_STORAGE_KEY = 'quill-theme';
 
 function applyTheme(id: ThemeId) {
   const root = document.documentElement;
-  for (const t of THEMES) root.classList.remove(`theme-${t.id}`);
+  // Remove legacy theme classes too when HMR/upgrades reuse the same document.
+  // The selector exposes exactly the two definitions above; old persisted ids
+  // fall through to Paper below.
+  for (const className of [...root.classList]) {
+    if (className.startsWith('theme-')) root.classList.remove(className);
+  }
   root.classList.add(`theme-${id}`);
 }
 
@@ -247,9 +250,9 @@ function ToggleSwitch({
 
 function ThemeSelector() {
   const [theme, setTheme] = useState<ThemeId>(() => {
-    if (typeof window === 'undefined') return 'sage';
+    if (typeof window === 'undefined') return 'paper';
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY) as ThemeId | null;
-    return stored && THEMES.some((t) => t.id === stored) ? stored : 'sage';
+    return stored && THEMES.some((t) => t.id === stored) ? stored : 'paper';
   });
   const [open, setOpen] = useState(false);
 

@@ -8,127 +8,69 @@
 }
 
 /* ── Design tokens ──────────────────────────────────────────────── */
-/* Default theme = "sage" (the original look). Override colors per theme
-   below. We rename the per-theme accent variables to neutral names
-   (--color-accent-*) so the CSS doesn't have to know which palette is in
-   play. */
+/* Paper is the conservative default: neutral chrome, a warm-white document,
+   and a restrained blue interaction color. Review states remain semantic and
+   deliberately distinct — green insertions, red deletions, yellow comments. */
 :root,
-:root.theme-sage {
-  --color-bg: #b8c2ba;
-  --color-chrome: #aebab1;
-  --color-chrome-dark: #a6b2a9;
-  --color-page: #f8f9f6;
-  --color-ink: #222722;
-  --color-ink-mid: #4e564e;
-  --color-ink-light: #838e83;
-  --color-border: #9eab9f;
-  --color-border-light: #c4cec5;
-  --color-accent: #5c7a62;
-  --color-accent-light: #dde6de;
-  --color-accent-mid: #8ead93;
-  --color-accent-dark: #3a5c3f;
-  --color-ai-bg: #e8ecf0;
-  --color-ai-text: #5a6e82;
-  --color-human-avatar-bg: #ddd8ce;
-  --color-human-avatar-text: #6b5e4a;
-  --color-track-add-bg: #dde6de; /* accent-light sage wash */
-  --color-track-add-text: #2e4a32;
-  --color-track-add-line: #5c7a62;
-  --color-track-del-bg: #e6d8d2; /* muted clay against sage */
-  --color-track-del-text: #573b32;
-  --color-track-del-line: #8e6857;
-  --color-highlight-bg: #eae8c8;
-  --color-highlight-border: #b0ac6a;
+:root.theme-paper {
+  color-scheme: light;
+  --color-bg: #e4e5e2;
+  --color-chrome: #f0f1ee;
+  --color-chrome-dark: #d9dbd7;
+  --color-page: #fffefa;
+  --color-ink: #202124;
+  --color-ink-mid: #4f5359;
+  --color-ink-light: #696d73;
+  --color-border: #c5c8c3;
+  --color-border-light: #dedfdb;
+  --color-accent: #315f7d;
+  --color-accent-light: #e3edf4;
+  --color-accent-mid: #86a7bd;
+  --color-accent-dark: #21465f;
+  --color-ai-bg: #edf2f6;
+  --color-ai-text: #35566e;
+  --color-human-avatar-bg: #ede2d2;
+  --color-human-avatar-text: #654827;
+  --color-track-add-bg: #e2f3e7;
+  --color-track-add-text: #1d5a34;
+  --color-track-add-line: #2f7d4a;
+  --color-track-del-bg: #f9e5e2;
+  --color-track-del-text: #782d29;
+  --color-track-del-line: #b44b43;
+  --color-highlight-bg: #fff1b8;
+  --color-highlight-border: #b88b13;
 }
 
-/* Warm neutral + Dragonfly accent (Behr 2026: Mocha Ice / Dainty Lace /
-   Hidden Gem / Dragonfly / Urban Nature / Terra Cotta Urn / Wheat Bread). */
-:root.theme-warm {
-  --color-bg: #c9bfae; /* Mocha Ice, slightly deeper */
-  --color-chrome: #e2dacd; /* Dainty Lace */
-  --color-chrome-dark: #d4cbbc;
-  --color-page: #f1ece2; /* Blank Canvas */
-  --color-ink: #2c3438; /* Hidden Gem ink */
-  --color-ink-mid: #555e61;
-  --color-ink-light: #8a8e8a;
-  --color-border: #c0b5a2;
-  --color-border-light: #ded5c5;
-  --color-accent: #6b8682; /* Dragonfly */
-  --color-accent-light: #dce3e0;
-  --color-accent-mid: #9ab1ac;
-  --color-accent-dark: #4a615e;
-  --color-ai-bg: #ece5d6;
-  --color-ai-text: #6b5e4a;
-  --color-human-avatar-bg: #ddd0bb;
-  --color-human-avatar-text: #6b5239;
-  --color-track-add-bg: #dce3e0; /* Dragonfly wash */
-  --color-track-add-text: #3a4d4a;
-  --color-track-add-line: #6b8682;
-  --color-track-del-bg: #e8d6ce; /* Terra Cotta wash */
-  --color-track-del-text: #5a3628;
-  --color-track-del-line: #9c5e4a;
-  --color-highlight-bg: #e8dec0; /* Wheat Bread */
-  --color-highlight-border: #b59e66;
-}
-
-/* Cool slate + Watery accent (Behr 2026: Watery / Blank Canvas / Nocturne
-   Blue / Adirondack Blue / Urban Nature / Rumors / Beehive). */
-:root.theme-cool {
-  --color-bg: #bfced1; /* Watery, a hair deeper for chrome contrast */
-  --color-chrome: #d6e0e2;
-  --color-chrome-dark: #c7d2d5;
-  --color-page: #fbfbf8;
-  --color-ink: #1f2a36; /* Nocturne Blue */
-  --color-ink-mid: #475866;
-  --color-ink-light: #8593a0;
-  --color-border: #a8b7bc;
-  --color-border-light: #ccd8dc;
-  --color-accent: #4f6b82; /* Adirondack Blue */
-  --color-accent-light: #dce4ec;
-  --color-accent-mid: #7e94a8;
-  --color-accent-dark: #2f4a60;
-  --color-ai-bg: #dce4ec;
-  --color-ai-text: #2f4a60;
-  --color-human-avatar-bg: #d7cfcc;
-  --color-human-avatar-text: #5a4244;
-  --color-track-add-bg: #dce4ec; /* Adirondack wash */
-  --color-track-add-text: #273d51;
-  --color-track-add-line: #4f6b82;
-  --color-track-del-bg: #e8d6d9; /* Rumors wash */
-  --color-track-del-text: #4d232b;
-  --color-track-del-line: #8b4453;
-  --color-highlight-bg: #ecddb4; /* Beehive */
-  --color-highlight-border: #b89344;
-}
-
-/* Earthy desert (Behr 2026: Iced Copper / Rodeo Tan / Baronial Brown /
-   Ecological / Terra Cotta Urn / Beehive). */
-:root.theme-earth {
-  --color-bg: #c2a988; /* Rodeo Tan, deeper */
-  --color-chrome: #d2b999; /* Iced Copper, lightened */
-  --color-chrome-dark: #c2a988;
-  --color-page: #efe5d3; /* Dainty Lace warm */
-  --color-ink: #3a2a1f; /* Baronial Brown */
-  --color-ink-mid: #5f4636;
-  --color-ink-light: #8e7b68;
-  --color-border: #b19a7b;
-  --color-border-light: #d6c2a6;
-  --color-accent: #7a8466; /* Ecological */
-  --color-accent-light: #dde2cf;
-  --color-accent-mid: #a2ac8c;
-  --color-accent-dark: #56603f;
-  --color-ai-bg: #e2d7c0;
-  --color-ai-text: #5f4636;
-  --color-human-avatar-bg: #d6b89a;
-  --color-human-avatar-text: #4a2f1e;
-  --color-track-add-bg: #dde2cf; /* Ecological wash */
-  --color-track-add-text: #445030;
-  --color-track-add-line: #7a8466;
-  --color-track-del-bg: #e8d2c5; /* Iced Copper wash */
-  --color-track-del-text: #5a3322;
-  --color-track-del-line: #a06a4a;
-  --color-highlight-bg: #ead49a; /* Beehive */
-  --color-highlight-border: #b89344;
+/* Gruvbox dark uses the canonical bg/fg and classic accent set as its base.
+   Review washes are adapted darker so bright semantic text remains legible;
+   deletion text is intentionally lighter than stock red because it is struck. */
+:root.theme-gruvbox {
+  color-scheme: dark;
+  --color-bg: #1d2021;
+  --color-chrome: #282828;
+  --color-chrome-dark: #1d2021;
+  --color-page: #282828;
+  --color-ink: #ebdbb2;
+  --color-ink-mid: #d5c4a1;
+  --color-ink-light: #bdae93;
+  --color-border: #504945;
+  --color-border-light: #3c3836;
+  --color-accent: #83a598;
+  --color-accent-light: #364442;
+  --color-accent-mid: #458588;
+  --color-accent-dark: #a9c7bc;
+  --color-ai-bg: #32383a;
+  --color-ai-text: #8ec07c;
+  --color-human-avatar-bg: #504945;
+  --color-human-avatar-text: #fabd2f;
+  --color-track-add-bg: #303d2d;
+  --color-track-add-text: #d5dc63;
+  --color-track-add-line: #98971a;
+  --color-track-del-bg: #49302f;
+  --color-track-del-text: #ff8a80;
+  --color-track-del-line: #fb4934;
+  --color-highlight-bg: #4c412b;
+  --color-highlight-border: #fabd2f;
 }
 
 /* ── Non-color tokens (shared across themes) ────────────────────── */
