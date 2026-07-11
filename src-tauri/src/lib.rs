@@ -538,6 +538,43 @@ mod tests {
     }
 
     #[test]
+    fn session_preview_accepts_a_regular_jsonl_inside_claude_projects() {
+        let _lock = HOME_ENV_LOCK.lock().unwrap();
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
+        let project = home.path().join(".claude/projects/-tmp");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join("inside.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"assistant","sessionId":"inside","cwd":"/tmp","message":{"content":[{"type":"text","text":"allowed preview"}]}}"#,
+        )
+        .unwrap();
+
+        let preview = read_claude_session_preview(path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(preview.session_id, "inside");
+        assert_eq!(preview.recent_assistant_messages, vec!["allowed preview"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_preview_rejects_a_symlink_that_escapes_claude_projects() {
+        use std::os::unix::fs::symlink;
+
+        let _lock = HOME_ENV_LOCK.lock().unwrap();
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
+        let project = home.path().join(".claude/projects/-tmp");
+        fs::create_dir_all(&project).unwrap();
+        let outside = home.path().join("outside.jsonl");
+        let link = project.join("linked.jsonl");
+        fs::write(&outside, "{}").unwrap();
+        symlink(&outside, &link).unwrap();
+
+        assert!(read_claude_session_preview(link.to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
     fn session_baseline_remains_the_authored_document_after_later_assistant_replies() {
         let _lock = HOME_ENV_LOCK.lock().unwrap();
         let home = tempdir().unwrap();
@@ -1210,7 +1247,19 @@ fn scan_session_head(path: &std::path::Path) -> Option<(String, String, Option<S
 
 #[tauri::command]
 fn read_claude_session_preview(jsonl_path: String) -> Result<SessionPreview, String> {
-    let path = PathBuf::from(&jsonl_path);
+    let root = std::fs::canonicalize(claude_projects_dir()?)
+        .map_err(|e| format!("Could not resolve Claude projects directory: {e}"))?;
+    let requested = PathBuf::from(&jsonl_path);
+    let requested_metadata = std::fs::symlink_metadata(&requested)
+        .map_err(|e| format!("Could not inspect Claude session transcript: {e}"))?;
+    if requested_metadata.file_type().is_symlink() || !requested_metadata.file_type().is_file() {
+        return Err("Refusing to preview a non-regular Claude session transcript".to_string());
+    }
+    let path = std::fs::canonicalize(&requested)
+        .map_err(|e| format!("Could not resolve Claude session transcript: {e}"))?;
+    if !path.starts_with(&root) || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+        return Err("Refusing to preview a file outside Claude's projects directory".to_string());
+    }
     let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
 
