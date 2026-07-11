@@ -1461,7 +1461,11 @@ fn classify_claude_outcome(
     result_message: Option<&str>,
     stderr_buf: &str,
 ) -> Result<(), String> {
-    let logical_ok = result_is_error != Some(true);
+    // A clean process exit is not enough: stream-json's terminal `result`
+    // record is the protocol-level acknowledgement that the request completed.
+    // Treat a missing/malformed result exactly like an error instead of
+    // finalizing a reply that may contain only a partial stream.
+    let logical_ok = result_is_error == Some(false);
     if exit_ok && logical_ok {
         return Ok(());
     }
