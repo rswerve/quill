@@ -125,18 +125,50 @@ export async function openMemoryFile(page: Page) {
 }
 
 export async function selectLastCharacters(page: Page, count: number) {
-  // Synthetic Shift+ArrowLeft sequences can race the editor's focus settling
-  // (an early press is occasionally dropped, silently shrinking the
-  // selection). Verify the selection actually reached `count` characters and
-  // retry from End — the sequence is idempotent — rather than let a test
-  // exercise a smaller edit than it claims to.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await page.keyboard.press('End');
-    await page.keyboard.down('Shift');
-    for (let i = 0; i < count; i++) await page.keyboard.press('ArrowLeft');
-    await page.keyboard.up('Shift');
-    const len = await page.evaluate(() => window.getSelection()?.toString().length ?? 0);
-    if (len === count) return;
+  // Keyboard Shift+ArrowLeft events can be dropped while ProseMirror is
+  // reconciling focus, and the DOM selection can briefly report the requested
+  // width before the editor state catches up. Build the browser range directly
+  // instead, then give ProseMirror two animation frames to observe it before
+  // the caller types or presses Backspace.
+  await page.locator('.ProseMirror').evaluate((root, requested) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    let current: Node | null;
+    while ((current = walker.nextNode())) nodes.push(current as Text);
+
+    const endNode = nodes.at(-1);
+    if (!endNode) throw new Error('selectLastCharacters: editor has no text');
+
+    let remaining = requested;
+    let startNode = endNode;
+    let startOffset = endNode.data.length;
+    for (let i = nodes.length - 1; i >= 0 && remaining > 0; i--) {
+      const node = nodes[i];
+      const consumed = Math.min(remaining, node.data.length);
+      startNode = node;
+      startOffset = node.data.length - consumed;
+      remaining -= consumed;
+    }
+    if (remaining > 0) {
+      throw new Error(`selectLastCharacters: document is shorter than ${requested} characters`);
+    }
+
+    (root as HTMLElement).focus({ preventScroll: true });
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endNode.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+  }, count);
+
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  const selected = await page.evaluate(() => window.getSelection()?.toString().length ?? 0);
+  if (selected !== count) {
+    throw new Error(`selectLastCharacters: selected ${selected} characters, expected ${count}`);
   }
-  throw new Error(`selectLastCharacters: selection never reached ${count} characters`);
 }
