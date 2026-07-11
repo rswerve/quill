@@ -27,6 +27,7 @@ export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Sug
       createdAt: new Date(c.createdAt).toISOString(),
       status: 'pending' as const,
       ...(c.pairId ? { pairId: c.pairId } : {}),
+      ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
     }));
 }
 
@@ -97,6 +98,7 @@ export function restoreReviewMarks(
         createdAt,
         updatedAt: createdAt,
         ...(s.pairId ? { pairId: s.pairId } : {}),
+        ...(s.originCommentId ? { originCommentId: s.originCommentId } : {}),
       };
       const type = operation === 'insert' ? insertType : deleteType;
       tr.addMark(from, to, type.create({ dataTracked, changeId: s.id }));

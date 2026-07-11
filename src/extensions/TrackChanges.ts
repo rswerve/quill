@@ -8,6 +8,12 @@ import type { TrackedChangeInfo } from '../types';
 export interface TrackChangesStorage {
   enabled: boolean;
   authorID: string;
+  /**
+   * The comment id stamped onto freshly minted changes (like authorID), so a
+   * change caused by an @claude comment request carries its provenance. Null
+   * for ordinary edits; set/reset around an applyTrackedEdits pass.
+   */
+  originCommentId: string | null;
 }
 
 declare module '@tiptap/core' {
@@ -15,6 +21,7 @@ declare module '@tiptap/core' {
     trackChanges: {
       setTrackChangesEnabled: (enabled: boolean) => ReturnType;
       setTrackChangesAuthor: (authorID: string) => ReturnType;
+      setTrackChangesOrigin: (originCommentId: string | null) => ReturnType;
       acceptChange: (id: string) => ReturnType;
       rejectChange: (id: string) => ReturnType;
       acceptAllChanges: () => ReturnType;
@@ -109,6 +116,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
     return {
       enabled: false,
       authorID: 'anonymous',
+      originCommentId: null,
     };
   },
 
@@ -126,7 +134,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const origDispatch = editorView.dispatch.bind(editorView);
 
           editorView.dispatch = function (tr) {
-            const { enabled, authorID } = getStorage();
+            const { enabled, authorID, originCommentId } = getStorage();
 
             if (
               enabled &&
@@ -134,7 +142,12 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
               !tr.getMeta(SKIP_TRACKING_META) &&
               !tr.getMeta('history$')
             ) {
-              const transformed = transformForTracking(tr, editorView.state, authorID);
+              const transformed = transformForTracking(
+                tr,
+                editorView.state,
+                authorID,
+                originCommentId,
+              );
               transformed.setMeta(SKIP_TRACKING_META, true);
               origDispatch(transformed);
             } else {
@@ -188,6 +201,11 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
 
       setTrackChangesAuthor: (authorID: string) => () => {
         this.storage.authorID = authorID;
+        return true;
+      },
+
+      setTrackChangesOrigin: (originCommentId: string | null) => () => {
+        this.storage.originCommentId = originCommentId;
         return true;
       },
 
@@ -363,7 +381,8 @@ export function getTrackedChanges(editor: {
     for (const mark of node.marks) {
       if (mark.type !== insertType && mark.type !== deleteType) continue;
       if (!mark.attrs.dataTracked) continue;
-      const { id, operation, authorID, status, createdAt, pairId } = mark.attrs.dataTracked;
+      const { id, operation, authorID, status, createdAt, pairId, originCommentId } =
+        mark.attrs.dataTracked;
       if (seen.has(id)) continue;
       seen.add(id);
       if (!changes.has(id)) {
@@ -377,6 +396,7 @@ export function getTrackedChanges(editor: {
           status,
           createdAt,
           ...(pairId ? { pairId } : {}),
+          ...(originCommentId ? { originCommentId } : {}),
         });
       } else {
         const existing = changes.get(id)!;
@@ -423,6 +443,12 @@ type DataTracked = {
    * "Replace old → new" suggestion resolved atomically.
    */
   pairId?: string;
+  /**
+   * The comment whose @claude request minted this change. Stamped from the
+   * extension storage at mint time (like authorID); reused/coalesced changes
+   * keep the origin they were minted with.
+   */
+  originCommentId?: string;
 };
 
 function adjacentTracked(
@@ -486,6 +512,7 @@ function transformForTracking(
   tr: import('@tiptap/pm/state').Transaction,
   state: import('@tiptap/pm/state').EditorState,
   authorID: string,
+  originCommentId: string | null = null,
 ): import('@tiptap/pm/state').Transaction {
   const schema = state.schema;
   const insertType = schema.marks['tracked_insert'];
@@ -616,6 +643,7 @@ function transformForTracking(
         createdAt: Date.now(),
         updatedAt: Date.now(),
         ...(pairId ? { pairId } : {}),
+        ...(originCommentId ? { originCommentId } : {}),
       };
 
       for (const r of normalRanges) {
@@ -663,6 +691,7 @@ function transformForTracking(
         createdAt: Date.now(),
         updatedAt: Date.now(),
         ...(pairId ? { pairId } : {}),
+        ...(originCommentId ? { originCommentId } : {}),
       };
 
       // A replacement's new text lands at the struck range's start so it

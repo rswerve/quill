@@ -24,11 +24,13 @@ interface UseClaudeReplyOptions {
   getDocMarkdown: () => string;
   /** Read the current document text for a comment's range + paragraph. */
   getRangeTexts: (comment: Comment) => RangeTexts;
-  /** Apply Claude's proposed edits as tracked-change suggestions. */
+  /** Apply Claude's proposed edits as tracked-change suggestions, stamped
+   *  with the comment that caused them. */
   applyTrackedEdits: (
     comment: Comment,
     edits: QuillEdit[],
     scope: EditScope,
+    originCommentId?: string,
   ) => { applied: number; skipped: number };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
@@ -447,7 +449,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
             visibleEmitted = rawAccum.indexOf(FENCE);
           }
-          const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, scope);
+          const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, scope, comment.id);
           if (skipped > 0) {
             const noun = skipped === 1 ? 'change' : 'changes';
             opts.appendAIReplyChunk(

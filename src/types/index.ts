@@ -55,6 +55,12 @@ export interface Suggestion {
    * written before suggestions persisted don't have it.
    */
   pairId?: string;
+  /**
+   * The id of the comment whose @claude request produced this suggestion.
+   * Round-trips through the sidecar so the card→comment link survives a
+   * save/reopen. Optional and backward compatible, like pairId.
+   */
+  originCommentId?: string;
 }
 
 export interface SidecarFile {
@@ -89,6 +95,13 @@ export interface TrackedChangeInfo {
    * or rejected together — pass the pairId to acceptChange / rejectChange.
    */
   pairId?: string;
+  /**
+   * The id of the comment whose @claude request produced this change. Stamped
+   * at mint time (like authorID), absent for user-typed changes and for
+   * full-document review edits; the card UI uses it to link back to the
+   * originating comment.
+   */
+  originCommentId?: string;
 }
 
 /**
