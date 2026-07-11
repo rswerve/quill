@@ -524,6 +524,40 @@ mod tests {
         assert!(err.contains("without producing a reply"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn child_pipe_reader_drains_large_stderr_before_stdout_closes() {
+        let script = r#"
+            parent=$$
+            (sleep 5; kill -TERM "$parent" 2>/dev/null) &
+            watchdog=$!
+            i=0
+            while [ "$i" -lt 4096 ]; do
+              printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n' >&2
+              i=$((i + 1))
+            done
+            kill "$watchdog" 2>/dev/null || true
+            printf '%s\n' '{"type":"result","is_error":false}'
+        "#;
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut stdout_lines = Vec::new();
+
+        let stderr_buf = read_child_pipes(stdout, stderr, |line| stdout_lines.push(line));
+        let status = child.wait().unwrap();
+
+        assert!(status.success(), "fake child watchdog fired");
+        assert!(stderr_buf.len() > 200_000);
+        assert_eq!(stdout_lines, vec![r#"{"type":"result","is_error":false}"#]);
+    }
+
     #[test]
     fn session_preview_refuses_jsonl_outside_claude_projects() {
         let dir = tempdir().unwrap();
@@ -1454,6 +1488,33 @@ fn build_child_path(
     ordered.join(":")
 }
 
+/// Consume a child's stdout line-by-line while draining stderr on a sibling
+/// thread. OS pipes have finite buffers; reading stdout to EOF before touching
+/// stderr deadlocks when the child fills stderr and blocks before it can close
+/// stdout. Keeping the concurrency in one helper makes that ordering testable.
+fn read_child_pipes<Stdout, Stderr, F>(
+    stdout: Stdout,
+    stderr: Stderr,
+    mut on_stdout_line: F,
+) -> String
+where
+    Stdout: Read,
+    Stderr: Read + Send + 'static,
+    F: FnMut(String),
+{
+    let stderr_thread = std::thread::spawn(move || {
+        let mut stderr_buf = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut stderr_buf);
+        stderr_buf
+    });
+
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        on_stdout_line(line);
+    }
+
+    stderr_thread.join().unwrap_or_default()
+}
+
 /// Decide whether a finished `claude` invocation succeeded, and if not, produce
 /// the most useful error message. Pure so it can be unit-tested.
 ///
@@ -1585,10 +1646,9 @@ fn spawn_claude_resume(
         // we must inspect this, not just the process exit code.
         let mut result_is_error: Option<bool> = None;
         let mut result_message: Option<String> = None;
-        let stdout_reader = BufReader::new(stdout);
-        for line in stdout_reader.lines().map_while(Result::ok) {
+        let stderr_buf = read_child_pipes(stdout, stderr, |line| {
             if line.trim().is_empty() {
-                continue;
+                return;
             }
             let parsed: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
@@ -1596,7 +1656,7 @@ fn spawn_claude_resume(
                     // A non-JSON line in the stream-json output is unexpected;
                     // skip it but leave a breadcrumb rather than vanishing it.
                     log::debug!("skipping non-JSON line from claude stream: {e}");
-                    continue;
+                    return;
                 }
             };
             // Terminal result line: { type: "result", is_error: bool,
@@ -1609,7 +1669,7 @@ fn spawn_claude_resume(
                     .and_then(|v| v.as_str())
                     .or_else(|| parsed.get("subtype").and_then(|v| v.as_str()))
                     .map(|s| s.to_string());
-                continue;
+                return;
             }
             // Partial messages: { type: "stream_event", event: { type: "content_block_delta",
             //                     delta: { type: "text_delta", text: "..." } } }
@@ -1619,7 +1679,7 @@ fn spawn_claude_resume(
                     let _ = on_event.send(ChunkEvent::Delta {
                         text: text.to_string(),
                     });
-                    continue;
+                    return;
                 }
             }
             // Final assistant message — only emit if we never saw deltas (fallback).
@@ -1639,10 +1699,7 @@ fn spawn_claude_resume(
                     }
                 }
             }
-        }
-
-        let mut stderr_buf = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut stderr_buf);
+        });
 
         let status = {
             let mut child_lock = lock_recover(&handle.child);
