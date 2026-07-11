@@ -622,10 +622,9 @@ mod tests {
                     "type": "user",
                     "sessionId": session_id,
                     "cwd": "/tmp",
-                    "message": { "content": [{
-                        "type": "text",
-                        "text": "You are responding inline on a markdown document you previously authored."
-                    }] }
+                    "message": {
+                        "content": "You are responding inline on a markdown document you previously authored."
+                    }
                 }),
                 serde_json::json!({
                     "type": "assistant",
@@ -641,6 +640,22 @@ mod tests {
 
         assert!(!info.compacted);
         assert_eq!(info.original_markdown.as_deref(), Some(original));
+    }
+
+    #[test]
+    fn quill_request_detection_handles_real_user_content_and_review_prompts() {
+        assert!(is_quill_request(&serde_json::json!({
+            "content": "You are responding inline on a markdown document you previously authored."
+        })));
+        assert!(is_quill_request(&serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "You are reviewing a markdown document you previously authored, now edited by the user in Quill."
+            }]
+        })));
+        assert!(!is_quill_request(&serde_json::json!({
+            "content": "Please draft a markdown document about testing."
+        })));
     }
 
     #[test]
@@ -931,6 +946,9 @@ struct CompactionInfo {
 
 fn assistant_text(msg: &serde_json::Value) -> String {
     let mut out = String::new();
+    if let Some(text) = msg.get("content").and_then(|content| content.as_str()) {
+        return text.to_string();
+    }
     if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
         for block in content {
             if block.get("type").and_then(|t| t.as_str()) == Some("text") {
@@ -941,6 +959,12 @@ fn assistant_text(msg: &serde_json::Value) -> String {
         }
     }
     out
+}
+
+fn is_quill_request(msg: &serde_json::Value) -> bool {
+    let text = assistant_text(msg);
+    text.contains("You are responding inline on a markdown document")
+        || text.contains("You are reviewing a markdown document")
 }
 
 fn iso_now() -> String {
@@ -1148,6 +1172,7 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
     let reader = BufReader::new(file);
     let mut compacted = false;
     let mut last_assistant_markdown: Option<String> = None;
+    let mut baseline_locked = false;
     for line in reader.lines().map_while(Result::ok) {
         let rec: JsonlRecord = match serde_json::from_str(&line) {
             Ok(r) => r,
@@ -1159,7 +1184,18 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
         {
             compacted = true;
         }
-        if rec.rec_type.as_deref() == Some("assistant") {
+        // The first Quill-generated user prompt marks the boundary between the
+        // session's authored document and replies produced inside Quill. Freeze
+        // the baseline there so a later comment answer cannot replace the
+        // Markdown used for subsequent line diffs. Before that boundary, keep
+        // the latest document-like assistant response: authoring sessions often
+        // contain several drafts before the final document.
+        if rec.rec_type.as_deref() == Some("user")
+            && rec.message.as_ref().is_some_and(is_quill_request)
+        {
+            baseline_locked = true;
+        }
+        if !baseline_locked && rec.rec_type.as_deref() == Some("assistant") {
             if let Some(msg) = &rec.message {
                 let text = assistant_text(msg);
                 if text.contains("```") || text.lines().count() > 3 {
