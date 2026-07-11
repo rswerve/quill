@@ -1,6 +1,6 @@
 import { Extension, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
-import { ReplaceStep } from '@tiptap/pm/transform';
+import { Mapping, ReplaceStep } from '@tiptap/pm/transform';
 import type { Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
 import type { TrackedChangeInfo } from '../types';
@@ -380,14 +380,19 @@ export function getTrackedChanges(editor: {
         });
       } else {
         const existing = changes.get(id)!;
-        // A tracked id is minted across a single contiguous run, so the next
-        // node carrying it should abut the range we've accumulated. Extend only
-        // when it does; a non-adjacent node sharing the id would otherwise make
-        // `to` span unmarked text in between (a malformed-doc case we don't want
-        // to silently widen the range for).
+        // A tracked id is minted across one contiguous change, but that change
+        // may span block boundaries (a multi-block paste): the next node
+        // carrying it then sits after structure tokens, not directly adjacent.
+        // Extend when the gap holds no real text; refuse when it does — a
+        // non-adjacent node sharing the id would otherwise make `to` span
+        // unmarked text in between (a malformed-doc case we don't want to
+        // silently widen the range for).
         if (pos === existing.to) {
           existing.to = pos + node.nodeSize;
           existing.text += node.text ?? '';
+        } else if (pos > existing.to && doc.textBetween(existing.to, pos) === '') {
+          existing.to = pos + node.nodeSize;
+          existing.text += '\n' + (node.text ?? '');
         }
       }
     }
@@ -489,17 +494,52 @@ function transformForTracking(
   if (!insertType || !deleteType) return tr;
 
   const newTr = state.tr;
-  let offset = 0;
+
+  // Each step's positions are expressed in the doc produced by the previous
+  // step (tr.docs[i]), NOT the original doc — and steps need not arrive in
+  // document order (FindBar's Replace All chains back-to-front). Meanwhile
+  // newTr's doc diverges from those intermediate docs wherever a deletion was
+  // kept as struck-through text. `mapToNew` translates the CURRENT step's
+  // coordinate frame into newTr's current doc; after each step it is rebuilt
+  // as invert(originalStep) ∘ previous ∘ mutationsAppliedToNewTr. A scalar
+  // offset cannot represent this (it assumes all prior changes lie before the
+  // current step's positions), which is exactly how Replace All corrupted
+  // tracked ranges.
+  //
+  // Known limit: without mirror bookkeeping, a step addressing the interior
+  // of content inserted by an earlier step in the SAME transaction maps to
+  // that content's boundary instead of the interior. Ordinary input arrives
+  // one step per transaction, so this only affects exotic multi-step chains.
+  let mapToNew = new Mapping();
+  const rebase = (step: import('@tiptap/pm/transform').Step, newTrStepsBefore: number) => {
+    mapToNew = new Mapping([
+      step.getMap().invert(),
+      ...mapToNew.maps,
+      ...newTr.mapping.maps.slice(newTrStepsBefore),
+    ]);
+  };
+
   let lastDeleteLeftmost: number | null = null;
   let lastInsertEnd: number | null = null;
 
   for (const step of tr.steps) {
+    const newTrStepsBefore = newTr.steps.length;
+
     if (!(step instanceof ReplaceStep)) {
-      try {
-        newTr.step(step);
-      } catch {
-        // ignore steps that fail due to position shift
+      // Mark steps (bold, link edits) and structural wrappers pass through
+      // untracked by design — but their positions still have to be translated
+      // into newTr's frame, or they land on the wrong text once any deletion
+      // has been kept.
+      const mapped = step.map(mapToNew);
+      if (mapped) {
+        try {
+          newTr.step(mapped);
+        } catch {
+          // A mapped step can still fail if the structure it targeted was
+          // reshaped; dropping it loses only an untracked structural change.
+        }
       }
+      rebase(step, newTrStepsBefore);
       continue;
     }
 
@@ -507,16 +547,51 @@ function transformForTracking(
     const slice = rs.slice;
     const hasDelete = rs.from < rs.to;
     const hasInsert = slice && slice.size > 0;
-    const offsetBefore = offset;
+
+    // Bias inward (1 / -1) so a range abutting kept struck-through text in
+    // newTr never swallows it.
+    const from = mapToNew.map(rs.from, 1);
+    const to = Math.max(from, mapToNew.map(rs.to, -1));
+
+    // Classify the deleted range against newTr's doc — the one that actually
+    // carries the tracked marks, including marks added for earlier steps of
+    // this same transaction.
+    const insertRanges: Array<{ from: number; to: number }> = [];
+    const normalRanges: Array<{ from: number; to: number }> = [];
+    let anyAlreadyDeleted = false;
+    if (hasDelete) {
+      newTr.doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isText) return;
+        const nodeFrom = Math.max(pos, from);
+        const nodeTo = Math.min(pos + node.nodeSize, to);
+        if (nodeFrom >= nodeTo) return;
+        const hasPendingInsert = node.marks.some(
+          (m) => m.type === insertType && m.attrs.dataTracked?.status === 'pending',
+        );
+        const hasPendingDelete = node.marks.some(
+          (m) => m.type === deleteType && m.attrs.dataTracked?.status === 'pending',
+        );
+        if (hasPendingInsert) {
+          // The author is deleting their own pending insertion: remove it for
+          // real instead of striking it through.
+          insertRanges.push({ from: nodeFrom, to: nodeTo });
+        } else if (hasPendingDelete) {
+          // Already struck through — leave it; only the cursor moves.
+          anyAlreadyDeleted = true;
+        } else {
+          normalRanges.push({ from: nodeFrom, to: nodeTo });
+        }
+      });
+    }
 
     // Reuse an existing pending change by this author if one is adjacent/inside,
     // otherwise mint a fresh dataTracked below. Returning the SAME object
     // reference means PM's Mark.eq() merges text nodes instead of stacking marks.
     const existingDelete = hasDelete
-      ? adjacentTracked(state.doc, rs.from, rs.to, insertType, deleteType, authorID, 'delete')
+      ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'delete')
       : null;
     const existingInsert = hasInsert
-      ? adjacentTracked(state.doc, rs.from, rs.to, insertType, deleteType, authorID, 'insert')
+      ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'insert')
       : null;
 
     // A step that both deletes and inserts is a replacement (typing over a
@@ -543,31 +618,6 @@ function transformForTracking(
         ...(pairId ? { pairId } : {}),
       };
 
-      const insertRanges: Array<{ from: number; to: number }> = [];
-      const normalRanges: Array<{ from: number; to: number }> = [];
-
-      state.doc.nodesBetween(rs.from, rs.to, (node, pos) => {
-        if (!node.isText) return;
-        const nodeFrom = Math.max(pos, rs.from);
-        const nodeTo = Math.min(pos + node.nodeSize, rs.to);
-        if (nodeFrom >= nodeTo) return;
-        const hasPendingInsert = node.marks.some(
-          (m) => m.type === insertType && m.attrs.dataTracked?.status === 'pending',
-        );
-        const hasPendingDelete = node.marks.some(
-          (m) => m.type === deleteType && m.attrs.dataTracked?.status === 'pending',
-        );
-        if (hasPendingInsert) {
-          insertRanges.push({ from: nodeFrom + offset, to: nodeTo + offset });
-        } else if (hasPendingDelete) {
-          // Already marked as a pending delete — skip re-marking, but we still
-          // want the cursor to move past it so the next backspace targets the
-          // character before this range.
-        } else {
-          normalRanges.push({ from: nodeFrom + offset, to: nodeTo + offset });
-        }
-      });
-
       for (const r of normalRanges) {
         newTr.addMark(
           r.from,
@@ -576,53 +626,32 @@ function transformForTracking(
         );
       }
 
+      // Back-to-front so each deletion leaves the remaining ranges' (and the
+      // insert point's, which is ≤ all of them) coordinates valid.
       insertRanges.sort((a, b) => b.from - a.from);
       for (const r of insertRanges) {
         newTr.delete(r.from, r.to);
       }
 
-      const insertSize = insertRanges.reduce((sum, r) => sum + (r.to - r.from), 0);
-
-      if (insertRanges.length === 0 && normalRanges.length === 0) {
-        // Either: pure block-boundary deletion (e.g. backspace at start of
-        // paragraph to merge lines), or: the entire range was already a
-        // pending tracked_delete (consecutive backspaces against marked text).
-        // For block-boundary: apply the step untracked.
-        // For already-marked: just move the cursor — don't re-apply the step,
-        // which would actually remove the kept-deleted text.
-        const anyAlreadyDeleted = (() => {
-          let found = false;
-          state.doc.nodesBetween(rs.from, rs.to, (node) => {
-            if (!node.isText) return;
-            if (
-              node.marks.some(
-                (m) => m.type === deleteType && m.attrs.dataTracked?.status === 'pending',
-              )
-            ) {
-              found = true;
-            }
-          });
-          return found;
-        })();
-        if (!anyAlreadyDeleted) {
+      if (insertRanges.length === 0 && normalRanges.length === 0 && !anyAlreadyDeleted) {
+        // Pure block-boundary deletion (e.g. backspace at the start of a
+        // paragraph to merge lines): no text to strike through, apply the
+        // step untracked — at translated positions.
+        const mapped = step.map(mapToNew);
+        if (mapped) {
           try {
-            newTr.step(step);
+            newTr.step(mapped);
           } catch {
-            // ignore
+            // Structure changed underneath the join; drop it rather than
+            // corrupt positions.
           }
         }
-      } else {
-        // The kept (delete-marked) text stays in the doc; the inserted-then-deleted
-        // text actually shrinks the doc. Offset shifts by the shrink amount.
-        offset -= insertSize;
       }
 
       // Leftmost position the cursor should land at: the start of the deleted
-      // range, mapped into new-doc coordinates using the offset BEFORE this
-      // step shrank the doc. That keeps the cursor inside the paragraph when
-      // an entire inserted suggestion is removed (e.g. backspacing through
-      // an <ins>aaa</ins> sequence to nothing).
-      lastDeleteLeftmost = rs.from + offsetBefore;
+      // range in newTr's frame, so the next backspace targets the character
+      // before the just-struck range instead of re-marking it.
+      lastDeleteLeftmost = from;
     }
 
     if (hasInsert) {
@@ -636,14 +665,18 @@ function transformForTracking(
         ...(pairId ? { pairId } : {}),
       };
 
-      const insertAt = rs.from + offset;
+      // A replacement's new text lands at the struck range's start so it
+      // precedes the struck original (Find.ts's stepping contract relies on
+      // this). Deleting the author's own pending insertions above happened at
+      // positions ≥ from, so `from` is still valid here.
+      const insertAt = hasDelete ? from : mapToNew.map(rs.from, -1);
       const isStructural = (slice.openStart ?? 0) > 0 || (slice.openEnd ?? 0) > 0;
       const docSizeBefore = newTr.doc.content.size;
 
       if (isStructural) {
-        // Block split (Enter) or other structural change: respect the slice's
-        // open boundaries by using replace, not insert. Insert(content) would
-        // splat the raw fragment in and leave extra empty blocks behind.
+        // Block split (Enter) or multi-block paste: respect the slice's open
+        // boundaries by using replace, not insert. Insert(content) would splat
+        // the raw fragment in and leave extra empty blocks behind.
         newTr.replace(insertAt, insertAt, slice);
       } else {
         newTr.insert(insertAt, slice.content);
@@ -651,18 +684,21 @@ function transformForTracking(
 
       const inserted = newTr.doc.content.size - docSizeBefore;
       const insertEnd = insertAt + inserted;
-      // Only mark text content (skip block-split boundaries — there's no text
-      // there to mark and addMark over block boundaries would crash).
-      if (!isStructural && inserted > 0) {
+      // Mark everything that was inserted. For a structural slice the range
+      // includes block tokens; addMark only touches the text nodes inside it,
+      // so a multi-block paste gets tracked per paragraph and a bare Enter
+      // split (no text) marks nothing.
+      if (inserted > 0) {
         newTr.addMark(
           insertAt,
           insertEnd,
           insertType.create({ dataTracked: insertTracked, changeId: insertTracked.id }),
         );
       }
-      offset += inserted;
       lastInsertEnd = insertEnd;
     }
+
+    rebase(step, newTrStepsBefore);
   }
 
   // Place cursor:
@@ -675,10 +711,9 @@ function transformForTracking(
     const rs = lastStep as unknown as { from: number; to: number; slice: Slice };
     const hasInsert = rs.slice && rs.slice.size > 0;
     try {
-      if (hasInsert) {
-        const insertEnd = lastInsertEnd ?? rs.from + offset;
-        newTr.setSelection(TextSelection.create(newTr.doc, insertEnd));
-      } else if (lastDeleteLeftmost !== null) {
+      if (hasInsert && lastInsertEnd !== null) {
+        newTr.setSelection(TextSelection.create(newTr.doc, lastInsertEnd));
+      } else if (!hasInsert && lastDeleteLeftmost !== null) {
         newTr.setSelection(TextSelection.create(newTr.doc, lastDeleteLeftmost));
       }
     } catch {
