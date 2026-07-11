@@ -58,6 +58,18 @@ const AUTHOR = 'Anonymous';
 // the extra scroll range the bottom spacer adds past the lowest card's bottom.
 const CARD_SCROLL_MARGIN = 24;
 
+function lastReplyModel(comments: Comment[]): string | null {
+  for (let commentIndex = comments.length - 1; commentIndex >= 0; commentIndex--) {
+    const replies = comments[commentIndex].replies;
+    for (let replyIndex = replies.length - 1; replyIndex >= 0; replyIndex--) {
+      if (replies[replyIndex].authorKind === 'ai' && replies[replyIndex].model) {
+        return replies[replyIndex].model ?? null;
+      }
+    }
+  }
+  return null;
+}
+
 export default function App() {
   const [editor, setEditor] = useState<TiptapEditor | null>(null);
   const editorRef = useRef<EditorRef>(null);
@@ -97,6 +109,7 @@ export default function App() {
 
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
+  const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
   // Folder of reference documents linked to this doc (persisted in the
   // sidecar). Claude gets read access to it plus a file manifest per ask.
   const [contextFolder, setContextFolder] = useState<string | null>(null);
@@ -160,6 +173,7 @@ export default function App() {
     deleteComment,
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyModel,
     finishAIReply,
     failAIReply,
     cancelAIReply,
@@ -287,6 +301,8 @@ export default function App() {
   const claudeReply = useClaudeReply({
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyModel,
+    onModelObserved: setLastKnownModel,
     finishAIReply: finishAIReplyAndDirty,
     failAIReply,
     cancelAIReply,
@@ -308,7 +324,7 @@ export default function App() {
   // mark the range, and attach the remark as a finished AI reply so it renders
   // with the Claude styling. False when the quote isn't found verbatim.
   const addClaudeComment = useCallback(
-    (find: string, body: string): boolean => {
+    (find: string, body: string, model?: string): boolean => {
       const ed = editor;
       if (!ed || find.trim().length === 0 || body.trim().length === 0) return false;
       const doc = ed.state.doc;
@@ -322,11 +338,12 @@ export default function App() {
       );
       ed.chain().setTextSelection({ from: range.from, to: range.to }).setComment(comment.id).run();
       const replyId = startAIReply(comment.id);
+      if (model) setAIReplyModel(comment.id, replyId, model);
       appendAIReplyChunk(comment.id, replyId, body);
       finishAIReplyAndDirty(comment.id, replyId);
       return true;
     },
-    [editor, addComment, startAIReply, appendAIReplyChunk, finishAIReplyAndDirty],
+    [editor, addComment, startAIReply, setAIReplyModel, appendAIReplyChunk, finishAIReplyAndDirty],
   );
 
   const docReview = useDocumentReview({
@@ -334,6 +351,7 @@ export default function App() {
     getContextFolder: useCallback(() => contextFolderRef.current, []),
     applyTrackedEdits: applyDocTrackedEdits,
     addClaudeComment,
+    onModelObserved: setLastKnownModel,
   });
 
   // Re-render on scroll so the comment column tracks the document (cards are
@@ -401,6 +419,7 @@ export default function App() {
       const loadedComments = result.sidecar.comments ?? [];
       const loadedSuggestions = result.sidecar.suggestions ?? [];
       setComments(loadedComments);
+      setLastKnownModel(lastReplyModel(loadedComments));
       setSuggestions(loadedSuggestions);
       // Stamp the marks back onto the parsed document: highlights, click
       // linking, and suggestion cards all read live marks, which Markdown
@@ -552,6 +571,7 @@ export default function App() {
     setComments([]);
     setSuggestions([]);
     setAISession(null);
+    setLastKnownModel(null);
     setContextFolder(null);
   }, [newFile, setComments, setSuggestions]);
 
@@ -568,6 +588,7 @@ export default function App() {
     const draftComments = draft.comments ?? [];
     const draftSuggestions = draft.suggestions ?? [];
     setComments(draftComments);
+    setLastKnownModel(lastReplyModel(draftComments));
     setSuggestions(draftSuggestions);
     // The draft's annotations need their marks stamped back just like a file
     // load — the snapshot's content is serialized Markdown, which drops them
@@ -1315,6 +1336,7 @@ export default function App() {
         zoom={zoom}
         onZoomChange={setZoom}
         aiSession={aiSession}
+        lastKnownModel={lastKnownModel}
         onOpenSessionPicker={() => setPickerOpen(true)}
         onUnlinkSession={handleUnlinkSession}
         contextFolder={contextFolder}

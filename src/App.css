@@ -1558,6 +1558,12 @@ del.track-delete {
 .comment-reply-ai .comment-header {
   align-items: center;
 }
+.comment-reply-model {
+  color: var(--color-ink-light);
+  font-size: var(--text-label);
+  font-weight: 500;
+  white-space: nowrap;
+}
 .ai-badge {
   display: inline-block;
   background: var(--color-accent);
@@ -1631,6 +1637,13 @@ del.track-delete {
 }
 
 /* ── Footer bindings (Claude session / reference folder) ───────── */
+.footer-model {
+  color: var(--color-ink-light);
+  font-size: var(--text-meta);
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
 .footer-ai-binding,
 .footer-context-binding {
   display: inline-flex;

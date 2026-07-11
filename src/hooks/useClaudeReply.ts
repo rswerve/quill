@@ -3,6 +3,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type { AISessionBinding, Comment, EditScope, QuillEdit, QuillEditsBlock } from '../types';
 
 export type ChunkEvent =
+  | { kind: 'model'; model: string }
   | { kind: 'delta'; text: string }
   | { kind: 'done' }
   | { kind: 'error'; message: string }
@@ -17,6 +18,8 @@ export interface RangeTexts {
 interface UseClaudeReplyOptions {
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
+  setAIReplyModel?: (commentId: string, replyId: string, model: string) => void;
+  onModelObserved?: (model: string) => void;
   finishAIReply: (commentId: string, replyId: string) => void;
   failAIReply: (commentId: string, replyId: string, message: string) => void;
   cancelAIReply: (commentId: string, replyId: string) => void;
@@ -482,7 +485,10 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           }
           return;
         }
-        if (msg.kind === 'delta') {
+        if (msg.kind === 'model') {
+          opts.setAIReplyModel?.(comment.id, replyId, msg.model);
+          opts.onModelObserved?.(msg.model);
+        } else if (msg.kind === 'delta') {
           rawAccum += msg.text;
           emitVisible(false);
         } else if (msg.kind === 'done') {

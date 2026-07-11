@@ -10,6 +10,7 @@ interface FooterProps {
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
+  lastKnownModel: string | null;
   onOpenSessionPicker: () => void;
   onUnlinkSession: () => void;
   contextFolder: string | null;
@@ -32,6 +33,7 @@ export default function Footer({
   zoom = 1,
   onZoomChange,
   aiSession,
+  lastKnownModel,
   onOpenSessionPicker,
   onUnlinkSession,
   contextFolder,
@@ -119,6 +121,17 @@ export default function Footer({
           📁 Link reference folder…
         </button>
       )}
+
+      <span
+        className="footer-model"
+        title={
+          lastKnownModel
+            ? `Last model reported by Claude Code: ${lastKnownModel}`
+            : 'No Claude reply has reported a model yet'
+        }
+      >
+        Model {lastKnownModel ?? '—'}
+      </span>
 
       {aiSession ? (
         <span className="footer-ai-binding linked">

@@ -33,7 +33,9 @@ interface UseDocumentReviewOptions {
   /** Apply Claude's proposed edits as doc-scoped tracked suggestions. */
   applyTrackedEdits: (edits: QuillEdit[]) => { applied: number; skipped: number };
   /** Anchor one Claude margin comment; false when `find` can't be located. */
-  addClaudeComment: (find: string, body: string) => boolean;
+  addClaudeComment: (find: string, body: string, model?: string) => boolean;
+  /** Report the model named by this spawn's authoritative stream init event. */
+  onModelObserved?: (model: string) => void;
 }
 
 interface UseDocumentReviewReturn {
@@ -232,6 +234,7 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
       const prompt = buildReviewPrompt(options, opts.getDocMarkdown(), context, fresh);
 
       let rawAccum = '';
+      let responseModel: string | undefined;
 
       // The streamed text shown in the modal: everything before the first
       // fence, holding back any trailing run that could still grow into one.
@@ -264,7 +267,9 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
                   if (
                     typeof c?.find === 'string' &&
                     typeof c?.comment === 'string' &&
-                    opts.addClaudeComment(c.find, c.comment)
+                    (responseModel
+                      ? opts.addClaudeComment(c.find, c.comment, responseModel)
+                      : opts.addClaudeComment(c.find, c.comment))
                   ) {
                     commentsAdded++;
                   } else {
@@ -306,7 +311,10 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
       const dispatch = (msg: ChunkEvent) => {
         // Drop late delta/done/error/cancelled events from a superseded run.
         if (!isCurrent()) return;
-        if (msg.kind === 'delta') {
+        if (msg.kind === 'model') {
+          responseModel = msg.model;
+          opts.onModelObserved?.(msg.model);
+        } else if (msg.kind === 'delta') {
           rawAccum += msg.text;
           setPhase({ status: 'streaming', text: visibleNow(false) });
         } else if (msg.kind === 'done') {

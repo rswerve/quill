@@ -12,6 +12,7 @@ import { ipcFixtures } from './helpers/ipcFixtures';
 import { openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 type MockScriptStep =
+  | { kind: 'model'; model: string }
   | { kind: 'delta'; text: string }
   | { kind: 'done' }
   | { kind: 'error'; message: string }
@@ -38,6 +39,7 @@ async function setupWithMockScripts(
       session: Record<string, unknown>;
     }) => {
       type Ev =
+        | { kind: 'model'; model: string }
         | { kind: 'delta'; text: string }
         | { kind: 'done' }
         | { kind: 'error'; message: string }
@@ -151,11 +153,14 @@ async function addCommentTaggingClaude(page: Page, anchor: string, body: string)
 
 test('AI reply: pending → delta → done streams chunks and clears spinner', async ({ page }) => {
   await setupWithMock(page, [
+    { kind: 'model', model: 'claude-fable-5' },
     { kind: 'delta', text: 'Sure — ' },
     { kind: 'delta', text: 'the answer ' },
     { kind: 'delta', text: 'is 42.' },
     { kind: 'done' },
   ]);
+
+  await expect(page.locator('.footer-model')).toHaveText('Model —');
 
   await addCommentWithAIReply(page, 'hello world', '@claude what is the answer?');
 
@@ -169,6 +174,8 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
+  await expect(aiReply.locator('.comment-reply-model')).toHaveText('claude-fable-5');
+  await expect(page.locator('.footer-model')).toHaveText('Model claude-fable-5');
 });
 
 test('AI reply: @claude in the initial comment triggers a reply', async ({ page }) => {

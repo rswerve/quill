@@ -449,6 +449,39 @@ mod tests {
     }
 
     #[test]
+    fn model_from_stream_record_reads_the_real_cli_init_event() {
+        let init: serde_json::Value =
+            serde_json::from_str(include_str!("../../test/fixtures/claude/system-init.json"))
+                .unwrap();
+
+        assert_eq!(model_from_stream_record(&init), Some("claude-fable-5"));
+        assert_eq!(
+            serde_json::to_value(ChunkEvent::Model {
+                model: "claude-fable-5".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "model", "model": "claude-fable-5" })
+        );
+    }
+
+    #[test]
+    fn model_from_stream_record_ignores_other_system_events_and_empty_models() {
+        let hook = serde_json::json!({
+            "type": "system",
+            "subtype": "hook_started",
+            "model": "claude-fable-5"
+        });
+        let empty = serde_json::json!({
+            "type": "system",
+            "subtype": "init",
+            "model": ""
+        });
+
+        assert_eq!(model_from_stream_record(&hook), None);
+        assert_eq!(model_from_stream_record(&empty), None);
+    }
+
+    #[test]
     fn disallowed_paths_are_rejected() {
         assert!(ensure_allowed_path("/etc/passwd").is_err());
         assert!(ensure_allowed_path("/Users/me/.ssh/id_rsa").is_err());
@@ -985,10 +1018,27 @@ fi
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum ChunkEvent {
+    Model { model: String },
     Delta { text: String },
     Done,
     Error { message: String },
     Cancelled,
+}
+
+/// Claude Code's verbose stream-json protocol starts each invocation with a
+/// system/init record whose `model` field is the model that actually served
+/// that request. Settings files are not authoritative (aliases and routing can
+/// change), so this stream record is Quill's only model source of truth.
+fn model_from_stream_record(record: &serde_json::Value) -> Option<&str> {
+    if record.get("type").and_then(|v| v.as_str()) != Some("system")
+        || record.get("subtype").and_then(|v| v.as_str()) != Some("init")
+    {
+        return None;
+    }
+    record
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|model| !model.is_empty())
 }
 
 struct ChildHandle {
@@ -1897,6 +1947,12 @@ fn spawn_claude_resume(
                     return;
                 }
             };
+            if let Some(model) = model_from_stream_record(&parsed) {
+                let _ = on_event.send(ChunkEvent::Model {
+                    model: model.to_string(),
+                });
+                return;
+            }
             // Terminal result line: { type: "result", is_error: bool,
             //                         subtype: "...", result: "..." }
             if parsed.get("type").and_then(|t| t.as_str()) == Some("result") {

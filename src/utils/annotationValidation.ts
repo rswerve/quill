@@ -49,6 +49,7 @@ function sanitizeReply(raw: unknown): Reply | null {
     text: typeof raw.text === 'string' ? raw.text : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     ...(raw.authorKind === 'user' || raw.authorKind === 'ai' ? { authorKind: raw.authorKind } : {}),
+    ...(isNonEmptyString(raw.model) ? { model: raw.model } : {}),
     ...(typeof raw.pending === 'boolean' ? { pending: raw.pending } : {}),
     ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
   };

@@ -1,0 +1,8 @@
+{
+  "type": "system",
+  "subtype": "init",
+  "cwd": "/private/tmp",
+  "session_id": "c62333f4-691c-437f-b041-77056cc20c9e",
+  "model": "claude-fable-5",
+  "claude_code_version": "2.1.207"
+}
