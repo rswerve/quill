@@ -55,11 +55,19 @@ test('review actions stay tonal, shadowless, and distinct in both themes', async
       [accept, reject, acceptAll, rejectAll].map((locator) =>
         locator.evaluate((element) => {
           const style = getComputedStyle(element);
-          return { background: style.backgroundColor, shadow: style.boxShadow };
+          return {
+            background: style.backgroundColor,
+            shadow: style.boxShadow,
+            borderStyle: style.borderTopStyle,
+            borderWidth: style.borderTopWidth,
+          };
         }),
       ),
     );
     expect(base.every(({ shadow }) => shadow === 'none')).toBe(true);
+    expect(
+      base.every(({ borderStyle, borderWidth }) => borderStyle === 'none' && borderWidth === '0px'),
+    ).toBe(true);
     expect(base[0].background).not.toBe(base[1].background);
     expect(base[2].background).not.toBe(base[3].background);
 
