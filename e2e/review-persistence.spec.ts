@@ -168,14 +168,15 @@ test.describe('suggestion cards link back to their origin comment', () => {
     // The chip's tooltip carries the origin comment's anchor text.
     await expect(chip).toHaveAttribute('title', 'hello');
 
-    // Posting the reply may have left the comment active (composer clicks
-    // bubble to the card). Activate the suggestion first so the chip click
-    // below deterministically activates — not toggles — the comment.
+    // Posting the reply leaves the comment active. A provenance chip is a
+    // directed jump, so clicking it must not toggle its target back off.
+    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await chip.click();
+    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+
+    // From a different active annotation, the chip activates the origin.
     await page.locator('.suggestion-card-replace').click();
     await expect(page.locator('.suggestion-card-replace')).not.toHaveClass(/card-origin-active/);
-
-    // Clicking the chip activates the origin comment, which outlines its
-    // child suggestion card (the reverse link).
     await chip.click();
     await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
 
@@ -223,6 +224,20 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await expect(reopened.locator('.suggestion-card-replace')).toBeVisible();
     await expect(reopened.locator('.suggestion-origin-chip')).toHaveCount(0);
     await expect(reopened.locator('.card-origin-active')).toHaveCount(0);
+  });
+
+  test('the chip reveals and activates a resolved origin comment', async ({ page }) => {
+    await openWithClaudeEdit(page);
+    await page.locator('.comment-resolve-btn').click();
+    await expect(page.locator('.comment-card')).toHaveCount(0);
+
+    const card = page.locator('.suggestion-card-replace');
+    const chip = card.locator('.suggestion-origin-chip');
+    await expect(chip).toBeVisible();
+    await chip.click();
+
+    await expect(page.locator('.comment-card.comment-card-resolved')).toBeVisible();
+    await expect(card).toHaveClass(/card-origin-active/);
   });
 });
 

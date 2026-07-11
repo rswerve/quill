@@ -168,6 +168,18 @@ export default function CommentLayer({
 
   const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
 
+  // A provenance chip is a directed jump, not a toggle: clicking it while its
+  // comment is already active must not deactivate the target. Resolved origin
+  // comments are still valid provenance, so reveal them before activating.
+  const activateOriginComment = useCallback(
+    (commentId: string) => {
+      const origin = comments.find((comment) => comment.id === commentId);
+      if (origin?.resolved) setShowResolved(true);
+      if (activeCommentId !== commentId) onActivate(commentId);
+    },
+    [activeCommentId, comments, onActivate],
+  );
+
   // Stable refs so reflow's identity doesn't change on every render
   // (which would otherwise re-run the editor.on effect → setState → loop).
   const editorRef = useRef(editor);
@@ -365,7 +377,7 @@ export default function CommentLayer({
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
-                onActivateComment={onActivate}
+                onActivateComment={activateOriginComment}
               />
             );
           }
@@ -381,7 +393,7 @@ export default function CommentLayer({
               onAccept={onAcceptChange}
               onReject={onRejectChange}
               onClick={onActivateSuggestion}
-              onActivateComment={onActivate}
+              onActivateComment={activateOriginComment}
             />
           );
         })}

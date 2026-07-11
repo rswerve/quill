@@ -716,8 +716,13 @@ function transformForTracking(
       // Mark everything that was inserted. For a structural slice the range
       // includes block tokens; addMark only touches the text nodes inside it,
       // so a multi-block paste gets tracked per paragraph and a bare Enter
-      // split (no text) marks nothing.
+      // split (no text) marks nothing. Remove inherited insert marks first:
+      // TrackedInsert deliberately allows same-type marks so independent
+      // changes can abut, but text inserted at an inclusive mark boundary can
+      // otherwise belong to both the previous author and the freshly minted
+      // change (misattributing user text to an adjacent Claude suggestion).
       if (inserted > 0) {
+        newTr.removeMark(insertAt, insertEnd, insertType);
         newTr.addMark(
           insertAt,
           insertEnd,
