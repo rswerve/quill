@@ -134,9 +134,13 @@ export function useFileManager(
         let autoBound = false;
         if (!sidecar.aiSession) {
           try {
-            const match = await invoke<AISessionBinding | null>('find_session_for_markdown', {
-              content,
-            });
+            // Validate instead of casting: the backend's result crosses a
+            // serialization boundary, and a binding that doesn't satisfy the
+            // sidecar's own validator would be persisted only to be silently
+            // dropped on the next open.
+            const match = sanitizeAISession(
+              await invoke<unknown>('find_session_for_markdown', { content }),
+            );
             if (match) {
               sidecar = { ...sidecar, aiSession: match };
               autoBound = true;
@@ -225,6 +229,10 @@ export function useFileManager(
         await invoke('write_file', { path: targetPath, content });
         if (!skipSidecar) {
           await saveSidecar(targetPath, comments, suggestions, aiSession, contextFolder);
+          // The sidecar at targetPath is now our own output. In the Save As
+          // escape (new path while protected) the protection must not follow
+          // the document, or every later save silently skips the sidecar.
+          setSidecarProtected(false);
         }
         setFilePath(targetPath);
         setIsDirty(false);

@@ -98,6 +98,7 @@ function sanitizeSuggestion(raw: unknown): Suggestion | null {
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
+    ...(isNonEmptyString(raw.pairId) ? { pairId: raw.pairId } : {}),
   };
 }
 

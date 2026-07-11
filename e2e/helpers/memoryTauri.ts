@@ -116,8 +116,18 @@ export async function openMemoryFile(page: Page) {
 }
 
 export async function selectLastCharacters(page: Page, count: number) {
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < count; i++) await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
+  // Synthetic Shift+ArrowLeft sequences can race the editor's focus settling
+  // (an early press is occasionally dropped, silently shrinking the
+  // selection). Verify the selection actually reached `count` characters and
+  // retry from End — the sequence is idempotent — rather than let a test
+  // exercise a smaller edit than it claims to.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.keyboard.press('End');
+    await page.keyboard.down('Shift');
+    for (let i = 0; i < count; i++) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.up('Shift');
+    const len = await page.evaluate(() => window.getSelection()?.toString().length ?? 0);
+    if (len === count) return;
+  }
+  throw new Error(`selectLastCharacters: selection never reached ${count} characters`);
 }
