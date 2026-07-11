@@ -8,6 +8,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { ipcFixtures } from './helpers/ipcFixtures';
 
 type MockScriptStep =
   | { kind: 'delta'; text: string }
@@ -29,9 +30,11 @@ async function setupWithMockScripts(
     ({
       scriptList,
       overrides,
+      session,
     }: {
       scriptList: MockScriptStep[][];
       overrides: Record<string, unknown>;
+      session: Record<string, unknown>;
     }) => {
       type Ev =
         | { kind: 'delta'; text: string }
@@ -44,10 +47,7 @@ async function setupWithMockScripts(
       const pending = new Map<string, () => void>(); // token → cancel resolver
 
       (window as unknown as { __quillTestSession: unknown }).__quillTestSession = {
-        provider: 'claude-code',
-        sessionId: 'test-session-id',
-        cwd: '/tmp/test',
-        generatedAt: '2026-01-01T00:00:00Z',
+        ...session,
         ...overrides,
       };
 
@@ -88,7 +88,7 @@ async function setupWithMockScripts(
         },
       };
     },
-    { scriptList: scripts, overrides: sessionOverrides },
+    { scriptList: scripts, overrides: sessionOverrides, session: ipcFixtures.autoBindSession },
   );
 
   await page.goto('/');

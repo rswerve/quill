@@ -1,0 +1,6 @@
+{
+  "provider": "claude-code",
+  "sessionId": "fixture-session-1234",
+  "cwd": "/tmp/quill-fixture-project",
+  "linkedAt": "2026-07-11T18:00:00Z"
+}

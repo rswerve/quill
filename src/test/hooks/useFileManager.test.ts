@@ -364,6 +364,51 @@ describe('useFileManager', () => {
       );
       expect(wroteNewSidecar).toBe(true);
     });
+
+    it('clears corrupt-sidecar protection after Save As so later saves persist review data', async () => {
+      mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+        if (cmd === 'read_file') {
+          const path = (args as { path: string }).path;
+          if (path.endsWith('.comments.json')) return Promise.resolve('{ corrupt');
+          return Promise.resolve('# Hello');
+        }
+        if (cmd === 'find_session_for_markdown') return Promise.resolve(null);
+        return Promise.resolve(undefined);
+      });
+
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.openFilePath('/docs/original.md');
+        await result.current.saveFile(
+          'first save',
+          [SAMPLE_COMMENT],
+          [],
+          null,
+          null,
+          '/docs/recovered.md',
+        );
+      });
+
+      mockInvoke.mockClear();
+      await act(async () => {
+        await result.current.saveFile(
+          'second save',
+          [SAMPLE_COMMENT, { ...SAMPLE_COMMENT, id: 'c2', anchorText: 'second', from: 3, to: 9 }],
+          [],
+          null,
+          null,
+        );
+      });
+
+      const sidecarWrite = mockInvoke.mock.calls.find(
+        (call) =>
+          call[0] === 'write_file' &&
+          (call[1] as { path: string }).path === '/docs/recovered.comments.json',
+      );
+      expect(sidecarWrite).toBeDefined();
+      const written = JSON.parse((sidecarWrite![1] as { content: string }).content);
+      expect(written.comments).toHaveLength(2);
+    });
   });
 
   describe('saveFileAs', () => {

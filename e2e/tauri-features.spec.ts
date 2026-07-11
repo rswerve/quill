@@ -11,6 +11,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { ipcFixtures } from './helpers/ipcFixtures';
 
 type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
 
@@ -22,10 +23,11 @@ async function setupWithIPC(
     testSession?: Record<string, unknown>;
     // Optional: capture invoke calls for later assertions.
     captureKey?: string;
+    fixtures?: Record<string, unknown>;
   },
 ): Promise<void> {
   await page.addInitScript(
-    ({ handlerSrc, testSession, captureKey }) => {
+    ({ handlerSrc, testSession, captureKey, fixtures }) => {
       // Reconstruct the handler from its source so it can be serialized.
 
       const handler = new Function('cmd', 'args', 'ctx', `return (${handlerSrc})(cmd, args, ctx);`);
@@ -61,6 +63,7 @@ async function setupWithIPC(
           if (cmd === 'plugin:event|unlisten') return null;
           // Delegate everything else to the test handler.
           return handler(cmd, args, {
+            fixtures,
             emit: (event: string, payload: unknown) => {
               for (const l of listeners) {
                 if (l.event === event) l.cb({ event, id: 0, payload });
@@ -99,6 +102,7 @@ async function setupWithIPC(
       handlerSrc: opts.handler.toString(),
       testSession: opts.testSession ?? null,
       captureKey: opts.captureKey ?? null,
+      fixtures: opts.fixtures ?? null,
     },
   );
 
@@ -110,9 +114,15 @@ async function setupWithIPC(
 // 1. Auto-bind on stray .md open
 // ────────────────────────────────────────────────────────────────────────────
 
-test('auto-bind: stray .md with no sidecar links to matching Claude session', async ({ page }) => {
+test('auto-bind: stray .md with no sidecar links to the canonical IPC session', async ({
+  page,
+}) => {
   // The handler must be self-contained — no closure variables.
-  const handler = (cmd: string, args: Record<string, unknown>) => {
+  const handler = (
+    cmd: string,
+    args: Record<string, unknown>,
+    ctx: { fixtures: { autoBindSession: Record<string, unknown> } },
+  ) => {
     if (cmd === 'show_open_dialog') return '/tmp/stray.md';
     if (cmd === 'read_file') {
       const path = args.path as string;
@@ -120,17 +130,12 @@ test('auto-bind: stray .md with no sidecar links to matching Claude session', as
       throw new Error('sidecar not found'); // .comments.json miss → empty sidecar
     }
     if (cmd === 'find_session_for_markdown') {
-      return {
-        provider: 'claude-code',
-        sessionId: 'autobound-session-xyz',
-        cwd: '/tmp/proj',
-        generatedAt: '2026-05-22T10:00:00Z',
-      };
+      return ctx.fixtures.autoBindSession;
     }
     return null;
   };
 
-  await setupWithIPC(page, { handler });
+  await setupWithIPC(page, { handler, fixtures: ipcFixtures });
 
   // Trigger File → Open via Cmd+O (App.tsx wires this to handleOpen → openFile).
   await page.keyboard.down('ControlOrMeta');
@@ -138,7 +143,7 @@ test('auto-bind: stray .md with no sidecar links to matching Claude session', as
   await page.keyboard.up('ControlOrMeta');
 
   // Footer should show the bound session id (Footer.tsx renders `aiSession.sessionId.slice(0,8)`).
-  await expect(page.locator('.footer-ai-binding.linked')).toContainText('autoboun', {
+  await expect(page.locator('.footer-ai-binding.linked')).toContainText('fixture-', {
     timeout: 3000,
   });
   // Title should show dirty bullet because auto-bind marks the file dirty.
@@ -218,10 +223,9 @@ test('compaction: non-compacted session sends diff form to claude', async ({ pag
   await setupWithIPC(page, {
     handler,
     testSession: {
-      provider: 'claude-code',
+      ...ipcFixtures.autoBindSession,
       sessionId: 'sess-not-compacted',
       cwd: '/tmp/x',
-      generatedAt: '2026-01-01T00:00:00Z',
     },
     captureKey: '__capturedCalls',
   });
@@ -259,10 +263,9 @@ test('compaction: compacted session sends full doc with compaction note', async 
   await setupWithIPC(page, {
     handler,
     testSession: {
-      provider: 'claude-code',
+      ...ipcFixtures.autoBindSession,
       sessionId: 'sess-compacted',
       cwd: '/tmp/x',
-      generatedAt: '2026-01-01T00:00:00Z',
     },
     captureKey: '__capturedCalls',
   });
@@ -424,10 +427,9 @@ test('context folder: @claude request passes --add-dir and a file manifest', asy
   await setupWithIPC(page, {
     handler,
     testSession: {
-      provider: 'claude-code',
+      ...ipcFixtures.autoBindSession,
       sessionId: 'sess-with-folder',
       cwd: '/tmp/x',
-      generatedAt: '2026-01-01T00:00:00Z',
     },
     captureKey: '__capturedCalls',
   });

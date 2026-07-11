@@ -5,6 +5,7 @@ import {
   sanitizeAISession,
   sanitizeContextFolder,
 } from '../../utils/annotationValidation';
+import autoBindSession from '../../../test/fixtures/ipc/auto-bind-session.json';
 
 const validComment = {
   id: 'c1',
@@ -113,20 +114,13 @@ describe('sanitizeSuggestions', () => {
 });
 
 describe('sanitizeAISession', () => {
-  const valid = {
-    provider: 'claude-code',
-    sessionId: 'abc',
-    cwd: '/home/me/project',
-    linkedAt: '2026-01-01T00:00:00Z',
-  };
+  const valid = autoBindSession;
 
   it('keeps a complete binding', () => {
     expect(sanitizeAISession(valid)).toEqual(valid);
   });
 
-  it('drops a legacy createdByQuill flag, loading it as a plain binding', () => {
-    // Old sidecars minted a session via Quill and stamped createdByQuill.
-    // That path is gone; the field is ignored and the binding resumes normally.
+  it('preserves the canonical IPC binding while ignoring compatible extra fields', () => {
     const sanitized = sanitizeAISession({ ...valid, createdByQuill: true });
     expect(sanitized).toEqual(valid);
     expect(sanitized).not.toHaveProperty('createdByQuill');

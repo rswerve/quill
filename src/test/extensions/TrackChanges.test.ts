@@ -213,6 +213,7 @@ describe('TrackChanges extension', () => {
       editor.commands.acceptAllChanges();
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(false);
+      expect(getTextContent(editor)).toBe(' beautiful world');
     });
   });
 
@@ -226,6 +227,87 @@ describe('TrackChanges extension', () => {
       editor.commands.rejectAllChanges();
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(false);
+      expect(getTextContent(editor)).toBe('Hello world');
+    });
+  });
+
+  describe('multi-step and structural transactions', () => {
+    function replaceAllAlphaWithGamma() {
+      editor = makeEditor('<p>alpha beta alpha</p>');
+      editor.commands.setTrackChangesEnabled(true);
+      editor
+        .chain()
+        .setTextSelection({ from: 12, to: 17 })
+        .insertContent('gamma')
+        .setTextSelection({ from: 1, to: 6 })
+        .insertContent('gamma')
+        .run();
+    }
+
+    it('tracks a back-to-front Replace All without moving either replacement', () => {
+      replaceAllAlphaWithGamma();
+
+      const changes = getTrackedChanges(editor);
+      expect(
+        changes
+          .filter((change) => change.operation === 'delete')
+          .map((change) => change.text)
+          .sort(),
+      ).toEqual(['alpha', 'alpha']);
+      expect(
+        changes
+          .filter((change) => change.operation === 'insert')
+          .map((change) => change.text)
+          .sort(),
+      ).toEqual(['gamma', 'gamma']);
+
+      editor.commands.acceptAllChanges();
+      expect(getTextContent(editor)).toBe('gamma beta gamma');
+    });
+
+    it('rejects a back-to-front Replace All back to the exact original text', () => {
+      replaceAllAlphaWithGamma();
+      editor.commands.rejectAllChanges();
+      expect(getTextContent(editor)).toBe('alpha beta alpha');
+    });
+
+    it('accepts a back-to-front Replace All as the exact requested text', () => {
+      replaceAllAlphaWithGamma();
+      editor.commands.acceptAllChanges();
+      expect(getTextContent(editor)).toBe('gamma beta gamma');
+    });
+
+    it('undoes a back-to-front Replace All in one step', () => {
+      replaceAllAlphaWithGamma();
+      editor.commands.undo();
+      expect(getTextContent(editor)).toBe('alpha beta alpha');
+      expect(getTrackedChanges(editor)).toEqual([]);
+    });
+
+    it("keeps replacement text in place when typing over the author's pending insertion", () => {
+      editor = makeEditor('<p>abc</p>');
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('alice');
+      editor.chain().setTextSelection(4).insertContent('xyz').run();
+      editor.chain().setTextSelection({ from: 4, to: 7 }).insertContent('Q').run();
+
+      expect(getTextContent(editor)).toBe('abcQ');
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toMatchObject({ operation: 'insert', text: 'Q', authorID: 'alice' });
+    });
+
+    it('tracks every text run in a multi-block paste', () => {
+      editor = makeEditor('<p>start end</p>');
+      editor.commands.setTrackChangesEnabled(true);
+      editor.chain().setTextSelection(7).insertContent('<p>pasted one</p><p>pasted two</p>').run();
+
+      const inserted = getTrackedChanges(editor)
+        .filter((change) => change.operation === 'insert')
+        .map((change) => change.text)
+        .join(' ');
+      expect(inserted).toContain('pasted one');
+      expect(inserted).toContain('pasted two');
     });
   });
 

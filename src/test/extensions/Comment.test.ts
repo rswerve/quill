@@ -77,6 +77,27 @@ describe('CommentMark extension', () => {
       expect(marks.filter((m) => m.commentId === 'c-002').length).toBeGreaterThan(0);
     });
 
+    it('preserves an overlapping comment across the full overlap when removing its neighbor', () => {
+      editor = makeEditor('<p>one two three four</p>');
+      editor.chain().setTextSelection({ from: 1, to: 14 }).setComment('c-001').run();
+      editor.chain().setTextSelection({ from: 5, to: 19 }).setComment('c-002').run();
+
+      editor.commands.unsetComment('c-001');
+
+      let covered = '';
+      editor.state.doc.nodesBetween(5, 19, (node) => {
+        if (
+          node.isText &&
+          node.marks.some(
+            (mark) => mark.type.name === 'comment' && mark.attrs.commentId === 'c-002',
+          )
+        ) {
+          covered += node.text;
+        }
+      });
+      expect(covered).toBe('two three four');
+    });
+
     it('is a no-op when the commentId does not exist', () => {
       editor = makeEditor('<p>Hello world</p>');
       editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('c-001').run();

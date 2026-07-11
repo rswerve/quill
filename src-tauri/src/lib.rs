@@ -210,8 +210,32 @@ fn list_context_files(folder: String) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs;
+    use std::sync::Mutex as TestMutex;
     use tempfile::tempdir;
+
+    static HOME_ENV_LOCK: TestMutex<()> = TestMutex::new(());
+
+    struct HomeEnvGuard(Option<OsString>);
+
+    impl HomeEnvGuard {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::var_os("HOME");
+            std::env::set_var("HOME", path);
+            Self(previous)
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                std::env::set_var("HOME", previous);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
 
     // --- recent menu labels ---
 
@@ -392,6 +416,22 @@ mod tests {
     }
 
     #[test]
+    fn auto_bind_result_matches_the_shared_ipc_contract() {
+        let actual = serde_json::to_value(AutoBindResult {
+            session_id: "fixture-session-1234".to_string(),
+            cwd: "/tmp/quill-fixture-project".to_string(),
+            linked_at: "2026-07-11T18:00:00Z".to_string(),
+        })
+        .unwrap();
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../../test/fixtures/ipc/auto-bind-session.json"
+        ))
+        .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn disallowed_paths_are_rejected() {
         assert!(ensure_allowed_path("/etc/passwd").is_err());
         assert!(ensure_allowed_path("/Users/me/.ssh/id_rsa").is_err());
@@ -399,6 +439,31 @@ mod tests {
         assert!(ensure_allowed_path("/tmp/secrets.json").is_err());
         // Suffix games: the real extension is what matters.
         assert!(ensure_allowed_path("/tmp/notes.md.exe").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_policy_rejects_markdown_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("looks-safe.md");
+        fs::write(&target, "secret").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(ensure_allowed_path(link.to_str().unwrap()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_policy_rejects_markdown_named_fifos() {
+        let dir = tempdir().unwrap();
+        let fifo = dir.path().join("blocking.md");
+        let status = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(status.success());
+
+        assert!(ensure_allowed_path(fifo.to_str().unwrap()).is_err());
     }
 
     #[test]
@@ -454,9 +519,59 @@ mod tests {
     // --- classify_claude_outcome ---
 
     #[test]
-    fn outcome_clean_exit_no_result_line_is_success() {
-        // Exited 0, no result line emitted (e.g. older CLI) → success.
-        assert!(classify_claude_outcome(true, Some(0), None, None, "").is_ok());
+    fn outcome_clean_exit_without_a_result_line_is_failure() {
+        let err = classify_claude_outcome(true, Some(0), None, None, "").unwrap_err();
+        assert!(err.contains("without producing a reply"));
+    }
+
+    #[test]
+    fn session_preview_refuses_jsonl_outside_claude_projects() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("attacker-controlled.jsonl");
+        fs::write(
+            &path,
+            r#"{"type":"assistant","sessionId":"outside","cwd":"/tmp","message":{"content":[{"type":"text","text":"private preview"}]}}"#,
+        )
+        .unwrap();
+
+        assert!(read_claude_session_preview(path.to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn session_baseline_remains_the_authored_document_after_later_assistant_replies() {
+        let _lock = HOME_ENV_LOCK.lock().unwrap();
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
+        let project = home.path().join(".claude/projects/-tmp");
+        fs::create_dir_all(&project).unwrap();
+        let session_id = "fixture-baseline-session";
+        let original = "# Authored document\n\nFirst paragraph.\n\nSecond paragraph.";
+        let later_reply =
+            "I checked that point.\n\nHere is a later answer.\n\nIt is not the document baseline.";
+        fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({
+                    "type": "assistant",
+                    "sessionId": session_id,
+                    "cwd": "/tmp",
+                    "message": { "content": [{ "type": "text", "text": original }] }
+                }),
+                serde_json::json!({
+                    "type": "assistant",
+                    "sessionId": session_id,
+                    "cwd": "/tmp",
+                    "message": { "content": [{ "type": "text", "text": later_reply }] }
+                })
+            ),
+        )
+        .unwrap();
+
+        let info = check_session_compacted(session_id.to_string()).unwrap();
+
+        assert!(!info.compacted);
+        assert_eq!(info.original_markdown.as_deref(), Some(original));
     }
 
     #[test]

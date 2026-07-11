@@ -9,6 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { ipcFixtures } from './helpers/ipcFixtures';
 
 type MockScriptStep =
   | { kind: 'delta'; text: string }
@@ -23,7 +24,15 @@ async function setupWithMock(
   sessionOverrides: Record<string, unknown> = {},
 ): Promise<void> {
   await page.addInitScript(
-    ({ steps, overrides }: { steps: MockScriptStep[]; overrides: Record<string, unknown> }) => {
+    ({
+      steps,
+      overrides,
+      session,
+    }: {
+      steps: MockScriptStep[];
+      overrides: Record<string, unknown>;
+      session: Record<string, unknown>;
+    }) => {
       type Ev =
         | { kind: 'delta'; text: string }
         | { kind: 'done' }
@@ -34,10 +43,7 @@ async function setupWithMock(
       const pending = new Map<string, () => void>(); // token → cancel resolver
 
       (window as unknown as { __quillTestSession: unknown }).__quillTestSession = {
-        provider: 'claude-code',
-        sessionId: 'test-session-id',
-        cwd: '/tmp/test',
-        generatedAt: '2026-01-01T00:00:00Z',
+        ...session,
         ...overrides,
       };
 
@@ -76,7 +82,7 @@ async function setupWithMock(
         },
       };
     },
-    { steps: script, overrides: sessionOverrides },
+    { steps: script, overrides: sessionOverrides, session: ipcFixtures.autoBindSession },
   );
 
   await page.goto('/');
@@ -200,7 +206,7 @@ test('Review: prompt carries the guidance, checkbox choices, and full document',
   const args = await page.evaluate(
     () => (window as unknown as { __lastSpawnArgs: unknown }).__lastSpawnArgs,
   );
-  expect(args).toMatchObject({ sessionId: 'test-session-id' });
+  expect(args).toMatchObject({ sessionId: ipcFixtures.autoBindSession.sessionId });
   const prompt = (args as { prompt: string }).prompt;
   expect(prompt).toContain('User guidance for this review: make it 20% shorter');
   expect(prompt).toContain('alpha beta gamma');

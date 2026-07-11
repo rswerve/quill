@@ -1,5 +1,6 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import Image from '@tiptap/extension-image';
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   TrackChanges,
@@ -20,7 +21,13 @@ function makeEditor(content: string) {
   document.body.appendChild(el);
   return new Editor({
     element: el,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackChanges],
+    extensions: [
+      StarterKit,
+      Image.configure({ inline: true }),
+      TrackedInsert,
+      TrackedDelete,
+      TrackChanges,
+    ],
     content,
   });
 }
@@ -70,6 +77,32 @@ describe('trackedEdits helpers', () => {
       editor = makeEditor('<p>hello world</p>');
       const doc = editor.state.doc;
       expect(locateEdit(doc, 0, doc.content.size, 'goodbye')).toBeNull();
+    });
+
+    it.each([
+      ['bold', '<p>hello <strong>world</strong></p>', 'world'],
+      ['italic', '<p>hello <em>world</em></p>', 'world'],
+      ['link', '<p>hello <a href="https://example.com">world</a></p>', 'world'],
+      ['hard break', '<p>line one<br>line two</p>', 'line two'],
+      ['inline image', '<p>before <img src="x.png"> after</p>', 'after'],
+      ['empty paragraph', '<p>alpha</p><p></p><p>omega</p>', 'omega'],
+    ])('round-trips a match across %s boundaries without shifting it', (_label, html, find) => {
+      editor = makeEditor(html);
+      const doc = editor.state.doc;
+      const at = locateEdit(doc, 0, doc.content.size, find);
+
+      expect(at).not.toBeNull();
+      expect(doc.textBetween(at!.from, at!.to, '\n', ' ')).toBe(find);
+    });
+
+    it('round-trips a match spanning adjacent differently-marked text runs', () => {
+      editor = makeEditor('<p>plain <strong>bold</strong> <em>italic</em></p>');
+      const doc = editor.state.doc;
+      const find = 'plain bold italic';
+      const at = locateEdit(doc, 0, doc.content.size, find);
+
+      expect(at).not.toBeNull();
+      expect(doc.textBetween(at!.from, at!.to, '\n', ' ')).toBe(find);
     });
   });
 
