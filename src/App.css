@@ -39,6 +39,16 @@
   --color-track-del-line: #b44b43;
   --color-highlight-bg: #fff1b8;
   --color-highlight-border: #b88b13;
+  --color-action-accept-bg: #eef4ef;
+  --color-action-accept-hover: #e3ece5;
+  --color-action-accept-active: #d8e5dc;
+  --color-action-accept-text: #365744;
+  --color-action-accept-border: #aebeb2;
+  --color-action-reject-bg: #f6f1f0;
+  --color-action-reject-hover: #eee4e2;
+  --color-action-reject-active: #e6d8d5;
+  --color-action-reject-text: #714742;
+  --color-action-reject-border: #c8b8b5;
 }
 
 /* Gruvbox dark uses the canonical bg/fg and classic accent set as its base.
@@ -71,6 +81,16 @@
   --color-track-del-line: #fb4934;
   --color-highlight-bg: #4c412b;
   --color-highlight-border: #fabd2f;
+  --color-action-accept-bg: #31382f;
+  --color-action-accept-hover: #3a4435;
+  --color-action-accept-active: #424e3b;
+  --color-action-accept-text: #b8bb86;
+  --color-action-accept-border: #5d6654;
+  --color-action-reject-bg: #392f2e;
+  --color-action-reject-hover: #463432;
+  --color-action-reject-active: #523a37;
+  --color-action-reject-text: #e5a09a;
+  --color-action-reject-border: #70504c;
 }
 
 /* ── Non-color tokens (shared across themes) ────────────────────── */
@@ -848,27 +868,51 @@ del.track-delete {
   padding: 0 1px;
 }
 
-/* Accept/reject toolbar buttons */
+/* Review actions are intentionally tonal rather than filled: the tracked text
+   is the primary signal, while these controls remain immediately scannable. */
+.toolbar-btn-accept,
+.toolbar-btn-reject,
+.suggestion-accept-btn,
+.suggestion-reject-btn {
+  appearance: none;
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
 .toolbar-btn-accept {
-  background: var(--color-accent) !important;
-  color: #fff !important;
+  border: 0.5px solid var(--color-action-accept-border);
+  background: var(--color-action-accept-bg) !important;
+  color: var(--color-action-accept-text) !important;
   font-size: var(--text-meta);
-  font-weight: 700;
   padding: 0 10px;
 }
 .toolbar-btn-accept:hover {
-  background: var(--color-accent-dark) !important;
-  color: #fff !important;
+  border-color: var(--color-track-add-line);
+  background: var(--color-action-accept-hover) !important;
+  color: var(--color-action-accept-text) !important;
+}
+.toolbar-btn-accept:active {
+  background: var(--color-action-accept-active) !important;
 }
 .toolbar-btn-reject {
-  border: 0.5px solid var(--color-border);
-  color: var(--color-ink-mid);
+  border: 0.5px solid var(--color-action-reject-border);
+  background: var(--color-action-reject-bg);
+  color: var(--color-action-reject-text);
   font-size: var(--text-meta);
-  font-weight: 300;
   padding: 0 10px;
 }
 .toolbar-btn-reject:hover {
-  background: var(--color-accent-light) !important;
+  border-color: var(--color-track-del-line);
+  background: var(--color-action-reject-hover) !important;
+  color: var(--color-action-reject-text);
+}
+.toolbar-btn-reject:active {
+  background: var(--color-action-reject-active) !important;
 }
 
 /* ── Comment panel ──────────────────────────────────────────────── */
@@ -1383,31 +1427,46 @@ del.track-delete {
 }
 .suggestion-accept-btn {
   flex: 1;
+  min-height: 27px;
   padding: 3px 8px;
-  background: var(--color-track-add-bg);
-  color: var(--color-track-add-text);
-  border: 1px solid var(--color-track-add-line);
+  background: var(--color-action-accept-bg);
+  color: var(--color-action-accept-text);
+  border: 0.5px solid var(--color-action-accept-border);
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  font-family: var(--font-sans);
 }
 .suggestion-accept-btn:hover {
-  filter: brightness(0.96);
+  background: var(--color-action-accept-hover);
+  border-color: var(--color-track-add-line);
+}
+.suggestion-accept-btn:active {
+  background: var(--color-action-accept-active);
 }
 .suggestion-reject-btn {
   flex: 1;
+  min-height: 27px;
   padding: 3px 8px;
-  background: var(--color-track-del-bg);
-  color: var(--color-track-del-text);
-  border: 1px solid var(--color-track-del-line);
+  background: var(--color-action-reject-bg);
+  color: var(--color-action-reject-text);
+  border: 0.5px solid var(--color-action-reject-border);
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  font-family: var(--font-sans);
 }
 .suggestion-reject-btn:hover {
-  filter: brightness(0.96);
+  background: var(--color-action-reject-hover);
+  border-color: var(--color-track-del-line);
+}
+.suggestion-reject-btn:active {
+  background: var(--color-action-reject-active);
+}
+.toolbar-btn-accept:focus-visible,
+.toolbar-btn-reject:focus-visible,
+.suggestion-accept-btn:focus-visible,
+.suggestion-reject-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 /* ── Footer / status bar ────────────────────────────────────────── */

@@ -74,4 +74,29 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
       contrast(token(body, '--color-ink'), token(body, '--color-highlight-bg')),
     ).toBeGreaterThanOrEqual(4.5);
   });
+
+  it('keeps quiet review actions distinct and at WCAG AA contrast', () => {
+    const acceptBackground = token(body, '--color-action-accept-bg');
+    const rejectBackground = token(body, '--color-action-reject-bg');
+
+    expect(acceptBackground).not.toBe(rejectBackground);
+    expect(
+      contrast(token(body, '--color-action-accept-text'), acceptBackground),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(token(body, '--color-action-reject-text'), rejectBackground),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(
+        token(body, '--color-action-accept-text'),
+        token(body, '--color-action-accept-hover'),
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(
+        token(body, '--color-action-reject-text'),
+        token(body, '--color-action-reject-hover'),
+      ),
+    ).toBeGreaterThanOrEqual(4.5);
+  });
 });
