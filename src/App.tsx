@@ -800,7 +800,9 @@ export default function App() {
       }
 
       if (!hasNativeMenu) {
-        if (e.key === 's' && e.shiftKey) {
+        // With Shift held, KeyboardEvent.key reports the shifted character
+        // ('S', not 's') — compare case-insensitively or the branch is dead.
+        if (e.key.toLowerCase() === 's' && e.shiftKey) {
           e.preventDefault();
           handleSaveAs();
           return;
