@@ -22,10 +22,26 @@ fn ensure_allowed_path(path: &str) -> Result<(), String> {
     let lower = path.to_ascii_lowercase();
     let allowed =
         lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".comments.json");
-    if allowed {
-        Ok(())
-    } else {
-        Err("Refusing to access a file Quill does not manage".to_string())
+    if !allowed {
+        return Err("Refusing to access a file Quill does not manage".to_string());
+    }
+
+    // Checking the final path component before any read/write prevents a
+    // document-looking symlink from redirecting the narrow IPC file surface to
+    // an arbitrary target. Reject every existing non-regular file as well:
+    // reading a FIFO can block the command thread indefinitely, while device
+    // files and sockets have no place in Quill's document model. A missing
+    // path remains valid because Save and Save As create new documents.
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("Refusing to access a symbolic link through Quill".to_string())
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            Err("Refusing to access a non-regular file through Quill".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Could not inspect file path: {error}")),
     }
 }
 
@@ -453,6 +469,9 @@ mod tests {
         symlink(&target, &link).unwrap();
 
         assert!(ensure_allowed_path(link.to_str().unwrap()).is_err());
+        assert!(read_file(link.to_string_lossy().into_owned()).is_err());
+        assert!(write_file(link.to_string_lossy().into_owned(), "overwrite".to_string()).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "secret");
     }
 
     #[cfg(unix)]
@@ -464,6 +483,10 @@ mod tests {
         assert!(status.success());
 
         assert!(ensure_allowed_path(fifo.to_str().unwrap()).is_err());
+        // This must return immediately instead of opening the FIFO and waiting
+        // forever for a writer.
+        assert!(read_file(fifo.to_string_lossy().into_owned()).is_err());
+        assert!(write_file(fifo.to_string_lossy().into_owned(), "blocked".to_string()).is_err());
     }
 
     #[test]
