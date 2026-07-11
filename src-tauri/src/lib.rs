@@ -551,12 +551,21 @@ mod tests {
         fs::write(
             project.join(format!("{session_id}.jsonl")),
             format!(
-                "{}\n{}\n",
+                "{}\n{}\n{}\n",
                 serde_json::json!({
                     "type": "assistant",
                     "sessionId": session_id,
                     "cwd": "/tmp",
                     "message": { "content": [{ "type": "text", "text": original }] }
+                }),
+                serde_json::json!({
+                    "type": "user",
+                    "sessionId": session_id,
+                    "cwd": "/tmp",
+                    "message": { "content": [{
+                        "type": "text",
+                        "text": "You are responding inline on a markdown document you previously authored."
+                    }] }
                 }),
                 serde_json::json!({
                     "type": "assistant",
