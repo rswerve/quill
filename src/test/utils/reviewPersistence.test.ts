@@ -211,4 +211,37 @@ describe('restoreReviewMarks', () => {
       segments: live.segments,
     });
   });
+
+  it.each([true, false])(
+    'save/reopen keeps freshly inserted text outside an inherited format marker (suggesting=%s)',
+    (suggesting) => {
+      editor = makeEditor('<p>Hello world</p>');
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('claude');
+      editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+      editor.commands.setTrackChangesEnabled(suggesting);
+      editor.commands.insertContentAt(3, 'X');
+
+      const records = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+      const format = records.find((record) => record.type === 'format');
+      expect(format?.type).toBe('format');
+      if (!format || format.type !== 'format') throw new Error('format record missing');
+      expect(format.segments.map((segment) => segment.text).join('')).toBe('Hello');
+      expect(format.segments.some((segment) => segment.text.includes('X'))).toBe(false);
+      editor.destroy();
+
+      // Markdown persists the now-applied bold but not review marks. This is
+      // the equivalent clean document shape presented to restoreReviewMarks.
+      editor = makeEditor('<p><strong>HeXllo</strong> world</p>');
+      restoreReviewMarks(editor, [], records);
+
+      let insertedMarks: string[] | null = null;
+      editor.state.doc.descendants((node) => {
+        if (node.isText && node.text === 'X') {
+          insertedMarks = node.marks.map((mark) => mark.type.name);
+        }
+      });
+      expect(insertedMarks).not.toContain('tracked_format');
+    },
+  );
 });

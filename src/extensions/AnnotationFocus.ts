@@ -74,7 +74,9 @@ export const AnnotationFocus = Extension.create({
           init: () => null,
           apply(tr, value: AnnotationFocusTarget | null) {
             const meta = tr.getMeta(ANNOTATION_FOCUS_KEY) as
-              AnnotationFocusTarget | null | undefined;
+              | AnnotationFocusTarget
+              | null
+              | undefined;
             return meta === undefined ? value : meta;
           },
         },
