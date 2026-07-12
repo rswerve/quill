@@ -104,6 +104,79 @@ function ReplyView({
   linkedSuggestionIds: string[];
 }) {
   const isAI = reply.authorKind === 'ai';
+  let replyBody;
+  if (reply.error) {
+    replyBody = (
+      <div className="comment-reply-error">
+        <p className="comment-reply-error-title">Couldn’t complete the request.</p>
+        <p className="comment-reply-error-detail">{reply.error}</p>
+        <ReplyErrorActions
+          message={reply.error}
+          onRetry={onRetry}
+          onRelink={onRelink}
+          onDismiss={onDismiss}
+        />
+      </div>
+    );
+  } else if (reply.cancelled) {
+    replyBody = (
+      <div className="comment-reply-cancelled">
+        <p>Reply stopped.</p>
+        <button className="btn-primary" onClick={onRetry}>
+          Re-run
+        </button>
+      </div>
+    );
+  } else {
+    replyBody = (
+      <>
+        <p className="comment-reply-text">
+          {reply.text}
+          {reply.pending && reply.text.length === 0 && (
+            <span className="ai-thinking">Claude is thinking</span>
+          )}
+          {reply.pending && (
+            <span
+              className={`ai-spinner ${reply.text.length > 0 ? 'ai-stream-caret' : 'ai-thinking-dots'}`}
+              aria-hidden="true"
+            />
+          )}
+        </p>
+        {reply.pending && (
+          <button
+            className="btn-ghost btn-cancel-ai"
+            aria-label="Cancel Claude reply"
+            onClick={onCancel}
+          >
+            ×
+          </button>
+        )}
+        {!reply.pending && linkedSuggestionIds.length > 0 && (
+          <div className="comment-reply-linked-actions">
+            <button
+              className="reply-view-suggestion"
+              onClick={(event) => {
+                event.stopPropagation();
+                onViewSuggestion(linkedSuggestionIds);
+              }}
+            >
+              <span aria-hidden>↗</span> View suggestion
+            </button>
+            <button
+              className="reply-dismiss"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDismiss();
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
     <div className={`comment-reply${isAI ? ' comment-reply-ai' : ''}`}>
       <div className="comment-header">
@@ -118,71 +191,7 @@ function ReplyView({
           </span>
         )}
       </div>
-      {reply.error ? (
-        <div className="comment-reply-error">
-          <p className="comment-reply-error-title">Couldn’t complete the request.</p>
-          <p className="comment-reply-error-detail">{reply.error}</p>
-          <ReplyErrorActions
-            message={reply.error}
-            onRetry={onRetry}
-            onRelink={onRelink}
-            onDismiss={onDismiss}
-          />
-        </div>
-      ) : reply.cancelled ? (
-        <div className="comment-reply-cancelled">
-          <p>Reply stopped.</p>
-          <button className="btn-primary" onClick={onRetry}>
-            Re-run
-          </button>
-        </div>
-      ) : (
-        <>
-          <p className="comment-reply-text">
-            {reply.text}
-            {reply.pending && reply.text.length === 0 && (
-              <span className="ai-thinking">Claude is thinking</span>
-            )}
-            {reply.pending && (
-              <span
-                className={`ai-spinner ${reply.text.length > 0 ? 'ai-stream-caret' : 'ai-thinking-dots'}`}
-                aria-hidden="true"
-              />
-            )}
-          </p>
-          {reply.pending && (
-            <button
-              className="btn-ghost btn-cancel-ai"
-              aria-label="Cancel Claude reply"
-              onClick={onCancel}
-            >
-              ×
-            </button>
-          )}
-          {!reply.pending && linkedSuggestionIds.length > 0 && (
-            <div className="comment-reply-linked-actions">
-              <button
-                className="reply-view-suggestion"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onViewSuggestion(linkedSuggestionIds);
-                }}
-              >
-                <span aria-hidden>↗</span> View suggestion
-              </button>
-              <button
-                className="reply-dismiss"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDismiss();
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-        </>
-      )}
+      {replyBody}
     </div>
   );
 }

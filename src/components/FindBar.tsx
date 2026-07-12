@@ -129,7 +129,7 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
           autoFocus
         />
         <span className="find-bar-count">
-          {query ? (count > 0 ? `${activeIndex + 1} of ${count}` : 'No results') : ''}
+          {query && (count > 0 ? `${activeIndex + 1} of ${count}` : 'No results')}
         </span>
         <button
           className="find-bar-btn"

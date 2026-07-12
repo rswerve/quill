@@ -1,5 +1,13 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Comment, Suggestion, TrackedChangeInfo } from '../types';
+import type { MarkType } from '@tiptap/pm/model';
+import type { Transaction } from '@tiptap/pm/state';
+import type {
+  Comment,
+  FormatSuggestion,
+  Suggestion,
+  TextSuggestion,
+  TrackedChangeInfo,
+} from '../types';
 
 /**
  * Review persistence: tracked-change and comment marks are the runtime truth,
@@ -65,6 +73,103 @@ export function refreshCommentRanges(
   });
 }
 
+function clampRange(from: number, to: number, size: number): { from: number; to: number } | null {
+  const clampedFrom = Math.max(0, Math.min(from, size));
+  const clampedTo = Math.max(0, Math.min(to, size));
+  return clampedTo > clampedFrom ? { from: clampedFrom, to: clampedTo } : null;
+}
+
+function restoreCommentMarks(
+  tr: Transaction,
+  commentType: MarkType | undefined,
+  comments: Comment[],
+  size: number,
+): void {
+  if (!commentType) return;
+  for (const comment of comments) {
+    if (comment.resolved) continue;
+    const range = clampRange(comment.from, comment.to, size);
+    if (!range) continue;
+    tr.addMark(
+      range.from,
+      range.to,
+      commentType.create({ commentId: comment.id, resolved: false }),
+    );
+  }
+}
+
+function restoreFormatSuggestion(
+  tr: Transaction,
+  formatType: MarkType | undefined,
+  suggestion: FormatSuggestion,
+  createdAt: number,
+  size: number,
+): void {
+  if (!formatType) return;
+  for (const segment of suggestion.segments) {
+    const range = clampRange(segment.from, segment.to, size);
+    if (!range) continue;
+    const dataTracked = {
+      id: suggestion.id,
+      operation: 'format',
+      authorID: suggestion.author,
+      status: 'pending',
+      createdAt,
+      updatedAt: createdAt,
+      ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
+      delta: { adds: [...segment.adds], removes: [...segment.removes] },
+    };
+    tr.addMark(range.from, range.to, formatType.create({ dataTracked, changeId: suggestion.id }));
+  }
+}
+
+function restoreTextSuggestion(
+  tr: Transaction,
+  insertType: MarkType | undefined,
+  deleteType: MarkType | undefined,
+  suggestion: TextSuggestion,
+  createdAt: number,
+  size: number,
+): void {
+  if (!insertType || !deleteType) return;
+  const range = clampRange(suggestion.from, suggestion.to, size);
+  if (!range) return;
+  const operation = suggestion.type === 'insertion' ? 'insert' : 'delete';
+  const dataTracked = {
+    id: suggestion.id,
+    operation,
+    authorID: suggestion.author,
+    status: 'pending',
+    createdAt,
+    updatedAt: createdAt,
+    ...(suggestion.pairId ? { pairId: suggestion.pairId } : {}),
+    ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
+  };
+  const type = operation === 'insert' ? insertType : deleteType;
+  tr.addMark(range.from, range.to, type.create({ dataTracked, changeId: suggestion.id }));
+}
+
+function restoreSuggestionMarks(
+  tr: Transaction,
+  schema: TiptapEditor['schema'],
+  suggestions: Suggestion[],
+  size: number,
+): void {
+  const insertType = schema.marks['tracked_insert'];
+  const deleteType = schema.marks['tracked_delete'];
+  const formatType = schema.marks['tracked_format'];
+
+  for (const suggestion of suggestions) {
+    if (suggestion.status !== 'pending') continue;
+    const createdAt = Date.parse(suggestion.createdAt) || Date.now();
+    if (suggestion.type === 'format') {
+      restoreFormatSuggestion(tr, formatType, suggestion, createdAt, size);
+    } else {
+      restoreTextSuggestion(tr, insertType, deleteType, suggestion, createdAt, size);
+    }
+  }
+}
+
 /**
  * Stamp comment and tracked-change marks back onto a freshly loaded document,
  * in one transaction that:
@@ -83,66 +188,10 @@ export function restoreReviewMarks(
   const { state } = editor;
   const { tr, doc, schema } = state;
   const commentType = schema.marks['comment'];
-  const insertType = schema.marks['tracked_insert'];
-  const deleteType = schema.marks['tracked_delete'];
-  const formatType = schema.marks['tracked_format'];
   const size = doc.content.size;
-  const clamp = (p: number) => Math.max(0, Math.min(p, size));
 
-  if (commentType) {
-    for (const c of comments) {
-      if (c.resolved) continue;
-      const from = clamp(c.from);
-      const to = clamp(c.to);
-      if (to <= from) continue;
-      tr.addMark(from, to, commentType.create({ commentId: c.id, resolved: false }));
-    }
-  }
-
-  for (const s of suggestions) {
-    if (s.status !== 'pending') continue;
-    const createdAt = Date.parse(s.createdAt) || Date.now();
-
-    if (s.type === 'format') {
-      if (!formatType) continue;
-      for (const segment of s.segments) {
-        const from = clamp(segment.from);
-        const to = clamp(segment.to);
-        if (to <= from) continue;
-        const dataTracked = {
-          id: s.id,
-          operation: 'format',
-          authorID: s.author,
-          status: 'pending',
-          createdAt,
-          updatedAt: createdAt,
-          ...(s.originCommentId ? { originCommentId: s.originCommentId } : {}),
-          delta: { adds: [...segment.adds], removes: [...segment.removes] },
-        };
-        tr.addMark(from, to, formatType.create({ dataTracked, changeId: s.id }));
-      }
-      continue;
-    }
-
-    if (insertType && deleteType) {
-      const from = clamp(s.from);
-      const to = clamp(s.to);
-      if (to <= from) continue;
-      const operation = s.type === 'insertion' ? 'insert' : 'delete';
-      const dataTracked = {
-        id: s.id,
-        operation,
-        authorID: s.author,
-        status: 'pending',
-        createdAt,
-        updatedAt: createdAt,
-        ...(s.pairId ? { pairId: s.pairId } : {}),
-        ...(s.originCommentId ? { originCommentId: s.originCommentId } : {}),
-      };
-      const type = operation === 'insert' ? insertType : deleteType;
-      tr.addMark(from, to, type.create({ dataTracked, changeId: s.id }));
-    }
-  }
+  restoreCommentMarks(tr, commentType, comments, size);
+  restoreSuggestionMarks(tr, schema, suggestions, size);
 
   if (!tr.steps.length) return;
   tr.setMeta('preventUpdate', true);

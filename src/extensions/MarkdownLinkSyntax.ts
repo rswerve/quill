@@ -5,7 +5,9 @@ import { normalizeHref } from '../utils/linkEditing';
 
 type MarkdownLinkData = { text: string; href: string };
 
+// eslint-disable-next-line sonarjs/super-linear-regex -- linear: negated class excludes the following delimiter
 const inputPattern = /\[([^\]\n]+)\]\(([^()\s]+)\)$/;
+// eslint-disable-next-line sonarjs/super-linear-regex -- linear: negated class excludes the following delimiter
 const pastePattern = /\[([^\]\n]+)\]\(([^()\s]+)\)/g;
 
 function isImageSyntax(source: string, index: number): boolean {

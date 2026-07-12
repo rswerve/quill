@@ -56,6 +56,12 @@ export default function ReviewModal({
 
   const composing = phase.status === 'idle';
   const streaming = phase.status === 'streaming';
+  let submitTitle: string | undefined;
+  if (guidance.trim() === '') {
+    submitTitle = 'Tell Claude what to do';
+  } else if (!makeComments && !makeSuggestions) {
+    submitTitle = 'Pick at least one: comments or suggestions';
+  }
 
   return (
     <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label="Ask Claude to…">
@@ -99,13 +105,7 @@ export default function ReviewModal({
               <button
                 className="btn-primary"
                 disabled={guidance.trim() === '' || (!makeComments && !makeSuggestions)}
-                title={
-                  guidance.trim() === ''
-                    ? 'Tell Claude what to do'
-                    : !makeComments && !makeSuggestions
-                      ? 'Pick at least one: comments or suggestions'
-                      : undefined
-                }
+                title={submitTitle}
                 onClick={() => onSubmit({ guidance, makeComments, makeSuggestions })}
               >
                 Submit

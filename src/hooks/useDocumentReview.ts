@@ -7,6 +7,7 @@ import type {
   QuillEdit,
   QuillEditsBlock,
 } from '../types';
+import { stripTrailingNewlines } from '../utils/trackedEdits';
 import type { ChunkEvent, PromptContext } from './useClaudeReply';
 
 export const EDITS_FENCE = '```quill-edits';
@@ -70,7 +71,7 @@ export function extractFencedBlock(raw: string, fence: string): string | null {
 export function reviewVisible(raw: string): string {
   const starts = [raw.indexOf(COMMENTS_FENCE), raw.indexOf(EDITS_FENCE)].filter((i) => i !== -1);
   if (starts.length === 0) return raw;
-  return raw.slice(0, Math.min(...starts)).replace(/\n+$/, '');
+  return stripTrailingNewlines(raw.slice(0, Math.min(...starts)));
 }
 
 /**
@@ -91,6 +92,61 @@ export function fenceHoldback(accum: string): number {
     }
   }
   return hold;
+}
+
+function addReviewComment(
+  candidate: unknown,
+  responseModel: string | undefined,
+  addClaudeComment: UseDocumentReviewOptions['addClaudeComment'],
+): boolean {
+  if (typeof candidate !== 'object' || candidate === null) return false;
+  const { find, comment } = candidate as Record<string, unknown>;
+  if (typeof find !== 'string' || typeof comment !== 'string') return false;
+  if (responseModel) return addClaudeComment(find, comment, responseModel);
+  return addClaudeComment(find, comment);
+}
+
+function applyReviewComments(
+  raw: string,
+  responseModel: string | undefined,
+  addClaudeComment: UseDocumentReviewOptions['addClaudeComment'],
+): { added: number; skipped: number } {
+  const block = extractFencedBlock(raw, COMMENTS_FENCE);
+  if (!block) return { added: 0, skipped: 0 };
+
+  try {
+    const parsed = JSON.parse(block) as QuillCommentsBlock;
+    if (!Array.isArray(parsed.comments)) return { added: 0, skipped: 0 };
+    let added = 0;
+    let skipped = 0;
+    for (const comment of parsed.comments) {
+      if (addReviewComment(comment, responseModel, addClaudeComment)) added++;
+      else skipped++;
+    }
+    return { added, skipped };
+  } catch (error) {
+    console.warn('Failed to parse quill-comments block:', error);
+    return { added: 0, skipped: 0 };
+  }
+}
+
+function applyReviewSuggestions(
+  raw: string,
+  applyTrackedEdits: UseDocumentReviewOptions['applyTrackedEdits'],
+): { applied: number; skipped: number } {
+  const block = extractFencedBlock(raw, EDITS_FENCE);
+  if (!block) return { applied: 0, skipped: 0 };
+
+  try {
+    const parsed = JSON.parse(block) as QuillEditsBlock;
+    if (!Array.isArray(parsed.edits) || parsed.edits.length === 0) {
+      return { applied: 0, skipped: 0 };
+    }
+    return applyTrackedEdits(parsed.edits);
+  } catch (error) {
+    console.warn('Failed to parse quill-edits block:', error);
+    return { applied: 0, skipped: 0 };
+  }
 }
 
 /** Exported for tests. */
@@ -260,61 +316,26 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
         // superseded run.
         if (!isCurrent()) return;
         tokenRef.current = null;
-        let commentsAdded = 0;
-        let suggestionsApplied = 0;
-        let skipped = 0;
 
         // Comments anchor first: marks don't move text, so the edits applied
         // below can't invalidate positions the comment `find`s located.
         // A block the user's checkboxes didn't ask for is ignored.
+        let commentResult = { added: 0, skipped: 0 };
         if (options.makeComments) {
-          const block = extractFencedBlock(rawAccum, COMMENTS_FENCE);
-          if (block) {
-            try {
-              const parsed = JSON.parse(block) as QuillCommentsBlock;
-              if (Array.isArray(parsed.comments)) {
-                for (const c of parsed.comments) {
-                  if (
-                    typeof c?.find === 'string' &&
-                    typeof c?.comment === 'string' &&
-                    (responseModel
-                      ? opts.addClaudeComment(c.find, c.comment, responseModel)
-                      : opts.addClaudeComment(c.find, c.comment))
-                  ) {
-                    commentsAdded++;
-                  } else {
-                    skipped++;
-                  }
-                }
-              }
-            } catch (e) {
-              console.warn('Failed to parse quill-comments block:', e);
-            }
-          }
+          commentResult = applyReviewComments(rawAccum, responseModel, opts.addClaudeComment);
         }
 
+        let suggestionResult = { applied: 0, skipped: 0 };
         if (options.makeSuggestions) {
-          const block = extractFencedBlock(rawAccum, EDITS_FENCE);
-          if (block) {
-            try {
-              const parsed = JSON.parse(block) as QuillEditsBlock;
-              if (Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-                const res = opts.applyTrackedEdits(parsed.edits);
-                suggestionsApplied = res.applied;
-                skipped += res.skipped;
-              }
-            } catch (e) {
-              console.warn('Failed to parse quill-edits block:', e);
-            }
-          }
+          suggestionResult = applyReviewSuggestions(rawAccum, opts.applyTrackedEdits);
         }
 
         setPhase({
           status: 'done',
           text: visibleNow(true),
-          commentsAdded,
-          suggestionsApplied,
-          skipped,
+          commentsAdded: commentResult.added,
+          suggestionsApplied: suggestionResult.applied,
+          skipped: commentResult.skipped + suggestionResult.skipped,
         });
       };
 

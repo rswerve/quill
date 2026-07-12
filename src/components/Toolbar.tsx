@@ -53,10 +53,16 @@ export function ToolbarButton({
   className,
   baseClassName = 'toolbar-btn',
 }: ButtonProps) {
+  const classes = [baseClassName];
+  if (active) classes.push('active');
+  if (mixed) classes.push('mixed');
+  if (disabled) classes.push('disabled');
+  if (className) classes.push(className);
+
   return (
     <button
       data-toolbar-button
-      className={`${baseClassName}${active ? ' active' : ''}${mixed ? ' mixed' : ''}${disabled ? ' disabled' : ''}${className ? ` ${className}` : ''}`}
+      className={classes.join(' ')}
       onMouseDown={(e) => {
         e.preventDefault(); // keep editor focus so selection is never lost
         const ed = toolbarSelectionStore.liveEditor;

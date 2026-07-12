@@ -592,7 +592,7 @@ export default function App() {
           const result = await openFilePath(pending);
           if (result) loadFileResult(result);
         }
-      } catch (e) {
+      } catch {
         // Non-Tauri context (e.g. plain dev server) — ignore.
       }
     })();
@@ -920,6 +920,40 @@ export default function App() {
   // double-firing (e.g. opening two file dialogs). Outside Tauri (plain dev
   // server / e2e) there is no native menu, so we keep handling them in JS.
   useEffect(() => {
+    function handleBrowserFileShortcut(e: KeyboardEvent): boolean {
+      if (hasNativeMenu) return false;
+
+      // With Shift held, KeyboardEvent.key reports the shifted character
+      // ('S', not 's') — compare case-insensitively or the branch is dead.
+      if (e.key.toLowerCase() === 's' && e.shiftKey) {
+        e.preventDefault();
+        handleSaveAs();
+        return true;
+      }
+
+      const action = {
+        s: handleSave,
+        o: handleOpen,
+        n: handleNew,
+      }[e.key];
+      if (action) {
+        e.preventDefault();
+        action();
+        return true;
+      }
+
+      if (e.key === 'p' && !e.shiftKey && !e.altKey) {
+        // Export to PDF (print-to-PDF). In Tauri the native menu owns this
+        // accelerator; here we intercept the browser's default print so the
+        // doc title is set first, matching the native path.
+        e.preventDefault();
+        handleExportPdf();
+        return true;
+      }
+
+      return false;
+    }
+
     function handleKeyDown(e: KeyboardEvent) {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) {
@@ -927,38 +961,7 @@ export default function App() {
         return;
       }
 
-      if (!hasNativeMenu) {
-        // With Shift held, KeyboardEvent.key reports the shifted character
-        // ('S', not 's') — compare case-insensitively or the branch is dead.
-        if (e.key.toLowerCase() === 's' && e.shiftKey) {
-          e.preventDefault();
-          handleSaveAs();
-          return;
-        }
-        if (e.key === 's') {
-          e.preventDefault();
-          handleSave();
-          return;
-        }
-        if (e.key === 'o') {
-          e.preventDefault();
-          handleOpen();
-          return;
-        }
-        if (e.key === 'n') {
-          e.preventDefault();
-          handleNew();
-          return;
-        }
-        if (e.key === 'p' && !e.shiftKey && !e.altKey) {
-          // Export to PDF (print-to-PDF). In Tauri the native menu owns this
-          // accelerator; here we intercept the browser's default print so the
-          // doc title is set first, matching the native path.
-          e.preventDefault();
-          handleExportPdf();
-          return;
-        }
-      }
+      if (handleBrowserFileShortcut(e)) return;
 
       // Cmd+F opens find & replace (re-focus when already open is handled by
       // the bar itself, which also owns Esc-to-close and Enter navigation).
@@ -987,7 +990,6 @@ export default function App() {
       if (e.key === '0') {
         e.preventDefault();
         setZoom(DEFAULT_ZOOM);
-        return;
       }
     }
     window.addEventListener('keydown', handleKeyDown);

@@ -1,7 +1,15 @@
 import { Extension, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
+import type { EditorState, Transaction } from '@tiptap/pm/state';
 import { AddMarkStep, Mapping, RemoveMarkStep, ReplaceStep } from '@tiptap/pm/transform';
-import type { MarkType, Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
+import type { Step } from '@tiptap/pm/transform';
+import type {
+  Mark as ProseMirrorMark,
+  MarkType,
+  Node as ProseMirrorNode,
+  Schema,
+  Slice,
+} from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
 import type { FormatSegment, TrackedChangeInfo } from '../types';
 
@@ -530,6 +538,97 @@ function sameDelta(
   );
 }
 
+function collectFormatChange(
+  changes: Map<string, TrackedChangeInfo>,
+  node: ProseMirrorNode,
+  pos: number,
+  mark: ProseMirrorMark,
+): void {
+  const data = mark.attrs.dataTracked;
+  if (!data) return;
+  const { id, authorID, status, createdAt, originCommentId, delta } = data;
+  const segment: FormatSegment = {
+    from: pos,
+    to: pos + node.nodeSize,
+    text: node.text ?? '',
+    adds: [...(delta?.adds ?? [])],
+    removes: [...(delta?.removes ?? [])],
+  };
+  const existing = changes.get(id);
+  if (!existing) {
+    changes.set(id, {
+      id,
+      operation: 'format',
+      segments: [segment],
+      authorID,
+      status,
+      createdAt,
+      ...(originCommentId ? { originCommentId } : {}),
+    });
+    return;
+  }
+  if (existing.operation !== 'format') return;
+
+  const last = existing.segments[existing.segments.length - 1];
+  if (last.to === segment.from && sameDelta(last, segment)) {
+    // Adjacent spans carrying the same delta were split only by an unrelated
+    // mark boundary — one span in the read model.
+    last.to = segment.to;
+    last.text += segment.text;
+  } else {
+    existing.segments.push(segment);
+  }
+}
+
+function extendTextChange(
+  existing: Exclude<TrackedChangeInfo, { operation: 'format' }>,
+  doc: ProseMirrorNode,
+  node: ProseMirrorNode,
+  pos: number,
+): void {
+  if (pos === existing.to) {
+    existing.to = pos + node.nodeSize;
+    existing.text += node.text ?? '';
+  } else if (pos > existing.to && doc.textBetween(existing.to, pos) === '') {
+    // A multi-block change crosses structure tokens but no real text.
+    existing.to = pos + node.nodeSize;
+    existing.text += '\n' + (node.text ?? '');
+  }
+}
+
+function collectTextChange(
+  changes: Map<string, TrackedChangeInfo>,
+  doc: ProseMirrorNode,
+  node: ProseMirrorNode,
+  pos: number,
+  mark: ProseMirrorMark,
+  seen: Set<string>,
+): void {
+  const data = mark.attrs.dataTracked;
+  if (!data) return;
+  const { id, operation, authorID, status, createdAt, pairId, originCommentId } = data;
+  if (seen.has(id)) return;
+  seen.add(id);
+
+  const existing = changes.get(id);
+  if (!existing) {
+    changes.set(id, {
+      id,
+      operation,
+      from: pos,
+      to: pos + node.nodeSize,
+      text: node.text ?? '',
+      authorID,
+      status,
+      createdAt,
+      ...(pairId ? { pairId } : {}),
+      ...(originCommentId ? { originCommentId } : {}),
+    });
+    return;
+  }
+  if (existing.operation !== 'format') extendTextChange(existing, doc, node, pos);
+}
+
 export function getTrackedChanges(editor: {
   state: { doc: ProseMirrorNode; schema: Schema };
 }): TrackedChangeInfo[] {
@@ -548,77 +647,11 @@ export function getTrackedChanges(editor: {
     const seen = new Set<string>();
     for (const mark of node.marks) {
       if (formatType && mark.type === formatType) {
-        const data = mark.attrs.dataTracked;
-        if (!data) continue;
-        const { id, authorID, status, createdAt, originCommentId, delta } = data;
-        const segment: FormatSegment = {
-          from: pos,
-          to: pos + node.nodeSize,
-          text: node.text ?? '',
-          adds: [...(delta?.adds ?? [])],
-          removes: [...(delta?.removes ?? [])],
-        };
-        const existing = changes.get(id);
-        if (!existing) {
-          changes.set(id, {
-            id,
-            operation: 'format',
-            segments: [segment],
-            authorID,
-            status,
-            createdAt,
-            ...(originCommentId ? { originCommentId } : {}),
-          });
-        } else if (existing.operation === 'format') {
-          const last = existing.segments[existing.segments.length - 1];
-          if (last.to === segment.from && sameDelta(last, segment)) {
-            // Adjacent spans carrying the same delta were split only by an
-            // unrelated mark boundary — one span in the read model.
-            last.to = segment.to;
-            last.text += segment.text;
-          } else {
-            existing.segments.push(segment);
-          }
-        }
+        collectFormatChange(changes, node, pos, mark);
         continue;
       }
       if (mark.type !== insertType && mark.type !== deleteType) continue;
-      if (!mark.attrs.dataTracked) continue;
-      const { id, operation, authorID, status, createdAt, pairId, originCommentId } =
-        mark.attrs.dataTracked;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      if (!changes.has(id)) {
-        changes.set(id, {
-          id,
-          operation,
-          from: pos,
-          to: pos + node.nodeSize,
-          text: node.text ?? '',
-          authorID,
-          status,
-          createdAt,
-          ...(pairId ? { pairId } : {}),
-          ...(originCommentId ? { originCommentId } : {}),
-        });
-      } else {
-        const existing = changes.get(id)!;
-        if (existing.operation === 'format') continue;
-        // A tracked id is minted across one contiguous change, but that change
-        // may span block boundaries (a multi-block paste): the next node
-        // carrying it then sits after structure tokens, not directly adjacent.
-        // Extend when the gap holds no real text; refuse when it does — a
-        // non-adjacent node sharing the id would otherwise make `to` span
-        // unmarked text in between (a malformed-doc case we don't want to
-        // silently widen the range for).
-        if (pos === existing.to) {
-          existing.to = pos + node.nodeSize;
-          existing.text += node.text ?? '';
-        } else if (pos > existing.to && doc.textBetween(existing.to, pos) === '') {
-          existing.to = pos + node.nodeSize;
-          existing.text += '\n' + (node.text ?? '');
-        }
-      }
+      collectTextChange(changes, doc, node, pos, mark, seen);
     }
   });
 
@@ -822,8 +855,18 @@ function reconcileFormatDeltas(
  * into newTr's frame; mark operations never change document size, so segments
  * snapshotted before mutation stay valid throughout.
  */
-function applyFormatStep(
-  newTr: import('@tiptap/pm/state').Transaction,
+type FormatSegmentPlan = {
+  from: number;
+  to: number;
+  /** raw = same author's pending insertion owns the text: format folds in, no marker. */
+  kind: 'suggest' | 'raw';
+  existing: FormatDataTracked | null;
+};
+
+type FormatGesture = { identity: FormatIdentity | null; blocked: boolean };
+
+function planFormatSegments(
+  doc: ProseMirrorNode,
   step: AddMarkStep | RemoveMarkStep,
   from: number,
   to: number,
@@ -831,27 +874,14 @@ function applyFormatStep(
     insertType: MarkType;
     formatType: MarkType;
     authorID: string;
-    originCommentId: string | null;
-    gesture: { identity: FormatIdentity | null; blocked: boolean };
+    gesture: FormatGesture;
   },
-): void {
-  const { insertType, formatType, authorID, originCommentId, gesture } = ctx;
+): FormatSegmentPlan[] {
+  const { insertType, formatType, authorID, gesture } = ctx;
   const isAdd = step instanceof AddMarkStep;
-  if (to <= from) return;
+  const segments: FormatSegmentPlan[] = [];
 
-  // Plan pass (read-only): split the step's range into homogeneous segments.
-  // Text nodes already break at every mark boundary, so per-node clipping
-  // covers all four boundary kinds (prior format state, existing marker,
-  // pending-insert ownership, block edges) at once.
-  type SegmentPlan = {
-    from: number;
-    to: number;
-    /** raw = same author's pending insertion owns the text: format folds in, no marker. */
-    kind: 'suggest' | 'raw';
-    existing: FormatDataTracked | null;
-  };
-  const segments: SegmentPlan[] = [];
-  newTr.doc.nodesBetween(from, to, (node, pos) => {
+  doc.nodesBetween(from, to, (node, pos) => {
     if (!node.isText) return;
     const segFrom = Math.max(pos, from);
     const segTo = Math.min(pos + node.nodeSize, to);
@@ -861,25 +891,22 @@ function applyFormatStep(
     const hasMark = step.mark.isInSet(node.marks);
     if (isAdd ? hasMark : !hasMark) return;
 
-    const marker = node.marks.find((m) => m.type === formatType);
+    const marker = node.marks.find((mark) => mark.type === formatType);
     const markerData = (marker?.attrs.dataTracked ?? null) as FormatDataTracked | null;
     const pendingMarker = markerData?.status === 'pending' ? markerData : null;
-
     if (pendingMarker && pendingMarker.authorID !== authorID) {
-      // v1 cross-author policy: another author's pending format suggestion
-      // owns this span — skip it; the gesture proceeds on the other segments
-      // and the transaction is flagged so the UI can say why.
+      // Another author's pending suggestion owns this span. Preserve it and
+      // flag the gesture so the UI can explain the partial application.
       gesture.blocked = true;
       return;
     }
 
     const ownPendingInsert = node.marks.some(
-      (m) =>
-        m.type === insertType &&
-        m.attrs.dataTracked?.status === 'pending' &&
-        m.attrs.dataTracked?.authorID === authorID,
+      (mark) =>
+        mark.type === insertType &&
+        mark.attrs.dataTracked?.status === 'pending' &&
+        mark.attrs.dataTracked?.authorID === authorID,
     );
-
     segments.push({
       from: segFrom,
       to: segTo,
@@ -887,28 +914,31 @@ function applyFormatStep(
       existing: pendingMarker,
     });
   });
-  if (segments.length === 0) return;
 
-  // Choose the identity for this step's suggest-segments: the OLDEST pending
-  // same-author id the gesture touches wins (deterministic union; ties break
-  // on id). Candidates are markers overlapped by this step plus the identity
-  // already minted/reused by an earlier step of the same gesture.
+  return segments;
+}
+
+function chooseFormatIdentity(
+  segments: FormatSegmentPlan[],
+  gesture: FormatGesture,
+  authorID: string,
+  originCommentId: string | null,
+): { identity: FormatIdentity; loserIds: Set<string> } {
   const candidates = new Map<string, FormatIdentity>();
-  for (const seg of segments) {
-    if (seg.existing) {
-      const { delta: _delta, ...identity } = seg.existing;
+  for (const segment of segments) {
+    if (segment.existing) {
+      // eslint-disable-next-line sonarjs/no-unused-vars -- destructure-to-omit: drop delta, keep identity
+      const { delta: _delta, ...identity } = segment.existing;
       candidates.set(identity.id, identity);
     }
   }
   if (gesture.identity) candidates.set(gesture.identity.id, gesture.identity);
 
-  let identity: FormatIdentity;
   const ranked = [...candidates.values()].sort(
     (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
   );
-  if (ranked.length > 0) {
-    identity = ranked[0];
-  } else {
+  let identity = ranked[0];
+  if (!identity) {
     const now = Date.now();
     identity = {
       id: uuidv4(),
@@ -921,60 +951,378 @@ function applyFormatStep(
     };
   }
   gesture.identity = identity;
+  return { identity, loserIds: new Set(ranked.slice(1).map((candidate) => candidate.id)) };
+}
 
-  // Mutation pass. The original step is never replayed wholesale — a blocked
-  // segment must not receive the format — so each allowed segment gets the
-  // real format change explicitly, then its recomposed marker.
-  for (const seg of segments) {
-    if (isAdd) newTr.addMark(seg.from, seg.to, step.mark);
-    else newTr.removeMark(seg.from, seg.to, step.mark.type);
-
-    if (seg.kind === 'raw') continue;
+function applyFormatSegments(
+  newTr: import('@tiptap/pm/state').Transaction,
+  step: AddMarkStep | RemoveMarkStep,
+  segments: FormatSegmentPlan[],
+  identity: FormatIdentity,
+  formatType: MarkType,
+): void {
+  const isAdd = step instanceof AddMarkStep;
+  for (const segment of segments) {
+    if (isAdd) newTr.addMark(segment.from, segment.to, step.mark);
+    else newTr.removeMark(segment.from, segment.to, step.mark.type);
+    if (segment.kind === 'raw') continue;
 
     const delta = composeDelta(
-      seg.existing?.delta ?? null,
+      segment.existing?.delta ?? null,
       isAdd ? 'add' : 'remove',
       step.mark.type.name,
     );
     if (delta.adds.length === 0 && delta.removes.length === 0) {
-      // The gesture restored this span's original formatting — nothing left
-      // to suggest here.
-      newTr.removeMark(seg.from, seg.to, formatType);
+      newTr.removeMark(segment.from, segment.to, formatType);
     } else {
       newTr.addMark(
-        seg.from,
-        seg.to,
+        segment.from,
+        segment.to,
         formatType.create({ dataTracked: { ...identity, delta }, changeId: identity.id }),
       );
     }
   }
+}
+
+function rewriteMergedFormatIds(
+  newTr: import('@tiptap/pm/state').Transaction,
+  formatType: MarkType,
+  identity: FormatIdentity,
+  loserIds: Set<string>,
+): void {
+  if (loserIds.size === 0) return;
+  newTr.doc.descendants((node, pos) => {
+    if (!node.isText) return;
+    const marker = node.marks.find((mark) => mark.type === formatType);
+    const data = marker?.attrs.dataTracked as FormatDataTracked | undefined;
+    if (!marker || !data || !loserIds.has(data.id)) return;
+    newTr.addMark(
+      pos,
+      pos + node.nodeSize,
+      formatType.create({
+        dataTracked: { ...identity, delta: data.delta },
+        changeId: identity.id,
+      }),
+    );
+  });
+}
+
+function applyFormatStep(
+  newTr: Transaction,
+  step: AddMarkStep | RemoveMarkStep,
+  from: number,
+  to: number,
+  ctx: {
+    insertType: MarkType;
+    formatType: MarkType;
+    authorID: string;
+    originCommentId: string | null;
+    gesture: FormatGesture;
+  },
+): void {
+  const { insertType, formatType, authorID, originCommentId, gesture } = ctx;
+  if (to <= from) return;
+
+  // Plan pass (read-only): split the step's range into homogeneous segments.
+  // Text nodes already break at every mark boundary, so per-node clipping
+  // covers all four boundary kinds (prior format state, existing marker,
+  // pending-insert ownership, block edges) at once.
+  const segments = planFormatSegments(newTr.doc, step, from, to, {
+    insertType,
+    formatType,
+    authorID,
+    gesture,
+  });
+  if (segments.length === 0) return;
+
+  // Choose the identity for this step's suggest-segments: the OLDEST pending
+  // same-author id the gesture touches wins (deterministic union; ties break
+  // on id). Candidates are markers overlapped by this step plus the identity
+  // already minted/reused by an earlier step of the same gesture.
+  const { identity, loserIds } = chooseFormatIdentity(segments, gesture, authorID, originCommentId);
+
+  // Mutation pass. The original step is never replayed wholesale — a blocked
+  // segment must not receive the format — so each allowed segment gets the
+  // real format change explicitly, then its recomposed marker.
+  applyFormatSegments(newTr, step, segments, identity, formatType);
 
   // Union: every span still carrying a merged-away id — including spans the
   // gesture never touched — is rewritten to the winning identity (keeping its
   // own delta), so one logical change never splinters across ids. updatedAt
   // rides along unchanged: spans sharing an id must stay Mark.eq-compatible.
-  const loserIds = new Set(ranked.slice(1).map((d) => d.id));
-  if (loserIds.size > 0) {
-    newTr.doc.descendants((node, pos) => {
-      if (!node.isText) return;
-      const m = node.marks.find((mm) => mm.type === formatType);
-      const data = m?.attrs.dataTracked as FormatDataTracked | undefined;
-      if (!m || !data || !loserIds.has(data.id)) return;
-      newTr.addMark(
-        pos,
-        pos + node.nodeSize,
-        formatType.create({
-          dataTracked: { ...identity, delta: data.delta },
-          changeId: identity.id,
-        }),
-      );
-    });
+  rewriteMergedFormatIds(newTr, formatType, identity, loserIds);
+}
+
+type ReplaceStepData = { from: number; to: number; slice: Slice };
+type TrackedRange = { from: number; to: number };
+type DeletedRangePlan = {
+  insertRanges: TrackedRange[];
+  normalRanges: TrackedRange[];
+  anyAlreadyDeleted: boolean;
+};
+
+function isTrackedFormatStep(
+  step: Step,
+  formatType: MarkType | undefined,
+): step is AddMarkStep | RemoveMarkStep {
+  return Boolean(
+    formatType &&
+    (step instanceof AddMarkStep || step instanceof RemoveMarkStep) &&
+    TRACKED_FORMAT_MARK_NAMES.has(step.mark.type.name),
+  );
+}
+
+function applyTrackedFormatTransactionStep(
+  newTr: Transaction,
+  step: AddMarkStep | RemoveMarkStep,
+  mapToNew: Mapping,
+  ctx: {
+    insertType: MarkType;
+    formatType: MarkType;
+    authorID: string;
+    originCommentId: string | null;
+    gesture: FormatGesture;
+  },
+): void {
+  // Bias inward so struck-through text kept at either edge is not swallowed.
+  const from = mapToNew.map(step.from, 1);
+  const to = Math.max(from, mapToNew.map(step.to, -1));
+  applyFormatStep(newTr, step, from, to, ctx);
+}
+
+function applyMappedPassthroughStep(newTr: Transaction, step: Step, mapToNew: Mapping): void {
+  const mapped = step.map(mapToNew);
+  if (!mapped) return;
+  try {
+    newTr.step(mapped);
+  } catch {
+    // A mapped step can still fail if the structure it targeted was reshaped;
+    // dropping it loses only an untracked structural change.
+  }
+}
+
+function classifyDeletedRanges(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+  insertType: MarkType,
+  deleteType: MarkType,
+): DeletedRangePlan {
+  const plan: DeletedRangePlan = {
+    insertRanges: [],
+    normalRanges: [],
+    anyAlreadyDeleted: false,
+  };
+  doc.nodesBetween(from, to, (node, pos) => {
+    if (!node.isText) return;
+    const nodeFrom = Math.max(pos, from);
+    const nodeTo = Math.min(pos + node.nodeSize, to);
+    if (nodeFrom >= nodeTo) return;
+    const hasPendingInsert = node.marks.some(
+      (mark) => mark.type === insertType && mark.attrs.dataTracked?.status === 'pending',
+    );
+    const hasPendingDelete = node.marks.some(
+      (mark) => mark.type === deleteType && mark.attrs.dataTracked?.status === 'pending',
+    );
+    if (hasPendingInsert) {
+      plan.insertRanges.push({ from: nodeFrom, to: nodeTo });
+    } else if (hasPendingDelete) {
+      plan.anyAlreadyDeleted = true;
+    } else {
+      plan.normalRanges.push({ from: nodeFrom, to: nodeTo });
+    }
+  });
+  return plan;
+}
+
+function resolveReplacementPairId(
+  hasDelete: boolean,
+  hasInsert: boolean,
+  existingDelete: DataTracked | null,
+  existingInsert: DataTracked | null,
+): string | undefined {
+  if (!hasDelete || !hasInsert) return undefined;
+  const existingPairId = existingDelete?.pairId ?? existingInsert?.pairId;
+  if (existingPairId) return existingPairId;
+  return !existingDelete && !existingInsert ? uuidv4() : undefined;
+}
+
+function trackedData(
+  existing: DataTracked | null,
+  operation: DataTracked['operation'],
+  authorID: string,
+  pairId: string | undefined,
+  originCommentId: string | null,
+): DataTracked {
+  return (
+    existing ?? {
+      id: uuidv4(),
+      operation,
+      authorID,
+      status: 'pending',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...(pairId ? { pairId } : {}),
+      ...(originCommentId ? { originCommentId } : {}),
+    }
+  );
+}
+
+function applyTrackedDeletion(
+  newTr: Transaction,
+  step: ReplaceStep,
+  mapToNew: Mapping,
+  from: number,
+  plan: DeletedRangePlan,
+  deleteType: MarkType,
+  deleteTracked: DataTracked,
+): number {
+  for (const range of plan.normalRanges) {
+    newTr.addMark(
+      range.from,
+      range.to,
+      deleteType.create({ dataTracked: deleteTracked, changeId: deleteTracked.id }),
+    );
+  }
+
+  // Back-to-front so deleting the author's pending inserts leaves every
+  // remaining range and the insertion point valid.
+  plan.insertRanges.sort((a, b) => b.from - a.from);
+  for (const range of plan.insertRanges) newTr.delete(range.from, range.to);
+
+  if (plan.insertRanges.length === 0 && plan.normalRanges.length === 0 && !plan.anyAlreadyDeleted) {
+    // Pure block-boundary deletion: apply the structural join untracked.
+    applyMappedPassthroughStep(newTr, step, mapToNew);
+  }
+  return from;
+}
+
+function applyTrackedInsertion(
+  newTr: Transaction,
+  mapToNew: Mapping,
+  replace: ReplaceStepData,
+  from: number,
+  hasDelete: boolean,
+  insertType: MarkType,
+  formatType: MarkType | undefined,
+  insertTracked: DataTracked,
+): number {
+  const { slice } = replace;
+  const insertAt = hasDelete ? from : mapToNew.map(replace.from, -1);
+  const isStructural = (slice.openStart ?? 0) > 0 || (slice.openEnd ?? 0) > 0;
+  const docSizeBefore = newTr.doc.content.size;
+  if (isStructural) newTr.replace(insertAt, insertAt, slice);
+  else newTr.insert(insertAt, slice.content);
+
+  const inserted = newTr.doc.content.size - docSizeBefore;
+  const insertEnd = insertAt + inserted;
+  if (inserted > 0) {
+    // Strip inherited tracking at inclusive boundaries before assigning the
+    // fresh insertion to its newly resolved identity.
+    newTr.removeMark(insertAt, insertEnd, insertType);
+    if (formatType) newTr.removeMark(insertAt, insertEnd, formatType);
+    newTr.addMark(
+      insertAt,
+      insertEnd,
+      insertType.create({ dataTracked: insertTracked, changeId: insertTracked.id }),
+    );
+  }
+  return insertEnd;
+}
+
+function applyTrackedReplaceStep(
+  newTr: Transaction,
+  step: ReplaceStep,
+  mapToNew: Mapping,
+  ctx: {
+    insertType: MarkType;
+    deleteType: MarkType;
+    formatType: MarkType | undefined;
+    authorID: string;
+    originCommentId: string | null;
+  },
+): { deleteLeftmost: number | null; insertEnd: number | null } {
+  const { insertType, deleteType, formatType, authorID, originCommentId } = ctx;
+  const replace = step as unknown as ReplaceStepData;
+  const hasDelete = replace.from < replace.to;
+  const hasInsert = replace.slice && replace.slice.size > 0;
+  // Bias inward so ranges abutting kept struck-through text never swallow it.
+  const from = mapToNew.map(replace.from, 1);
+  const to = Math.max(from, mapToNew.map(replace.to, -1));
+  const deletedRanges = hasDelete
+    ? classifyDeletedRanges(newTr.doc, from, to, insertType, deleteType)
+    : { insertRanges: [], normalRanges: [], anyAlreadyDeleted: false };
+
+  const existingDelete = hasDelete
+    ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'delete')
+    : null;
+  const existingInsert = hasInsert
+    ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'insert')
+    : null;
+  const pairId = resolveReplacementPairId(hasDelete, hasInsert, existingDelete, existingInsert);
+
+  let deleteLeftmost: number | null = null;
+  if (hasDelete) {
+    const deletion = trackedData(existingDelete, 'delete', authorID, pairId, originCommentId);
+    deleteLeftmost = applyTrackedDeletion(
+      newTr,
+      step,
+      mapToNew,
+      from,
+      deletedRanges,
+      deleteType,
+      deletion,
+    );
+  }
+
+  let insertEnd: number | null = null;
+  if (hasInsert) {
+    const insertion = trackedData(existingInsert, 'insert', authorID, pairId, originCommentId);
+    insertEnd = applyTrackedInsertion(
+      newTr,
+      mapToNew,
+      replace,
+      from,
+      hasDelete,
+      insertType,
+      formatType,
+      insertion,
+    );
+  }
+  return { deleteLeftmost, insertEnd };
+}
+
+function copyPasteRuleMeta(source: Transaction, target: Transaction): void {
+  for (const key of ['uiEvent', 'paste', 'applyPasteRules'] as const) {
+    const value = source.getMeta(key);
+    if (value !== undefined) target.setMeta(key, value);
+  }
+}
+
+function placeTrackedSelection(
+  source: Transaction,
+  target: Transaction,
+  lastDeleteLeftmost: number | null,
+  lastInsertEnd: number | null,
+): void {
+  const lastStep = source.steps[source.steps.length - 1];
+  if (!(lastStep instanceof ReplaceStep)) return;
+  const replace = lastStep as unknown as ReplaceStepData;
+  const hasInsert = replace.slice && replace.slice.size > 0;
+  try {
+    if (hasInsert && lastInsertEnd !== null) {
+      target.setSelection(TextSelection.create(target.doc, lastInsertEnd));
+    } else if (!hasInsert && lastDeleteLeftmost !== null) {
+      target.setSelection(TextSelection.create(target.doc, lastDeleteLeftmost));
+    }
+  } catch {
+    // Keep the transaction's default selection when a translated edge vanished.
   }
 }
 
 function transformForTracking(
-  tr: import('@tiptap/pm/state').Transaction,
-  state: import('@tiptap/pm/state').EditorState,
+  tr: Transaction,
+  state: EditorState,
   authorID: string,
   originCommentId: string | null = null,
 ): import('@tiptap/pm/state').Transaction {
@@ -1003,7 +1351,7 @@ function transformForTracking(
   // that content's boundary instead of the interior. Ordinary input arrives
   // one step per transaction, so this only affects exotic multi-step chains.
   let mapToNew = new Mapping();
-  const rebase = (step: import('@tiptap/pm/transform').Step, newTrStepsBefore: number) => {
+  const rebase = (step: Step, newTrStepsBefore: number) => {
     mapToNew = new Mapping([
       step.getMap().invert(),
       ...mapToNew.maps,
@@ -1015,7 +1363,7 @@ function transformForTracking(
   let lastInsertEnd: number | null = null;
   // One toolbar gesture may emit several scoped mark steps (unsetBold over
   // disjoint bold runs); sharing this identity keeps them one suggestion.
-  const formatGesture: { identity: FormatIdentity | null; blocked: boolean } = {
+  const formatGesture: FormatGesture = {
     identity: null,
     blocked: false,
   };
@@ -1023,212 +1371,35 @@ function transformForTracking(
   for (const step of tr.steps) {
     const newTrStepsBefore = newTr.steps.length;
 
-    if (
-      formatType &&
-      (step instanceof AddMarkStep || step instanceof RemoveMarkStep) &&
-      TRACKED_FORMAT_MARK_NAMES.has(step.mark.type.name)
-    ) {
-      // Scoped formatting becomes a tracked suggestion. Positions translate
-      // into newTr's frame first (this transaction may also carry replace
-      // steps), biased inward like the replace path so struck-through text
-      // kept at the edges is never swallowed.
-      const from = mapToNew.map(step.from, 1);
-      const to = Math.max(from, mapToNew.map(step.to, -1));
-      applyFormatStep(newTr, step, from, to, {
+    if (isTrackedFormatStep(step, formatType)) {
+      applyTrackedFormatTransactionStep(newTr, step, mapToNew, {
         insertType,
-        formatType,
+        formatType: formatType!,
         authorID,
         originCommentId,
         gesture: formatGesture,
       });
-      rebase(step, newTrStepsBefore);
-      continue;
-    }
-
-    if (!(step instanceof ReplaceStep)) {
+    } else if (!(step instanceof ReplaceStep)) {
       // Remaining mark steps (link edits, code) and structural wrappers pass
       // through untracked by design — but their positions still have to be
       // translated into newTr's frame, or they land on the wrong text once
       // any deletion has been kept.
-      const mapped = step.map(mapToNew);
-      if (mapped) {
-        try {
-          newTr.step(mapped);
-        } catch {
-          // A mapped step can still fail if the structure it targeted was
-          // reshaped; dropping it loses only an untracked structural change.
-        }
-      }
-      rebase(step, newTrStepsBefore);
-      continue;
-    }
-
-    const rs = step as unknown as { from: number; to: number; slice: Slice };
-    const slice = rs.slice;
-    const hasDelete = rs.from < rs.to;
-    const hasInsert = slice && slice.size > 0;
-
-    // Bias inward (1 / -1) so a range abutting kept struck-through text in
-    // newTr never swallows it.
-    const from = mapToNew.map(rs.from, 1);
-    const to = Math.max(from, mapToNew.map(rs.to, -1));
-
-    // Classify the deleted range against newTr's doc — the one that actually
-    // carries the tracked marks, including marks added for earlier steps of
-    // this same transaction.
-    const insertRanges: Array<{ from: number; to: number }> = [];
-    const normalRanges: Array<{ from: number; to: number }> = [];
-    let anyAlreadyDeleted = false;
-    if (hasDelete) {
-      newTr.doc.nodesBetween(from, to, (node, pos) => {
-        if (!node.isText) return;
-        const nodeFrom = Math.max(pos, from);
-        const nodeTo = Math.min(pos + node.nodeSize, to);
-        if (nodeFrom >= nodeTo) return;
-        const hasPendingInsert = node.marks.some(
-          (m) => m.type === insertType && m.attrs.dataTracked?.status === 'pending',
-        );
-        const hasPendingDelete = node.marks.some(
-          (m) => m.type === deleteType && m.attrs.dataTracked?.status === 'pending',
-        );
-        if (hasPendingInsert) {
-          // The author is deleting their own pending insertion: remove it for
-          // real instead of striking it through.
-          insertRanges.push({ from: nodeFrom, to: nodeTo });
-        } else if (hasPendingDelete) {
-          // Already struck through — leave it; only the cursor moves.
-          anyAlreadyDeleted = true;
-        } else {
-          normalRanges.push({ from: nodeFrom, to: nodeTo });
-        }
+      applyMappedPassthroughStep(newTr, step, mapToNew);
+    } else {
+      const result = applyTrackedReplaceStep(newTr, step, mapToNew, {
+        insertType,
+        deleteType,
+        formatType,
+        authorID,
+        originCommentId,
       });
+      if (result.deleteLeftmost !== null) lastDeleteLeftmost = result.deleteLeftmost;
+      if (result.insertEnd !== null) lastInsertEnd = result.insertEnd;
     }
 
-    // Reuse an existing pending change by this author if one is adjacent/inside,
-    // otherwise mint a fresh dataTracked below. Returning the SAME object
-    // reference means PM's Mark.eq() merges text nodes instead of stacking marks.
-    const existingDelete = hasDelete
-      ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'delete')
-      : null;
-    const existingInsert = hasInsert
-      ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'insert')
-      : null;
-
-    // A step that both deletes and inserts is a replacement (typing over a
-    // selection, or an applied quill-edit). Pair the halves so the UI shows one
-    // card: two fresh halves share a new pairId, and a fresh half joining a
-    // reused one adopts its pairId (extending an in-progress replacement). A
-    // reused half that was never part of a pair stays unpaired — two cards,
-    // matching how those changes began.
-    const pairId =
-      hasDelete && hasInsert
-        ? (existingDelete?.pairId ??
-          existingInsert?.pairId ??
-          (!existingDelete && !existingInsert ? uuidv4() : undefined))
-        : undefined;
-
-    if (hasDelete) {
-      const deleteTracked: DataTracked = existingDelete ?? {
-        id: uuidv4(),
-        operation: 'delete',
-        authorID,
-        status: 'pending',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        ...(pairId ? { pairId } : {}),
-        ...(originCommentId ? { originCommentId } : {}),
-      };
-
-      for (const r of normalRanges) {
-        newTr.addMark(
-          r.from,
-          r.to,
-          deleteType.create({ dataTracked: deleteTracked, changeId: deleteTracked.id }),
-        );
-      }
-
-      // Back-to-front so each deletion leaves the remaining ranges' (and the
-      // insert point's, which is ≤ all of them) coordinates valid.
-      insertRanges.sort((a, b) => b.from - a.from);
-      for (const r of insertRanges) {
-        newTr.delete(r.from, r.to);
-      }
-
-      if (insertRanges.length === 0 && normalRanges.length === 0 && !anyAlreadyDeleted) {
-        // Pure block-boundary deletion (e.g. backspace at the start of a
-        // paragraph to merge lines): no text to strike through, apply the
-        // step untracked — at translated positions.
-        const mapped = step.map(mapToNew);
-        if (mapped) {
-          try {
-            newTr.step(mapped);
-          } catch {
-            // Structure changed underneath the join; drop it rather than
-            // corrupt positions.
-          }
-        }
-      }
-
-      // Leftmost position the cursor should land at: the start of the deleted
-      // range in newTr's frame, so the next backspace targets the character
-      // before the just-struck range instead of re-marking it.
-      lastDeleteLeftmost = from;
-    }
-
-    if (hasInsert) {
-      const insertTracked: DataTracked = existingInsert ?? {
-        id: uuidv4(),
-        operation: 'insert',
-        authorID,
-        status: 'pending',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        ...(pairId ? { pairId } : {}),
-        ...(originCommentId ? { originCommentId } : {}),
-      };
-
-      // A replacement's new text lands at the struck range's start so it
-      // precedes the struck original (Find.ts's stepping contract relies on
-      // this). Deleting the author's own pending insertions above happened at
-      // positions ≥ from, so `from` is still valid here.
-      const insertAt = hasDelete ? from : mapToNew.map(rs.from, -1);
-      const isStructural = (slice.openStart ?? 0) > 0 || (slice.openEnd ?? 0) > 0;
-      const docSizeBefore = newTr.doc.content.size;
-
-      if (isStructural) {
-        // Block split (Enter) or multi-block paste: respect the slice's open
-        // boundaries by using replace, not insert. Insert(content) would splat
-        // the raw fragment in and leave extra empty blocks behind.
-        newTr.replace(insertAt, insertAt, slice);
-      } else {
-        newTr.insert(insertAt, slice.content);
-      }
-
-      const inserted = newTr.doc.content.size - docSizeBefore;
-      const insertEnd = insertAt + inserted;
-      // Mark everything that was inserted. For a structural slice the range
-      // includes block tokens; addMark only touches the text nodes inside it,
-      // so a multi-block paste gets tracked per paragraph and a bare Enter
-      // split (no text) marks nothing. Remove inherited insert marks first:
-      // TrackedInsert deliberately allows same-type marks so independent
-      // changes can abut, but text inserted at an inclusive mark boundary can
-      // otherwise belong to both the previous author and the freshly minted
-      // change (misattributing user text to an adjacent Claude suggestion).
-      if (inserted > 0) {
-        newTr.removeMark(insertAt, insertEnd, insertType);
-        // Inherited format markers come off too: fresh text belongs to the
-        // insertion suggestion; its formatting is part of that insert, never
-        // a formatting suggestion of its own.
-        if (formatType) newTr.removeMark(insertAt, insertEnd, formatType);
-        newTr.addMark(
-          insertAt,
-          insertEnd,
-          insertType.create({ dataTracked: insertTracked, changeId: insertTracked.id }),
-        );
-      }
-      lastInsertEnd = insertEnd;
-    }
-
+    // Fragile coordinate-frame boundary: rebuild exactly once after every
+    // original step, using that step's inverse and only the mutations the
+    // current iteration appended to newTr.
     rebase(step, newTrStepsBefore);
   }
 
@@ -1242,30 +1413,14 @@ function transformForTracking(
   // Markdown-link rule). These keys describe the input gesture; they do not
   // bypass tracking, and the appended rule transaction operates on the
   // already-tracked insertion.
-  for (const key of ['uiEvent', 'paste', 'applyPasteRules'] as const) {
-    const value = tr.getMeta(key);
-    if (value !== undefined) newTr.setMeta(key, value);
-  }
+  copyPasteRuleMeta(tr, newTr);
 
   // Place cursor:
   //  - End of last inserted text (insert / replace operations)
   //  - Start of last deleted range (pure delete, e.g. backspace) — so the
   //    next backspace targets the character to the left of the just-marked
   //    range instead of re-marking the same character.
-  const lastStep = tr.steps[tr.steps.length - 1];
-  if (lastStep instanceof ReplaceStep) {
-    const rs = lastStep as unknown as { from: number; to: number; slice: Slice };
-    const hasInsert = rs.slice && rs.slice.size > 0;
-    try {
-      if (hasInsert && lastInsertEnd !== null) {
-        newTr.setSelection(TextSelection.create(newTr.doc, lastInsertEnd));
-      } else if (!hasInsert && lastDeleteLeftmost !== null) {
-        newTr.setSelection(TextSelection.create(newTr.doc, lastDeleteLeftmost));
-      }
-    } catch {
-      // keep default selection
-    }
-  }
+  placeTrackedSelection(tr, newTr, lastDeleteLeftmost, lastInsertEnd);
 
   // Input rules can deliberately set the marks for what the user types next
   // (Markdown links remove their inclusive link mark at the closing `)`).

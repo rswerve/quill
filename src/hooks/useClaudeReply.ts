@@ -10,6 +10,7 @@ import type {
   TrackedChangeInfo,
 } from '../types';
 import { clip } from '../utils/format';
+import { stripTrailingNewlines } from '../utils/trackedEdits';
 
 export type ChunkEvent =
   | { kind: 'model'; model: string }
@@ -140,7 +141,7 @@ export function classifyReplyError(message: string): ReplyErrorClass {
 export function splitVisible(raw: string): { visible: string; block: string | null } {
   const start = raw.indexOf(FENCE);
   if (start === -1) return { visible: raw, block: null };
-  const visible = raw.slice(0, start).replace(/\n+$/, '');
+  const visible = stripTrailingNewlines(raw.slice(0, start));
   const afterFence = raw.slice(start + FENCE.length);
   const close = afterFence.indexOf('```');
   if (close === -1) return { visible, block: null };
@@ -267,17 +268,21 @@ export function buildPrompt(
       ]
     : [];
 
+  let documentIntroduction = 'Current document (may have been edited since you wrote it):';
+  if (freshSession) {
+    documentIntroduction = 'Here is the full current document:';
+  } else if (compaction?.compacted) {
+    documentIntroduction =
+      'Your context was compacted since you wrote this; full current document follows:';
+  }
+
   return [
     ...head,
     ...editProtocol,
     ...pendingSection,
     ...contextSection,
     '=== FULL DOCUMENT ===',
-    freshSession
-      ? 'Here is the full current document:'
-      : compaction?.compacted
-        ? 'Your context was compacted since you wrote this; full current document follows:'
-        : 'Current document (may have been edited since you wrote it):',
+    documentIntroduction,
     '---',
     docMarkdown,
     '---',

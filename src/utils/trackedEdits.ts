@@ -13,6 +13,13 @@ const PROTOCOL_FORMAT_MARKS = {
 
 export type FormatMarkName = (typeof PROTOCOL_FORMAT_MARKS)[keyof typeof PROTOCOL_FORMAT_MARKS];
 
+/** Remove only LF characters from the end of a string in linear time. */
+export function stripTrailingNewlines(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 10) end--;
+  return value.slice(0, end);
+}
+
 /**
  * Read the plain text of a document range the same way Claude was shown it.
  * We pass '\n' as the block separator and ' ' as the leaf separator so list
@@ -59,7 +66,8 @@ export function mapRangeTextOffsetToPos(
   let lastEnd = from;
 
   doc.nodesBetween(from, to, (node, pos) => {
-    const leafText = node.isText ? '' : node.isLeaf ? ' ' : '';
+    let leafText = '';
+    if (!node.isText && node.isLeaf) leafText = ' ';
     if (node.isBlock && ((node.isLeaf && leafText) || node.isTextblock)) {
       if (first) {
         first = false;
@@ -132,6 +140,81 @@ export type PlacedEdit =
       marks: Array<{ mark: FormatMarkName; set: boolean }>;
     };
 
+type PlacedTextEdit = Extract<PlacedEdit, { kind: 'text' }>;
+type PlacedFormatEdit = Extract<PlacedEdit, { kind: 'format' }>;
+
+function protocolFormatMarks(format: QuillFormatEdit['format']): PlacedFormatEdit['marks'] {
+  const marks: PlacedFormatEdit['marks'] = [];
+  for (const [key, mark] of Object.entries(PROTOCOL_FORMAT_MARKS)) {
+    const value = (format as Record<string, unknown>)[key];
+    if (typeof value === 'boolean') marks.push({ mark, set: value });
+  }
+  return marks;
+}
+
+function planFormatEdit(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  find: string,
+  format: QuillFormatEdit['format'],
+): PlacedFormatEdit | null {
+  const marks = protocolFormatMarks(format);
+  if (!find || marks.length === 0) return null;
+  const at = locateEdit(doc, rangeFrom, rangeTo, find);
+  if (!at || at.to <= at.from || !formatOpChangesState(doc, at.from, at.to, marks)) return null;
+  return { kind: 'format', from: at.from, to: at.to, marks };
+}
+
+function planTextEdit(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  find: string,
+  replace: string,
+): PlacedTextEdit | null {
+  // A text-identical replacement can only be a formatting-only ask, which
+  // find/replace cannot express — the protocol's format ops can.
+  if (find === replace) return null;
+  const at = locateEdit(doc, rangeFrom, rangeTo, find);
+  return at ? { kind: 'text', from: at.from, to: at.to, replace } : null;
+}
+
+function planEdit(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  edit: QuillEdit,
+): PlacedEdit | null {
+  // Model JSON is untrusted despite its static type: reject malformed entries
+  // instead of throwing part-way through an apply.
+  if (typeof edit !== 'object' || edit === null || typeof edit.find !== 'string') return null;
+
+  const replace = (edit as QuillTextEdit).replace;
+  const format = (edit as QuillFormatEdit).format;
+  const hasReplace = typeof replace === 'string';
+  const hasFormat = typeof format === 'object' && format !== null && !Array.isArray(format);
+  // XOR: an edit is a text replacement or a format op, never both/neither.
+  if (hasReplace === hasFormat) return null;
+
+  return hasFormat
+    ? planFormatEdit(doc, rangeFrom, rangeTo, edit.find, format)
+    : planTextEdit(doc, rangeFrom, rangeTo, edit.find, replace);
+}
+
+function formatConflicts(
+  doc: ProseMirrorNode,
+  format: PlacedFormatEdit,
+  texts: PlacedTextEdit[],
+  formatAuthor?: string,
+): boolean {
+  const overlapsText = texts.some((text) => format.from < text.to && text.from < format.to);
+  if (overlapsText) return true;
+  return Boolean(
+    formatAuthor && rangeHasForeignPendingFormat(doc, format.from, format.to, formatAuthor),
+  );
+}
+
 /**
  * Pure planning step: turn quote-based edits into absolute-position edits,
  * sorted back-to-front so applying them in order keeps earlier positions
@@ -150,83 +233,27 @@ export function planEdits(
   edits: QuillEdit[],
   formatAuthor?: string,
 ): { placed: PlacedEdit[]; skipped: number } {
-  const texts: Array<Extract<PlacedEdit, { kind: 'text' }>> = [];
-  const formats: Array<Extract<PlacedEdit, { kind: 'format' }>> = [];
+  const texts: PlacedTextEdit[] = [];
+  const formats: PlacedFormatEdit[] = [];
   let skipped = 0;
 
   for (const edit of edits) {
-    // Model JSON is untrusted: entries can be null, non-objects, or carry
-    // wrongly-typed fields. Structurally invalid entries count as skipped
-    // instead of throwing mid-apply.
-    if (typeof edit !== 'object' || edit === null || typeof edit.find !== 'string') {
+    const candidate = planEdit(doc, rangeFrom, rangeTo, edit);
+    if (!candidate) {
       skipped++;
       continue;
     }
-    const replace = (edit as QuillTextEdit).replace;
-    const format = (edit as QuillFormatEdit).format;
-    const hasReplace = typeof replace === 'string';
-    const hasFormat = typeof format === 'object' && format !== null && !Array.isArray(format);
-
-    // XOR: an edit is a text replacement or a format op, never both/neither.
-    if (hasReplace === hasFormat) {
-      skipped++;
-      continue;
-    }
-
-    if (hasFormat) {
-      const marks: Array<{ mark: FormatMarkName; set: boolean }> = [];
-      for (const [key, mark] of Object.entries(PROTOCOL_FORMAT_MARKS)) {
-        const value = (format as Record<string, unknown>)[key];
-        if (typeof value === 'boolean') marks.push({ mark, set: value });
-      }
-      if (!edit.find || marks.length === 0) {
-        skipped++;
-        continue;
-      }
-      const at = locateEdit(doc, rangeFrom, rangeTo, edit.find);
-      if (!at || at.to <= at.from) {
-        skipped++;
-        continue;
-      }
-      // A fully-satisfied op (bolding already-bold text) would mint no marker
-      // in the engine; counting it as applied would report suggestions that
-      // produce no cards. Skip it so the summary stays honest.
-      if (!formatOpChangesState(doc, at.from, at.to, marks)) {
-        skipped++;
-        continue;
-      }
-      formats.push({ kind: 'format', from: at.from, to: at.to, marks });
-      continue;
-    }
-
-    // A text-identical replacement can only be a formatting-only ask, which
-    // find/replace cannot express — the protocol's format ops can. Skip it so
-    // the done-phase summary reports it honestly instead.
-    if (edit.find === replace) {
-      skipped++;
-      continue;
-    }
-    const at = locateEdit(doc, rangeFrom, rangeTo, edit.find);
-    if (!at) {
-      skipped++;
-      continue;
-    }
-    texts.push({ kind: 'text', from: at.from, to: at.to, replace });
+    if (candidate.kind === 'text') texts.push(candidate);
+    else formats.push(candidate);
   }
 
   const placed: PlacedEdit[] = [...texts];
-  for (const f of formats) {
-    if (texts.some((t) => f.from < t.to && t.from < f.to)) {
-      // One reply proposed replacing this text AND reformatting it — the
-      // replacement wins (it already carries the new content).
+  for (const format of formats) {
+    if (formatConflicts(doc, format, texts, formatAuthor)) {
       skipped++;
       continue;
     }
-    if (formatAuthor && rangeHasForeignPendingFormat(doc, f.from, f.to, formatAuthor)) {
-      skipped++;
-      continue;
-    }
-    placed.push(f);
+    placed.push(format);
   }
 
   placed.sort((a, b) => b.from - a.from);
