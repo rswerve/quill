@@ -5,10 +5,12 @@ import type { ReviewOptions, ReviewPhase } from '../hooks/useDocumentReview';
  * The "Ask Claude to…" box is deliberately free-form and empty by default:
  * what the user types is the ONLY substantive direction the review prompt
  * carries (the fixed scaffold is wire-format plumbing plus comment/edit
- * routing). The placeholder completes the label's sentence.
+ * routing). The placeholder completes the title's sentence. An empty ask is
+ * not submittable — with no hidden defaults left, a blank request would just
+ * hand the review criteria to the model's whim.
  */
 export const REVIEW_ASK_PLACEHOLDER =
-  'review for tone and flow, make it 20% shorter, check the dates against the reference folder… — or leave blank';
+  'review for tone and flow, make it 20% shorter, check the dates against the reference folder…';
 
 interface ReviewModalProps {
   phase: ReviewPhase;
@@ -96,11 +98,13 @@ export default function ReviewModal({
               </button>
               <button
                 className="btn-primary"
-                disabled={!makeComments && !makeSuggestions}
+                disabled={guidance.trim() === '' || (!makeComments && !makeSuggestions)}
                 title={
-                  !makeComments && !makeSuggestions
-                    ? 'Pick at least one: comments or suggestions'
-                    : undefined
+                  guidance.trim() === ''
+                    ? 'Tell Claude what to do'
+                    : !makeComments && !makeSuggestions
+                      ? 'Pick at least one: comments or suggestions'
+                      : undefined
                 }
                 onClick={() => onSubmit({ guidance, makeComments, makeSuggestions })}
               >

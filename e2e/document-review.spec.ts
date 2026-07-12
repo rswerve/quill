@@ -99,6 +99,11 @@ async function openReviewModal(page: Page, docText: string) {
   await expect(page.locator('.review-modal')).toBeVisible({ timeout: 2000 });
 }
 
+// Submit requires a non-empty ask; specs that don't care what it says use this.
+async function fillAsk(page: Page) {
+  await page.locator('#review-guidance').fill('review this document');
+}
+
 test('Review: button opens the modal with an empty free-form ask and both boxes checked', async ({
   page,
 }) => {
@@ -122,6 +127,7 @@ test('Review: button opens the modal with an empty free-form ask and both boxes 
 test('Review: Submit is disabled when neither output is requested', async ({ page }) => {
   await setupWithMock(page, [{ kind: 'done' }]);
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page); // isolate the checkbox condition
 
   const checks = page.locator('.review-modal-check input[type="checkbox"]');
   await checks.nth(0).uncheck();
@@ -129,6 +135,18 @@ test('Review: Submit is disabled when neither output is requested', async ({ pag
   await expect(page.locator('.review-modal .btn-primary')).toBeDisabled();
   await checks.nth(0).check();
   await expect(page.locator('.review-modal .btn-primary')).toBeEnabled();
+});
+
+test('Review: Submit is disabled until the ask has text', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'done' }]);
+  await openReviewModal(page, 'alpha beta gamma');
+
+  // Blank ask → no hidden default takes over; the request must be the user's.
+  await expect(page.locator('.review-modal .btn-primary')).toBeDisabled();
+  await fillAsk(page);
+  await expect(page.locator('.review-modal .btn-primary')).toBeEnabled();
+  await page.locator('#review-guidance').fill('   ');
+  await expect(page.locator('.review-modal .btn-primary')).toBeDisabled();
 });
 
 test('Review: reply becomes margin comments and tracked suggestions, with a summary', async ({
@@ -147,6 +165,7 @@ test('Review: reply becomes margin comments and tracked suggestions, with a summ
     { kind: 'done' },
   ]);
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page);
   await page.locator('.review-modal .btn-primary').click();
 
   // Assessment prose streams in; the JSON blocks never reach the user.
@@ -185,6 +204,7 @@ test('Review: unplaceable finds are skipped and surfaced in the summary', async 
     { kind: 'done' },
   ]);
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page);
   await page.locator('.review-modal .btn-primary').click();
 
   await expect(page.locator('.review-modal-summary')).toContainText('1 skipped', {
@@ -221,6 +241,7 @@ test('Review: selected model and effort reach the full-document spawn', async ({
   await page.getByLabel('Claude model').selectOption('haiku');
   await page.getByLabel('Claude effort').selectOption('xhigh');
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page);
   await page.locator('.review-modal .btn-primary').click();
   await expect(page.locator('.review-modal-summary')).toBeVisible({ timeout: 3000 });
 
@@ -235,6 +256,7 @@ test('Review: cancel mid-stream discards partial output and returns to the form'
 }) => {
   await setupWithMock(page, [{ kind: 'delta', text: 'Reading…' }, { kind: 'pause' }]);
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page);
   await page.locator('.review-modal .btn-primary').click();
 
   await expect(page.locator('.review-modal-stream')).toContainText('Reading…', { timeout: 3000 });
@@ -265,6 +287,7 @@ test('Review: a stream error is shown and the modal can be closed', async ({ pag
     { kind: 'error', message: 'Session no longer available' },
   ]);
   await openReviewModal(page, 'alpha beta gamma');
+  await fillAsk(page);
   await page.locator('.review-modal .btn-primary').click();
 
   await expect(page.locator('.review-modal-error')).toContainText('Session no longer available', {
