@@ -48,7 +48,7 @@ Releases are **macOS-only** for now — the `@claude` integration locates the Cl
 - **AI-authored tracked changes** — ask Claude in a comment to _revise_ the text ("tighten this", "fix the grammar") and it writes the edits straight into the document as **tracked changes attributed to Claude** — reviewed as ordinary Accept / Reject suggestion cards, just like a human's. Scope follows your phrasing: the highlighted text by default, or "this paragraph" / "the whole document".
 - **Reference folder** — link a document to a folder of source material (notes, research, data files). Every `@claude` request grants Claude read access to that folder and includes a manifest of its contents, so it can pull in the relevant sources before answering.
 - **Deep links** — `quill://open?file=…` opens a document directly, e.g. launched from a Claude Code session, restoring its comments, suggestions, and session binding.
-- **Quality-of-life** — document zoom (60–240%), two persisted color themes (Paper and Gruvbox), a live status bar (word/char count, line/column, dirty indicator), and standard file shortcuts (New, Open, Save, Save As).
+- **Quality-of-life** — document zoom (60–240%), six persisted color themes (Paper, Sage, Mocha · Dragonfly, Watery · Adirondack, Rodeo · Ecological, and Gruvbox), a live status bar (word/char count, line/column, dirty indicator), and standard file shortcuts (New, Open, Save, Save As).
 
 ## Persistence model
 

@@ -1,6 +1,15 @@
 import { expect, test } from '@playwright/test';
 
-test('theme selector offers only Paper and Gruvbox and persists Gruvbox', async ({ page }) => {
+const THEME_LABELS = [
+  'Paper',
+  'Sage',
+  'Mocha · Dragonfly',
+  'Watery · Adirondack',
+  'Rodeo · Ecological',
+  'Gruvbox',
+];
+
+test('theme selector offers all six themes and persists Gruvbox', async ({ page }) => {
   await page.goto('/');
   await page.locator('.ProseMirror').waitFor();
 
@@ -9,8 +18,8 @@ test('theme selector offers only Paper and Gruvbox and persists Gruvbox', async 
 
   await page.locator('.theme-selector-trigger').click();
   const options = page.locator('.theme-selector-item');
-  await expect(options).toHaveCount(2);
-  await expect(options.locator('.theme-label')).toHaveText(['Paper', 'Gruvbox']);
+  await expect(options).toHaveCount(6);
+  await expect(options.locator('.theme-label')).toHaveText(THEME_LABELS);
   await options.filter({ hasText: 'Gruvbox' }).click();
 
   await expect(page.locator('html')).toHaveClass(/theme-gruvbox/);
@@ -21,17 +30,25 @@ test('theme selector offers only Paper and Gruvbox and persists Gruvbox', async 
   await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Gruvbox');
 });
 
-test('a removed legacy theme id migrates to Paper', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('quill-theme', 'sage'));
+test('the four original persisted theme ids remain valid', async ({ page }) => {
   await page.goto('/');
   await page.locator('.ProseMirror').waitFor();
 
-  await expect(page.locator('html')).toHaveClass(/theme-paper/);
-  await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Paper');
-  expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('paper');
+  for (const [id, label] of [
+    ['sage', 'Sage'],
+    ['warm', 'Mocha · Dragonfly'],
+    ['cool', 'Watery · Adirondack'],
+    ['earth', 'Rodeo · Ecological'],
+  ]) {
+    await page.evaluate((themeId) => localStorage.setItem('quill-theme', themeId), id);
+    await page.reload();
+    await expect(page.locator('html')).toHaveClass(new RegExp(`theme-${id}`));
+    await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText(label);
+    expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe(id);
+  }
 });
 
-test('review actions stay tonal, shadowless, and distinct in both themes', async ({ page }) => {
+test('review actions stay tonal, borderless, and distinct in all six themes', async ({ page }) => {
   await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor();
@@ -45,8 +62,8 @@ test('review actions stay tonal, shadowless, and distinct in both themes', async
   const acceptAll = page.locator('.toolbar-btn-accept');
   const rejectAll = page.locator('.toolbar-btn-reject');
 
-  for (const theme of ['Paper', 'Gruvbox']) {
-    if (theme === 'Gruvbox') {
+  for (const theme of THEME_LABELS) {
+    if (theme !== 'Paper') {
       await page.locator('.theme-selector-trigger').click();
       await page.locator('.theme-selector-item').filter({ hasText: theme }).click();
     }

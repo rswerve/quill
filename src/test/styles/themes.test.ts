@@ -31,14 +31,22 @@ function contrast(a: string, b: string): number {
 }
 
 describe('theme catalog', () => {
-  it('offers exactly Paper and Gruvbox and no legacy themes', () => {
+  it('offers Paper, the four original themes, and Gruvbox under stable ids', () => {
     const catalog = toolbar.match(/const THEMES:[\s\S]*?= \[([\s\S]*?)\];/)?.[1] ?? '';
     expect([...catalog.matchAll(/id: '([^']+)'/g)].map((match) => match[1])).toEqual([
       'paper',
+      'sage',
+      'warm',
+      'cool',
+      'earth',
       'gruvbox',
     ]);
-    expect(toolbar).not.toMatch(/Mocha|Dragonfly|Watery|Adirondack|Rodeo|Ecological/);
-    expect(css).not.toMatch(/theme-(sage|warm|cool|earth)/);
+    expect(toolbar).toContain('Mocha · Dragonfly');
+    expect(toolbar).toContain('Watery · Adirondack');
+    expect(toolbar).toContain('Rodeo · Ecological');
+    for (const id of ['sage', 'warm', 'cool', 'earth']) {
+      expect(css).toContain(`:root.theme-${id}`);
+    }
   });
 
   it('uses the canonical Gruvbox background and foreground', () => {
