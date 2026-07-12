@@ -18,7 +18,9 @@ function nodeMatches(node: ProseMirrorNode, target: AnnotationFocusTarget): bool
   return node.marks.some((mark) =>
     target.kind === 'comment'
       ? mark.type.name === 'comment' && mark.attrs.commentId === target.id
-      : (mark.type.name === 'tracked_insert' || mark.type.name === 'tracked_delete') &&
+      : (mark.type.name === 'tracked_insert' ||
+          mark.type.name === 'tracked_delete' ||
+          mark.type.name === 'tracked_format') &&
         (mark.attrs.dataTracked?.id === target.id || mark.attrs.dataTracked?.pairId === target.id),
   );
 }
@@ -72,9 +74,7 @@ export const AnnotationFocus = Extension.create({
           init: () => null,
           apply(tr, value: AnnotationFocusTarget | null) {
             const meta = tr.getMeta(ANNOTATION_FOCUS_KEY) as
-              | AnnotationFocusTarget
-              | null
-              | undefined;
+              AnnotationFocusTarget | null | undefined;
             return meta === undefined ? value : meta;
           },
         },

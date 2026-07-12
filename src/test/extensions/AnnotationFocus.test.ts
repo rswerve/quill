@@ -7,14 +7,21 @@ import {
   findAnnotationRange,
 } from '../../extensions/AnnotationFocus';
 import { CommentMark } from '../../extensions/Comment';
-import { TrackedInsert, TrackedDelete } from '../../extensions/TrackChanges';
+import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/TrackChanges';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
   document.body.appendChild(el);
   return new Editor({
     element: el,
-    extensions: [StarterKit, CommentMark, TrackedInsert, TrackedDelete, AnnotationFocus],
+    extensions: [
+      StarterKit,
+      CommentMark,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      AnnotationFocus,
+    ],
     content,
   });
 }
@@ -50,6 +57,28 @@ function addTracked(
 
 function addTrackedInsert(editor: Editor, from: number, to: number, id: string) {
   addTracked(editor, 'tracked_insert', from, to, id);
+}
+
+function addTrackedFormat(
+  editor: Editor,
+  from: number,
+  to: number,
+  id: string,
+  adds: string[] = ['bold'],
+) {
+  const type = editor.schema.marks['tracked_format'];
+  const dataTracked = {
+    id,
+    operation: 'format',
+    authorID: 'Anonymous',
+    status: 'pending',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    delta: { adds, removes: [] },
+  };
+  editor.view.dispatch(
+    editor.state.tr.addMark(from, to, type.create({ dataTracked, changeId: id })),
+  );
 }
 
 describe('AnnotationFocus extension', () => {
@@ -135,6 +164,18 @@ describe('AnnotationFocus extension', () => {
     expect(focusedText(editor)).toBe('Hello');
   });
 
+  it('focuses every format segment without highlighting the gaps between them', () => {
+    editor = makeEditor('<p>one gap two</p>');
+    addTrackedFormat(editor, 1, 4, 'fmt1');
+    addTrackedFormat(editor, 9, 12, 'fmt1', ['italic']);
+    editor.commands.setAnnotationFocus('suggestion', 'fmt1');
+
+    const highlights = Array.from(editor.view.dom.querySelectorAll('.annotation-focus'));
+    expect(highlights.map((node) => node.textContent)).toEqual(['one', 'two']);
+    expect(focusedText(editor)).toBe('onetwo');
+    expect(editor.view.dom.querySelector('.annotation-focus')?.textContent).not.toContain('gap');
+  });
+
   it('renders nothing once the annotation is gone from the document', () => {
     editor = makeEditor('<p>Hello world</p>');
     editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('c1').run();
@@ -186,5 +227,16 @@ describe('findAnnotationRange', () => {
     addTracked(editor, 'tracked_insert', 7, 12, 'i1', 'p1');
 
     expect(findAnnotationRange(editor.state.doc, 'suggestion', 'p1')).toEqual({ from: 1, to: 12 });
+  });
+
+  it('returns the outer range of a multi-span formatting suggestion for scrolling', () => {
+    editor = makeEditor('<p>one gap two</p>');
+    addTrackedFormat(editor, 1, 4, 'fmt1');
+    addTrackedFormat(editor, 9, 12, 'fmt1', ['italic']);
+
+    expect(findAnnotationRange(editor.state.doc, 'suggestion', 'fmt1')).toEqual({
+      from: 1,
+      to: 12,
+    });
   });
 });

@@ -50,32 +50,39 @@ export interface Comment {
   replies: Reply[];
 }
 
-export type SuggestionType = 'insertion' | 'deletion';
+export type SuggestionType = 'insertion' | 'deletion' | 'format';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected';
 
-export interface Suggestion {
+interface SuggestionBase {
   id: string;
-  type: SuggestionType;
+  author: string;
+  createdAt: string;
+  status: SuggestionStatus;
+  /** The comment whose Claude request produced this suggestion, if any. */
+  originCommentId?: string;
+}
+
+export interface TextSuggestion extends SuggestionBase {
+  type: 'insertion' | 'deletion';
   from: number;
   to: number;
   originalText: string;
   suggestedText: string;
-  author: string;
-  createdAt: string;
-  status: SuggestionStatus;
   /**
    * Shared by the deletion and insertion halves of a replacement so they
    * reload as one paired card. Optional and backward compatible: sidecars
    * written before suggestions persisted don't have it.
    */
   pairId?: string;
-  /**
-   * The id of the comment whose @claude request produced this suggestion.
-   * Round-trips through the sidecar so the card→comment link survives a
-   * save/reopen. Optional and backward compatible, like pairId.
-   */
-  originCommentId?: string;
 }
+
+export interface FormatSuggestion extends SuggestionBase {
+  type: 'format';
+  /** Homogeneous spans for one logical formatting suggestion. */
+  segments: FormatSegment[];
+}
+
+export type Suggestion = TextSuggestion | FormatSuggestion;
 
 export interface SidecarFile {
   version: 2;

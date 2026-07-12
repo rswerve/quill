@@ -118,6 +118,70 @@ test.describe('review metadata survives save and reopen', () => {
     const mark = page.locator('mark.comment-mark[data-comment-id="fixture-comment"]');
     await expect(mark).toHaveText('hello');
   });
+
+  test('pending formatting remains reviewable after save and reopen', async ({ page }) => {
+    await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
+    const editor = page.locator('.ProseMirror');
+    await editor.click();
+    await page.keyboard.type('plain text');
+    await page.locator('.mode-switch').click();
+    await editor.click();
+    await selectLastCharacters(page, 'text'.length);
+    await page.keyboard.press('ControlOrMeta+b');
+
+    await expect(editor.locator('span.track-format')).toHaveText('text');
+    await expect(page.locator('.suggestion-card-format')).toContainText('bold added');
+
+    const reopened = await saveNewAndReopen(page);
+    const reopenedEditor = reopened.locator('.ProseMirror');
+    await expect(reopenedEditor.locator('span.track-format')).toHaveText('text');
+    await expect(reopenedEditor.locator('strong')).toHaveText('text');
+    await expect(reopened.locator('.suggestion-card-format')).toContainText('bold added');
+
+    await reopened.locator('.suggestion-card-format .suggestion-reject-btn').click();
+    await expect(reopened.locator('.suggestion-card-format')).toHaveCount(0);
+    await expect(reopenedEditor.locator('strong')).toHaveCount(0);
+    await expect(reopenedEditor).toContainText('plain text');
+  });
+
+  test('a multi-span format card focuses exact spans and reject restores each prior state', async ({
+    page,
+  }) => {
+    await setupMemoryTauri(page, {
+      openPath: DOC_PATH,
+      files: {
+        [DOC_PATH]: '**one** gap two',
+        [SIDECAR_PATH]: sidecar({
+          suggestions: [
+            {
+              id: 'fmt-multi',
+              type: 'format',
+              author: 'claude',
+              createdAt: '2026-07-11T18:00:00Z',
+              status: 'pending',
+              segments: [
+                { from: 1, to: 4, text: 'one', adds: ['bold'], removes: [] },
+                { from: 9, to: 12, text: 'two', adds: [], removes: ['italic'] },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    await openMemoryFile(page);
+
+    const card = page.locator('.suggestion-card-format');
+    await expect(card).toContainText('bold added · italic removed');
+    await card.click();
+    await expect(page.locator('.annotation-focus')).toHaveCount(2);
+    expect(await page.locator('.annotation-focus').allTextContents()).toEqual(['one', 'two']);
+
+    await card.locator('.suggestion-reject-btn').click();
+    const editor = page.locator('.ProseMirror');
+    await expect(editor.locator('strong')).toHaveCount(0);
+    await expect(editor.locator('em')).toHaveText('two');
+    await expect(card).toHaveCount(0);
+  });
 });
 
 test.describe('suggestion cards link back to their origin comment', () => {

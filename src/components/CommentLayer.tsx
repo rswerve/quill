@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Editor } from '@tiptap/react';
-import type { Comment, TrackedChangeInfo, TrackedTextChange } from '../types';
+import type { Comment, TrackedChangeInfo, TrackedFormatChange, TrackedTextChange } from '../types';
 import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
+import FormattingCard from './FormattingCard';
 
 interface CommentLayerProps {
   editor: Editor | null;
@@ -63,15 +64,17 @@ export function computeBottomSpacer(
 // replacement card is keyed and positioned by the shared pairId.
 type SuggestionGroup =
   | { kind: 'single'; cardId: string; change: TrackedTextChange }
-  | { kind: 'replacement'; cardId: string; del: TrackedTextChange; ins: TrackedTextChange };
+  | { kind: 'replacement'; cardId: string; del: TrackedTextChange; ins: TrackedTextChange }
+  | { kind: 'format'; cardId: string; change: TrackedFormatChange };
 
 function groupChanges(changes: TrackedChangeInfo[]): SuggestionGroup[] {
   const groups: SuggestionGroup[] = [];
   const byPair = new Map<string, TrackedTextChange[]>();
   for (const c of changes) {
-    // TODO(codex): render format changes as a dedicated formatting card;
-    // until then they resolve via Accept all / Reject all only.
-    if (c.operation === 'format') continue;
+    if (c.operation === 'format') {
+      groups.push({ kind: 'format', cardId: c.id, change: c });
+      continue;
+    }
     if (c.pairId) {
       const list = byPair.get(c.pairId) ?? [];
       list.push(c);
@@ -214,12 +217,14 @@ export default function CommentLayer({
       // A replacement is anchored by its delete half — the original text's
       // location, where the eye lands first.
       const anchor = group.kind === 'replacement' ? group.del : group.change;
+      const fallbackFrom =
+        anchor.operation === 'format' ? (anchor.segments[0]?.from ?? 0) : anchor.from;
       const top = getChangeAnchorTop(ed, anchor.id);
       rawCards.push({
         cardId: group.cardId,
         type: 'suggestion',
-        rawTop: top ?? anchor.from * 0.5,
-        nudgedTop: top ?? anchor.from * 0.5,
+        rawTop: top ?? fallbackFrom * 0.5,
+        nudgedTop: top ?? fallbackFrom * 0.5,
       });
     }
 
@@ -378,6 +383,23 @@ export default function CommentLayer({
                 originComment={originComment}
                 originActive={originActive}
                 top={pos?.nudgedTop ?? del.from * 0.5}
+                onAccept={onAcceptChange}
+                onReject={onRejectChange}
+                onClick={onActivateSuggestion}
+                onActivateComment={activateOriginComment}
+              />
+            );
+          }
+          if (group.kind === 'format') {
+            const change = group.change;
+            return (
+              <FormattingCard
+                key={change.id}
+                change={change}
+                isActive={change.id === activeSuggestionId}
+                originComment={originComment}
+                originActive={originActive}
+                top={pos?.nudgedTop ?? (change.segments[0]?.from ?? 0) * 0.5}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
