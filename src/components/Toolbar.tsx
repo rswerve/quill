@@ -39,7 +39,7 @@ interface ToolbarProps {
   hasPendingChanges: boolean;
 }
 
-type ThemeId = 'paper' | 'gruvbox';
+export type ThemeId = 'paper' | 'gruvbox';
 
 interface ThemeDef {
   id: ThemeId;
@@ -49,14 +49,14 @@ interface ThemeDef {
   swatches: [string, string, string];
 }
 
-const THEMES: ThemeDef[] = [
+export const THEMES: ThemeDef[] = [
   { id: 'paper', label: 'Paper', swatches: ['#FBFAF7', '#B65C38', '#23201B'] },
   { id: 'gruvbox', label: 'Gruvbox', swatches: ['#282828', '#D65D0E', '#EBDBB2'] },
 ];
 
-const THEME_STORAGE_KEY = 'quill-theme';
+export const THEME_STORAGE_KEY = 'quill-theme';
 
-function applyTheme(id: ThemeId) {
+export function applyTheme(id: ThemeId) {
   document.documentElement.dataset.theme = id;
 }
 
@@ -67,13 +67,22 @@ interface ButtonProps {
   title: string;
   children: React.ReactNode;
   className?: string;
+  baseClassName?: string;
 }
 
-function ToolbarButton({ onClick, active, disabled, title, children, className }: ButtonProps) {
+export function ToolbarButton({
+  onClick,
+  active,
+  disabled,
+  title,
+  children,
+  className,
+  baseClassName = 'toolbar-btn',
+}: ButtonProps) {
   return (
     <button
       data-toolbar-button
-      className={`toolbar-btn${active ? ' active' : ''}${disabled ? ' disabled' : ''}${className ? ` ${className}` : ''}`}
+      className={`${baseClassName}${active ? ' active' : ''}${disabled ? ' disabled' : ''}${className ? ` ${className}` : ''}`}
       onMouseDown={(e) => {
         e.preventDefault(); // keep editor focus so selection is never lost
         const ed = toolbarSelectionStore.liveEditor;
@@ -107,7 +116,7 @@ function Divider() {
 }
 
 // SVG Icons
-const BoldIcon = () => (
+export const BoldIcon = () => (
   <svg
     width="14"
     height="14"
@@ -121,7 +130,7 @@ const BoldIcon = () => (
   </svg>
 );
 
-const ItalicIcon = () => (
+export const ItalicIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="19" y1="4" x2="10" y2="4" />
     <line x1="14" y1="20" x2="5" y2="20" />
@@ -129,14 +138,14 @@ const ItalicIcon = () => (
   </svg>
 );
 
-const UnderlineIcon = () => (
+export const UnderlineIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M6 3v7a6 6 0 0 0 12 0V3" />
     <line x1="4" y1="21" x2="20" y2="21" />
   </svg>
 );
 
-const StrikeIcon = () => (
+export const StrikeIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="4" y1="12" x2="20" y2="12" />
     <path d="M17.5 7C17.5 5.5 16.5 4 14 4H10C7.5 4 6 5.5 6 7.5C6 9 7 10 9 11" />
@@ -144,7 +153,7 @@ const StrikeIcon = () => (
   </svg>
 );
 
-const BulletIcon = () => (
+export const BulletIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="9" y1="6" x2="20" y2="6" />
     <line x1="9" y1="12" x2="20" y2="12" />
@@ -155,7 +164,7 @@ const BulletIcon = () => (
   </svg>
 );
 
-const NumberedIcon = () => (
+export const NumberedIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="10" y1="6" x2="21" y2="6" />
     <line x1="10" y1="12" x2="21" y2="12" />
@@ -166,35 +175,35 @@ const NumberedIcon = () => (
   </svg>
 );
 
-const BlockquoteIcon = () => (
+export const BlockquoteIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z" />
     <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z" />
   </svg>
 );
 
-const CodeIcon = () => (
+export const CodeIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <polyline points="16 18 22 12 16 6" />
     <polyline points="8 6 2 12 8 18" />
   </svg>
 );
 
-const LinkIcon = () => (
+export const LinkIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
   </svg>
 );
 
-const UndoIcon = () => (
+export const UndoIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M3 7v6h6" />
     <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
   </svg>
 );
 
-const RedoIcon = () => (
+export const RedoIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M21 7v6h-6" />
     <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
@@ -301,7 +310,7 @@ function ThemeSelector() {
   );
 }
 
-function LinkButton({ editor }: { editor: Editor }) {
+export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClassName?: string }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState('');
   // The popover's input steals focus from the editor, so capture the target
@@ -380,7 +389,13 @@ function LinkButton({ editor }: { editor: Editor }) {
 
   return (
     <div className="link-button-wrap">
-      <ToolbarButton onClick={openPopover} active={onLink} disabled={!canLink} title="Link (Cmd+K)">
+      <ToolbarButton
+        onClick={openPopover}
+        active={onLink}
+        disabled={!canLink}
+        title="Link (Cmd+K)"
+        baseClassName={baseClassName}
+      >
         <LinkIcon />
       </ToolbarButton>
       {open && (

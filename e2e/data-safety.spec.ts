@@ -84,7 +84,7 @@ test('clean document: Cmd+N proceeds without a confirmation dialog', async ({ pa
   await page.waitForTimeout(200);
 
   await expect(page.locator('.app-modal')).toHaveCount(0);
-  await expect(page.locator('.footer-filename')).toContainText('Untitled');
+  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
 });
 
 test('dirty document: Cmd+N shows the guard; Cancel keeps the document', async ({ page }) => {
@@ -199,8 +199,10 @@ test('failed save shows an error notice instead of failing silently', async ({ p
 
   await modal.locator('button:has-text("OK")').click();
   await expect(modal).toHaveCount(0);
-  // The document is still dirty — the failed save must not clear the flag.
-  await expect(page.locator('.footer-dirty')).toBeVisible();
+  // The document is still dirty — Untitled drops folder/meta chrome but keeps
+  // the compact dirty dot after its filename.
+  await expect(page.locator('.dirty-dot')).toBeVisible();
+  expect(await page.title()).toContain('•');
 });
 
 test('corrupt sidecar on open shows a notice and the doc still loads', async ({ page }) => {

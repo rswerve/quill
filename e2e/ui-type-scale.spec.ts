@@ -170,7 +170,11 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
         getComputedStyle(document.documentElement).getPropertyValue('--font-sans'),
       );
       return elements
-        .filter((element) => !element.closest('.footer'))
+        .filter(
+          (element) =>
+            !element.closest('.footer') &&
+            !element.matches('.rail-btn.italic, .rail-btn.quote, .rail-btn.code'),
+        )
         .map((element) => ({
           element: `${element.tagName.toLowerCase()}.${element.className}`,
           family: primaryFamily(getComputedStyle(element).fontFamily),
@@ -188,9 +192,8 @@ test('document typography stays pinned while both themes keep chrome vertically 
 
   await expectType(page.locator('.editor-scroll-area'), '18px');
   await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
-  await expectType(page.locator('.toolbar-btn').first(), '13px');
-  await expectType(page.locator('.mode-switch'), '12.5px');
-  await expectType(page.locator('.theme-selector-trigger'), '12.5px');
+  await expectType(page.locator('.rail-btn').first(), '13px');
+  await expectType(page.locator('.mode-switch .seg').first(), '12px');
   await expect(
     page.locator(
       '.editor-scroll-area button, .editor-scroll-area input, .editor-scroll-area textarea, .editor-scroll-area select',
@@ -198,15 +201,14 @@ test('document typography stays pinned while both themes keep chrome vertically 
   ).toHaveCount(0);
   await expectVisibleControlsUseUiFamily(page);
 
-  const themes = ['Paper', 'Gruvbox'];
+  const themes = ['paper', 'gruvbox'];
   for (const theme of themes) {
-    if (theme !== 'Paper') {
-      await page.locator('.theme-selector-trigger').click();
-      await page.locator('.theme-selector-item').filter({ hasText: theme }).click();
+    if (theme !== 'paper') {
+      await page.locator('.rail .theme-toggle').click();
     }
     await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
-    await expectVerticallyContained(page.locator('.toolbar button:visible'));
-    await expectVerticallyContained(page.locator('.toolbar label:visible'));
+    await expectVerticallyContained(page.locator('.rail button:visible'));
+    await expectVerticallyContained(page.locator('.topbar button:visible'));
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }
@@ -256,7 +258,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
 
   await page.keyboard.press('ControlOrMeta+f');
   await expectType(page.locator('.find-bar-input').first(), '13px');
-  await expectType(page.locator('.find-bar-btn-text').first(), '12.5px');
+  await expectType(page.locator('.find-bar-btn-text').first(), '12px');
   await page.locator('.find-bar-btn[title="Close (Esc)"]').click();
 
   const editor = page.locator('.ProseMirror');
@@ -271,9 +273,9 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await page.locator('.add-comment-btn').click();
   await expectType(page.locator('.add-comment-compose .comment-reply-input'), '13px');
 
-  await expectType(page.locator('.footer-zoom-label'), '12.5px', { checkUiFamily: false });
-  await expectType(page.getByLabel('Claude model'), '12.5px', { checkUiFamily: false });
-  await expectType(page.locator('.footer-context-binding'), '12.5px', {
+  await expectType(page.locator('.footer-zoom-label'), '10px', { checkUiFamily: false });
+  await expectType(page.getByLabel('Claude model'), '10px', { checkUiFamily: false });
+  await expectType(page.locator('.footer-context-binding'), '10px', {
     checkUiFamily: false,
   });
   await expectVisibleControlsUseUiFamily(page);

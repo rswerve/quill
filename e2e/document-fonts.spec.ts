@@ -65,7 +65,8 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
 
   const documentFont = await editor.evaluate((element) => getComputedStyle(element).fontFamily);
   const chromeFont = await page
-    .locator('.mode-switch-label')
+    .locator('.topbar .seg')
+    .first()
     .evaluate((element) => getComputedStyle(element).fontFamily);
   const statusFont = await page
     .locator('.footer')
@@ -76,14 +77,25 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
   expect(statusFont).toContain('JetBrains Mono Variable');
 });
 
-test('places the Editing toggle directly after the link divider', async ({ page }) => {
+test('places the link at the end of the formatting rail and Editing in the topbar', async ({
+  page,
+}) => {
   await setup(page);
 
-  const toggle = page.locator('.link-button-wrap + .toolbar-divider + .mode-switch');
+  const link = page.locator('.rail .link-button-wrap');
+  const toggle = page.locator('.topbar .mode-switch');
+  await expect(link).toBeVisible();
+  await expect(link.locator('xpath=following-sibling::*[1]')).toHaveClass(/rail-spacer/);
   await expect(toggle).toBeVisible();
-  await expect(toggle).toContainText('Editing');
-  await toggle.click();
-  await expect(toggle).toContainText('Suggesting');
+  await expect(toggle.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await toggle.getByRole('button', { name: 'Suggesting' }).click();
+  await expect(toggle.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 });
 
 test('persists zoom across reloads and restores the document scale', async ({ page }) => {

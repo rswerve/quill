@@ -23,16 +23,22 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 
 async function enableSuggesting(page: Page) {
   const sw = page.locator('.mode-switch');
-  await expect(sw).toContainText('Editing');
-  await sw.click();
-  await expect(sw).toContainText('Suggesting');
+  await expect(sw.getByRole('button', { name: 'Editing' })).toHaveAttribute('aria-pressed', 'true');
+  await sw.getByRole('button', { name: 'Suggesting' }).click();
+  await expect(sw.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 }
 
 async function disableSuggesting(page: Page) {
   const sw = page.locator('.mode-switch');
-  await expect(sw).toContainText('Suggesting');
-  await sw.click();
-  await expect(sw).toContainText('Editing');
+  await expect(sw.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await sw.getByRole('button', { name: 'Editing' }).click();
+  await expect(sw.getByRole('button', { name: 'Editing' })).toHaveAttribute('aria-pressed', 'true');
 }
 
 async function selectAll(page: Page) {
@@ -379,10 +385,13 @@ test('suggestion cards persist after exiting Suggesting mode', async ({ page }) 
   await expect(page.locator('.suggestion-card')).toHaveCount(1);
 });
 
-test('Footer shows "Suggesting" badge while in suggesting mode', async ({ page }) => {
+test('topbar segmented control shows Suggesting while in suggesting mode', async ({ page }) => {
   await setup(page);
   await enableSuggesting(page);
-  await expect(page.locator('.footer-suggesting-badge')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -837,7 +846,7 @@ test('resolving a comment hides it from the default view', async ({ page }) => {
   await page.locator('.comment-resolve-btn').click();
   await page.waitForTimeout(150);
   await expect(page.locator('.comment-card.comment-card-resolved')).toHaveCount(0);
-  await expect(page.locator('.show-resolved-btn')).toBeVisible();
+  await expect(page.locator('.comments-head .filter')).toBeEnabled();
 });
 
 test('resolving a comment drops its in-text highlight', async ({ page }) => {
@@ -857,14 +866,14 @@ test('resolving a comment drops its in-text highlight', async ({ page }) => {
   await expect(editor.locator('mark[data-comment-id]')).toHaveCount(0);
 });
 
-test('show-resolved button reveals resolved comments', async ({ page }) => {
+test('comments filter reveals resolved comments', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
   await page.locator('.comment-resolve-btn').click();
   await page.waitForTimeout(100);
-  await page.locator('.show-resolved-btn').click();
+  await page.locator('.comments-head .filter').click();
   await page.waitForTimeout(100);
   await expect(page.locator('.comment-card-resolved')).toBeVisible();
 });
@@ -1164,26 +1173,28 @@ test('word count updates as the user types', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('one two three');
   await page.waitForTimeout(100);
-  await expect(page.locator('.footer')).toContainText('3 words');
+  await expect(page.locator('.footer')).toContainText('3 WORDS');
 });
 
 test('char count updates as the user types', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello');
   await page.waitForTimeout(100);
-  await expect(page.locator('.footer')).toContainText('5 chars');
+  await expect(page.locator('.footer')).toContainText('5 CHARS');
 });
 
-test('footer shows "Untitled" when no file is open', async ({ page }) => {
+test('topbar shows "Untitled" when no file is open', async ({ page }) => {
   await setup(page);
-  await expect(page.locator('.footer-filename')).toContainText('Untitled');
+  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
 });
 
-test('dirty marker appears in footer after typing', async ({ page }) => {
+test('Untitled breadcrumb stays collapsed after typing', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('x');
   await page.waitForTimeout(150);
-  await expect(page.locator('.footer-dirty')).toBeVisible();
+  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
+  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(page.locator('.saved')).toHaveCount(0);
 });
 
 test('document title shows dirty bullet when modified', async ({ page }) => {
@@ -1268,7 +1279,7 @@ test('zoom scales document text and reflows inside a fixed-width page', async ({
   const large = await metrics();
 
   expect(Math.abs(large.pageWidth - small.pageWidth)).toBeLessThan(1);
-  expect(large.pageWidth).toBeGreaterThan(800);
+  expect(large.pageWidth).toBeCloseTo(640, 0);
   expect(large.fontSize / small.fontSize).toBeCloseTo(4, 1);
   expect(large.paragraphHeight).toBeGreaterThan(small.paragraphHeight * 3);
 });

@@ -73,8 +73,8 @@ describe('reading measure (spec 12 — wider surface)', () => {
     expect(readToken('--page-padding-x')).toBeLessThanOrEqual(72);
   });
 
-  it('keeps at least US-Letter page width (≥ 816px)', () => {
-    expect(readToken('--page-max-width')).toBeGreaterThanOrEqual(816);
+  it('uses the Studio handoff document width (640px)', () => {
+    expect(readToken('--page-max-width')).toBe(640);
   });
 
   it('negative control: the old cramped 96px padding would fail the guard', () => {

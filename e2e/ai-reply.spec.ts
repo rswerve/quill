@@ -160,7 +160,10 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
     { kind: 'done' },
   ]);
 
-  await expect(page.locator('.footer-model')).toHaveText('Reported —');
+  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+    'title',
+    'Model and effort used for the next Claude request',
+  );
 
   await addCommentWithAIReply(page, 'hello world', '@claude what is the answer?');
 
@@ -175,7 +178,10 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
   await expect(aiReply.locator('.comment-reply-model')).toHaveText('claude-fable-5');
-  await expect(page.locator('.footer-model')).toHaveText('Reported claude-fable-5');
+  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+    'title',
+    'Last model reported by Claude Code: claude-fable-5',
+  );
 });
 
 test('Claude model and effort choices persist and reach an @claude spawn', async ({ page }) => {
@@ -183,14 +189,14 @@ test('Claude model and effort choices persist and reach an @claude spawn', async
 
   const model = page.getByLabel('Claude model');
   const effort = page.getByLabel('Claude effort');
-  await expect(model.locator('option')).toHaveText(['Default', 'fable', 'opus', 'sonnet', 'haiku']);
+  await expect(model.locator('option')).toHaveText(['DEFAULT', 'FABLE', 'OPUS', 'SONNET', 'HAIKU']);
   await expect(effort.locator('option')).toHaveText([
-    'Default',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
+    'DEFAULT',
+    'LOW',
+    'MEDIUM',
+    'HIGH',
+    'XHIGH',
+    'MAX',
   ]);
 
   await model.selectOption('opus');

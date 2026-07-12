@@ -1,14 +1,11 @@
+import type { CSSProperties } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
-import { basename } from '../utils/path';
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 
 interface FooterProps {
   editor: Editor | null;
-  filePath: string | null;
-  isSuggesting: boolean;
-  isDirty?: boolean;
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
@@ -33,9 +30,6 @@ function countWords(text: string): number {
 
 export default function Footer({
   editor,
-  filePath,
-  isSuggesting,
-  isDirty,
   zoom = DEFAULT_ZOOM,
   onZoomChange,
   aiSession,
@@ -50,7 +44,7 @@ export default function Footer({
   onLinkContextFolder,
   onUnlinkContextFolder,
 }: FooterProps) {
-  if (!editor) return <div className="footer" />;
+  if (!editor) return <footer className="footer status" />;
 
   const text = editor.state.doc.textContent;
   const words = countWords(text);
@@ -65,146 +59,133 @@ export default function Footer({
   line = Math.max(1, line);
   const col = resolved.parentOffset + 1;
 
-  const fileName = filePath ? basename(filePath) : 'Untitled';
+  const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
 
   return (
-    <div className="footer">
-      <span className="footer-filename">
-        {fileName}
-        {isDirty && <span className="footer-dirty">•</span>}
-      </span>
-      <span className="footer-sep">·</span>
-      <span>{words.toLocaleString()} words</span>
-      <span className="footer-sep">·</span>
-      <span>{chars.toLocaleString()} chars</span>
-      <span className="footer-sep">·</span>
-      <span>
-        Line {line}, Col {col}
-      </span>
-      {isSuggesting && (
-        <>
-          <span className="footer-sep">·</span>
-          <span className="footer-suggesting-badge">Suggesting</span>
-        </>
-      )}
-      <div className="footer-zoom">
-        <input
-          type="range"
-          min={MIN_ZOOM}
-          max={MAX_ZOOM}
-          step={0.06}
-          value={zoom}
-          onChange={(e) => onZoomChange?.(parseFloat(e.target.value))}
-          className="footer-zoom-slider"
-          title="Zoom"
-        />
-        <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}>
-          {Math.round(zoom * 100)}%
+    <footer className="footer status">
+      <div className="status-group status-left">
+        <span className="status-item">{words.toLocaleString()} WORDS</span>
+        <span className="status-item">{chars.toLocaleString()} CHARS</span>
+        <span className="status-item">
+          LN {line}:{col}
         </span>
       </div>
 
-      <span className="toolbar-spacer" />
+      <div className="status-group status-right">
+        <label className="footer-zoom zoom">
+          <span aria-hidden>−</span>
+          <input
+            type="range"
+            min={MIN_ZOOM}
+            max={MAX_ZOOM}
+            step={0.06}
+            value={zoom}
+            onChange={(event) => onZoomChange?.(parseFloat(event.target.value))}
+            className="footer-zoom-slider"
+            style={{ '--zoom-progress': `${zoomProgress}%` } as CSSProperties}
+            title="Zoom"
+          />
+          <span aria-hidden>+</span>
+          <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}>
+            {Math.round(zoom * 100)}%
+          </span>
+        </label>
 
-      {contextFolder ? (
-        <span className="footer-context-binding linked">
+        <span className={`status-binding footer-context-binding${contextFolder ? ' linked' : ''}`}>
           <button
             className="footer-context-binding-label"
             onClick={onLinkContextFolder}
-            title={`Reference folder: ${contextFolder} (click to change)`}
+            title={
+              contextFolder
+                ? `Reference folder: ${contextFolder} (click to change)`
+                : 'Link a folder of reference documents Claude can read'
+            }
           >
-            📁 {basename(contextFolder)}
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path
+                d="M2 5.2c0-.8.6-1.4 1.4-1.4h2.4l1.6 1.6h5.2c.8 0 1.4.6 1.4 1.4v5c0 .8-.6 1.4-1.4 1.4H3.4c-.8 0-1.4-.6-1.4-1.4z"
+                stroke="currentColor"
+                strokeWidth="1.4"
+              />
+            </svg>
+            REFERENCE FOLDER
           </button>
-          <button
-            className="footer-context-binding-unlink"
-            onClick={onUnlinkContextFolder}
-            title="Unlink reference folder"
-          >
-            ×
-          </button>
+          {contextFolder && (
+            <button
+              className="footer-context-binding-unlink"
+              onClick={onUnlinkContextFolder}
+              title="Unlink reference folder"
+            >
+              ×
+            </button>
+          )}
         </span>
-      ) : (
-        <button
-          className="footer-context-binding"
-          onClick={onLinkContextFolder}
-          title="Link a folder of reference documents Claude can read"
-        >
-          📁 Link reference folder…
-        </button>
-      )}
 
-      <span
-        className="footer-model"
-        title={
-          lastKnownModel
-            ? `Last model reported by Claude Code: ${lastKnownModel}`
-            : 'No Claude reply has reported a model yet'
-        }
-      >
-        Reported {lastKnownModel ?? '—'}
-      </span>
-
-      <label className="footer-claude-setting">
-        <span>Model:</span>
-        <select
-          aria-label="Claude model"
-          value={claudeModel ?? ''}
-          onChange={(event) =>
-            onClaudeModelChange((event.target.value || null) as ClaudeModelAlias | null)
+        <span
+          className="footer-claude-settings"
+          title={
+            lastKnownModel
+              ? `Last model reported by Claude Code: ${lastKnownModel}`
+              : 'Model and effort used for the next Claude request'
           }
         >
-          <option value="">Default</option>
-          {CLAUDE_MODEL_ALIASES.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-      </label>
+          <select
+            aria-label="Claude model"
+            value={claudeModel ?? ''}
+            onChange={(event) =>
+              onClaudeModelChange((event.target.value || null) as ClaudeModelAlias | null)
+            }
+          >
+            <option value="">DEFAULT</option>
+            {CLAUDE_MODEL_ALIASES.map((model) => (
+              <option key={model} value={model}>
+                {model.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <span aria-hidden>/</span>
+          <select
+            aria-label="Claude effort"
+            value={claudeEffort ?? ''}
+            onChange={(event) =>
+              onClaudeEffortChange((event.target.value || null) as ClaudeEffort | null)
+            }
+          >
+            <option value="">DEFAULT</option>
+            {CLAUDE_EFFORT_LEVELS.map((effort) => (
+              <option key={effort} value={effort}>
+                {effort.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </span>
 
-      <label className="footer-claude-setting">
-        <span>Effort:</span>
-        <select
-          aria-label="Claude effort"
-          value={claudeEffort ?? ''}
-          onChange={(event) =>
-            onClaudeEffortChange((event.target.value || null) as ClaudeEffort | null)
-          }
-        >
-          <option value="">Default</option>
-          {CLAUDE_EFFORT_LEVELS.map((effort) => (
-            <option key={effort} value={effort}>
-              {effort}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {aiSession ? (
-        <span className="footer-ai-binding linked">
+        <span className={`status-binding footer-ai-binding${aiSession ? ' linked' : ''}`}>
           <button
             className="footer-ai-binding-label"
             onClick={onOpenSessionPicker}
-            title={`Linked to Claude session ${aiSession.sessionId} (cwd ${aiSession.cwd})`}
+            title={
+              aiSession
+                ? `Linked to Claude session ${aiSession.sessionId} (cwd ${aiSession.cwd})`
+                : 'Link this doc to a Claude Code session'
+            }
           >
-            🔗 Claude {aiSession.sessionId.slice(0, 8)}
+            <span className="session-spark" aria-hidden>
+              ✦
+            </span>
+            {aiSession ? aiSession.sessionId.slice(0, 8).toUpperCase() : 'LINK SESSION'}
           </button>
-          <button
-            className="footer-ai-binding-unlink"
-            onClick={onUnlinkSession}
-            title="Unlink Claude session"
-          >
-            ×
-          </button>
+          {aiSession && (
+            <button
+              className="footer-ai-binding-unlink"
+              onClick={onUnlinkSession}
+              title="Unlink Claude session"
+            >
+              ×
+            </button>
+          )}
         </span>
-      ) : (
-        <button
-          className="footer-ai-binding"
-          onClick={onOpenSessionPicker}
-          title="Link this doc to a Claude Code session"
-        >
-          🔗 Link to Claude session…
-        </button>
-      )}
-    </div>
+      </div>
+    </footer>
   );
 }

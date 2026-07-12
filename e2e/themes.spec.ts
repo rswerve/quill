@@ -1,26 +1,25 @@
 import { expect, test } from '@playwright/test';
 
-const THEME_LABELS = ['Paper', 'Gruvbox'];
+const THEME_IDS = ['paper', 'gruvbox'] as const;
 
-test('theme selector offers only Paper and Gruvbox and persists Gruvbox', async ({ page }) => {
+test('rail theme toggle switches between only Paper and Gruvbox and persists Gruvbox', async ({
+  page,
+}) => {
   await page.goto('/');
   await page.locator('.ProseMirror').waitFor();
 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
-  await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Paper');
-
-  await page.locator('.theme-selector-trigger').click();
-  const options = page.locator('.theme-selector-item');
-  await expect(options).toHaveCount(2);
-  await expect(options.locator('.theme-label')).toHaveText(THEME_LABELS);
-  await options.filter({ hasText: 'Gruvbox' }).click();
+  const toggle = page.locator('.rail .theme-toggle');
+  await expect(toggle).toHaveAttribute('title', 'Switch to Gruvbox');
+  await toggle.click();
 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'gruvbox');
+  await expect(toggle).toHaveAttribute('title', 'Switch to Paper');
   expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('gruvbox');
 
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'gruvbox');
-  await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Gruvbox');
+  await expect(page.locator('.rail .theme-toggle')).toHaveAttribute('title', 'Switch to Paper');
 });
 
 test('retired persisted theme ids fall back to Paper and are normalized', async ({ page }) => {
@@ -31,7 +30,7 @@ test('retired persisted theme ids fall back to Paper and are normalized', async 
     await page.evaluate((themeId) => localStorage.setItem('quill-theme', themeId), id);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
-    await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Paper');
+    await expect(page.locator('.rail .theme-toggle')).toHaveAttribute('title', 'Switch to Gruvbox');
     expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('paper');
   }
 });
@@ -41,19 +40,18 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
   const editor = page.locator('.ProseMirror');
   await editor.waitFor();
   await editor.click();
-  await page.locator('.mode-switch').click();
+  await page.getByRole('button', { name: 'Suggesting' }).click();
   await editor.click();
   await page.keyboard.type('A restrained suggestion');
 
   const accept = page.locator('.suggestion-accept-btn');
   const reject = page.locator('.suggestion-reject-btn');
-  const acceptAll = page.locator('.toolbar-btn-accept');
-  const rejectAll = page.locator('.toolbar-btn-reject');
+  const acceptAll = page.locator('.topbar-accept-all');
+  const rejectAll = page.locator('.topbar-reject-all');
 
-  for (const theme of THEME_LABELS) {
-    if (theme !== 'Paper') {
-      await page.locator('.theme-selector-trigger').click();
-      await page.locator('.theme-selector-item').filter({ hasText: theme }).click();
+  for (const theme of THEME_IDS) {
+    if (theme !== 'paper') {
+      await page.locator('.rail .theme-toggle').click();
     }
 
     const base = await Promise.all(
@@ -62,6 +60,7 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
           const style = getComputedStyle(element);
           return {
             background: style.backgroundColor,
+            color: style.color,
             shadow: style.boxShadow,
             borderStyle: style.borderTopStyle,
             borderWidth: style.borderTopWidth,
@@ -74,7 +73,9 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
       base.every(({ borderStyle, borderWidth }) => borderStyle === 'none' && borderWidth === '0px'),
     ).toBe(true);
     expect(base[0].background).not.toBe(base[1].background);
-    expect(base[2].background).not.toBe(base[3].background);
+    expect(base[2].background).toBe('rgba(0, 0, 0, 0)');
+    expect(base[3].background).toBe('rgba(0, 0, 0, 0)');
+    expect(base[2].color).not.toBe(base[3].color);
 
     await accept.hover();
     await expect
@@ -84,5 +85,13 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
     await expect
       .poll(() => reject.evaluate((element) => getComputedStyle(element).backgroundColor))
       .not.toBe(base[1].background);
+    await acceptAll.hover();
+    await expect
+      .poll(() => acceptAll.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .not.toBe(base[2].background);
+    await rejectAll.hover();
+    await expect
+      .poll(() => rejectAll.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .not.toBe(base[3].background);
   }
 });

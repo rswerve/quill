@@ -143,7 +143,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
   await page.keyboard.up('ControlOrMeta');
 
   // Footer should show the bound session id (Footer.tsx renders `aiSession.sessionId.slice(0,8)`).
-  await expect(page.locator('.footer-ai-binding.linked')).toContainText('fixture-', {
+  await expect(page.locator('.footer-ai-binding.linked')).toContainText('FIXTURE-', {
     timeout: 3000,
   });
   // Title should show dirty bullet because auto-bind marks the file dirty.
@@ -170,10 +170,9 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
   await page.keyboard.up('ControlOrMeta');
   await page.waitForTimeout(300);
 
-  // No linked-session chip in footer (still showing "Link to Claude session…").
+  // No linked-session chip in the status bar (still showing its link affordance).
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
-  // The unlinked "Link to Claude session…" affordance should be present.
-  await expect(page.locator('.footer-ai-binding').first()).toContainText(/Link to Claude/i);
+  await expect(page.locator('.footer-ai-binding').first()).toContainText('LINK SESSION');
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -316,7 +315,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     timeout: 3000,
   });
   // Footer filename should reflect the opened file.
-  await expect(page.locator('.footer-filename')).toContainText('linked.md');
+  await expect(page.locator('.crumbs .cur')).toContainText('linked.md');
 });
 
 test('deep-link: opening a doc with no linked session forces the session picker', async ({
@@ -381,11 +380,14 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
 
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
-  // Link: the unlinked affordance becomes a chip showing the folder name.
+  // Link: the reference-folder status control becomes linked and retains the
+  // full folder path in its tooltip while keeping the compact mono label.
   await page.locator('.footer-context-binding').click();
-  await expect(page.locator('.footer-context-binding.linked')).toContainText('research', {
-    timeout: 2000,
-  });
+  await expect(page.locator('.footer-context-binding.linked')).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('.footer-context-binding-label')).toHaveAttribute(
+    'title',
+    'Reference folder: /refs/research (click to change)',
+  );
   // Linking marks the document dirty so the binding gets saved.
   await page.waitForTimeout(150);
   expect(await page.title()).toContain('•');
@@ -413,7 +415,11 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
   // Unlink: chip reverts to the link affordance.
   await page.locator('.footer-context-binding-unlink').click();
   await expect(page.locator('.footer-context-binding.linked')).toHaveCount(0);
-  await expect(page.locator('.footer-context-binding')).toContainText(/Link reference folder/i);
+  await expect(page.locator('.footer-context-binding')).toContainText('REFERENCE FOLDER');
+  await expect(page.locator('.footer-context-binding-label')).toHaveAttribute(
+    'title',
+    'Link a folder of reference documents Claude can read',
+  );
 });
 
 test('context folder: @claude request passes --add-dir and a file manifest', async ({ page }) => {
@@ -469,5 +475,5 @@ test('deep-link: empty payload is ignored (no crash, no file load)', async ({ pa
   await page.waitForTimeout(200);
 
   // Filename stays at Untitled.
-  await expect(page.locator('.footer-filename')).toContainText('Untitled');
+  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
 });

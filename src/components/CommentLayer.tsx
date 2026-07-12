@@ -27,7 +27,6 @@ interface CommentLayerProps {
   onActivateSuggestion: (id: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
-  onReviewDocument: () => void;
   /** Lowest card bottom in document space (`nudgedTop + measuredHeight`), so
    *  App can extend the scroll range to reach a below-fold card. 0 when empty. */
   onMaxCardBottomChange: (maxBottom: number) => void;
@@ -42,6 +41,10 @@ interface CardPosition {
 
 const CARD_HEIGHT_ESTIMATE = 120;
 const CARD_GAP = 8;
+// Phase B keeps the existing free-positioned cards functional below the new
+// 44px panel header. Phase C replaces this interim offset with the specified
+// in-panel card layout and scroll-sync behavior.
+const PANEL_HEADER_OFFSET = 44;
 
 /**
  * Extra scrollable height the document needs so the lowest comment/suggestion
@@ -160,7 +163,6 @@ export default function CommentLayer({
   onActivateSuggestion,
   onAcceptChange,
   onRejectChange,
-  onReviewDocument,
   onMaxCardBottomChange,
 }: CommentLayerProps) {
   const [cardPositions, setCardPositions] = useState<CardPosition[]>([]);
@@ -205,11 +207,12 @@ export default function CommentLayer({
 
     for (const comment of displayCommentsRef.current) {
       const top = getAnchorTop(ed, comment.id);
+      const panelTop = (top ?? comment.from * 0.5) + PANEL_HEADER_OFFSET;
       rawCards.push({
         cardId: comment.id,
         type: 'comment',
-        rawTop: top ?? comment.from * 0.5,
-        nudgedTop: top ?? comment.from * 0.5,
+        rawTop: panelTop,
+        nudgedTop: panelTop,
       });
     }
 
@@ -220,11 +223,12 @@ export default function CommentLayer({
       const fallbackFrom =
         anchor.operation === 'format' ? (anchor.segments[0]?.from ?? 0) : anchor.from;
       const top = getChangeAnchorTop(ed, anchor.id);
+      const panelTop = (top ?? fallbackFrom * 0.5) + PANEL_HEADER_OFFSET;
       rawCards.push({
         cardId: group.cardId,
         type: 'suggestion',
-        rawTop: top ?? fallbackFrom * 0.5,
-        nudgedTop: top ?? fallbackFrom * 0.5,
+        rawTop: panelTop,
+        nudgedTop: panelTop,
       });
     }
 
@@ -318,19 +322,34 @@ export default function CommentLayer({
 
   return (
     <div
-      className="comment-layer"
+      className="comment-layer comments"
       ref={containerRef as React.RefObject<HTMLDivElement>}
       onWheel={handleWheel}
     >
-      <button className="review-doc-btn" onClick={onReviewDocument}>
-        ✨ Ask Claude to…
-      </button>
-
-      {resolvedComments.length > 0 && (
-        <button className="show-resolved-btn" onClick={() => setShowResolved((v) => !v)}>
-          {showResolved ? 'Hide' : 'Show'} {resolvedComments.length} resolved
+      <header className="comments-head">
+        <h3>Comments</h3>
+        <span className="count-pill">{visibleComments.length}</span>
+        <span className="grow" />
+        <button
+          className="filter"
+          onClick={() => setShowResolved((value) => !value)}
+          disabled={resolvedComments.length === 0}
+          title={
+            resolvedComments.length ? 'Show or hide resolved comments' : 'No resolved comments'
+          }
+        >
+          {showResolved ? 'All' : 'Open'}
+          <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path
+              d="M4 6.5 8 10.5 12 6.5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
-      )}
+      </header>
 
       {/* Cards are positioned in document space (anchor offset + scrollTop), so
           translating this wrapper by -scrollTop makes the comment column scroll
@@ -423,6 +442,10 @@ export default function CommentLayer({
             />
           );
         })}
+      </div>
+
+      <div className="comments-compose-chrome">
+        <div className="new-comment general-comment-field">General comment — no selection</div>
       </div>
     </div>
   );

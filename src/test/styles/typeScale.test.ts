@@ -36,12 +36,17 @@ describe('UI type scale', () => {
     }
   });
 
-  it('leaves hardcoded pixel sizes only on deliberately exceptional glyphs and modal titles', () => {
+  it('keeps direct Studio component sizes within the handoff type scale', () => {
     const explicit = [...css.matchAll(/font-size:\s*([\d.]+)px/g)].map((match) => match[1]);
-    expect(new Set(explicit)).toEqual(new Set(['10', '15', '18']));
+    expect(new Set(explicit)).toEqual(
+      new Set(['9', '9.5', '10', '11', '11.5', '12', '12.5', '13', '15', '17', '18']),
+    );
     expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
     expect(ruleBody('.app-modal-title')).toContain('font-size: 15px');
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
     expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
+    expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
+    expect(ruleBody('.topbar .seg')).toContain('font-size: 12px');
+    expect(ruleBody('.footer.status')).toContain('font-size: 10px');
   });
 });

@@ -124,7 +124,7 @@ export async function closeSessionPickerIfOpen(page: Page) {
 
 export async function openMemoryFile(page: Page) {
   await page.keyboard.press('ControlOrMeta+o');
-  await page.locator('.footer-filename').waitFor();
+  await page.locator('.crumbs .cur').waitFor();
   await closeSessionPickerIfOpen(page);
 }
 

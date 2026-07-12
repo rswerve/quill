@@ -12,9 +12,15 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 
 async function enableSuggesting(page: Page) {
   const badge = page.locator('.mode-switch');
-  await expect(badge).toContainText('Editing');
-  await badge.click();
-  await expect(badge).toContainText('Suggesting');
+  await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await badge.getByRole('button', { name: 'Suggesting' }).click();
+  await expect(badge.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 }
 
 // ── Insertion tracking ────────────────────────────────────────────────────────
@@ -286,8 +292,11 @@ test('toggling back to editing mode stops tracking new changes', async ({ page }
 
   await enableSuggesting(page);
   // Exit suggesting mode
-  await page.locator('.mode-switch').click();
-  await expect(page.locator('.mode-switch')).toContainText('Editing');
+  await page.getByRole('button', { name: 'Editing' }).click();
+  await expect(page.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   await editor.click();
   await page.keyboard.type('normal text');

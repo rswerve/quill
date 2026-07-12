@@ -21,9 +21,15 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 
 async function enableSuggesting(page: Page) {
   const badge = page.locator('.mode-switch');
-  await expect(badge).toContainText('Editing');
-  await badge.click();
-  await expect(badge).toContainText('Suggesting');
+  await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await badge.getByRole('button', { name: 'Suggesting' }).click();
+  await expect(badge.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 }
 
 function display(page: Page, selector: string) {
@@ -37,14 +43,16 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
   test('hides app chrome under print media', async ({ page }) => {
     await setup(page);
 
-    // On screen the toolbar and footer are visible…
-    await expect(page.locator('.toolbar')).toBeVisible();
+    // On screen the rail, topbar, and status bar are visible…
+    await expect(page.locator('.rail')).toBeVisible();
+    await expect(page.locator('.topbar')).toBeVisible();
     await expect(page.locator('.footer')).toBeVisible();
 
     await page.emulateMedia({ media: 'print' });
 
     // …and gone under print media.
-    expect(await display(page, '.toolbar')).toBe('none');
+    expect(await display(page, '.rail')).toBe('none');
+    expect(await display(page, '.topbar')).toBe('none');
     expect(await display(page, '.footer')).toBe('none');
     expect(await display(page, '.comment-layer')).toBe('none');
   });

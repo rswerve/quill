@@ -11,14 +11,14 @@ function sidecar(overrides: Record<string, unknown> = {}) {
 
 async function saveNewAndReopen(page: import('@playwright/test').Page) {
   await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.locator('.footer-dirty')).toHaveCount(0);
+  await expect(page.locator('.dirty-dot')).toHaveCount(0);
   const files = await page.evaluate(
     () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
   );
   const reopened = await page.context().newPage();
   await setupMemoryTauri(reopened, { files, openPath: DOC_PATH });
   await openMemoryFile(reopened);
-  await expect(reopened.locator('.footer-filename')).toContainText('review-persistence.md');
+  await expect(reopened.locator('.crumbs .cur')).toContainText('review-persistence.md');
   return reopened;
 }
 
@@ -246,7 +246,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
 
     // Saving persists the provenance into the sidecar.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
     const suggestions = await page.evaluate(
       (path) => JSON.parse(window.__quillFiles[path]).suggestions,
       SIDECAR_PATH,
@@ -269,7 +269,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
   test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {
     await openWithClaudeEdit(page);
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
     const files = await page.evaluate(
       () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
     );
@@ -337,7 +337,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     // Current Tiptap setContent incorrectly marks an open dirty. Saving here
     // isolates each review-only mutation so that bug cannot mask another one.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
   }
 
   test('opening a clean file does not mark it dirty', async ({ page }) => {
@@ -346,7 +346,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
       files: { [DOC_PATH]: 'clean content', [SIDECAR_PATH]: sidecar() },
     });
     await openMemoryFile(page);
-    await expect(page.locator('.footer-dirty')).toHaveCount(0);
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
   });
 
   test('adding a user reply marks the document dirty', async ({ page }) => {
@@ -354,7 +354,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await page.locator('.comment-reply-trigger').click();
     await page.locator('.comment-reply-input').fill('persist me');
     await page.locator('.comment-card .btn-primary').click();
-    await expect(page.locator('.footer-dirty')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('finishing an AI reply marks the document dirty', async ({ page }) => {
@@ -363,27 +363,27 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await page.locator('.comment-reply-input').fill('@claude answer this');
     await page.locator('.comment-card .btn-primary').click();
     await expect(page.locator('.comment-reply-ai')).toContainText('Persist this answer.');
-    await expect(page.locator('.footer-dirty')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('resolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
     await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.footer-dirty')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('unresolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await page.locator('.show-resolved-btn').click();
+    await page.locator('.comments-head .filter').click();
     await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.footer-dirty')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('deleting a resolved comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await page.locator('.show-resolved-btn').click();
+    await page.locator('.comments-head .filter').click();
     await page.locator('.comment-delete-btn').click();
-    await expect(page.locator('.footer-dirty')).toBeVisible();
+    await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 });
 
@@ -442,6 +442,6 @@ test.describe('desktop fallback regressions', () => {
     await page.keyboard.press('Enter');
     await page.keyboard.type('three');
 
-    await expect(page.locator('.footer')).toContainText('Line 3, Col 6');
+    await expect(page.locator('.footer')).toContainText('LN 3:6');
   });
 });

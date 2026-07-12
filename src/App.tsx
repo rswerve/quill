@@ -2,7 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './components/Editor';
 import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './components/Editor';
-import Toolbar from './components/Toolbar';
+import Rail from './components/Rail';
+import Topbar from './components/Topbar';
 import Footer from './components/Footer';
 import CommentLayer, { computeBottomSpacer } from './components/CommentLayer';
 import AddCommentButton from './components/AddCommentButton';
@@ -182,6 +183,7 @@ export default function App() {
     newFile,
     restoreDraft,
   } = useFileManager(showError);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
 
   // Live dirty flag for listeners registered once (close-requested, deep-link)
   // so they don't need to re-register on every edit.
@@ -496,6 +498,7 @@ export default function App() {
       // resolves image srcs) synchronously when content is set.
       setImageBaseDir(dirname(result.filePath));
       void syncRecentMenu(addRecentFile(result.filePath));
+      setLastSavedAt(Date.now());
       editorRef.current?.setContent(result.content);
       const loadedComments = result.sidecar.comments ?? [];
       const loadedSuggestions = result.sidecar.suggestions ?? [];
@@ -610,6 +613,7 @@ export default function App() {
     if (path) {
       setImageBaseDir(dirname(path));
       void syncRecentMenu(addRecentFile(path));
+      setLastSavedAt(Date.now());
     }
     return path;
   }, [saveFileAs, getLiveReviewState, aiSession, contextFolder]);
@@ -619,7 +623,15 @@ export default function App() {
       return handleSaveAs();
     }
     const live = getLiveReviewState();
-    return saveFile(getMarkdown(), live.comments, live.suggestions, aiSession, contextFolder);
+    const path = await saveFile(
+      getMarkdown(),
+      live.comments,
+      live.suggestions,
+      aiSession,
+      contextFolder,
+    );
+    if (path) setLastSavedAt(Date.now());
+    return path;
   }, [filePath, saveFile, getLiveReviewState, aiSession, contextFolder, handleSaveAs]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
@@ -654,6 +666,7 @@ export default function App() {
     setAISession(null);
     setLastKnownModel(null);
     setContextFolder(null);
+    setLastSavedAt(null);
   }, [newFile, setComments, setSuggestions]);
 
   // Adopt the recovered draft as the open (dirty) document. The draft's
@@ -664,6 +677,7 @@ export default function App() {
     if (!draft) return;
     setRecoveryDraft(null);
     restoreDraft(draft.filePath);
+    setLastSavedAt(null);
     setImageBaseDir(draft.filePath ? dirname(draft.filePath) : null);
     editorRef.current?.setContent(draft.content);
     const draftComments = draft.comments ?? [];
@@ -1332,131 +1346,145 @@ export default function App() {
     markDirty();
   }, [markDirty]);
 
+  const pendingSuggestionCount = trackedChanges.filter(
+    (change) => change.status === 'pending',
+  ).length;
+
   return (
     <div className="app">
-      <Toolbar
-        editor={editor}
-        isSuggesting={isSuggesting}
-        onToggleSuggesting={handleToggleSuggesting}
-        onAcceptAll={handleAcceptAll}
-        onRejectAll={handleRejectAll}
-        hasPendingChanges={trackedChanges.some((c) => c.status === 'pending')}
-      />
+      <Rail editor={editor} />
 
-      {updateCheck.update && (
-        <UpdateBanner
-          version={updateCheck.update.version}
-          url={updateCheck.update.url}
-          onDismiss={updateCheck.dismiss}
-        />
-      )}
-
-      <div className="workspace" ref={scrollAreaRef}>
-        {findOpen && (
-          <FindBar
-            editor={editor}
-            onClose={() => {
-              setFindOpen(false);
-              editor?.commands.focus();
-            }}
+      <main className="studio-main">
+        {updateCheck.update && (
+          <UpdateBanner
+            version={updateCheck.update.version}
+            url={updateCheck.update.url}
+            onDismiss={updateCheck.dismiss}
           />
         )}
-        <div className="editor-scroll-area">
-          <div
-            className="editor-page-zoom-wrapper"
-            style={{ fontSize: `${Math.round(zoom * 100)}%` }}
-            data-editor-zoom={zoom}
-          >
-            <QuillEditor
-              key={editorKey}
-              ref={editorRef}
-              initialContent=""
-              isSuggesting={isSuggesting}
-              authorID={AUTHOR}
-              onUpdate={markDirty}
-              onSelectionChange={handleSelectionChange}
-              onEditorReady={setEditor}
-              onAnnotationClick={handleAnnotationClick}
-            />
-          </div>
-          {/* Extends the scroll range only when a low-anchored card would
+
+        <Topbar
+          editor={editor}
+          filePath={filePath}
+          isDirty={isDirty}
+          lastSavedAt={lastSavedAt}
+          isSuggesting={isSuggesting}
+          onToggleSuggesting={handleToggleSuggesting}
+          pendingSuggestionCount={pendingSuggestionCount}
+          onAcceptAll={handleAcceptAll}
+          onRejectAll={handleRejectAll}
+          onReviewDocument={handleReviewDocument}
+        />
+
+        <div className="studio-body">
+          <div className="workspace doc-scroll" ref={scrollAreaRef}>
+            {findOpen && (
+              <FindBar
+                editor={editor}
+                onClose={() => {
+                  setFindOpen(false);
+                  editor?.commands.focus();
+                }}
+              />
+            )}
+            <div className="editor-scroll-area">
+              <div
+                className="editor-page-zoom-wrapper"
+                style={{ fontSize: `${Math.round(zoom * 100)}%` }}
+                data-editor-zoom={zoom}
+              >
+                <QuillEditor
+                  key={editorKey}
+                  ref={editorRef}
+                  initialContent=""
+                  isSuggesting={isSuggesting}
+                  authorID={AUTHOR}
+                  onUpdate={markDirty}
+                  onSelectionChange={handleSelectionChange}
+                  onEditorReady={setEditor}
+                  onAnnotationClick={handleAnnotationClick}
+                />
+              </div>
+              {/* Extends the scroll range only when a low-anchored card would
               otherwise be unreachable (see the spacer effect). Height 0 for
               normal docs; hidden in print so it never affects PDF output. */}
-          {bottomSpacer > 0 && (
-            <div className="editor-bottom-spacer" style={{ height: bottomSpacer }} aria-hidden />
-          )}
+              {bottomSpacer > 0 && (
+                <div
+                  className="editor-bottom-spacer"
+                  style={{ height: bottomSpacer }}
+                  aria-hidden
+                />
+              )}
+            </div>
+
+            {selectionInfo &&
+              (() => {
+                const commentLayer = commentLayerRef.current;
+                const commentLayerRect = commentLayer?.getBoundingClientRect();
+                // Fixed positioning: coordsAtPos reports the post-reflow viewport
+                // coordinates directly, so no scale compensation is needed.
+                const top = editor
+                  ? editor.view.coordsAtPos(selectionInfo.from).top
+                  : selectionInfo.top;
+                const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
+                return (
+                  <AddCommentButton
+                    top={top}
+                    left={left}
+                    visible
+                    author={AUTHOR}
+                    onAdd={handleAddComment}
+                    onComposingChange={handleComposingChange}
+                  />
+                );
+              })()}
+          </div>
+
+          <CommentLayer
+            editor={editor}
+            comments={comments}
+            activeCommentId={activeCommentId}
+            activeSuggestionId={activeSuggestionId}
+            containerRef={commentLayerRef}
+            trackedChanges={trackedChanges}
+            scrollTop={scrollTop}
+            zoom={zoom}
+            onReply={(id, text) => {
+              addReply(id, text, AUTHOR);
+              markDirty();
+            }}
+            onAIReplyRequest={handleAIReplyRequest}
+            onCancelAIReply={claudeReply.cancel}
+            onRetryAIReply={claudeReply.retry}
+            onOpenSessionPicker={() => setPickerOpen(true)}
+            onResolve={handleResolveComment}
+            onUnresolve={handleUnresolveComment}
+            onDelete={handleDeleteComment}
+            onActivate={handleActivateComment}
+            onActivateSuggestion={handleActivateSuggestion}
+            onAcceptChange={handleAcceptChange}
+            onRejectChange={handleRejectChange}
+            onMaxCardBottomChange={setMaxCardBottom}
+          />
         </div>
 
-        {selectionInfo &&
-          (() => {
-            const commentLayer = commentLayerRef.current;
-            const commentLayerRect = commentLayer?.getBoundingClientRect();
-            // Fixed positioning: coordsAtPos reports the post-reflow viewport
-            // coordinates directly, so no scale compensation is needed.
-            const top = editor
-              ? editor.view.coordsAtPos(selectionInfo.from).top
-              : selectionInfo.top;
-            const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
-            return (
-              <AddCommentButton
-                top={top}
-                left={left}
-                visible
-                author={AUTHOR}
-                onAdd={handleAddComment}
-                onComposingChange={handleComposingChange}
-              />
-            );
-          })()}
-
-        <CommentLayer
+        <Footer
           editor={editor}
-          comments={comments}
-          activeCommentId={activeCommentId}
-          activeSuggestionId={activeSuggestionId}
-          containerRef={commentLayerRef}
-          trackedChanges={trackedChanges}
-          scrollTop={scrollTop}
           zoom={zoom}
-          onReply={(id, text) => {
-            addReply(id, text, AUTHOR);
-            markDirty();
-          }}
-          onAIReplyRequest={handleAIReplyRequest}
-          onCancelAIReply={claudeReply.cancel}
-          onRetryAIReply={claudeReply.retry}
+          onZoomChange={(nextZoom) => setZoom(clampZoom(nextZoom))}
+          aiSession={aiSession}
+          lastKnownModel={lastKnownModel}
+          claudeModel={claudeModel}
+          claudeEffort={claudeEffort}
+          onClaudeModelChange={handleClaudeModelChange}
+          onClaudeEffortChange={handleClaudeEffortChange}
           onOpenSessionPicker={() => setPickerOpen(true)}
-          onResolve={handleResolveComment}
-          onUnresolve={handleUnresolveComment}
-          onDelete={handleDeleteComment}
-          onActivate={handleActivateComment}
-          onActivateSuggestion={handleActivateSuggestion}
-          onAcceptChange={handleAcceptChange}
-          onRejectChange={handleRejectChange}
-          onReviewDocument={handleReviewDocument}
-          onMaxCardBottomChange={setMaxCardBottom}
+          onUnlinkSession={handleUnlinkSession}
+          contextFolder={contextFolder}
+          onLinkContextFolder={handleLinkContextFolder}
+          onUnlinkContextFolder={handleUnlinkContextFolder}
         />
-      </div>
-
-      <Footer
-        editor={editor}
-        filePath={filePath}
-        isSuggesting={isSuggesting}
-        isDirty={isDirty}
-        zoom={zoom}
-        onZoomChange={(nextZoom) => setZoom(clampZoom(nextZoom))}
-        aiSession={aiSession}
-        lastKnownModel={lastKnownModel}
-        claudeModel={claudeModel}
-        claudeEffort={claudeEffort}
-        onClaudeModelChange={handleClaudeModelChange}
-        onClaudeEffortChange={handleClaudeEffortChange}
-        onOpenSessionPicker={() => setPickerOpen(true)}
-        onUnlinkSession={handleUnlinkSession}
-        contextFolder={contextFolder}
-        onLinkContextFolder={handleLinkContextFolder}
-        onUnlinkContextFolder={handleUnlinkContextFolder}
-      />
+      </main>
 
       <SessionPicker
         open={pickerOpen}
