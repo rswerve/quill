@@ -37,7 +37,8 @@ function doneSummary(phase: Extract<ReviewPhase, { status: 'done' }>): string {
 }
 
 /**
- * The "Review full document" dialog: guidance + what-to-produce checkboxes,
+ * The "Ask Claude to…" dialog (full-document pass): the free-form ask, the
+ * what-to-produce checkboxes,
  * then Claude's streaming assessment, then a result summary. Comments and
  * suggestions land in the document behind the modal as it finishes.
  */
@@ -55,23 +56,16 @@ export default function ReviewModal({
   const streaming = phase.status === 'streaming';
 
   return (
-    <div
-      className="app-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Review full document"
-    >
+    <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label="Ask Claude to…">
       <div className="app-modal review-modal">
-        <h2 className="app-modal-title">Review full document</h2>
+        <h2 className="app-modal-title">Ask Claude to…</h2>
 
         {composing && (
           <>
-            <label className="review-modal-label" htmlFor="review-guidance">
-              Ask Claude to…
-            </label>
             <textarea
               id="review-guidance"
               className="review-modal-guidance"
+              aria-label="Ask Claude to…"
               value={guidance}
               onChange={(e) => setGuidance(e.target.value)}
               placeholder={REVIEW_ASK_PLACEHOLDER}

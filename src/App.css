@@ -1468,13 +1468,6 @@ del.track-delete {
 .review-modal {
   width: 480px;
 }
-.review-modal-label {
-  display: block;
-  font-size: var(--text-meta);
-  font-weight: 400;
-  color: var(--color-ink-mid);
-  margin-bottom: 6px;
-}
 .review-modal-guidance {
   width: 100%;
   box-sizing: border-box;

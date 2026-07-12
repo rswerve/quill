@@ -323,7 +323,7 @@ export default function CommentLayer({
       onWheel={handleWheel}
     >
       <button className="review-doc-btn" onClick={onReviewDocument}>
-        ✨ Review full document
+        ✨ Ask Claude to…
       </button>
 
       {resolvedComments.length > 0 && (
