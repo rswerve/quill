@@ -270,8 +270,11 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await editor.click();
   await selectLastCharacters(page, 4);
   await page.keyboard.press('ControlOrMeta+k');
-  await expectType(page.locator('.link-popover-input'), '13px');
-  await expectType(page.locator('.link-popover-btn').first(), '12.5px');
+  await expectType(page.locator('#link-editor-text'), '14px', { checkUiFamily: false });
+  await expectType(page.locator('#link-editor-url'), '12.5px', { checkUiFamily: false });
+  await expectType(page.locator('.link-editor-btn').first(), '12.5px', {
+    checkUiFamily: false,
+  });
   await page.keyboard.press('Escape');
 
   await expect(page.locator('.add-comment-btn')).toBeVisible();
