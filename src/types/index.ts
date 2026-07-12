@@ -12,6 +12,11 @@ export interface Reply {
    * terminal state (distinct from `error`), offering a Re-run rather than an
    * error recovery. Transient/UI-only; never persisted to the sidecar. */
   cancelled?: boolean;
+  /** Tracked suggestions minted from this Claude reply. Persisted so the
+   * reply-to-card provenance jump survives save/reopen. */
+  suggestionIds?: string[];
+  /** The user dismissed this Claude reply block without removing its thread. */
+  dismissed?: boolean;
 }
 
 export interface AISessionBinding {

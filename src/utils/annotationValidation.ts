@@ -52,6 +52,14 @@ function sanitizeReply(raw: unknown): Reply | null {
     ...(isNonEmptyString(raw.model) ? { model: raw.model } : {}),
     ...(typeof raw.pending === 'boolean' ? { pending: raw.pending } : {}),
     ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
+    ...(Array.isArray(raw.suggestionIds)
+      ? {
+          suggestionIds: raw.suggestionIds.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
+        }
+      : {}),
+    ...(raw.dismissed === true ? { dismissed: true } : {}),
   };
 }
 

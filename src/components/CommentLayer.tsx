@@ -27,6 +27,8 @@ interface CommentLayerProps {
   onAIReplyRequest: (commentId: string, userText: string) => void;
   onCancelAIReply: (replyId: string) => void;
   onRetryAIReply: (replyId: string) => void;
+  onDismissAIReply: (commentId: string, replyId: string) => void;
+  onViewReplySuggestion: (suggestionIds: string[]) => void;
   onOpenSessionPicker: () => void;
   onResolve: (commentId: string) => void;
   onUnresolve: (commentId: string) => void;
@@ -161,6 +163,8 @@ export default function CommentLayer({
   onAIReplyRequest,
   onCancelAIReply,
   onRetryAIReply,
+  onDismissAIReply,
+  onViewReplySuggestion,
   onOpenSessionPicker,
   onResolve,
   onUnresolve,
@@ -184,6 +188,9 @@ export default function CommentLayer({
   const displayComments = showResolved ? comments : visibleComments;
 
   const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
+  const pendingSuggestionIds = new Set(
+    trackedChanges.filter((change) => change.status === 'pending').map((change) => change.id),
+  );
 
   // A provenance chip is a directed jump, not a toggle: clicking it while its
   // comment is already active must not deactivate the target. Resolved origin
@@ -538,6 +545,9 @@ export default function CommentLayer({
               onAIReplyRequest={onAIReplyRequest}
               onCancelAIReply={onCancelAIReply}
               onRetryAIReply={onRetryAIReply}
+              onDismissAIReply={onDismissAIReply}
+              onViewReplySuggestion={onViewReplySuggestion}
+              pendingSuggestionIds={pendingSuggestionIds}
               onOpenSessionPicker={onOpenSessionPicker}
               onResolve={onResolve}
               onUnresolve={onUnresolve}

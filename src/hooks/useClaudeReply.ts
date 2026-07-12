@@ -33,6 +33,7 @@ interface UseClaudeReplyOptions {
   failAIReply: (commentId: string, replyId: string, message: string) => void;
   cancelAIReply: (commentId: string, replyId: string) => void;
   retryAIReply: (commentId: string, replyId: string) => void;
+  linkAIReplySuggestions: (commentId: string, replyId: string, suggestionIds: string[]) => void;
   getDocMarkdown: () => string;
   /** Read the current document text for a comment's range + paragraph. */
   getRangeTexts: (comment: Comment) => RangeTexts;
@@ -43,7 +44,7 @@ interface UseClaudeReplyOptions {
     edits: QuillEdit[],
     scope: EditScope,
     originCommentId?: string,
-  ) => { applied: number; skipped: number };
+  ) => { applied: number; skipped: number; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
@@ -451,7 +452,15 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           }
           // Edits are document-scale: the highlight frames the request but
           // does not fence where changes may land.
-          const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, 'doc', comment.id);
+          const { skipped, suggestionIds = [] } = opts.applyTrackedEdits(
+            comment,
+            parsed.edits,
+            'doc',
+            comment.id,
+          );
+          if (suggestionIds.length > 0) {
+            opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
+          }
           if (skipped > 0) {
             const noun = skipped === 1 ? 'change was' : 'changes were';
             opts.appendAIReplyChunk(

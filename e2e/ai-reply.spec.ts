@@ -343,6 +343,7 @@ test('AI reply: a session-loss error shows Re-link primary plus a secondary Retr
   });
   await expect(aiReply.getByRole('button', { name: /Re-link session/i })).toBeVisible();
   await expect(aiReply.getByRole('button', { name: /^Retry$/i })).toBeVisible();
+  await expect(aiReply.getByRole('button', { name: 'Dismiss' })).toBeVisible();
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
 });
 
@@ -440,6 +441,30 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   await expect(page.locator('.suggestion-card .suggestion-ai-badge').first()).toHaveText('AI');
   // The new text "cats are" shows up as a tracked insertion in the document.
   await expect(page.locator('.ProseMirror')).toContainText('cats are');
+
+  // Q7's linkage is bidirectional: the reply jumps to the already-applied
+  // tracked suggestion (there is no second Apply-edit path), and that card
+  // remains the sole Accept/Reject surface.
+  const viewSuggestion = aiReply.getByRole('button', { name: /View suggestion/i });
+  await expect(viewSuggestion).toBeVisible();
+  await viewSuggestion.click();
+  await expect(card.first()).toHaveClass(/suggestion-card-active/);
+  await expect(card.first().getByRole('button', { name: 'Accept' })).toBeVisible();
+  await expect(card.first().getByRole('button', { name: 'Reject' })).toBeVisible();
+
+  // The card's provenance chip completes the return trip to the thread.
+  await card
+    .first()
+    .getByRole('button', { name: /from comment/i })
+    .click();
+  await expect(page.locator('.comment-card')).toHaveClass(/comment-card-active/);
+
+  // Dismiss removes only Claude's reply block: the thread and its linked,
+  // accept/rejectable suggestion remain intact.
+  await aiReply.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(aiReply).toHaveCount(0);
+  await expect(page.locator('.comment-card')).toHaveCount(1);
+  await expect(card.first()).toBeVisible();
 });
 
 test('AI edits: an edit outside the highlight applies (edits are document-scale)', async ({

@@ -2994,6 +2994,168 @@ del.track-delete {
   font-style: italic;
 }
 
+/* ── Studio Claude reply block (Design Q7) ───────────────────── */
+.comments .comment-reply-ai {
+  position: relative;
+  margin-top: 0;
+  padding: 11px 13px 12px;
+  border-top: 1px solid var(--border-card);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg-panel) 46%, var(--bg-card));
+}
+.comments .comment-reply-ai .comment-header {
+  padding: 0;
+  border: 0;
+  gap: 7px;
+}
+.comments .comment-reply-ai .comment-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.comments .comment-reply-ai .ai-badge {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b3a4a;
+  color: #83a598;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.comments .comment-reply-model {
+  order: 2;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.comments .comment-reply-ai .comment-time {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.comments .comment-reply-ai .comment-reply-text {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.comments .ai-thinking {
+  color: var(--text-dim);
+  font-style: normal;
+}
+.comments .ai-spinner {
+  width: auto;
+  height: auto;
+  margin-left: 3px;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  animation: none;
+}
+.comments .ai-thinking-dots::before {
+  content: '···';
+  animation: ai-dots 1.1s steps(4, end) infinite;
+}
+.comments .ai-stream-caret {
+  width: 1px;
+  height: 13px;
+  background: var(--accent);
+  vertical-align: -2px;
+  animation: ai-caret 0.8s step-end infinite;
+}
+@keyframes ai-dots {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ai-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.comments .btn-cancel-ai {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.comments .comment-reply-error {
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-left: 3px solid var(--removed);
+  border-radius: 0 6px 6px 0;
+  background: var(--removed-bg);
+}
+:root[data-theme='gruvbox'] .comments .comment-reply-error {
+  border-left-color: var(--removed-accent);
+}
+.comments .comment-reply-error p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.comments .comment-reply-error-title {
+  color: var(--removed);
+  font-weight: 600;
+}
+.comments .comment-reply-error-detail {
+  color: var(--text-dim) !important;
+}
+.comments .comment-reply-error-actions,
+.comment-reply-linked-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.reply-view-suggestion,
+.reply-dismiss {
+  height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.reply-view-suggestion {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.reply-view-suggestion:hover {
+  background: var(--hl-bg);
+}
+.reply-dismiss {
+  color: var(--text-dim);
+}
+.reply-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
 .suggestion-actions {
   margin: 0;
   gap: 0;

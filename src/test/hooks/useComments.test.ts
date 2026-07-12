@@ -328,4 +328,28 @@ describe('useComments', () => {
       expect(result.current.comments[0].replies[0]).toEqual(before);
     });
   });
+
+  describe('Claude reply provenance', () => {
+    it('links suggestion ids and dismisses only the reply block', () => {
+      const { result } = renderHook(() => useComments());
+      let commentId = '';
+      let replyId = '';
+      act(() => {
+        commentId = result.current.addComment('text', 0, 4, 'Alice').id;
+      });
+      act(() => {
+        replyId = result.current.startAIReply(commentId);
+        result.current.linkAIReplySuggestions(commentId, replyId, ['change-1', 'change-2']);
+        result.current.dismissAIReply(commentId, replyId);
+      });
+
+      expect(result.current.comments).toHaveLength(1);
+      expect(result.current.comments[0].replies).toHaveLength(1);
+      expect(result.current.comments[0].replies[0]).toMatchObject({
+        id: replyId,
+        suggestionIds: ['change-1', 'change-2'],
+        dismissed: true,
+      });
+    });
+  });
 });

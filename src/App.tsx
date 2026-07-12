@@ -215,6 +215,8 @@ export default function App() {
     failAIReply,
     cancelAIReply,
     retryAIReply,
+    linkAIReplySuggestions,
+    dismissAIReply,
   } = useComments();
   const { suggestions, setSuggestions } = useSuggestions();
 
@@ -309,7 +311,9 @@ export default function App() {
       originCommentId?: string,
     ) => {
       const ed = editor;
-      if (!ed) return { applied: 0, skipped: edits.length };
+      if (!ed) return { applied: 0, skipped: edits.length, suggestionIds: [] };
+
+      const suggestionIdsBefore = new Set(getTrackedChanges(ed).map((change) => change.id));
 
       const range = resolveScopeRange(ed.state.doc, comment, scope);
       // Claude's author id doubles as the cross-author filter: format ops
@@ -358,7 +362,13 @@ export default function App() {
         ed.commands.setTrackChangesOrigin(null);
         applyingClaudeEditsRef.current = false;
       }
-      return { applied, skipped };
+      const suggestionIds = getTrackedChanges(ed)
+        .filter(
+          (change) =>
+            !suggestionIdsBefore.has(change.id) && change.originCommentId === originCommentId,
+        )
+        .map((change) => change.id);
+      return { applied, skipped, suggestionIds };
     },
     [editor],
   );
@@ -383,6 +393,7 @@ export default function App() {
     failAIReply,
     cancelAIReply,
     retryAIReply,
+    linkAIReplySuggestions,
     getDocMarkdown,
     getRangeTexts,
     applyTrackedEdits,
@@ -1264,6 +1275,30 @@ export default function App() {
     [editor, scrollCardIntoView],
   );
 
+  // Reply → suggestion is a directed provenance jump, so it never toggles an
+  // already-active target off. If one linked change has been resolved, advance
+  // to the first linked suggestion that is still pending.
+  const handleViewReplySuggestion = useCallback(
+    (suggestionIds: string[]) => {
+      const change = trackedChanges.find(
+        (candidate) => suggestionIds.includes(candidate.id) && candidate.status === 'pending',
+      );
+      if (!change) return;
+      const cardId = change.operation !== 'format' && change.pairId ? change.pairId : change.id;
+      setActiveAnnotation({ kind: 'suggestion', id: cardId });
+      if (editor) {
+        const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);
+        if (range) {
+          const { node } = editor.view.domAtPos(range.from);
+          const element = node instanceof HTMLElement ? node : node.parentElement;
+          element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+        }
+      }
+      scrollCardIntoView(cardId);
+    },
+    [editor, scrollCardIntoView, trackedChanges],
+  );
+
   const handleAIReplyRequest = useCallback(
     (commentId: string, userText: string) => {
       const comment = comments.find((c) => c.id === commentId);
@@ -1462,6 +1497,11 @@ export default function App() {
             onAIReplyRequest={handleAIReplyRequest}
             onCancelAIReply={claudeReply.cancel}
             onRetryAIReply={claudeReply.retry}
+            onDismissAIReply={(commentId, replyId) => {
+              dismissAIReply(commentId, replyId);
+              markDirty();
+            }}
+            onViewReplySuggestion={handleViewReplySuggestion}
             onOpenSessionPicker={() => setPickerOpen(true)}
             onResolve={handleResolveComment}
             onUnresolve={handleUnresolveComment}

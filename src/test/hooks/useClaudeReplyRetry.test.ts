@@ -81,6 +81,7 @@ function makeOpts(mock: MockClaude) {
   const failAIReply = vi.fn();
   const cancelAIReply = vi.fn();
   const retryAIReply = vi.fn();
+  const linkAIReplySuggestions = vi.fn();
   const getDocMarkdown = vi.fn(() => 'doc body');
   const getRangeTexts = vi.fn(
     (_c: Comment): RangeTexts => ({ highlightText: 'anchor', paragraphText: 'anchor para' }),
@@ -99,6 +100,7 @@ function makeOpts(mock: MockClaude) {
       failAIReply,
       cancelAIReply,
       retryAIReply,
+      linkAIReplySuggestions,
       getDocMarkdown,
       getRangeTexts,
       applyTrackedEdits,
@@ -112,6 +114,7 @@ function makeOpts(mock: MockClaude) {
       failAIReply,
       cancelAIReply,
       retryAIReply,
+      linkAIReplySuggestions,
     },
     mock,
   };

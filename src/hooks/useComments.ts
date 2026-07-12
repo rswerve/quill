@@ -17,6 +17,8 @@ interface UseCommentsReturn {
   failAIReply: (commentId: string, replyId: string, message: string) => void;
   cancelAIReply: (commentId: string, replyId: string) => void;
   retryAIReply: (commentId: string, replyId: string) => void;
+  linkAIReplySuggestions: (commentId: string, replyId: string, suggestionIds: string[]) => void;
+  dismissAIReply: (commentId: string, replyId: string) => void;
 }
 
 export function useComments(): UseCommentsReturn {
@@ -185,6 +187,39 @@ export function useComments(): UseCommentsReturn {
     );
   }, []);
 
+  const linkAIReplySuggestions = useCallback(
+    (commentId: string, replyId: string, suggestionIds: string[]) => {
+      setComments((prev) =>
+        prev.map((comment) =>
+          comment.id === commentId
+            ? {
+                ...comment,
+                replies: comment.replies.map((reply) =>
+                  reply.id === replyId ? { ...reply, suggestionIds } : reply,
+                ),
+              }
+            : comment,
+        ),
+      );
+    },
+    [],
+  );
+
+  const dismissAIReply = useCallback((commentId: string, replyId: string) => {
+    setComments((prev) =>
+      prev.map((comment) =>
+        comment.id === commentId
+          ? {
+              ...comment,
+              replies: comment.replies.map((reply) =>
+                reply.id === replyId ? { ...reply, dismissed: true } : reply,
+              ),
+            }
+          : comment,
+      ),
+    );
+  }, []);
+
   return {
     comments,
     setComments,
@@ -200,5 +235,7 @@ export function useComments(): UseCommentsReturn {
     failAIReply,
     cancelAIReply,
     retryAIReply,
+    linkAIReplySuggestions,
+    dismissAIReply,
   };
 }
