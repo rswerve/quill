@@ -35,6 +35,7 @@ export function applyTheme(id: ThemeId) {
 interface ButtonProps {
   onClick: () => void;
   active?: boolean;
+  mixed?: boolean;
   disabled?: boolean;
   title: string;
   children: React.ReactNode;
@@ -45,6 +46,7 @@ interface ButtonProps {
 export function ToolbarButton({
   onClick,
   active,
+  mixed,
   disabled,
   title,
   children,
@@ -54,7 +56,7 @@ export function ToolbarButton({
   return (
     <button
       data-toolbar-button
-      className={`${baseClassName}${active ? ' active' : ''}${disabled ? ' disabled' : ''}${className ? ` ${className}` : ''}`}
+      className={`${baseClassName}${active ? ' active' : ''}${mixed ? ' mixed' : ''}${disabled ? ' disabled' : ''}${className ? ` ${className}` : ''}`}
       onMouseDown={(e) => {
         e.preventDefault(); // keep editor focus so selection is never lost
         const ed = toolbarSelectionStore.liveEditor;

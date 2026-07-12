@@ -44,13 +44,29 @@ export default function Rail({ editor }: RailProps) {
     if (editor) run();
   };
 
+  const markState = (name: 'bold' | 'italic' | 'strike') => {
+    if (!editor) return { active: false, mixed: false };
+    const { empty, from, to } = editor.state.selection;
+    const active = editor.isActive(name);
+    const mark = editor.schema.marks[name];
+    return {
+      active,
+      mixed: Boolean(!empty && !active && mark && editor.state.doc.rangeHasMark(from, to, mark)),
+    };
+  };
+
+  const bold = markState('bold');
+  const italic = markState('italic');
+  const strike = markState('strike');
+
   return (
     <nav className="rail" aria-label="Formatting">
       <ToolbarButton
         baseClassName="rail-btn"
         className="bold"
         onClick={command(() => editor!.chain().focus().toggleBold().run())}
-        active={editor?.isActive('bold') ?? false}
+        active={bold.active}
+        mixed={bold.mixed}
         disabled={!editor}
         title="Bold (Cmd+B)"
       >
@@ -60,7 +76,8 @@ export default function Rail({ editor }: RailProps) {
         baseClassName="rail-btn"
         className="italic"
         onClick={command(() => editor!.chain().focus().toggleItalic().run())}
-        active={editor?.isActive('italic') ?? false}
+        active={italic.active}
+        mixed={italic.mixed}
         disabled={!editor}
         title="Italic (Cmd+I)"
       >
@@ -80,7 +97,8 @@ export default function Rail({ editor }: RailProps) {
         baseClassName="rail-btn"
         className="strike"
         onClick={command(() => editor!.chain().focus().toggleStrike().run())}
-        active={editor?.isActive('strike') ?? false}
+        active={strike.active}
+        mixed={strike.mixed}
         disabled={!editor}
         title="Strikethrough"
       >

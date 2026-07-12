@@ -63,3 +63,27 @@ test('bold button with partial selection', async ({ page }) => {
   const html = await editor.innerHTML();
   expect(html).toContain('<strong>world</strong>');
 });
+
+test('bold rail state distinguishes full, mixed, and plain selections', async ({ page }) => {
+  await setupEditor(page);
+  const bold = page.locator('[title="Bold (Cmd+B)"]');
+
+  await page.keyboard.type('bold plain');
+  await page.keyboard.press('Home');
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+  await page.keyboard.up('Shift');
+  await bold.click();
+  await expect(bold).toHaveClass(/active/);
+  await expect(bold).not.toHaveClass(/mixed/);
+
+  await page.keyboard.press('ControlOrMeta+a');
+  await expect(bold).toHaveClass(/mixed/);
+  await expect(bold).not.toHaveClass(/active/);
+
+  await page.keyboard.press('End');
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
+  await page.keyboard.up('Shift');
+  await expect(bold).not.toHaveClass(/active|mixed/);
+});
