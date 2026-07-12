@@ -219,7 +219,12 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
               // When tracking is disabled, make sure tracked marks aren't
               // inherited from the cursor's stored marks (which would happen
               // when typing immediately after existing <ins>/<del>).
-              if (!enabled && tr.docChanged && !tr.getMeta(SKIP_TRACKING_META)) {
+              if (
+                !enabled &&
+                tr.docChanged &&
+                !tr.getMeta(SKIP_TRACKING_META) &&
+                !tr.getMeta('history$')
+              ) {
                 const schema = editorView.state.schema;
                 const insertType = schema.marks['tracked_insert'];
                 const deleteType = schema.marks['tracked_delete'];
@@ -1229,6 +1234,17 @@ function transformForTracking(
 
   if (formatGesture.blocked) {
     newTr.setMeta(FORMAT_BLOCKED_META, true);
+  }
+
+  // Paste rules run after the dispatched transaction. Replacing that
+  // transaction for tracking must retain Tiptap/ProseMirror's paste trigger,
+  // or Suggesting mode silently disables every paste rule (including the
+  // Markdown-link rule). These keys describe the input gesture; they do not
+  // bypass tracking, and the appended rule transaction operates on the
+  // already-tracked insertion.
+  for (const key of ['uiEvent', 'paste', 'applyPasteRules'] as const) {
+    const value = tr.getMeta(key);
+    if (value !== undefined) newTr.setMeta(key, value);
   }
 
   // Place cursor:

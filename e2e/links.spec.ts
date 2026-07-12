@@ -14,6 +14,16 @@ async function selectAll(page: Page) {
   await page.keyboard.press('ControlOrMeta+a');
 }
 
+async function pastePlainText(editor: Locator, text: string) {
+  await editor.evaluate((element, value) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', value);
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }),
+    );
+  }, text);
+}
+
 const linkButton = (page: Page) => page.locator('[title="Link (Cmd+K)"]');
 const linkEditor = (page: Page) => page.locator('.link-editor-card');
 const textInput = (page: Page) => linkEditor(page).getByLabel('Text');
@@ -218,4 +228,83 @@ test.describe('Link editor', () => {
     );
     await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
   });
+});
+
+test.describe('Markdown link shortcuts', () => {
+  const syntax = '[text and](https://www.thenalink.com)';
+
+  test('typing the exact Markdown syntax converts it to one clean link', async ({ page }) => {
+    const { editor } = await setup(page);
+    await page.keyboard.type(syntax);
+
+    await expect(editor).toHaveText('text and');
+    await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
+  });
+
+  test('pasting the exact Markdown syntax converts it before bare-URL autolinking', async ({
+    page,
+  }) => {
+    const { editor } = await setup(page);
+    await pastePlainText(editor, syntax);
+
+    await expect(editor).toHaveText('text and');
+    await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
+  });
+
+  test('a bare-domain Markdown href is normalized', async ({ page }) => {
+    const { editor } = await setup(page);
+    await page.keyboard.type('[x](example.com)');
+
+    await expect(editor.locator('a[href="https://example.com"]')).toHaveText('x');
+  });
+
+  for (const gesture of ['type', 'paste'] as const) {
+    test(`suggesting mode ${gesture} conversion leaves no tracked punctuation`, async ({
+      page,
+    }) => {
+      const { editor } = await setup(page);
+      await page.getByRole('button', { name: 'Suggesting' }).click();
+      await editor.click();
+
+      if (gesture === 'type') await page.keyboard.type(syntax);
+      else await pastePlainText(editor, syntax);
+
+      await expect(editor).toHaveText('text and');
+      await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
+      await expect(editor.locator('del.track-delete')).toHaveCount(0);
+      await expect(editor.locator('ins.track-insert')).toHaveText('text and');
+      await expect(page.locator('.suggestion-card-insert')).toHaveCount(1);
+    });
+  }
+
+  test('bare-URL paste autolinks exactly once in suggesting mode', async ({ page }) => {
+    const { editor } = await setup(page);
+    await page.getByRole('button', { name: 'Suggesting' }).click();
+    await editor.click();
+    await pastePlainText(editor, 'https://x.com');
+
+    await expect(editor).toHaveText('https://x.com');
+    await expect(editor.locator('a[href="https://x.com"]')).toHaveCount(1);
+    await expect(editor.locator('a[href="https://x.com"] ins.track-insert')).toHaveText(
+      'https://x.com',
+    );
+  });
+
+  for (const suggesting of [false, true]) {
+    test(`one undo fully reverts a paste-converted link (suggesting=${suggesting})`, async ({
+      page,
+    }) => {
+      const { editor } = await setup(page);
+      if (suggesting) {
+        await page.getByRole('button', { name: 'Suggesting' }).click();
+        await editor.click();
+      }
+      await pastePlainText(editor, syntax);
+      await expect(editor).toHaveText('text and');
+
+      await page.keyboard.press('ControlOrMeta+z');
+      await expect(editor).toHaveText('');
+      await expect(editor.locator('a')).toHaveCount(0);
+    });
+  }
 });

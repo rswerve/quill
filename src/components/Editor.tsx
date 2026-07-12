@@ -10,6 +10,7 @@ import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
 import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
+import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
 import {
   TrackedInsert,
   TrackedDelete,
@@ -78,6 +79,10 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
 
     const editor = useEditor({
       extensions: [
+        // Run the full Markdown-link paste rule before StarterKit's bare-URL
+        // rule, so `[label](url)` becomes one link instead of linked URL text
+        // surrounded by literal punctuation.
+        MarkdownLinkSyntax,
         StarterKit.configure({
           // Don't auto-insert an empty paragraph after non-paragraph blocks
           // (e.g. headings). It interferes with toggling H1 back to paragraph.
