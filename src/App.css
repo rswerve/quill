@@ -246,14 +246,17 @@
   --font-serif: 'Playfair Display', Georgia, serif;
   --font-sans: 'Lato', system-ui, sans-serif;
 
-  /* Document typography is relative to the shell's 12px base so changing the
-     zoom wrapper's font-size scales text and reflows within the fixed page. */
+  /* Document typography is em-based against --text-doc-base (pinned on the
+     editor scroll area) so the zoom wrapper's percentage font-size scales
+     text and reflows within the fixed page — and so UI-chrome type-scale
+     changes never rescale the page text. */
+  --text-doc-base: 12px;
   --text-doc-title: 1.925926em; /* 26 / 13.5 */
   --text-doc-h2: 1.185185em; /* 16 / 13.5 */
   --text-body: 1.125em; /* 13.5 / 12 */
-  --text-ui: 12px;
-  --text-meta: 11px;
-  --text-label: 10px;
+  --text-ui: 13px;
+  --text-meta: 12px;
+  --text-label: 11px;
 
   --leading-tight: 1.25;
   --leading-body: 1.85;
@@ -272,8 +275,8 @@
   --radius-lg: 8px;
   --radius-full: 50%;
 
-  --toolbar-height: 42px;
-  --statusbar-height: 34px;
+  --toolbar-height: 44px;
+  --statusbar-height: 36px;
   --comment-panel-width: 260px;
   --page-max-width: 816px;
   /* 816 − 2×64 = 688px measure (~85 chars). Trim padding, not width, so the
@@ -326,8 +329,8 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
+  min-width: 30px;
+  height: 30px;
   padding: 0 5px;
   border: none;
   border-radius: var(--radius-md);
@@ -382,7 +385,7 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border: none;
   border-radius: var(--radius-md);
@@ -448,7 +451,7 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border: 0.5px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -490,7 +493,7 @@ body,
 }
 
 .theme-caret {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--color-ink-light);
   margin-left: 2px;
 }
@@ -633,10 +636,10 @@ body,
   margin-left: auto;
   border: none;
   background: transparent;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-md);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1;
   color: inherit;
   cursor: pointer;
@@ -705,8 +708,8 @@ body,
 .find-bar-btn {
   border: none;
   background: transparent;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
   color: var(--color-ink-mid);
   font-size: var(--text-ui);
@@ -732,6 +735,9 @@ body,
 
 /* ── Editor scroll area ─────────────────────────────────────────── */
 .editor-scroll-area {
+  /* Fixed base for the document's em type scale: the zoom wrapper multiplies
+     this with its inline percentage, independent of the UI chrome's px size. */
+  font-size: var(--text-doc-base);
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
@@ -1154,13 +1160,13 @@ del.track-delete {
 }
 
 .comment-avatar {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
   background: var(--color-human-avatar-bg);
@@ -1289,8 +1295,8 @@ del.track-delete {
 
 /* ── Add comment button / compose ───────────────────────────────── */
 .add-comment-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: #fff;
@@ -1404,7 +1410,7 @@ del.track-delete {
 }
 .app-modal-title {
   margin: 0 0 8px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--color-ink);
 }
@@ -1560,7 +1566,7 @@ del.track-delete {
 }
 
 .suggestion-type-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   padding: 1px 5px;
   border-radius: 3px;
@@ -1595,7 +1601,7 @@ del.track-delete {
   display: inline-block;
   margin: 6px 12px 0;
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-sans);
   color: var(--color-ink-light);
   background: transparent;
@@ -1634,14 +1640,14 @@ del.track-delete {
 }
 .suggestion-accept-btn {
   flex: 1;
-  min-height: 27px;
+  min-height: 29px;
   padding: 3px 8px;
   background: var(--color-action-accept-bg);
   color: var(--color-action-accept-text);
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
 }
 .suggestion-accept-btn:hover {
   background: var(--color-action-accept-hover);
@@ -1651,14 +1657,14 @@ del.track-delete {
 }
 .suggestion-reject-btn {
   flex: 1;
-  min-height: 27px;
+  min-height: 29px;
   padding: 3px 8px;
   background: var(--color-action-reject-bg);
   color: var(--color-action-reject-text);
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
 }
 .suggestion-reject-btn:hover {
   background: var(--color-action-reject-hover);
@@ -1804,7 +1810,7 @@ del.track-delete {
 .btn-cancel-ai {
   margin-top: 4px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .comment-reply-error {
   background: var(--color-track-del-bg);
@@ -1815,7 +1821,7 @@ del.track-delete {
 }
 .comment-reply-error p {
   color: var(--color-track-del-text);
-  font-size: 12px;
+  font-size: 13px;
   margin-bottom: 4px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1839,7 +1845,7 @@ del.track-delete {
 }
 .comment-reply-cancelled p {
   color: var(--color-ink-mid);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* ── Footer bindings (Claude session / reference folder) ───────── */
@@ -1859,9 +1865,9 @@ del.track-delete {
 }
 
 .footer-claude-setting select {
-  min-width: 70px;
-  max-width: 88px;
-  height: 22px;
+  min-width: 74px;
+  max-width: 94px;
+  height: 24px;
   padding: 0 18px 0 5px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
