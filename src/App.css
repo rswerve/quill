@@ -864,7 +864,10 @@ body,
      pre's inherited context — pin the same stack here so block code can never
      diverge from inline code. */
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-  background: var(--color-ink);
+  /* Same tint family as inline code, not inverted video: a code block is
+     the block-level sibling of the inline chip and should read as one. */
+  background: var(--color-ai-bg);
+  border: 0.5px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 1em;
   overflow-x: auto;
@@ -873,7 +876,7 @@ body,
 
 .ProseMirror pre code {
   background: transparent;
-  color: var(--color-page);
+  color: var(--color-ink);
   padding: 0;
 }
 
