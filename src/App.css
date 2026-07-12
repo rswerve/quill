@@ -2824,6 +2824,34 @@ del.track-delete {
   margin: 0;
   gap: 8px;
 }
+.footer-zoom-step {
+  width: 15px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+.footer-zoom-step:hover:not(:disabled),
+.footer-zoom-step:focus-visible {
+  color: var(--text);
+}
+.footer-zoom-step:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.footer-zoom-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.footer-zoom-slider-label {
+  display: flex;
+  align-items: center;
+}
 .footer-zoom-slider {
   appearance: none;
   width: 70px;

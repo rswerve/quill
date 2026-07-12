@@ -1247,6 +1247,25 @@ test('zoom slider in footer is present', async ({ page }) => {
   await expect(page.locator('.footer-zoom-label')).toContainText('100%');
 });
 
+test('zoom step buttons change zoom and disable at the bounds', async ({ page }) => {
+  await setup(page);
+  const zoomIn = page.getByRole('button', { name: 'Zoom in' });
+  const zoomOut = page.getByRole('button', { name: 'Zoom out' });
+
+  await zoomIn.click();
+  await expect(page.locator('.footer-zoom-label')).toHaveText('112%');
+  await zoomOut.click();
+  await expect(page.locator('.footer-zoom-label')).toHaveText('100%');
+
+  await setZoom(page, 0.6);
+  await expect(zoomOut).toBeDisabled();
+  await expect(zoomIn).toBeEnabled();
+
+  await setZoom(page, 2.4);
+  await expect(zoomIn).toBeDisabled();
+  await expect(zoomOut).toBeEnabled();
+});
+
 test('Cmd+= zoom shortcut increases zoom', async ({ page }) => {
   await setup(page);
   await page.keyboard.down('ControlOrMeta');

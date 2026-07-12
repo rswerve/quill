@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
-import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
+import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 
 interface FooterProps {
   editor: Editor | null;
@@ -72,24 +72,43 @@ export default function Footer({
       </div>
 
       <div className="status-group status-right">
-        <label className="footer-zoom zoom">
-          <span aria-hidden>−</span>
-          <input
-            type="range"
-            min={MIN_ZOOM}
-            max={MAX_ZOOM}
-            step={0.06}
-            value={zoom}
-            onChange={(event) => onZoomChange?.(parseFloat(event.target.value))}
-            className="footer-zoom-slider"
-            style={{ '--zoom-progress': `${zoomProgress}%` } as CSSProperties}
-            title="Zoom"
-          />
-          <span aria-hidden>+</span>
+        <div className="footer-zoom zoom" role="group" aria-label="Document zoom">
+          <button
+            type="button"
+            className="footer-zoom-step"
+            aria-label="Zoom out"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => onZoomChange?.(clampZoom(Math.round((zoom - 0.12) * 100) / 100))}
+          >
+            −
+          </button>
+          <label className="footer-zoom-slider-label">
+            <input
+              aria-label="Zoom"
+              type="range"
+              min={MIN_ZOOM}
+              max={MAX_ZOOM}
+              step={0.06}
+              value={zoom}
+              onChange={(event) => onZoomChange?.(parseFloat(event.target.value))}
+              className="footer-zoom-slider"
+              style={{ '--zoom-progress': `${zoomProgress}%` } as CSSProperties}
+              title="Zoom"
+            />
+          </label>
+          <button
+            type="button"
+            className="footer-zoom-step"
+            aria-label="Zoom in"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => onZoomChange?.(clampZoom(Math.round((zoom + 0.12) * 100) / 100))}
+          >
+            +
+          </button>
           <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}>
             {Math.round(zoom * 100)}%
           </span>
-        </label>
+        </div>
 
         <span className={`status-binding footer-context-binding${contextFolder ? ' linked' : ''}`}>
           <button
