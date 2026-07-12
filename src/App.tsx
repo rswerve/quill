@@ -20,7 +20,7 @@ import { useSuggestions } from './hooks/useSuggestions';
 import { useClaudeReply } from './hooks/useClaudeReply';
 import { useDocumentReview } from './hooks/useDocumentReview';
 import type { ReviewOptions } from './hooks/useDocumentReview';
-import { getTrackedChanges } from './extensions/TrackChanges';
+import { FORMAT_BLOCKED_META, getTrackedChanges } from './extensions/TrackChanges';
 import { setImageBaseDir } from './extensions/MarkdownImage';
 import { detectLossyConstructs } from './utils/markdownFidelity';
 import { findAnnotationRange } from './extensions/AnnotationFocus';
@@ -280,6 +280,10 @@ export default function App() {
     [editor],
   );
 
+  // True while applyTrackedEdits is dispatching Claude's edits, so the
+  // blocked-formatting notice only ever fires for the user's own gestures.
+  const applyingClaudeEditsRef = useRef(false);
+
   // Apply Claude's quote-based edits as tracked-change suggestions. Forces
   // suggesting mode on (under Claude's author id, stamped with the originating
   // comment when one is given) for the duration, applies each located edit
@@ -313,6 +317,10 @@ export default function App() {
 
       let applied = 0;
       try {
+        // Suppress the blocked-formatting notice for automated applies:
+        // planEdits already pre-blocks Claude's conflicting format ops and
+        // reports them as skipped; a modal mid-apply would be noise.
+        applyingClaudeEditsRef.current = true;
         ed.commands.setTrackChangesEnabled(true);
         ed.commands.setTrackChangesAuthor(CLAUDE_AUTHOR_ID);
         ed.commands.setTrackChangesOrigin(originCommentId ?? null);
@@ -335,6 +343,7 @@ export default function App() {
         ed.commands.setTrackChangesEnabled(priorEnabled);
         ed.commands.setTrackChangesAuthor(priorAuthor);
         ed.commands.setTrackChangesOrigin(null);
+        applyingClaudeEditsRef.current = false;
       }
       return { applied, skipped };
     },
@@ -950,6 +959,30 @@ export default function App() {
     refresh();
     return () => {
       editor.off('update', refresh);
+    };
+  }, [editor]);
+
+  // A formatting gesture that ran into someone else's pending formatting
+  // suggestion silently leaves those spans unchanged (v1 cross-author
+  // policy) — surface why, but never for Claude's automated applies, whose
+  // conflicts planEdits already blocks and reports as skipped.
+  useEffect(() => {
+    if (!editor) return;
+    const onTransaction = ({
+      transaction,
+    }: {
+      transaction: import('@tiptap/pm/state').Transaction;
+    }) => {
+      if (!transaction.getMeta(FORMAT_BLOCKED_META) || applyingClaudeEditsRef.current) return;
+      setNotice({
+        title: 'Formatting suggestion in the way',
+        message:
+          'Part of the selection already carries a pending formatting suggestion by another author, so that part was left unchanged. Resolve the existing suggestion first, then reformat it.',
+      });
+    };
+    editor.on('transaction', onTransaction);
+    return () => {
+      editor.off('transaction', onTransaction);
     };
   }, [editor]);
 

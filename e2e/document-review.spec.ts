@@ -185,7 +185,7 @@ test('Review: unplaceable finds are skipped and surfaced in the summary', async 
   await openReviewModal(page, 'alpha beta gamma');
   await page.locator('.review-modal .btn-primary').click();
 
-  await expect(page.locator('.review-modal-summary')).toContainText("1 couldn't be placed", {
+  await expect(page.locator('.review-modal-summary')).toContainText('1 skipped', {
     timeout: 3000,
   });
   await page.locator('.review-modal .btn-primary').click();

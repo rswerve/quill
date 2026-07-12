@@ -453,11 +453,11 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           // does not fence where changes may land.
           const { skipped } = opts.applyTrackedEdits(comment, parsed.edits, 'doc', comment.id);
           if (skipped > 0) {
-            const noun = skipped === 1 ? 'change' : 'changes';
+            const noun = skipped === 1 ? 'change was' : 'changes were';
             opts.appendAIReplyChunk(
               comment.id,
               replyId,
-              `\n\n(${skipped} ${noun} could not be located in the text and ${skipped === 1 ? 'was' : 'were'} skipped.)`,
+              `\n\n(${skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`,
             );
           }
         } else {

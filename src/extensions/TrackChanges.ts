@@ -41,6 +41,13 @@ const SKIP_TRACKING_META = 'skipTracking';
  */
 export const TRACKED_FORMAT_MARK_NAMES = new Set(['bold', 'italic', 'strike']);
 
+/**
+ * Transaction meta set when a formatting gesture skipped spans owned by
+ * another author's pending format suggestion, so the UI can tell the user
+ * why part of the selection was left unchanged.
+ */
+export const FORMAT_BLOCKED_META = 'trackedFormatBlocked';
+
 export const TrackedInsert = Mark.create({
   name: 'tracked_insert',
   inclusive: true,
@@ -237,6 +244,17 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
                   });
                   void step;
                 });
+                // Editing-mode formatting over a pending format suggestion
+                // manually overrides part of what that suggestion did — cancel
+                // the changed mark out of the span's recorded delta (dropping
+                // the marker when nothing remains) so the card and Reject keep
+                // describing a real, reversible difference. Marks the delta
+                // never touched are the user's own business and leave the
+                // suggestion alone. History transactions restore old markers
+                // verbatim and must not be re-reconciled.
+                if (formatType && !tr.getMeta('history$')) {
+                  reconcileFormatDeltas(tr, formatType);
+                }
               }
               origDispatch(tr);
             }
@@ -731,6 +749,68 @@ function composeDelta(
 type FormatIdentity = Omit<FormatDataTracked, 'delta'>;
 
 /**
+ * Reconcile pending tracked_format deltas with formatting applied while
+ * suggesting mode is OFF. A raw editing-mode bold/italic/strike change over a
+ * marker span makes the recorded delta stale: unbolding text whose suggestion
+ * says "adds bold" must shrink that delta (the manual edit did what Reject
+ * would have), or the card keeps advertising a change that no longer exists
+ * and Accept/Reject stop being distinguishable. Only marks present in the
+ * delta are cancelled; an independent editing-mode mark change never enters
+ * a suggestion. Appends marker rewrites to the SAME transaction, so the
+ * user's gesture and the reconciliation undo together.
+ */
+function reconcileFormatDeltas(
+  tr: import('@tiptap/pm/state').Transaction,
+  formatType: MarkType,
+): void {
+  tr.steps.forEach((step, i) => {
+    if (
+      !(step instanceof AddMarkStep || step instanceof RemoveMarkStep) ||
+      !TRACKED_FORMAT_MARK_NAMES.has(step.mark.type.name)
+    ) {
+      return;
+    }
+    const isAdd = step instanceof AddMarkStep;
+    const name = step.mark.type.name;
+    // The doc this step applied to; mark steps keep positions stable, so a
+    // range here maps to the current doc through the steps after i.
+    const before = tr.docs[i];
+    const mapAfter = tr.mapping.slice(i + 1);
+    before.nodesBetween(step.from, step.to, (node, pos) => {
+      if (!node.isText) return;
+      // Only segments whose format state actually changed matter.
+      const hasMark = step.mark.isInSet(node.marks);
+      if (isAdd ? hasMark : !hasMark) return;
+      const marker = node.marks.find((m) => m.type === formatType);
+      const data = marker?.attrs.dataTracked as FormatDataTracked | undefined;
+      if (!marker || !data || data.status !== 'pending') return;
+      const inDelta = isAdd
+        ? data.delta?.removes?.includes(name)
+        : data.delta?.adds?.includes(name);
+      if (!inDelta) return;
+
+      const adds = (data.delta?.adds ?? []).filter((n) => !(!isAdd && n === name));
+      const removes = (data.delta?.removes ?? []).filter((n) => !(isAdd && n === name));
+      const from = mapAfter.map(Math.max(pos, step.from), 1);
+      const to = mapAfter.map(Math.min(pos + node.nodeSize, step.to), -1);
+      if (to <= from) return;
+      if (adds.length === 0 && removes.length === 0) {
+        tr.removeMark(from, to, formatType);
+      } else {
+        tr.addMark(
+          from,
+          to,
+          formatType.create({
+            dataTracked: { ...data, delta: { adds, removes } },
+            changeId: data.id,
+          }),
+        );
+      }
+    });
+  });
+}
+
+/**
  * Rebuild one scoped AddMarkStep/RemoveMarkStep as tracked formatting: apply
  * the real format change per allowed segment and stamp/compose a
  * tracked_format marker recording the net delta. Positions come pre-mapped
@@ -747,7 +827,7 @@ function applyFormatStep(
     formatType: MarkType;
     authorID: string;
     originCommentId: string | null;
-    gesture: { identity: FormatIdentity | null };
+    gesture: { identity: FormatIdentity | null; blocked: boolean };
   },
 ): void {
   const { insertType, formatType, authorID, originCommentId, gesture } = ctx;
@@ -782,7 +862,9 @@ function applyFormatStep(
 
     if (pendingMarker && pendingMarker.authorID !== authorID) {
       // v1 cross-author policy: another author's pending format suggestion
-      // owns this span — skip it; the gesture proceeds on the other segments.
+      // owns this span — skip it; the gesture proceeds on the other segments
+      // and the transaction is flagged so the UI can say why.
+      gesture.blocked = true;
       return;
     }
 
@@ -928,7 +1010,10 @@ function transformForTracking(
   let lastInsertEnd: number | null = null;
   // One toolbar gesture may emit several scoped mark steps (unsetBold over
   // disjoint bold runs); sharing this identity keeps them one suggestion.
-  const formatGesture: { identity: FormatIdentity | null } = { identity: null };
+  const formatGesture: { identity: FormatIdentity | null; blocked: boolean } = {
+    identity: null,
+    blocked: false,
+  };
 
   for (const step of tr.steps) {
     const newTrStepsBefore = newTr.steps.length;
@@ -1140,6 +1225,10 @@ function transformForTracking(
     }
 
     rebase(step, newTrStepsBefore);
+  }
+
+  if (formatGesture.blocked) {
+    newTr.setMeta(FORMAT_BLOCKED_META, true);
   }
 
   // Place cursor:

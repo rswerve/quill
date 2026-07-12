@@ -221,6 +221,30 @@ describe('trackedEdits helpers', () => {
       expect(placed).toEqual([{ kind: 'text', from: 12, to: 17, replace: 'G' }]);
     });
 
+    it('skips format ops whose target already matches the requested state', () => {
+      // Bolding already-bold text mints no marker in the engine; counting it
+      // as applied would report suggestions that produce no cards.
+      editor = makeEditor('<p><strong>alpha</strong> beta</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'alpha', format: { bold: true } },
+        { find: 'beta', format: { italic: false } },
+        { find: 'beta', format: { bold: true, italic: false } },
+      ]);
+      expect(skipped).toBe(2);
+      expect(placed).toEqual([
+        {
+          kind: 'format',
+          from: 7,
+          to: 11,
+          marks: [
+            { mark: 'bold', set: true },
+            { mark: 'italic', set: false },
+          ],
+        },
+      ]);
+    });
+
     it('skips a format op that overlaps a text replacement from the same block', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;

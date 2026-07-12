@@ -188,6 +188,13 @@ export function planEdits(
         skipped++;
         continue;
       }
+      // A fully-satisfied op (bolding already-bold text) would mint no marker
+      // in the engine; counting it as applied would report suggestions that
+      // produce no cards. Skip it so the summary stays honest.
+      if (!formatOpChangesState(doc, at.from, at.to, marks)) {
+        skipped++;
+        continue;
+      }
       formats.push({ kind: 'format', from: at.from, to: at.to, marks });
       continue;
     }
@@ -224,6 +231,24 @@ export function planEdits(
 
   placed.sort((a, b) => b.from - a.from);
   return { placed, skipped };
+}
+
+/** Whether applying `marks` over the range would change any text node's state. */
+function formatOpChangesState(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+  marks: Array<{ mark: FormatMarkName; set: boolean }>,
+): boolean {
+  let changes = false;
+  doc.nodesBetween(from, to, (node) => {
+    if (changes || !node.isText) return;
+    changes = marks.some(({ mark, set }) => {
+      const has = node.marks.some((m) => m.type.name === mark);
+      return set ? !has : has;
+    });
+  });
+  return changes;
 }
 
 function rangeHasForeignPendingFormat(

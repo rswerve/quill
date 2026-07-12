@@ -184,7 +184,14 @@ describe('tracked formatting (suggesting mode)', () => {
     editor.chain().setTextSelection({ from: 1, to: 4 }).toggleBold().run();
 
     editor.commands.setTrackChangesAuthor('bob');
+    let blockedMeta = false;
+    editor.on('transaction', ({ transaction }) => {
+      if (transaction.getMeta('trackedFormatBlocked')) blockedMeta = true;
+    });
     editor.chain().setTextSelection({ from: 1, to: 7 }).toggleItalic().run();
+    // The gesture that skipped foreign spans flags its transaction so the UI
+    // can tell the user why part of the selection was left unchanged.
+    expect(blockedMeta).toBe(true);
 
     // alice's span is untouched; bob's suggestion covers only the free text.
     expect(textHasMark(editor, 'abc', 'italic')).toBe(false);
@@ -264,6 +271,52 @@ describe('tracked formatting (suggesting mode)', () => {
     // Three text nodes (a / italic b / c) but one logical span in the read
     // model — same delta, contiguous.
     expect(segmentShapes(changes[0])).toEqual([{ text: 'abc', adds: ['bold'], removes: [] }]);
+  });
+
+  it('editing-mode unbold cancels the pending suggestion that added the bold', () => {
+    // Codex adversarial repro: suggest bold, switch to Editing, unbold — the
+    // stale marker kept advertising "bold added" over plain text and Accept /
+    // Reject became indistinguishable.
+    editor = makeEditor();
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+    editor.commands.setTrackChangesEnabled(false);
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(false);
+    expect(formatChanges(editor)).toHaveLength(0);
+
+    // One undo restores the manual unbold AND the suggestion marker together.
+    editor.commands.undo();
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(true);
+    expect(formatChanges(editor)).toHaveLength(1);
+  });
+
+  it('an independent editing-mode mark change never enters the suggestion delta', () => {
+    editor = makeEditor();
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+    editor.commands.setTrackChangesEnabled(false);
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleItalic().run();
+
+    const changes = formatChanges(editor);
+    expect(changes).toHaveLength(1);
+    expect(segmentShapes(changes[0])).toEqual([{ text: 'Hello', adds: ['bold'], removes: [] }]);
+
+    // Rejecting the suggestion strips only its bold; the user's own italic stays.
+    editor.commands.rejectChange(changes[0].id);
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(false);
+    expect(textHasMark(editor, 'Hello', 'italic')).toBe(true);
+  });
+
+  it('a partial editing-mode unbold shrinks the suggestion to the untouched span', () => {
+    editor = makeEditor();
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+    editor.commands.setTrackChangesEnabled(false);
+    editor.chain().setTextSelection({ from: 1, to: 4 }).toggleBold().run();
+
+    expect(textHasMark(editor, 'Hel', 'bold')).toBe(false);
+    const changes = formatChanges(editor);
+    expect(changes).toHaveLength(1);
+    expect(segmentShapes(changes[0])).toEqual([{ text: 'lo', adds: ['bold'], removes: [] }]);
   });
 
   it('does not track formatting when suggesting mode is off', () => {

@@ -30,7 +30,7 @@ function doneSummary(phase: Extract<ReviewPhase, { status: 'done' }>): string {
     );
   }
   if (phase.skipped > 0) {
-    parts.push(`${phase.skipped} couldn't be placed`);
+    parts.push(`${phase.skipped} skipped (not found, already as proposed, or conflicting)`);
   }
   return parts.length > 0 ? parts.join(' · ') : 'No comments or suggestions were made.';
 }
