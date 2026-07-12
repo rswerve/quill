@@ -243,8 +243,14 @@
 
 /* ── Non-color tokens (shared across themes) ────────────────────── */
 :root {
-  --font-serif: 'Playfair Display', Georgia, serif;
-  --font-sans: 'Lato', system-ui, sans-serif;
+  --font-serif: 'Petrona Variable', Georgia, serif;
+  --font-sans: 'Mulish Variable', system-ui, sans-serif;
+  /* Document typography, driven by the toolbar's Font selector (see
+     utils/typography.ts — inline overrides on :root). Headings keep a
+     serif-contrast partner face by decision; UI chrome stays on the
+     tokens above and never follows the document selection. */
+  --font-doc-body: var(--font-sans);
+  --font-doc-heading: var(--font-serif);
 
   /* Document typography is em-based against --text-doc-base (pinned on the
      editor scroll area) so the zoom wrapper's percentage font-size scales
@@ -785,7 +791,7 @@ body,
   outline: none;
   /* Layout minimum so an empty document keeps a comfortable page-sized surface */
   min-height: 912px;
-  font-family: var(--font-sans);
+  font-family: var(--font-doc-body);
   font-size: var(--text-body);
   font-weight: 400;
   line-height: 1.35;
@@ -801,7 +807,7 @@ body,
 }
 
 .ProseMirror h1 {
-  font-family: var(--font-serif);
+  font-family: var(--font-doc-heading);
   font-size: var(--text-doc-title);
   font-weight: 500;
   color: var(--color-ink);
@@ -811,7 +817,7 @@ body,
 }
 
 .ProseMirror h2 {
-  font-family: var(--font-serif);
+  font-family: var(--font-doc-heading);
   font-size: var(--text-doc-h2);
   font-weight: 500;
   color: var(--color-ink);
@@ -821,7 +827,7 @@ body,
 }
 
 .ProseMirror h3 {
-  font-family: var(--font-serif);
+  font-family: var(--font-doc-heading);
   font-size: 1.037037em; /* 14 / 13.5 */
   font-weight: 500;
   color: var(--color-ink);
@@ -1847,6 +1853,38 @@ del.track-delete {
 .comment-reply-cancelled p {
   color: var(--color-ink-mid);
   font-size: 13px;
+}
+
+/* ── Font controls (toolbar) ────────────────────────────────────── */
+/* Document Font / Size selectors, labeled per Maz ("Font", "Size").
+   Same labeled-select idiom as the footer's Model/Effort pickers, sized
+   for the toolbar row. font: inherit because selects don't inherit type. */
+.font-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 2px;
+}
+.font-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-ink-mid);
+  font-size: var(--text-ui);
+  white-space: nowrap;
+}
+.font-control-select {
+  height: 26px;
+  min-width: 88px;
+  padding: 0 18px 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-chrome);
+  color: var(--color-ink-mid);
+  font: inherit;
+}
+.font-control-select-size {
+  min-width: 56px;
 }
 
 /* ── Footer bindings (Claude session / reference folder) ───────── */

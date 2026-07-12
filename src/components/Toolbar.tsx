@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import { toolbarSelectionStore } from './Editor';
+import {
+  DOC_FONTS,
+  DOC_FONT_SIZES,
+  applyDocTypography,
+  loadDocFont,
+  loadDocFontSize,
+  saveDocTypography,
+  type DocFontId,
+  type DocFontSize,
+} from '../utils/typography';
 
 /**
  * Schemes a link mark is allowed to carry. Anything else — most importantly
@@ -248,6 +258,56 @@ function ToggleSwitch({
       </span>
       <span className="mode-switch-label">{on ? labelOn : labelOff}</span>
     </button>
+  );
+}
+
+/**
+ * Document Font / Size selectors. Like the theme, the choice is global and
+ * persisted; it styles the page typography only (UI chrome has its own
+ * tokens). Selection applies immediately via :root CSS variables.
+ */
+function FontControls() {
+  const [font, setFont] = useState<DocFontId>(loadDocFont);
+  const [size, setSize] = useState<DocFontSize>(loadDocFontSize);
+
+  useEffect(() => {
+    applyDocTypography(font, size);
+    saveDocTypography(font, size);
+  }, [font, size]);
+
+  return (
+    <div className="font-controls">
+      <label className="font-control">
+        <span className="font-control-label">Font</span>
+        <select
+          className="font-control-select"
+          value={font}
+          onChange={(e) => setFont(e.target.value as DocFontId)}
+          title="Document font"
+        >
+          {DOC_FONTS.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="font-control">
+        <span className="font-control-label">Size</span>
+        <select
+          className="font-control-select font-control-select-size"
+          value={String(size)}
+          onChange={(e) => setSize(Number(e.target.value) as DocFontSize)}
+          title="Document text size"
+        >
+          {DOC_FONT_SIZES.map((s) => (
+            <option key={s} value={String(s)}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
   );
 }
 
@@ -557,6 +617,10 @@ export default function Toolbar({
         <CodeIcon />
       </ToolbarButton>
       <LinkButton editor={editor} />
+
+      <Divider />
+
+      <FontControls />
 
       <Divider />
 
