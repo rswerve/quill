@@ -121,11 +121,16 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).not.toContain('Edit ONLY the highlighted text');
   });
 
-  it('tells Claude formatting-only changes cannot be expressed as edits', () => {
+  it('documents format edits for formatting-only changes (replacing the old refusal rule)', () => {
     const prompt = buildPrompt(makeComment([]), 'bold this', 'doc body', RANGES, null, null);
-    expect(prompt).toContain('Formatting-only changes');
-    expect(prompt).toContain('CANNOT be expressed as find/replace edits');
-    expect(prompt).toContain('do NOT emit an edits block with identical "find" and "replace"');
+    expect(prompt).toContain('use a "format" edit instead of "replace"');
+    expect(prompt).toContain('"bold", "italic", "strikethrough"');
+    expect(prompt).toContain('either "replace" or "format", never both');
+    // Inexpressible styles still get an honest prose answer, and the old
+    // identical-find/replace trap stays outlawed.
+    expect(prompt).toContain('Underline and other styles beyond those three cannot be suggested');
+    expect(prompt).toContain('Never emit an edits block with identical "find" and "replace"');
+    expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
   });
 
   it('always sends the full document — no diff branch even with intact context', () => {

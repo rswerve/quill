@@ -145,14 +145,38 @@ export interface TrackedFormatChange extends TrackedChangeBase {
 export type TrackedChangeInfo = TrackedTextChange | TrackedFormatChange;
 
 /**
- * One quote-based edit Claude proposes inside a comment: replace the first
- * occurrence of the plaintext `find` (within the scoped range) with `replace`.
- * An empty `find` is a pure insertion; an empty `replace` is a pure deletion.
+ * One quote-based text edit Claude proposes: replace the first occurrence of
+ * the plaintext `find` (within the scoped range) with `replace`. An empty
+ * `find` is a pure insertion; an empty `replace` is a pure deletion.
  */
-export interface QuillEdit {
+export interface QuillTextEdit {
   find: string;
   replace: string;
 }
+
+/**
+ * The style toggles of a formatting edit: true turns a style on over the
+ * matched text, false turns it off; absent keys are untouched. Protocol names
+ * are writer-facing («strikethrough»); the engine maps them to mark names.
+ */
+export interface QuillFormatOp {
+  bold?: boolean;
+  italic?: boolean;
+  strikethrough?: boolean;
+}
+
+/**
+ * One formatting edit Claude proposes: apply `format` to the first occurrence
+ * of the plaintext `find`. Pure formatting — `find` must be non-empty and an
+ * edit carries either `replace` or `format`, never both.
+ */
+export interface QuillFormatEdit {
+  find: string;
+  format: QuillFormatOp;
+}
+
+/** One edit inside a quill-edits block: a text replacement XOR a format op. */
+export type QuillEdit = QuillTextEdit | QuillFormatEdit;
 
 /** The parsed contents of a ```quill-edits fenced block in Claude's reply. */
 export interface QuillEditsBlock {

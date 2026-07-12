@@ -136,7 +136,7 @@ export function buildReviewPrompt(
       'To propose concrete text changes (applied as tracked suggestions the user accepts or rejects one by one), append a fenced block:',
       '',
       '```quill-edits',
-      '{"summary":"<one short sentence describing what you changed>","edits":[{"find":"<exact original substring>","replace":"<new text>"}]}',
+      '{"summary":"<one short sentence describing what you changed>","edits":[{"find":"<exact original substring>","replace":"<new text>"},{"find":"<exact substring to restyle>","format":{"bold":true}}]}',
       '```',
     );
   }
@@ -150,6 +150,7 @@ export function buildReviewPrompt(
   if (options.makeSuggestions) {
     respond.push(
       '- To delete text, use an empty "replace". To insert, set "find" to a short unique substring and include it at the start of "replace".',
+      '- For formatting-only changes, use a "format" edit instead of "replace": {"find":"<exact substring>","format":{"bold":true,"italic":false}}. true turns a style on, false turns it off; supported styles are "bold", "italic", "strikethrough". An edit carries either "replace" or "format", never both, and a format edit needs a non-empty "find".',
     );
   }
   if (options.makeComments && options.makeSuggestions) {

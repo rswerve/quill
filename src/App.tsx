@@ -295,7 +295,15 @@ export default function App() {
       if (!ed) return { applied: 0, skipped: edits.length };
 
       const range = resolveScopeRange(ed.state.doc, comment, scope);
-      const { placed, skipped } = planEdits(ed.state.doc, range.from, range.to, edits);
+      // Claude's author id doubles as the cross-author filter: format ops
+      // touching another author's pending format suggestion are skipped whole.
+      const { placed, skipped } = planEdits(
+        ed.state.doc,
+        range.from,
+        range.to,
+        edits,
+        CLAUDE_AUTHOR_ID,
+      );
 
       const trackStorage = (
         ed.storage as unknown as Record<string, { enabled: boolean; authorID: string }>
@@ -310,7 +318,17 @@ export default function App() {
         ed.commands.setTrackChangesOrigin(originCommentId ?? null);
         for (const e of placed) {
           // Back-to-front: applying a later edit doesn't shift earlier offsets.
-          ed.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
+          if (e.kind === 'format') {
+            // One chain = one transaction = one gesture, so the engine mints
+            // a single format suggestion per edit (with origin stamped).
+            let chain = ed.chain().setTextSelection({ from: e.from, to: e.to });
+            for (const op of e.marks) {
+              chain = op.set ? chain.setMark(op.mark) : chain.unsetMark(op.mark);
+            }
+            chain.run();
+          } else {
+            ed.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
+          }
           applied++;
         }
       } finally {

@@ -6,6 +6,7 @@ import {
   TrackChanges,
   TrackedInsert,
   TrackedDelete,
+  TrackedFormat,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import {
@@ -26,6 +27,7 @@ function makeEditor(content: string) {
       Image.configure({ inline: true }),
       TrackedInsert,
       TrackedDelete,
+      TrackedFormat,
       TrackChanges,
     ],
     content,
@@ -142,7 +144,7 @@ describe('trackedEdits helpers', () => {
       expect(placed).toHaveLength(2);
       // Back-to-front: gamma (later) comes first.
       expect(placed[0].from).toBeGreaterThan(placed[1].from);
-      expect(placed[0].replace).toBe('G');
+      expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G' });
     });
 
     it('skips a text-identical edit (formatting-only ask) instead of placing it', () => {
@@ -167,7 +169,112 @@ describe('trackedEdits helpers', () => {
       ]);
       expect(skipped).toBe(1);
       expect(placed).toHaveLength(1);
-      expect(placed[0].replace).toBe('G');
+      expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G' });
+    });
+  });
+
+  describe('planEdits format ops', () => {
+    it('places a format edit with mapped mark names (strikethrough → strike)', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'beta', format: { bold: true, strikethrough: false } },
+      ]);
+      expect(skipped).toBe(0);
+      expect(placed).toEqual([
+        {
+          kind: 'format',
+          from: 7,
+          to: 11,
+          marks: [
+            { mark: 'bold', set: true },
+            { mark: 'strike', set: false },
+          ],
+        },
+      ]);
+    });
+
+    it('skips malformed entries: both replace and format, neither, empty find, no known styles', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'beta', replace: 'B', format: { bold: true } } as never,
+        { find: 'beta' } as never,
+        { find: '', format: { bold: true } },
+        { find: 'beta', format: { underline: true } as never },
+      ]);
+      expect(skipped).toBe(4);
+      expect(placed).toHaveLength(0);
+    });
+
+    it('skips a format op that overlaps a text replacement from the same block', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        { find: 'alpha beta', replace: 'rewritten' },
+        { find: 'beta', format: { italic: true } },
+      ]);
+      expect(skipped).toBe(1);
+      expect(placed).toEqual([{ kind: 'text', from: 1, to: 11, replace: 'rewritten' }]);
+    });
+
+    it("blocks a format op touching another author's pending format suggestion", () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      // Maz suggests bolding "beta" first…
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('maz');
+      editor.chain().setTextSelection({ from: 7, to: 11 }).toggleBold().run();
+
+      const doc = editor.state.doc;
+      // …then a Claude reply proposes italicizing overlapping text.
+      const { placed, skipped } = planEdits(
+        doc,
+        0,
+        doc.content.size,
+        [
+          { find: 'beta gamma', format: { italic: true } },
+          { find: 'alpha', format: { italic: true } },
+        ],
+        'claude',
+      );
+      expect(skipped).toBe(1);
+      expect(placed).toEqual([
+        {
+          kind: 'format',
+          from: 1,
+          to: 6,
+          marks: [{ mark: 'italic', set: true }],
+        },
+      ]);
+    });
+
+    it('applies through the engine as one format suggestion with origin stamped', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed } = planEdits(doc, 0, doc.content.size, [
+        { find: 'beta', format: { bold: true } },
+      ]);
+
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('claude');
+      editor.commands.setTrackChangesOrigin('comment-9');
+      for (const e of placed) {
+        if (e.kind !== 'format') continue;
+        let chain = editor.chain().setTextSelection({ from: e.from, to: e.to });
+        for (const op of e.marks) {
+          chain = op.set ? chain.setMark(op.mark) : chain.unsetMark(op.mark);
+        }
+        chain.run();
+      }
+      editor.commands.setTrackChangesOrigin(null);
+
+      const formats = getTrackedChanges(editor).filter((c) => c.operation === 'format');
+      expect(formats).toHaveLength(1);
+      expect(formats[0]).toMatchObject({
+        authorID: 'claude',
+        status: 'pending',
+        originCommentId: 'comment-9',
+      });
     });
   });
 
@@ -188,6 +295,7 @@ describe('trackedEdits helpers', () => {
       editor.commands.setTrackChangesEnabled(true);
       editor.commands.setTrackChangesAuthor('claude');
       for (const e of placed) {
+        if (e.kind !== 'text') continue;
         editor.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
       }
       editor.commands.setTrackChangesEnabled(priorEnabled);
