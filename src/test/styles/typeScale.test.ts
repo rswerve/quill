@@ -39,8 +39,9 @@ describe('UI type scale', () => {
   it('keeps direct Studio component sizes within the handoff type scale', () => {
     const explicit = [...css.matchAll(/font-size:\s*([\d.]+)px/g)].map((match) => match[1]);
     expect(new Set(explicit)).toEqual(
-      new Set(['8.5', '9', '9.5', '10', '11', '11.5', '12', '12.5', '13', '15', '17', '18']),
+      new Set(['8.5', '9', '9.5', '10', '11', '11.5', '12', '12.5', '13', '14', '15', '17', '18']),
     );
+    expect(ruleBody('.link-editor-input')).toContain('font-size: 14px');
     expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
     expect(ruleBody('.app-modal-title')).toContain('font-size: 15px');
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');

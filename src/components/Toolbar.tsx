@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import { toolbarSelectionStore } from './Editor';
+import LinkEditor, { type LinkEditorAnchor } from './LinkEditor';
 import {
   applyLinkTarget,
+  captureLinkAtPosition,
   captureLinkTarget,
+  openLinkHref,
   removeLinkTarget,
   type LinkTarget,
 } from '../utils/linkEditing';
@@ -175,45 +178,108 @@ export const RedoIcon = () => (
   </svg>
 );
 
+function targetAnchor(
+  editor: Editor,
+  target: LinkTarget,
+  linkElement: HTMLElement | null,
+): LinkEditorAnchor {
+  if (linkElement?.isConnected) {
+    const rect = linkElement.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
+  }
+
+  const start = editor.view.coordsAtPos(target.from);
+  const end = editor.view.coordsAtPos(target.to);
+  return {
+    top: Math.min(start.top, end.top),
+    right: Math.max(start.right, end.right),
+    bottom: Math.max(start.bottom, end.bottom),
+    left: Math.min(start.left, end.left),
+  };
+}
+
+function targetLinkElement(editor: Editor, target: LinkTarget): HTMLElement | null {
+  if (!target.existing || target.to <= target.from) return null;
+  try {
+    const { node } = editor.view.domAtPos(Math.min(target.to - 1, target.from + 1));
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    return element?.closest<HTMLElement>('a[href]') ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClassName?: string }) {
-  const [open, setOpen] = useState(false);
-  const [url, setUrl] = useState('');
-  // The popover's input steals focus from the editor, so capture the target
-  // range when opening and re-apply it when the link is committed.
   const [target, setTarget] = useState<LinkTarget | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [anchor, setAnchor] = useState<LinkEditorAnchor | null>(null);
+  const activeLinkRef = useRef<HTMLElement | null>(null);
 
   const onLink = editor.isActive('link');
   const { from, to } = editor.state.selection;
   const canLink = onLink || from !== to;
 
-  const openPopover = () => {
+  const clearActiveLink = useCallback(() => {
+    activeLinkRef.current?.classList.remove('link-editor-anchor-active');
+    activeLinkRef.current = null;
+  }, []);
+
+  const openEditor = useCallback(
+    (nextTarget: LinkTarget, element: HTMLElement | null = null) => {
+      clearActiveLink();
+      const linkElement = element ?? targetLinkElement(editor, nextTarget);
+      if (linkElement) {
+        linkElement.classList.add('link-editor-anchor-active');
+        activeLinkRef.current = linkElement;
+      }
+      setTarget(nextTarget);
+      setAnchor(targetAnchor(editor, nextTarget, linkElement));
+    },
+    [clearActiveLink, editor],
+  );
+
+  const openFromSelection = useCallback(() => {
     const nextTarget = captureLinkTarget(editor);
     if (!nextTarget) return;
-    setUrl(nextTarget.href);
-    setTarget(nextTarget);
-    setOpen(true);
-  };
+    openEditor(nextTarget);
+  }, [editor, openEditor]);
 
-  const close = () => {
-    setOpen(false);
+  const close = useCallback(() => {
+    clearActiveLink();
     setTarget(null);
+    setAnchor(null);
     editor.commands.focus();
-  };
+  }, [clearActiveLink, editor]);
 
-  const apply = () => {
+  const apply = (text: string, href: string) => {
     if (!target) return;
-    applyLinkTarget(editor, target, url);
-    setOpen(false);
-    setTarget(null);
+    if (applyLinkTarget(editor, target, href, text)) close();
   };
 
   const remove = () => {
-    if (!target) return;
+    if (!target?.existing) return;
     removeLinkTarget(editor, target);
-    setOpen(false);
-    setTarget(null);
+    close();
   };
+
+  // A normal click into an existing link opens the same editor as Cmd+K.
+  useEffect(() => {
+    const editorElement = editor.view.dom;
+    const onClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const link = event.target.closest<HTMLElement>('a[href]');
+      if (!link || !editorElement.contains(link)) return;
+      event.preventDefault();
+      try {
+        const position = editor.view.posAtDOM(link, 0);
+        const nextTarget = captureLinkAtPosition(editor, position);
+        if (nextTarget) openEditor(nextTarget, link);
+      } catch {
+        // The editor may have redrawn between the click and the DOM lookup.
+      }
+    };
+    editorElement.addEventListener('click', onClick);
+    return () => editorElement.removeEventListener('click', onClick);
+  }, [editor, openEditor]);
 
   // Cmd+K from anywhere (the editor owns focus most of the time).
   useEffect(() => {
@@ -222,30 +288,40 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
         e.preventDefault();
         const nextTarget = captureLinkTarget(editor);
         if (!nextTarget) return;
-        setUrl(nextTarget.href);
-        setTarget(nextTarget);
-        setOpen(true);
+        openEditor(nextTarget);
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [editor]);
+  }, [editor, openEditor]);
 
-  // Click outside closes, like the theme selector menu.
+  // The portal is fixed to the viewport; keep it attached while any nested
+  // editor/workspace scroller moves beneath it.
   useEffect(() => {
-    if (!open) return;
-    const closeOnOutside = (e: MouseEvent) => {
-      if (!(e.target instanceof Element)) return;
-      if (!e.target.closest('.link-button-wrap')) setOpen(false);
+    if (!target) return;
+    const reposition = () => {
+      try {
+        setAnchor(targetAnchor(editor, target, activeLinkRef.current));
+      } catch {
+        close();
+      }
     };
-    document.addEventListener('mousedown', closeOnOutside);
-    return () => document.removeEventListener('mousedown', closeOnOutside);
-  }, [open]);
+    document.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    editor.on('update', reposition);
+    return () => {
+      document.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+      editor.off('update', reposition);
+    };
+  }, [close, editor, target]);
+
+  useEffect(() => () => clearActiveLink(), [clearActiveLink]);
 
   return (
     <div className="link-button-wrap">
       <ToolbarButton
-        onClick={openPopover}
+        onClick={openFromSelection}
         active={onLink}
         disabled={!canLink}
         title="Link (Cmd+K)"
@@ -253,37 +329,15 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
       >
         <LinkIcon />
       </ToolbarButton>
-      {open && (
-        <div className="link-popover" role="dialog" aria-label="Edit link">
-          <input
-            ref={inputRef}
-            className="link-popover-input"
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                apply();
-              }
-              if (e.key === 'Escape') close();
-            }}
-            placeholder="https://example.com"
-            autoFocus
-          />
-          <button
-            className="link-popover-btn link-popover-apply"
-            onClick={apply}
-            disabled={!url.trim() && !onLink}
-          >
-            {onLink ? 'Update' : 'Add link'}
-          </button>
-          {onLink && (
-            <button className="link-popover-btn" onClick={remove}>
-              Remove
-            </button>
-          )}
-        </div>
+      {target && anchor && (
+        <LinkEditor
+          target={target}
+          anchor={anchor}
+          onApply={apply}
+          onRemove={remove}
+          onOpen={(href) => void openLinkHref(href)}
+          onDismiss={close}
+        />
       )}
     </div>
   );

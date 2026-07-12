@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
-import { applyLinkTarget, captureLinkTarget, removeLinkTarget } from '../../utils/linkEditing';
+import {
+  getTrackedChanges,
+  TrackChanges,
+  TrackedDelete,
+  TrackedFormat,
+  TrackedInsert,
+} from '../../extensions/TrackChanges';
+import {
+  applyLinkTarget,
+  captureLinkAtPosition,
+  captureLinkTarget,
+  isOpenableHref,
+  removeLinkTarget,
+} from '../../utils/linkEditing';
 
 let editor: Editor | null = null;
 
@@ -25,7 +38,13 @@ describe('shared link editing', () => {
     expect(captureLinkTarget(ed)).toBeNull();
 
     ed.commands.setTextSelection({ from: 1, to: 6 });
-    expect(captureLinkTarget(ed)).toEqual({ from: 1, to: 6, href: '' });
+    expect(captureLinkTarget(ed)).toEqual({
+      from: 1,
+      to: 6,
+      href: '',
+      text: 'visit',
+      existing: false,
+    });
   });
 
   it('adds and normalizes a link on the captured selection', () => {
@@ -45,12 +64,60 @@ describe('shared link editing', () => {
     const ed = makeEditor('<p><a href="https://old.example.com">linked words</a></p>');
     ed.commands.setTextSelection(4);
     const target = captureLinkTarget(ed);
-    expect(target).toEqual({ from: 4, to: 4, href: 'https://old.example.com' });
+    expect(target).toEqual({
+      from: 1,
+      to: 13,
+      href: 'https://old.example.com',
+      text: 'linked words',
+      existing: true,
+    });
 
     applyLinkTarget(ed, target!, 'https://new.example.com');
 
     expect(ed.getHTML()).toContain('href="https://new.example.com">linked words</a>');
     expect(ed.getHTML()).not.toContain('old.example.com');
+  });
+
+  it('captures a clicked link position and updates its text and href together', () => {
+    const ed = makeEditor('<p>read <a href="https://old.example.com">the guide</a> today</p>');
+    const target = captureLinkAtPosition(ed, 8);
+
+    expect(target?.text).toBe('the guide');
+    applyLinkTarget(ed, target!, 'docs.example.com/new', 'our handbook');
+
+    expect(ed.getHTML()).toContain(
+      '<a target="_blank" rel="noopener noreferrer nofollow" href="https://docs.example.com/new">our handbook</a>',
+    );
+    expect(ed.getHTML()).not.toContain('the guide');
+  });
+
+  it('keeps the new href on a suggesting-mode display-text replacement', () => {
+    editor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: { openOnClick: false } }),
+        TrackedInsert,
+        TrackedDelete,
+        TrackedFormat,
+        TrackChanges,
+      ],
+      content: '<p>read <a href="https://old.example.com">the guide</a></p>',
+    });
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('alice');
+    editor.commands.setTextSelection(9);
+    const target = captureLinkTarget(editor);
+
+    applyLinkTarget(editor, target!, 'https://new.example.com', 'our handbook');
+
+    const html = editor.getHTML();
+    expect(html).toContain('href="https://new.example.com"><ins');
+    expect(html).toContain('href="https://old.example.com"><del');
+    const changes = getTrackedChanges(editor);
+    expect(changes).toHaveLength(2);
+    expect(changes[0].operation === 'format' ? undefined : changes[0].pairId).toBeTruthy();
+    expect(changes[0].operation === 'format' ? undefined : changes[0].pairId).toBe(
+      changes[1].operation === 'format' ? undefined : changes[1].pairId,
+    );
   });
 
   it('removes a whole cursor link without removing its text', () => {
@@ -61,5 +128,14 @@ describe('shared link editing', () => {
     removeLinkTarget(ed, target!);
 
     expect(ed.getHTML()).toBe('<p>linked words</p>');
+  });
+
+  it('only permits absolute application links to open externally', () => {
+    expect(isOpenableHref('https://example.com')).toBe(true);
+    expect(isOpenableHref('mailto:hello@example.com')).toBe(true);
+    expect(isOpenableHref('example.com')).toBe(true);
+    expect(isOpenableHref('./sibling.md')).toBe(false);
+    expect(isOpenableHref('#section')).toBe(false);
+    expect(isOpenableHref('javascript:alert(1)')).toBe(false);
   });
 });
