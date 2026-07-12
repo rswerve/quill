@@ -130,9 +130,23 @@ describe('shared link editing', () => {
     expect(ed.getHTML()).toBe('<p>linked words</p>');
   });
 
-  it('only permits absolute application links to open externally', () => {
+  it('removes multiple and partial links across one captured selection', () => {
+    const ed = makeEditor(
+      '<p><a href="https://one.example">one</a> plain <a href="https://two.example">two</a></p>',
+    );
+    ed.commands.setTextSelection({ from: 1, to: 14 });
+    const target = captureLinkTarget(ed);
+
+    removeLinkTarget(ed, target!);
+
+    expect(ed.getHTML()).toBe('<p>one plain two</p>');
+  });
+
+  it('opens only the approved external schemes', () => {
     expect(isOpenableHref('https://example.com')).toBe(true);
-    expect(isOpenableHref('mailto:hello@example.com')).toBe(true);
+    expect(isOpenableHref('http://example.com')).toBe(true);
+    expect(isOpenableHref('mailto:sam@example.com')).toBe(true);
+    expect(isOpenableHref('tel:+15551234567')).toBe(true);
     expect(isOpenableHref('example.com')).toBe(true);
     expect(isOpenableHref('./sibling.md')).toBe(false);
     expect(isOpenableHref('#section')).toBe(false);

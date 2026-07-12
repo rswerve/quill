@@ -12,6 +12,7 @@ import FindBar from './components/FindBar';
 import AppModal from './components/AppModal';
 import ReviewModal from './components/ReviewModal';
 import UpdateBanner from './components/UpdateBanner';
+import FormattingInspector from './components/FormattingInspector';
 import { useFileManager, stripTransientReplyState } from './hooks/useFileManager';
 import { useDraftAutosave } from './hooks/useDraftAutosave';
 import type { DraftSnapshot } from './hooks/useDraftAutosave';
@@ -1528,6 +1529,7 @@ export default function App() {
                   onEditorReady={setEditor}
                   onAnnotationClick={handleAnnotationClick}
                 />
+                {editor && <FormattingInspector editor={editor} />}
               </div>
               {/* Extends the scroll range only when a low-anchored card would
               otherwise be unreachable (see the spacer effect). Height 0 for

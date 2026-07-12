@@ -85,6 +85,8 @@ export function ToolbarButton({
       }}
       disabled={disabled}
       title={title}
+      aria-label={title}
+      aria-pressed={mixed ? 'mixed' : active}
     >
       {children}
     </button>

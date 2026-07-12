@@ -145,7 +145,6 @@ export function isOpenableHref(rawHref: string): boolean {
 export async function openLinkHref(rawHref: string): Promise<boolean> {
   const href = normalizeHref(rawHref);
   if (!isOpenableHref(href)) return false;
-
   try {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
     await openUrl(href);
