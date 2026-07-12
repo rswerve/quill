@@ -72,7 +72,11 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
     expect(
       base.every(({ borderStyle, borderWidth }) => borderStyle === 'none' && borderWidth === '0px'),
     ).toBe(true);
-    expect(base[0].background).not.toBe(base[1].background);
+    const alpha = (background: string) =>
+      background === 'rgba(0, 0, 0, 0)' ? 0 : Number(background.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
+    expect(alpha(base[0].background)).toBeLessThanOrEqual(0.02);
+    expect(alpha(base[1].background)).toBeLessThanOrEqual(0.02);
+    expect(base[0].color).not.toBe(base[1].color);
     expect(base[2].background).toBe('rgba(0, 0, 0, 0)');
     expect(base[3].background).toBe('rgba(0, 0, 0, 0)');
     expect(base[2].color).not.toBe(base[3].color);

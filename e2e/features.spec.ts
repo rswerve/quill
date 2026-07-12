@@ -912,8 +912,8 @@ test('multiple comments stack without overlapping', async ({ page }) => {
   const a = await cards.nth(0).boundingBox();
   const b = await cards.nth(1).boundingBox();
   expect(a && b).toBeTruthy();
-  // No overlap on the y-axis
-  expect(a!.y + a!.height).toBeLessThanOrEqual(b!.y + 1);
+  // Document order is preserved with the specified 12px minimum gap.
+  expect(b!.y - (a!.y + a!.height)).toBeGreaterThanOrEqual(11);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -927,6 +927,7 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await addCommentViaPlusButton(page, 'note');
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
+  await expect(page.locator('.annotation-connector')).toBeVisible();
 });
 
 test('Escape clears the annotation focus', async ({ page }) => {
@@ -938,6 +939,7 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('.comment-card-active')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(page.locator('.annotation-connector')).toHaveCount(0);
 });
 
 test('clicking commented text activates its card', async ({ page }) => {
@@ -1323,17 +1325,21 @@ test('comment card realigns with its anchor when zoom changes', async ({ page })
   const card = page.locator('.comment-card');
   await expect(card).toBeVisible();
 
-  const deltaAt = async () => {
-    const markTop = (await mark.boundingBox())!.y;
-    const cardTop = (await card.boundingBox())!.y;
-    return cardTop - markTop;
+  const alignmentError = async () => {
+    const markBox = (await mark.boundingBox())!;
+    const cardBox = (await card.boundingBox())!;
+    const panelBox = (await page.locator('.comments').boundingBox())!;
+    const expectedTop = Math.min(
+      Math.max(markBox.y, panelBox.y + 44),
+      panelBox.y + panelBox.height - 62 - cardBox.height,
+    );
+    return Math.abs(cardBox.y - expectedTop);
   };
 
   await setZoom(page, 0.6);
-  const deltaSmall = await deltaAt();
+  expect(await alignmentError()).toBeLessThan(2);
   await setZoom(page, 2.4);
-  const deltaLarge = await deltaAt();
-  expect(Math.abs(deltaLarge - deltaSmall)).toBeLessThan(20);
+  expect(await alignmentError()).toBeLessThan(2);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -5,6 +5,11 @@ import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
 import FormattingCard from './FormattingCard';
+import {
+  layoutAnchoredCards,
+  type AnchoredCardInput,
+  type AnchoredPanelLayout,
+} from './commentPositioning';
 
 interface CommentLayerProps {
   editor: Editor | null;
@@ -32,19 +37,15 @@ interface CommentLayerProps {
   onMaxCardBottomChange: (maxBottom: number) => void;
 }
 
-interface CardPosition {
-  cardId: string;
+interface CardCatalogEntry extends AnchoredCardInput {
   type: 'comment' | 'suggestion';
-  rawTop: number;
-  nudgedTop: number;
 }
 
 const CARD_HEIGHT_ESTIMATE = 120;
-const CARD_GAP = 8;
-// Phase B keeps the existing free-positioned cards functional below the new
-// 44px panel header. Phase C replaces this interim offset with the specified
-// in-panel card layout and scroll-sync behavior.
-const PANEL_HEADER_OFFSET = 44;
+const CARD_GAP = 12;
+const PANEL_HEADER_HEIGHT = 44;
+const PANEL_BOTTOM_CHROME_HEIGHT = 62;
+const EMPTY_LAYOUT: AnchoredPanelLayout = { positions: [], above: [], below: [] };
 
 /**
  * Extra scrollable height the document needs so the lowest comment/suggestion
@@ -100,22 +101,6 @@ function groupChanges(changes: TrackedChangeInfo[]): SuggestionGroup[] {
   return groups;
 }
 
-function stackCards(cards: CardPosition[], heightFor: (id: string) => number): CardPosition[] {
-  if (cards.length === 0) return cards;
-
-  const sorted = [...cards].sort((a, b) => a.rawTop - b.rawTop);
-  const result: CardPosition[] = [];
-  let cursor = sorted[0].rawTop;
-
-  for (const card of sorted) {
-    const nudgedTop = Math.max(card.rawTop, cursor);
-    result.push({ ...card, nudgedTop });
-    cursor = nudgedTop + heightFor(card.cardId) + CARD_GAP;
-  }
-
-  return result;
-}
-
 // Top of an annotation's in-text highlight, in scroll-area coordinates. Comments
 // and tracked changes anchor identically — they differ only in the data
 // attribute the highlight carries.
@@ -142,6 +127,20 @@ function getChangeAnchorTop(editor: Editor, changeId: string): number | null {
   return getAnchorTopBy(editor, 'data-change-id', changeId);
 }
 
+function getDocumentPositionTop(editor: Editor, position: number): number | null {
+  try {
+    const rect = editor.view.coordsAtPos(
+      Math.max(0, Math.min(position, editor.state.doc.content.size)),
+    );
+    const scrollArea = editor.view.dom.closest('.editor-scroll-area');
+    const containerRect = scrollArea?.getBoundingClientRect();
+    if (!containerRect) return null;
+    return rect.top - containerRect.top + (scrollArea?.scrollTop ?? 0);
+  } catch {
+    return null;
+  }
+}
+
 export default function CommentLayer({
   editor,
   comments,
@@ -165,10 +164,11 @@ export default function CommentLayer({
   onRejectChange,
   onMaxCardBottomChange,
 }: CommentLayerProps) {
-  const [cardPositions, setCardPositions] = useState<CardPosition[]>([]);
+  const [panelLayout, setPanelLayout] = useState<AnchoredPanelLayout>(EMPTY_LAYOUT);
   const rafRef = useRef<number>(0);
   const [showResolved, setShowResolved] = useState(false);
   const heightsRef = useRef<Map<string, number>>(new Map());
+  const cardCatalogRef = useRef<Map<string, CardCatalogEntry>>(new Map());
 
   const visibleComments = comments.filter((c) => !c.resolved);
   const resolvedComments = comments.filter((c) => c.resolved);
@@ -193,26 +193,33 @@ export default function CommentLayer({
   const editorRef = useRef(editor);
   const displayCommentsRef = useRef(displayComments);
   const suggestionGroupsRef = useRef(suggestionGroups);
+  const scrollTopRef = useRef(scrollTop);
+  const activeCommentIdRef = useRef(activeCommentId);
+  const activeSuggestionIdRef = useRef(activeSuggestionId);
   const onMaxCardBottomChangeRef = useRef(onMaxCardBottomChange);
   editorRef.current = editor;
   displayCommentsRef.current = displayComments;
   suggestionGroupsRef.current = suggestionGroups;
+  scrollTopRef.current = scrollTop;
+  activeCommentIdRef.current = activeCommentId;
+  activeSuggestionIdRef.current = activeSuggestionId;
   onMaxCardBottomChangeRef.current = onMaxCardBottomChange;
 
   const reflow = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
 
-    const rawCards: CardPosition[] = [];
+    const catalog: CardCatalogEntry[] = [];
+    let documentOrder = 0;
 
     for (const comment of displayCommentsRef.current) {
-      const top = getAnchorTop(ed, comment.id);
-      const panelTop = (top ?? comment.from * 0.5) + PANEL_HEADER_OFFSET;
-      rawCards.push({
+      const top = getAnchorTop(ed, comment.id) ?? getDocumentPositionTop(ed, comment.from);
+      catalog.push({
         cardId: comment.id,
         type: 'comment',
-        rawTop: panelTop,
-        nudgedTop: panelTop,
+        anchorTop: top ?? comment.from * 0.5,
+        height: heightsRef.current.get(comment.id) ?? CARD_HEIGHT_ESTIMATE,
+        documentOrder: documentOrder++,
       });
     }
 
@@ -222,60 +229,103 @@ export default function CommentLayer({
       const anchor = group.kind === 'replacement' ? group.del : group.change;
       const fallbackFrom =
         anchor.operation === 'format' ? (anchor.segments[0]?.from ?? 0) : anchor.from;
-      const top = getChangeAnchorTop(ed, anchor.id);
-      const panelTop = (top ?? fallbackFrom * 0.5) + PANEL_HEADER_OFFSET;
-      rawCards.push({
+      const top = getChangeAnchorTop(ed, anchor.id) ?? getDocumentPositionTop(ed, fallbackFrom);
+      catalog.push({
         cardId: group.cardId,
         type: 'suggestion',
-        rawTop: panelTop,
-        nudgedTop: panelTop,
+        anchorTop: top ?? fallbackFrom * 0.5,
+        height: heightsRef.current.get(group.cardId) ?? CARD_HEIGHT_ESTIMATE,
+        documentOrder: documentOrder++,
       });
     }
 
-    const heightFor = (id: string) => heightsRef.current.get(id) ?? CARD_HEIGHT_ESTIMATE;
-    const next = stackCards(rawCards, heightFor);
+    cardCatalogRef.current = new Map(catalog.map((entry) => [entry.cardId, entry]));
+    const liveIds = new Set(catalog.map((entry) => entry.cardId));
+    for (const id of heightsRef.current.keys()) {
+      if (!liveIds.has(id)) heightsRef.current.delete(id);
+    }
+
+    const groups = suggestionGroupsRef.current;
+    const activeSuggestionId = activeSuggestionIdRef.current;
+    const activeSuggestionCard = activeSuggestionId
+      ? groups.find(
+          (group) =>
+            group.cardId === activeSuggestionId ||
+            (group.kind === 'replacement' &&
+              (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
+        )?.cardId
+      : null;
+    const activeCardId = activeCommentIdRef.current ?? activeSuggestionCard ?? null;
+
+    const fullLayout = layoutAnchoredCards(catalog, {
+      viewportTop: Number.NEGATIVE_INFINITY,
+      viewportBottom: Number.POSITIVE_INFINITY,
+      activeCardId,
+      gap: CARD_GAP,
+    });
 
     // Lowest card bottom in document space — what App needs to size the bottom
-    // spacer so a below-fold card can be scrolled into view. Both `nudgedTop`
-    // and the measured heights are scroll-independent, so reporting this can't
+    // spacer so a below-fold card can be scrolled into view. Both positioned
+    // tops and measured heights are scroll-independent, so reporting this can't
     // feed a scroll→reflow loop.
-    const maxBottom = next.reduce((m, p) => Math.max(m, p.nudgedTop + heightFor(p.cardId)), 0);
+    const maxBottom = fullLayout.positions.reduce(
+      (maximum, position) => Math.max(maximum, position.top + position.height),
+      0,
+    );
     onMaxCardBottomChangeRef.current(maxBottom);
 
-    setCardPositions((prev) => {
-      if (
-        prev.length === next.length &&
-        prev.every((p, i) => p.cardId === next[i].cardId && p.nudgedTop === next[i].nudgedTop)
-      ) {
-        return prev;
-      }
-      return next;
+    const panelHeight = containerRef.current?.clientHeight ?? 0;
+    const viewportTop = scrollTopRef.current;
+    const viewportBottom =
+      panelHeight > PANEL_HEADER_HEIGHT + PANEL_BOTTOM_CHROME_HEIGHT
+        ? scrollTopRef.current + panelHeight
+        : Number.POSITIVE_INFINITY;
+    const next = layoutAnchoredCards(catalog, {
+      viewportTop,
+      viewportBottom,
+      cardViewportTop: scrollTopRef.current + PANEL_HEADER_HEIGHT,
+      cardViewportBottom:
+        panelHeight > PANEL_HEADER_HEIGHT + PANEL_BOTTOM_CHROME_HEIGHT
+          ? scrollTopRef.current + panelHeight - PANEL_BOTTOM_CHROME_HEIGHT
+          : Number.POSITIVE_INFINITY,
+      activeCardId,
+      gap: CARD_GAP,
     });
-  }, []);
 
-  const containerEl = containerRef.current;
+    setPanelLayout((previous) => {
+      const samePositions =
+        previous.positions.length === next.positions.length &&
+        previous.positions.every(
+          (position, index) =>
+            position.cardId === next.positions[index].cardId &&
+            position.top === next.positions[index].top &&
+            position.height === next.positions[index].height,
+        );
+      const sameAbove =
+        previous.above.length === next.above.length &&
+        previous.above.every((id, index) => id === next.above[index]);
+      const sameBelow =
+        previous.below.length === next.below.length &&
+        previous.below.every((id, index) => id === next.below[index]);
+      return samePositions && sameAbove && sameBelow ? previous : next;
+    });
+  }, [containerRef]);
+
   useEffect(() => {
+    const containerEl = containerRef.current;
     if (!containerEl) return;
     const observer = new ResizeObserver(() => {
       const cards = containerEl.querySelectorAll<HTMLElement>('[data-card-id]');
       let changed = false;
-      const seen = new Set<string>();
       cards.forEach((el) => {
         const id = el.dataset.cardId;
         if (!id) return;
-        seen.add(id);
         const h = el.getBoundingClientRect().height;
         if (heightsRef.current.get(id) !== h) {
           heightsRef.current.set(id, h);
           changed = true;
         }
       });
-      for (const id of heightsRef.current.keys()) {
-        if (!seen.has(id)) {
-          heightsRef.current.delete(id);
-          changed = true;
-        }
-      }
       if (changed) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = requestAnimationFrame(reflow);
@@ -285,7 +335,7 @@ export default function CommentLayer({
     const cards = containerEl.querySelectorAll<HTMLElement>('[data-card-id]');
     cards.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [containerEl, reflow, cardPositions.length]);
+  }, [containerRef, reflow, panelLayout.positions.length]);
 
   useEffect(() => {
     if (!editor) return;
@@ -309,7 +359,16 @@ export default function CommentLayer({
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(reflow);
-  }, [comments, trackedChanges, showResolved, zoom, reflow]);
+  }, [
+    comments,
+    trackedChanges,
+    showResolved,
+    zoom,
+    scrollTop,
+    activeCommentId,
+    activeSuggestionId,
+    reflow,
+  ]);
 
   // The comment column has no scrollbar of its own — cards are translated by
   // the editor's scrollTop. So a wheel gesture over the column would otherwise
@@ -320,6 +379,39 @@ export default function CommentLayer({
     if (scrollArea) scrollArea.scrollTop += e.deltaY;
   }, []);
 
+  const revealPinnedCard = useCallback(
+    (cardId: string) => {
+      const entry = cardCatalogRef.current.get(cardId);
+      const scrollArea = editorRef.current?.view.dom.closest('.editor-scroll-area');
+      if (!entry || !scrollArea) return;
+      scrollArea.scrollTo({
+        top: Math.max(0, entry.anchorTop - PANEL_HEADER_HEIGHT - CARD_GAP),
+        behavior: 'smooth',
+      });
+      if (entry.type === 'comment') {
+        if (activeCommentId !== cardId) onActivate(cardId);
+      } else if (activeSuggestionId !== cardId) {
+        onActivateSuggestion(cardId);
+      }
+    },
+    [activeCommentId, activeSuggestionId, onActivate, onActivateSuggestion],
+  );
+
+  const positionById = new Map(
+    panelLayout.positions.map((position) => [position.cardId, position]),
+  );
+  const activeSuggestionCardId = activeSuggestionId
+    ? suggestionGroups.find(
+        (group) =>
+          group.cardId === activeSuggestionId ||
+          (group.kind === 'replacement' &&
+            (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
+      )?.cardId
+    : null;
+  const activePanelCardId = activeCommentId ?? activeSuggestionCardId ?? null;
+  const activePosition = activePanelCardId ? positionById.get(activePanelCardId) : null;
+  const openCardCount = visibleComments.length + suggestionGroups.length;
+
   return (
     <div
       className="comment-layer comments"
@@ -328,7 +420,7 @@ export default function CommentLayer({
     >
       <header className="comments-head">
         <h3>Comments</h3>
-        <span className="count-pill">{visibleComments.length}</span>
+        <span className="count-pill">{openCardCount}</span>
         <span className="grow" />
         <button
           className="filter"
@@ -351,19 +443,44 @@ export default function CommentLayer({
         </button>
       </header>
 
+      {panelLayout.above.length > 0 && (
+        <button
+          className="offscreen-pill offscreen-pill-above"
+          onClick={() => revealPinnedCard(panelLayout.above.at(-1)!)}
+        >
+          ▲ {panelLayout.above.length} above
+        </button>
+      )}
+      {panelLayout.below.length > 0 && (
+        <button
+          className="offscreen-pill offscreen-pill-below"
+          onClick={() => revealPinnedCard(panelLayout.below[0])}
+        >
+          ▼ {panelLayout.below.length} below
+        </button>
+      )}
+
+      {activePosition && (
+        <span
+          className="annotation-connector"
+          style={{ top: activePosition.top - scrollTop }}
+          aria-hidden
+        />
+      )}
+
       {/* Cards are positioned in document space (anchor offset + scrollTop), so
           translating this wrapper by -scrollTop makes the comment column scroll
           in lockstep with the editor — like Google Docs. */}
       <div className="comment-layer-scroll" style={{ transform: `translateY(${-scrollTop}px)` }}>
         {displayComments.map((comment) => {
-          const pos = cardPositions.find((p) => p.cardId === comment.id);
-          const top = pos?.nudgedTop ?? comment.from * 0.5;
+          const position = positionById.get(comment.id);
+          if (!position) return null;
           return (
             <CommentCard
               key={comment.id}
               comment={comment}
               isActive={comment.id === activeCommentId}
-              top={top}
+              top={position.top}
               onReply={onReply}
               onAIReplyRequest={onAIReplyRequest}
               onCancelAIReply={onCancelAIReply}
@@ -378,7 +495,8 @@ export default function CommentLayer({
         })}
 
         {suggestionGroups.map((group) => {
-          const pos = cardPositions.find((p) => p.cardId === group.cardId);
+          const position = positionById.get(group.cardId);
+          if (!position) return null;
           // Provenance link: the change's origin comment, only while it still
           // exists (a deleted comment degrades to no chip and no outline).
           const originId =
@@ -401,7 +519,7 @@ export default function CommentLayer({
                 }
                 originComment={originComment}
                 originActive={originActive}
-                top={pos?.nudgedTop ?? del.from * 0.5}
+                top={position.top}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
@@ -418,7 +536,7 @@ export default function CommentLayer({
                 isActive={change.id === activeSuggestionId}
                 originComment={originComment}
                 originActive={originActive}
-                top={pos?.nudgedTop ?? (change.segments[0]?.from ?? 0) * 0.5}
+                top={position.top}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
@@ -434,7 +552,7 @@ export default function CommentLayer({
               isActive={change.id === activeSuggestionId}
               originComment={originComment}
               originActive={originActive}
-              top={pos?.nudgedTop ?? change.from * 0.5}
+              top={position.top}
               onAccept={onAcceptChange}
               onReject={onRejectChange}
               onClick={onActivateSuggestion}

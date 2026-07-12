@@ -2375,6 +2375,7 @@ del.track-delete {
   min-height: 0;
   flex: 1;
   display: flex;
+  overflow: hidden;
 }
 .workspace.doc-scroll {
   min-width: 0;
@@ -2415,14 +2416,14 @@ del.track-delete {
   padding: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
 }
 .comments-head {
   height: 44px;
   flex: none;
-  z-index: 5;
+  z-index: 8;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -2466,6 +2467,44 @@ del.track-delete {
   right: 0;
   bottom: 0;
   left: 0;
+}
+.offscreen-pill {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 30px;
+  z-index: 7;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+.offscreen-pill:hover {
+  color: var(--text-muted);
+}
+.offscreen-pill-above {
+  top: 44px;
+  border-bottom: 1px solid var(--badge-format-bg);
+}
+.offscreen-pill-below {
+  bottom: 62px;
+  border-top: 1px solid var(--badge-format-bg);
+}
+.annotation-connector {
+  position: absolute;
+  left: -44px;
+  width: 44px;
+  height: 1px;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--hl-line);
+  opacity: 0.5;
 }
 .comments-compose-chrome {
   position: absolute;
@@ -2729,6 +2768,11 @@ del.track-delete {
 }
 .comments .suggestion-card-format {
   border-left-color: var(--sugg-format);
+}
+.comments .comment-card-active,
+.comments .suggestion-card-active {
+  border-color: var(--accent) !important;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 :root[data-theme='gruvbox'] .comments .suggestion-card-delete {
   border-left-color: var(--removed-accent);
