@@ -4,8 +4,8 @@ import ReactDOM from 'react-dom/client';
 // the Vite pipeline: no CDN, no CSP entry, works offline.
 import '@fontsource-variable/mulish';
 import '@fontsource-variable/mulish/wght-italic.css';
-import '@fontsource-variable/petrona';
-import '@fontsource-variable/petrona/wght-italic.css';
+import '@fontsource-variable/lora';
+import '@fontsource-variable/lora/wght-italic.css';
 import App from './App';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

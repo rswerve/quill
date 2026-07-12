@@ -20,12 +20,12 @@ describe('bundled document fonts', () => {
   it('imports the variable faces with true italics in main.tsx', () => {
     expect(main).toContain("@fontsource-variable/mulish'");
     expect(main).toContain("@fontsource-variable/mulish/wght-italic.css'");
-    expect(main).toContain("@fontsource-variable/petrona'");
-    expect(main).toContain("@fontsource-variable/petrona/wght-italic.css'");
+    expect(main).toContain("@fontsource-variable/lora'");
+    expect(main).toContain("@fontsource-variable/lora/wght-italic.css'");
   });
 
   it('routes document typography through the doc variables, not the UI tokens', () => {
-    // Body text follows the Font selector…
+    // Body text follows the fixed document body token…
     expect(css).toMatch(/\.ProseMirror \{[^}]*font-family: var\(--font-doc-body\)/);
     // …headings follow the serif-contrast partner…
     for (const level of ['h1', 'h2', 'h3']) {
@@ -33,10 +33,10 @@ describe('bundled document fonts', () => {
         new RegExp(`\\.ProseMirror ${level} \\{[^}]*font-family: var\\(--font-doc-heading\\)`),
       );
     }
-    // …and the defaults resolve to the bundled pair.
+    // …and the fixed defaults resolve to the bundled pair.
     expect(css).toMatch(/--font-doc-body: var\(--font-sans\)/);
     expect(css).toMatch(/--font-doc-heading: var\(--font-serif\)/);
     expect(css).toMatch(/--font-sans: 'Mulish Variable'/);
-    expect(css).toMatch(/--font-serif: 'Petrona Variable'/);
+    expect(css).toMatch(/--font-serif: 'Lora Variable'/);
   });
 });

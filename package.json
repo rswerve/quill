@@ -41,8 +41,8 @@
     "prosemirror-view": "^1.41.9"
   },
   "dependencies": {
+    "@fontsource-variable/lora": "^5.2.8",
     "@fontsource-variable/mulish": "^5.2.8",
-    "@fontsource-variable/petrona": "^5.2.8",
     "@manuscripts/track-changes-plugin": "^2.3.10",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.0",

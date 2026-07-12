@@ -2,6 +2,7 @@ import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
 import { basename } from '../utils/path';
+import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 
 interface FooterProps {
   editor: Editor | null;
@@ -35,7 +36,7 @@ export default function Footer({
   filePath,
   isSuggesting,
   isDirty,
-  zoom = 1,
+  zoom = DEFAULT_ZOOM,
   onZoomChange,
   aiSession,
   lastKnownModel,
@@ -89,15 +90,15 @@ export default function Footer({
       <div className="footer-zoom">
         <input
           type="range"
-          min={0.6}
-          max={2.4}
+          min={MIN_ZOOM}
+          max={MAX_ZOOM}
           step={0.06}
           value={zoom}
           onChange={(e) => onZoomChange?.(parseFloat(e.target.value))}
           className="footer-zoom-slider"
           title="Zoom"
         />
-        <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(1)}>
+        <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}>
           {Math.round(zoom * 100)}%
         </span>
       </div>

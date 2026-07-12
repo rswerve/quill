@@ -190,8 +190,6 @@ test('document typography stays pinned while all six themes keep chrome vertical
   await expectType(page.locator('.toolbar-btn').first(), '13px');
   await expectType(page.locator('.mode-switch'), '12px');
   await expectType(page.locator('.theme-selector-trigger'), '12px');
-  await expectType(page.locator('.font-control').first(), '13px');
-  await expectType(page.locator('.font-control-select').first(), '13px');
   await expect(
     page.locator(
       '.editor-scroll-area button, .editor-scroll-area input, .editor-scroll-area textarea, .editor-scroll-area select',

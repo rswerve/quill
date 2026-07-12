@@ -44,6 +44,12 @@ import {
   writeClaudeEffort,
   writeClaudeModel,
 } from './utils/claudePreferences';
+import {
+  clampZoom,
+  DEFAULT_ZOOM,
+  loadZoomPreference,
+  saveZoomPreference,
+} from './utils/zoomPreference';
 import type {
   AISessionBinding,
   ClaudeEffort,
@@ -97,7 +103,7 @@ export default function App() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(loadZoomPreference);
   const [scrollTick, setScrollTick] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   // Lowest comment/suggestion card bottom (document space), reported by
@@ -251,6 +257,10 @@ export default function App() {
   // A draft left behind by a crashed/killed run, awaiting the user's
   // Recover / Discard decision.
   const [recoveryDraft, setRecoveryDraft] = useState<DraftFile | null>(null);
+
+  useEffect(() => {
+    saveZoomPreference(zoom);
+  }, [zoom]);
 
   useEffect(() => {
     void (async () => {
@@ -934,17 +944,17 @@ export default function App() {
 
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
-        setZoom((z) => Math.min(2.4, Math.round((z + 0.12) * 100) / 100));
+        setZoom((z) => clampZoom(Math.round((z + 0.12) * 100) / 100));
         return;
       }
       if (e.key === '-') {
         e.preventDefault();
-        setZoom((z) => Math.max(0.6, Math.round((z - 0.12) * 100) / 100));
+        setZoom((z) => clampZoom(Math.round((z - 0.12) * 100) / 100));
         return;
       }
       if (e.key === '0') {
         e.preventDefault();
-        setZoom(1);
+        setZoom(DEFAULT_ZOOM);
         return;
       }
     }
@@ -1434,7 +1444,7 @@ export default function App() {
         isSuggesting={isSuggesting}
         isDirty={isDirty}
         zoom={zoom}
-        onZoomChange={setZoom}
+        onZoomChange={(nextZoom) => setZoom(clampZoom(nextZoom))}
         aiSession={aiSession}
         lastKnownModel={lastKnownModel}
         claudeModel={claudeModel}
