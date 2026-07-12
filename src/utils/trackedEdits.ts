@@ -155,10 +155,17 @@ export function planEdits(
   let skipped = 0;
 
   for (const edit of edits) {
+    // Model JSON is untrusted: entries can be null, non-objects, or carry
+    // wrongly-typed fields. Structurally invalid entries count as skipped
+    // instead of throwing mid-apply.
+    if (typeof edit !== 'object' || edit === null || typeof edit.find !== 'string') {
+      skipped++;
+      continue;
+    }
     const replace = (edit as QuillTextEdit).replace;
     const format = (edit as QuillFormatEdit).format;
     const hasReplace = typeof replace === 'string';
-    const hasFormat = typeof format === 'object' && format !== null;
+    const hasFormat = typeof format === 'object' && format !== null && !Array.isArray(format);
 
     // XOR: an edit is a text replacement or a format op, never both/neither.
     if (hasReplace === hasFormat) {

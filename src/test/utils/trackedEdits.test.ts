@@ -207,6 +207,20 @@ describe('trackedEdits helpers', () => {
       expect(placed).toHaveLength(0);
     });
 
+    it('skips structurally invalid entries from untrusted model JSON without throwing', () => {
+      editor = makeEditor('<p>alpha beta gamma</p>');
+      const doc = editor.state.doc;
+      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+        null as never,
+        'not an edit' as never,
+        { find: 42, replace: 'X' } as never,
+        { find: 'beta', format: ['bold'] as never },
+        { find: 'gamma', replace: 'G' },
+      ]);
+      expect(skipped).toBe(4);
+      expect(placed).toEqual([{ kind: 'text', from: 12, to: 17, replace: 'G' }]);
+    });
+
     it('skips a format op that overlaps a text replacement from the same block', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
