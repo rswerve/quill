@@ -228,7 +228,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
 
     const chip = page.locator('.suggestion-card-replace .suggestion-origin-chip');
     await expect(chip).toBeVisible();
-    await expect(chip).toHaveText('↳ comment');
+    await expect(chip).toHaveText('↳ from comment');
     // The chip's tooltip carries the origin comment's anchor text.
     await expect(chip).toHaveAttribute('title', 'hello');
 
@@ -263,7 +263,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
     const reopened = await saveNewAndReopen(page);
     const card = reopened.locator('.suggestion-card-replace');
     await expect(card).toBeVisible();
-    await expect(card.locator('.suggestion-origin-chip')).toHaveText('↳ comment');
+    await expect(card.locator('.suggestion-origin-chip')).toHaveText('↳ from comment');
   });
 
   test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {

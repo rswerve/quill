@@ -244,13 +244,16 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await expectType(page.locator('.comment-time').first(), '11px');
   await expectType(page.locator('.comment-anchor-text').first(), '13px');
   await expectType(page.locator('.comment-reply-text').first(), '13px');
-  await expectType(page.locator('.ai-badge'), '11px');
-  await expectType(page.locator('.suggestion-type-badge.insert'), '12.5px');
-  await expectType(page.locator('.suggestion-type-badge.delete'), '12.5px');
-  await expectType(page.locator('.suggestion-type-badge.replace'), '12.5px');
-  await expectType(page.locator('.suggestion-type-badge.format'), '12.5px');
-  await expectType(page.locator('.formatting-change-description'), '12.5px');
-  await expectType(page.locator('.suggestion-accept-btn').first(), '13px');
+  await expectType(page.locator('.comment-reply .ai-badge'), '11px');
+  await expectType(page.locator('.suggestion-ai-badge').first(), '8.5px', {
+    checkUiFamily: false,
+  });
+  await expectType(page.locator('.suggestion-type-badge.insert'), '10px');
+  await expectType(page.locator('.suggestion-type-badge.delete'), '10px');
+  await expectType(page.locator('.suggestion-type-badge.replace'), '10px');
+  await expectType(page.locator('.suggestion-type-badge.format'), '10px');
+  await expectType(page.locator('.formatting-change-description'), '12px');
+  await expectType(page.locator('.suggestion-accept-btn').first(), '12px');
 
   await expectType(page.locator('.comment-reply-trigger'), '13px');
   await page.locator('.comment-reply-trigger').click();

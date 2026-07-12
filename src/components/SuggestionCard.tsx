@@ -1,5 +1,6 @@
 import type { Comment, TrackedTextChange } from '../types';
-import { timeAgo, clip } from '../utils/format';
+import { clip } from '../utils/format';
+import SuggestionCardShell from './SuggestionCardShell';
 
 interface SuggestionCardProps {
   change: TrackedTextChange;
@@ -30,68 +31,30 @@ export default function SuggestionCard({
 }: SuggestionCardProps) {
   const isInsert = change.operation === 'insert';
   const preview = clip(change.text);
-  const authorLabel = change.authorID === 'claude' ? 'Claude (AI)' : change.authorID;
 
   return (
-    <div
-      className={`suggestion-card ${isInsert ? 'suggestion-card-insert' : 'suggestion-card-delete'}${isActive ? ' suggestion-card-active' : ''}${originActive ? ' card-origin-active' : ''}`}
-      style={{ top }}
-      data-card-id={change.id}
+    <SuggestionCardShell
+      cardId={change.id}
+      kind={isInsert ? 'insert' : 'delete'}
+      label={isInsert ? 'Insertion' : 'Deletion'}
+      authorID={change.authorID}
+      createdAt={change.createdAt}
+      isActive={isActive}
+      originComment={originComment}
+      originActive={originActive}
+      top={top}
+      acceptTitle="Accept change"
+      rejectTitle="Reject change"
+      onAccept={() => onAccept(change.id)}
+      onReject={() => onReject(change.id)}
       onClick={() => onClick(change.id)}
+      onActivateComment={onActivateComment}
     >
-      <div className="comment-thread-line" />
-
-      <div className="comment-header">
-        <span className={`suggestion-type-badge ${isInsert ? 'insert' : 'delete'}`}>
-          {isInsert ? 'Insertion' : 'Deletion'}
-        </span>
-        <span className="comment-author">{authorLabel}</span>
-        <span className="comment-time">{timeAgo(change.createdAt)}</span>
-      </div>
-
       {preview && (
-        <div className="comment-anchor-text">
-          {'"'}
-          {preview}
-          {'"'}
+        <div className="suggestion-preview">
+          <span className={isInsert ? 'suggestion-added' : 'suggestion-removed'}>“{preview}”</span>
         </div>
       )}
-
-      {originComment && (
-        <button
-          className="suggestion-origin-chip"
-          title={clip(originComment.anchorText, 80)}
-          onClick={(e) => {
-            e.stopPropagation();
-            onActivateComment(originComment.id);
-          }}
-        >
-          ↳ comment
-        </button>
-      )}
-
-      <div className="suggestion-actions">
-        <button
-          className="suggestion-accept-btn"
-          title="Accept change"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAccept(change.id);
-          }}
-        >
-          ✓ Accept
-        </button>
-        <button
-          className="suggestion-reject-btn"
-          title="Reject change"
-          onClick={(e) => {
-            e.stopPropagation();
-            onReject(change.id);
-          }}
-        >
-          ✗ Reject
-        </button>
-      </div>
-    </div>
+    </SuggestionCardShell>
   );
 }

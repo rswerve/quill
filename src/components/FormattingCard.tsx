@@ -1,5 +1,6 @@
 import type { Comment, FormatSegment, TrackedFormatChange } from '../types';
-import { timeAgo, clip } from '../utils/format';
+import { clip } from '../utils/format';
+import SuggestionCardShell from './SuggestionCardShell';
 
 interface FormattingCardProps {
   change: TrackedFormatChange;
@@ -50,70 +51,31 @@ export default function FormattingCard({
   onClick,
   onActivateComment,
 }: FormattingCardProps) {
-  const authorLabel = change.authorID === 'claude' ? 'Claude (AI)' : change.authorID;
   const description = describeFormatSegments(change.segments);
   const preview = previewText(change.segments);
 
   return (
-    <div
-      className={`suggestion-card suggestion-card-format${isActive ? ' suggestion-card-active' : ''}${originActive ? ' card-origin-active' : ''}`}
-      style={{ top }}
-      data-card-id={change.id}
+    <SuggestionCardShell
+      cardId={change.id}
+      kind="format"
+      label="Formatting"
+      authorID={change.authorID}
+      createdAt={change.createdAt}
+      isActive={isActive}
+      originComment={originComment}
+      originActive={originActive}
+      top={top}
+      acceptTitle="Accept formatting"
+      rejectTitle="Reject formatting"
+      onAccept={() => onAccept(change.id)}
+      onReject={() => onReject(change.id)}
       onClick={() => onClick(change.id)}
+      onActivateComment={onActivateComment}
     >
-      <div className="comment-thread-line" />
-
-      <div className="comment-header">
-        <span className="suggestion-type-badge format">Formatting</span>
-        <span className="comment-author">{authorLabel}</span>
-        <span className="comment-time">{timeAgo(change.createdAt)}</span>
+      <div className="suggestion-preview suggestion-format-preview">
+        <div className="formatting-change-description">{description}</div>
+        {preview && <div className="suggestion-format-quote">“{preview}”</div>}
       </div>
-
-      <div className="formatting-change-description">{description}</div>
-
-      {preview && (
-        <div className="comment-anchor-text">
-          {'"'}
-          {preview}
-          {'"'}
-        </div>
-      )}
-
-      {originComment && (
-        <button
-          className="suggestion-origin-chip"
-          title={clip(originComment.anchorText, 80)}
-          onClick={(event) => {
-            event.stopPropagation();
-            onActivateComment(originComment.id);
-          }}
-        >
-          ↳ comment
-        </button>
-      )}
-
-      <div className="suggestion-actions">
-        <button
-          className="suggestion-accept-btn"
-          title="Accept formatting"
-          onClick={(event) => {
-            event.stopPropagation();
-            onAccept(change.id);
-          }}
-        >
-          ✓ Accept
-        </button>
-        <button
-          className="suggestion-reject-btn"
-          title="Reject formatting"
-          onClick={(event) => {
-            event.stopPropagation();
-            onReject(change.id);
-          }}
-        >
-          ✗ Reject
-        </button>
-      </div>
-    </div>
+    </SuggestionCardShell>
   );
 }

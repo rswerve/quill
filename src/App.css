@@ -2705,6 +2705,194 @@ del.track-delete {
   color: var(--accent-text);
 }
 
+/* ── Studio suggestion cards (Phase C1) ───────────────────────── */
+.comments .comment-card,
+.comments .suggestion-card {
+  left: 14px;
+  right: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.comments .suggestion-card {
+  border-left-width: 3px;
+}
+.comments .suggestion-card-insert {
+  border-left-color: var(--added);
+}
+.comments .suggestion-card-delete {
+  border-left-color: var(--removed);
+}
+.comments .suggestion-card-replace {
+  border-left-color: var(--sugg-replace);
+}
+.comments .suggestion-card-format {
+  border-left-color: var(--sugg-format);
+}
+:root[data-theme='gruvbox'] .comments .suggestion-card-delete {
+  border-left-color: var(--removed-accent);
+}
+
+.suggestion-head {
+  padding: 11px 13px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.suggestion-head .comment-author {
+  flex: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.suggestion-head .comment-time {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.suggestion-head-spacer {
+  flex: 1;
+}
+
+.suggestion-type-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.suggestion-type-badge.insert {
+  background: var(--added-bg);
+  color: var(--added);
+}
+.suggestion-type-badge.delete {
+  background: var(--removed-bg);
+  color: var(--removed);
+}
+.suggestion-type-badge.replace {
+  background: var(--accent-soft);
+  color: var(--sugg-replace);
+}
+.suggestion-type-badge.format {
+  background: var(--badge-format-bg);
+  color: var(--sugg-format);
+}
+
+.suggestion-ai-badge {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b3a4a;
+  color: #83a598;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.suggestion-origin-chip {
+  width: max-content;
+  margin: 8px 13px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.suggestion-origin-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.suggestion-preview {
+  padding: 9px 13px 12px;
+  color: var(--text-body);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-style: italic;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.suggestion-added {
+  color: var(--added);
+}
+.suggestion-removed {
+  color: var(--removed);
+  text-decoration: line-through;
+}
+:root[data-theme='gruvbox'] .suggestion-removed {
+  text-decoration-color: var(--removed-accent);
+}
+.suggestion-replace-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.suggestion-format-preview {
+  font-style: normal;
+}
+.formatting-change-description {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+}
+.suggestion-format-quote {
+  color: var(--text-body);
+  font-style: italic;
+}
+
+.suggestion-actions {
+  margin: 0;
+  gap: 0;
+  display: flex;
+  border-top: 1px solid var(--badge-format-bg);
+}
+.suggestion-accept-btn,
+.suggestion-reject-btn {
+  min-height: 0;
+  flex: 1;
+  padding: 9px 0;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+}
+.suggestion-accept-btn {
+  border-right: 1px solid var(--badge-format-bg);
+  color: var(--added);
+}
+.suggestion-reject-btn {
+  color: var(--removed);
+}
+.suggestion-accept-btn:hover,
+.suggestion-accept-btn:active {
+  background: var(--added-bg);
+}
+.suggestion-reject-btn:hover,
+.suggestion-reject-btn:active {
+  background: var(--removed-bg);
+}
+
 /* ── Scrollbar ──────────────────────────────────────────────────── */
 .editor-scroll-area::-webkit-scrollbar {
   width: 6px;

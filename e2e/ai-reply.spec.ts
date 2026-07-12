@@ -436,7 +436,8 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   // A suggestion card appears for the edit, authored by Claude.
   const card = page.locator('.suggestion-card');
   await expect(card.first()).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.suggestion-card .comment-author').first()).toHaveText('Claude (AI)');
+  await expect(page.locator('.suggestion-card .comment-author').first()).toHaveText('Claude');
+  await expect(page.locator('.suggestion-card .suggestion-ai-badge').first()).toHaveText('AI');
   // The new text "cats are" shows up as a tracked insertion in the document.
   await expect(page.locator('.ProseMirror')).toContainText('cats are');
 });

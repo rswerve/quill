@@ -1,5 +1,6 @@
 import type { Comment, TrackedTextChange } from '../types';
-import { timeAgo, clip } from '../utils/format';
+import { clip } from '../utils/format';
+import SuggestionCardShell from './SuggestionCardShell';
 
 interface ReplacementCardProps {
   /** The delete half — the original text being replaced. */
@@ -34,72 +35,29 @@ export default function ReplacementCard({
   onActivateComment,
 }: ReplacementCardProps) {
   const pairId = del.pairId ?? ins.pairId ?? del.id;
-  const authorLabel = del.authorID === 'claude' ? 'Claude (AI)' : del.authorID;
 
   return (
-    <div
-      className={`suggestion-card suggestion-card-replace${isActive ? ' suggestion-card-active' : ''}${originActive ? ' card-origin-active' : ''}`}
-      style={{ top }}
-      data-card-id={pairId}
+    <SuggestionCardShell
+      cardId={pairId}
+      kind="replace"
+      label="Replacement"
+      authorID={del.authorID}
+      createdAt={del.createdAt}
+      isActive={isActive}
+      originComment={originComment}
+      originActive={originActive}
+      top={top}
+      acceptTitle="Accept replacement"
+      rejectTitle="Reject replacement"
+      onAccept={() => onAccept(pairId)}
+      onReject={() => onReject(pairId)}
       onClick={() => onClick(pairId)}
+      onActivateComment={onActivateComment}
     >
-      <div className="comment-thread-line" />
-
-      <div className="comment-header">
-        <span className="suggestion-type-badge replace">Replacement</span>
-        <span className="comment-author">{authorLabel}</span>
-        <span className="comment-time">{timeAgo(del.createdAt)}</span>
+      <div className="suggestion-preview suggestion-replace-preview">
+        <span className="suggestion-replace-old suggestion-removed">“{clip(del.text)}”</span>
+        <span className="suggestion-replace-new suggestion-added">“{clip(ins.text)}”</span>
       </div>
-
-      <div className="comment-anchor-text">
-        <span className="suggestion-replace-old">
-          {'"'}
-          {clip(del.text)}
-          {'"'}
-        </span>
-        <span className="suggestion-replace-arrow"> → </span>
-        <span className="suggestion-replace-new">
-          {'"'}
-          {clip(ins.text)}
-          {'"'}
-        </span>
-      </div>
-
-      {originComment && (
-        <button
-          className="suggestion-origin-chip"
-          title={clip(originComment.anchorText, 80)}
-          onClick={(e) => {
-            e.stopPropagation();
-            onActivateComment(originComment.id);
-          }}
-        >
-          ↳ comment
-        </button>
-      )}
-
-      <div className="suggestion-actions">
-        <button
-          className="suggestion-accept-btn"
-          title="Accept replacement"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAccept(pairId);
-          }}
-        >
-          ✓ Accept
-        </button>
-        <button
-          className="suggestion-reject-btn"
-          title="Reject replacement"
-          onClick={(e) => {
-            e.stopPropagation();
-            onReject(pairId);
-          }}
-        >
-          ✗ Reject
-        </button>
-      </div>
-    </div>
+    </SuggestionCardShell>
   );
 }

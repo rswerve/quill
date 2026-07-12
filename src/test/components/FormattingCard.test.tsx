@@ -52,12 +52,13 @@ describe('FormattingCard', () => {
     );
 
     expect(screen.getByText('Formatting')).toBeInTheDocument();
-    expect(screen.getByText('Claude (AI)')).toBeInTheDocument();
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.getByText('AI')).toBeInTheDocument();
     expect(
       screen.getByText('bold added · italic added · strikethrough removed'),
     ).toBeInTheDocument();
     expect(screen.getByText(/one … two/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '↳ comment' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '↳ from comment' })).toHaveAttribute(
       'title',
       originComment.anchorText,
     );
@@ -87,7 +88,7 @@ describe('FormattingCard', () => {
     fireEvent.click(card!);
     fireEvent.click(screen.getByTitle('Accept formatting'));
     fireEvent.click(screen.getByTitle('Reject formatting'));
-    fireEvent.click(screen.getByRole('button', { name: '↳ comment' }));
+    fireEvent.click(screen.getByRole('button', { name: '↳ from comment' }));
 
     expect(onClick).toHaveBeenCalledWith('fmt1');
     expect(onAccept).toHaveBeenCalledWith('fmt1');
