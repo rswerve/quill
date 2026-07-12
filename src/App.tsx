@@ -101,6 +101,7 @@ export default function App() {
   const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
     null,
   );
+  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
@@ -1120,33 +1121,38 @@ export default function App() {
         }
       }
       setActiveAnnotation({ kind: 'comment', id: comment.id });
+      setCommentComposerOpen(false);
+      editor.commands.clearPendingCommentRange();
       setPendingCommentSelection(null);
       setSelectionInfo(null);
     },
     [pendingCommentSelection, selectionInfo, editor, addComment, addReply, aiSession, claudeReply],
   );
 
-  const handleSelectionChange = useCallback((info: SelectionInfo | null) => {
-    setSelectionInfo(info);
-    if (info) setPendingCommentSelection(info);
-  }, []);
+  const handleSelectionChange = useCallback(
+    (info: SelectionInfo | null) => {
+      setSelectionInfo(info);
+      if (info && !commentComposerOpen) setPendingCommentSelection(info);
+    },
+    [commentComposerOpen],
+  );
 
   // Keep the target range visibly highlighted while the comment composer is
   // open (the native selection highlight disappears when the textarea takes
   // focus). Rendered as a decoration, so it never dirties the document; it
   // hands off to the real comment mark on submit and vanishes on cancel.
-  const handleComposingChange = useCallback(
-    (composing: boolean) => {
-      if (!editor || editor.isDestroyed) return;
-      if (composing) {
-        const sel = pendingCommentSelection ?? selectionInfo;
-        if (sel) editor.commands.setPendingCommentRange(sel.from, sel.to);
-      } else {
-        editor.commands.clearPendingCommentRange();
-      }
-    },
-    [editor, pendingCommentSelection, selectionInfo],
-  );
+  const handleOpenCommentComposer = useCallback(() => {
+    const sel = selectionInfo;
+    if (!sel || !editor || editor.isDestroyed) return;
+    setPendingCommentSelection(sel);
+    editor.commands.setPendingCommentRange(sel.from, sel.to);
+    setCommentComposerOpen(true);
+  }, [editor, selectionInfo]);
+
+  const handleCancelCommentComposer = useCallback(() => {
+    if (editor && !editor.isDestroyed) editor.commands.clearPendingCommentRange();
+    setCommentComposerOpen(false);
+  }, [editor]);
 
   const handleDeleteComment = useCallback(
     (commentId: string) => {
@@ -1418,6 +1424,7 @@ export default function App() {
             </div>
 
             {selectionInfo &&
+              !commentComposerOpen &&
               (() => {
                 const commentLayer = commentLayerRef.current;
                 const commentLayerRect = commentLayer?.getBoundingClientRect();
@@ -1432,9 +1439,7 @@ export default function App() {
                     top={top}
                     left={left}
                     visible
-                    author={AUTHOR}
-                    onAdd={handleAddComment}
-                    onComposingChange={handleComposingChange}
+                    onOpen={handleOpenCommentComposer}
                   />
                 );
               })()}
@@ -1447,6 +1452,7 @@ export default function App() {
             activeSuggestionId={activeSuggestionId}
             containerRef={commentLayerRef}
             trackedChanges={trackedChanges}
+            commentComposer={commentComposerOpen ? pendingCommentSelection : null}
             scrollTop={scrollTop}
             zoom={zoom}
             onReply={(id, text) => {
@@ -1464,6 +1470,8 @@ export default function App() {
             onActivateSuggestion={handleActivateSuggestion}
             onAcceptChange={handleAcceptChange}
             onRejectChange={handleRejectChange}
+            onSubmitComment={handleAddComment}
+            onCancelComment={handleCancelCommentComposer}
             onMaxCardBottomChange={setMaxCardBottom}
           />
         </div>

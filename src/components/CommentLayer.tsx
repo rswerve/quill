@@ -5,6 +5,8 @@ import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
 import FormattingCard from './FormattingCard';
+import CommentComposerCard from './CommentComposerCard';
+import type { SelectionInfo } from './Editor';
 import {
   layoutAnchoredCards,
   type AnchoredCardInput,
@@ -18,6 +20,7 @@ interface CommentLayerProps {
   activeSuggestionId: string | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   trackedChanges: TrackedChangeInfo[];
+  commentComposer: SelectionInfo | null;
   scrollTop: number;
   zoom: number;
   onReply: (commentId: string, text: string) => void;
@@ -32,19 +35,22 @@ interface CommentLayerProps {
   onActivateSuggestion: (id: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
+  onSubmitComment: (text: string) => void;
+  onCancelComment: () => void;
   /** Lowest card bottom in document space (`nudgedTop + measuredHeight`), so
    *  App can extend the scroll range to reach a below-fold card. 0 when empty. */
   onMaxCardBottomChange: (maxBottom: number) => void;
 }
 
 interface CardCatalogEntry extends AnchoredCardInput {
-  type: 'comment' | 'suggestion';
+  type: 'comment' | 'suggestion' | 'composer';
 }
 
 const CARD_HEIGHT_ESTIMATE = 120;
 const CARD_GAP = 12;
 const PANEL_HEADER_HEIGHT = 44;
 const PANEL_BOTTOM_CHROME_HEIGHT = 62;
+const COMMENT_COMPOSER_CARD_ID = 'comment-composer';
 const EMPTY_LAYOUT: AnchoredPanelLayout = { positions: [], above: [], below: [] };
 
 /**
@@ -148,6 +154,7 @@ export default function CommentLayer({
   activeSuggestionId,
   containerRef,
   trackedChanges,
+  commentComposer,
   scrollTop,
   zoom,
   onReply,
@@ -162,6 +169,8 @@ export default function CommentLayer({
   onActivateSuggestion,
   onAcceptChange,
   onRejectChange,
+  onSubmitComment,
+  onCancelComment,
   onMaxCardBottomChange,
 }: CommentLayerProps) {
   const [panelLayout, setPanelLayout] = useState<AnchoredPanelLayout>(EMPTY_LAYOUT);
@@ -193,6 +202,7 @@ export default function CommentLayer({
   const editorRef = useRef(editor);
   const displayCommentsRef = useRef(displayComments);
   const suggestionGroupsRef = useRef(suggestionGroups);
+  const commentComposerRef = useRef(commentComposer);
   const scrollTopRef = useRef(scrollTop);
   const activeCommentIdRef = useRef(activeCommentId);
   const activeSuggestionIdRef = useRef(activeSuggestionId);
@@ -200,6 +210,7 @@ export default function CommentLayer({
   editorRef.current = editor;
   displayCommentsRef.current = displayComments;
   suggestionGroupsRef.current = suggestionGroups;
+  commentComposerRef.current = commentComposer;
   scrollTopRef.current = scrollTop;
   activeCommentIdRef.current = activeCommentId;
   activeSuggestionIdRef.current = activeSuggestionId;
@@ -208,6 +219,15 @@ export default function CommentLayer({
   const reflow = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
+
+    // A composer can be replaced by a comment card without changing the
+    // number of positioned children. Read every live card before laying out
+    // so that swap (and first paint) never uses the generic height estimate;
+    // ResizeObserver continues to cover later reply/streaming growth.
+    containerRef.current?.querySelectorAll<HTMLElement>('[data-card-id]').forEach((element) => {
+      const id = element.dataset.cardId;
+      if (id) heightsRef.current.set(id, element.getBoundingClientRect().height);
+    });
 
     const catalog: CardCatalogEntry[] = [];
     let documentOrder = 0;
@@ -239,6 +259,18 @@ export default function CommentLayer({
       });
     }
 
+    const composer = commentComposerRef.current;
+    if (composer) {
+      const top = getDocumentPositionTop(ed, composer.from);
+      catalog.push({
+        cardId: COMMENT_COMPOSER_CARD_ID,
+        type: 'composer',
+        anchorTop: top ?? composer.from * 0.5,
+        height: heightsRef.current.get(COMMENT_COMPOSER_CARD_ID) ?? 208,
+        documentOrder: documentOrder++,
+      });
+    }
+
     cardCatalogRef.current = new Map(catalog.map((entry) => [entry.cardId, entry]));
     const liveIds = new Set(catalog.map((entry) => entry.cardId));
     for (const id of heightsRef.current.keys()) {
@@ -255,7 +287,9 @@ export default function CommentLayer({
               (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
         )?.cardId
       : null;
-    const activeCardId = activeCommentIdRef.current ?? activeSuggestionCard ?? null;
+    const activeCardId = composer
+      ? COMMENT_COMPOSER_CARD_ID
+      : (activeCommentIdRef.current ?? activeSuggestionCard ?? null);
 
     const fullLayout = layoutAnchoredCards(catalog, {
       viewportTop: Number.NEGATIVE_INFINITY,
@@ -335,7 +369,14 @@ export default function CommentLayer({
     const cards = containerEl.querySelectorAll<HTMLElement>('[data-card-id]');
     cards.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [containerRef, reflow, panelLayout.positions.length]);
+  }, [
+    containerRef,
+    reflow,
+    panelLayout.positions.length,
+    comments,
+    trackedChanges,
+    commentComposer,
+  ]);
 
   useEffect(() => {
     if (!editor) return;
@@ -362,6 +403,7 @@ export default function CommentLayer({
   }, [
     comments,
     trackedChanges,
+    commentComposer,
     showResolved,
     zoom,
     scrollTop,
@@ -390,7 +432,7 @@ export default function CommentLayer({
       });
       if (entry.type === 'comment') {
         if (activeCommentId !== cardId) onActivate(cardId);
-      } else if (activeSuggestionId !== cardId) {
+      } else if (entry.type === 'suggestion' && activeSuggestionId !== cardId) {
         onActivateSuggestion(cardId);
       }
     },
@@ -408,7 +450,9 @@ export default function CommentLayer({
             (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
       )?.cardId
     : null;
-  const activePanelCardId = activeCommentId ?? activeSuggestionCardId ?? null;
+  const activePanelCardId = commentComposer
+    ? COMMENT_COMPOSER_CARD_ID
+    : (activeCommentId ?? activeSuggestionCardId ?? null);
   const activePosition = activePanelCardId ? positionById.get(activePanelCardId) : null;
   const openCardCount = visibleComments.length + suggestionGroups.length;
 
@@ -472,6 +516,15 @@ export default function CommentLayer({
           translating this wrapper by -scrollTop makes the comment column scroll
           in lockstep with the editor — like Google Docs. */}
       <div className="comment-layer-scroll" style={{ transform: `translateY(${-scrollTop}px)` }}>
+        {commentComposer && positionById.has(COMMENT_COMPOSER_CARD_ID) && (
+          <CommentComposerCard
+            quote={commentComposer.text}
+            top={positionById.get(COMMENT_COMPOSER_CARD_ID)!.top}
+            onSubmit={onSubmitComment}
+            onCancel={onCancelComment}
+          />
+        )}
+
         {displayComments.map((comment) => {
           const position = positionById.get(comment.id);
           if (!position) return null;

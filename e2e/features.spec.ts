@@ -738,8 +738,11 @@ test('clicking "+" opens compose box', async ({ page }) => {
   await page.keyboard.type('hello world');
   await selectAll(page);
   await page.locator('.add-comment-btn').click();
-  await expect(page.locator('.add-comment-compose')).toBeVisible();
+  const composer = page.locator('.comments .add-comment-compose');
+  await expect(composer).toBeVisible();
+  await expect(composer.locator('.comment-composer-quote')).toContainText('hello world');
   await expect(page.locator('.add-comment-compose textarea')).toBeFocused();
+  await expect(page.locator('.comments .general-comment-field')).toBeVisible();
 });
 
 test('selected range stays highlighted while composing a comment', async ({ page }) => {

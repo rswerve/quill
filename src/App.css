@@ -2527,6 +2527,101 @@ del.track-delete {
   font-size: 12.5px;
 }
 
+/* Selection comments use the hybrid flow from Design Q4: the trigger stays
+   beside the selection, while the captured quote and composer live in the
+   anchored panel-card system. */
+.studio-body .add-comment-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-app);
+  color: var(--accent-text);
+  box-shadow: 0 4px 14px rgba(50, 42, 25, 0.14);
+}
+:root[data-theme='gruvbox'] .studio-body .add-comment-btn {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.36);
+}
+.studio-body .add-comment-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+}
+.comments .add-comment-compose {
+  position: absolute;
+  right: 14px;
+  left: 14px;
+  width: auto;
+  z-index: 5;
+  overflow: hidden;
+  border: 1px solid var(--border-card);
+  border-left: 3px solid var(--hl-line);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 5px 18px rgba(50, 42, 25, 0.1);
+}
+:root[data-theme='gruvbox'] .comments .add-comment-compose {
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.28);
+}
+.comment-composer-quote {
+  margin: 12px 12px 0;
+  padding: 7px 9px;
+  overflow: hidden;
+  border-left: 2px solid var(--hl-line);
+  background: var(--hl-bg);
+  color: var(--text-muted);
+  font-family: var(--font-doc-body);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comments .anchored-comment-composer .comment-reply-input {
+  width: calc(100% - 24px);
+  min-height: 68px;
+  margin: 10px 12px 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.45;
+  resize: none;
+}
+.comments .anchored-comment-composer .comment-reply-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--hl-bg);
+}
+.comment-composer-tip {
+  padding: 5px 13px 0;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.comments .comment-composer-actions {
+  margin-top: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-card);
+}
+.comments .comment-composer-actions .btn-primary,
+.comments .comment-composer-actions .btn-ghost {
+  height: 27px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+.comments .comment-composer-actions .btn-primary {
+  background: var(--accent);
+  color: var(--bg-app);
+}
+.comments .comment-composer-actions .btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.comments .comment-composer-actions .btn-primary:disabled {
+  opacity: 0.45;
+}
+
 .workspace .find-bar {
   top: 16px;
   right: 20px;
