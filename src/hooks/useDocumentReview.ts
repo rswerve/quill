@@ -1,6 +1,12 @@
 import { useCallback, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AISessionBinding, QuillCommentsBlock, QuillEdit, QuillEditsBlock } from '../types';
+import type {
+  AISessionBinding,
+  ClaudeRunOptions,
+  QuillCommentsBlock,
+  QuillEdit,
+  QuillEditsBlock,
+} from '../types';
 import type { ChunkEvent, PromptContext } from './useClaudeReply';
 
 export const EDITS_FENCE = '```quill-edits';
@@ -36,6 +42,8 @@ interface UseDocumentReviewOptions {
   addClaudeComment: (find: string, body: string, model?: string) => boolean;
   /** Report the model named by this spawn's authoritative stream init event. */
   onModelObserved?: (model: string) => void;
+  /** Global model/effort choices, read immediately before each spawn. */
+  getRunOptions?: () => ClaudeRunOptions;
 }
 
 interface UseDocumentReviewReturn {
@@ -329,6 +337,9 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
         }
       };
 
+      // Read after asynchronous preflight work so a just-changed footer choice
+      // governs the child we are about to spawn.
+      const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
       if (mock) {
         const token = mock.spawn(
           {
@@ -337,6 +348,8 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
             prompt,
             addDir: contextFolder,
             allowCreate: fresh,
+            model: runOptions.model,
+            effort: runOptions.effort,
           },
           dispatch,
         );
@@ -355,6 +368,8 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
           prompt,
           addDir: contextFolder,
           allowCreate: fresh,
+          model: runOptions.model,
+          effort: runOptions.effort,
           onEvent: channel,
         });
         // A cancel that landed during the spawn await orphaned this child —

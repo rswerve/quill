@@ -39,8 +39,16 @@ import {
   syncRecentMenu,
 } from './utils/recentFiles';
 import { sidecarPath } from './utils/sidecarPath';
+import {
+  readClaudeRunOptions,
+  writeClaudeEffort,
+  writeClaudeModel,
+} from './utils/claudePreferences';
 import type {
   AISessionBinding,
+  ClaudeEffort,
+  ClaudeModelAlias,
+  ClaudeRunOptions,
   Comment,
   DraftFile,
   EditScope,
@@ -110,6 +118,26 @@ export default function App() {
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
+  const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
+    () => readClaudeRunOptions(window.localStorage).model,
+  );
+  const [claudeEffort, setClaudeEffort] = useState<ClaudeEffort | null>(
+    () => readClaudeRunOptions(window.localStorage).effort,
+  );
+  const claudeRunOptionsRef = useRef<ClaudeRunOptions>({
+    model: claudeModel,
+    effort: claudeEffort,
+  });
+  claudeRunOptionsRef.current = { model: claudeModel, effort: claudeEffort };
+  const getClaudeRunOptions = useCallback(() => claudeRunOptionsRef.current, []);
+  const handleClaudeModelChange = useCallback((model: ClaudeModelAlias | null) => {
+    setClaudeModel(model);
+    writeClaudeModel(window.localStorage, model);
+  }, []);
+  const handleClaudeEffortChange = useCallback((effort: ClaudeEffort | null) => {
+    setClaudeEffort(effort);
+    writeClaudeEffort(window.localStorage, effort);
+  }, []);
   // Folder of reference documents linked to this doc (persisted in the
   // sidecar). Claude gets read access to it plus a file manifest per ask.
   const [contextFolder, setContextFolder] = useState<string | null>(null);
@@ -325,6 +353,7 @@ export default function App() {
       () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
       [editor],
     ),
+    getRunOptions: getClaudeRunOptions,
   });
 
   // Doc-scoped wrapper for the full-document review: the same tracked-edit
@@ -366,6 +395,7 @@ export default function App() {
     applyTrackedEdits: applyDocTrackedEdits,
     addClaudeComment,
     onModelObserved: setLastKnownModel,
+    getRunOptions: getClaudeRunOptions,
   });
 
   // Re-render on scroll so the comment column tracks the document (cards are
@@ -1351,6 +1381,10 @@ export default function App() {
         onZoomChange={setZoom}
         aiSession={aiSession}
         lastKnownModel={lastKnownModel}
+        claudeModel={claudeModel}
+        claudeEffort={claudeEffort}
+        onClaudeModelChange={handleClaudeModelChange}
+        onClaudeEffortChange={handleClaudeEffortChange}
         onOpenSessionPicker={() => setPickerOpen(true)}
         onUnlinkSession={handleUnlinkSession}
         contextFolder={contextFolder}

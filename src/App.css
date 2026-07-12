@@ -1659,8 +1659,37 @@ del.track-delete {
 .footer-model {
   color: var(--color-ink-light);
   font-size: var(--text-meta);
-  margin-right: 6px;
   white-space: nowrap;
+}
+
+.footer-claude-setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-ink-light);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.footer-claude-setting select {
+  min-width: 70px;
+  max-width: 88px;
+  height: 22px;
+  padding: 0 18px 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-ink-mid);
+  font: inherit;
+}
+
+.footer-claude-setting select:hover {
+  border-color: var(--color-accent-mid);
+}
+
+.footer-claude-setting select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .footer-ai-binding,
