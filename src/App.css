@@ -1456,7 +1456,8 @@ del.track-delete {
   display: block;
   width: calc(100% - 20px);
   margin: 0 10px var(--space-md);
-  font-size: var(--text-meta);
+  /* Primary action, not metadata — it reads at control size. */
+  font-size: var(--text-ui);
   font-weight: 400;
   color: var(--color-accent-dark);
   background: transparent;
