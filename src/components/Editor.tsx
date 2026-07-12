@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
@@ -70,6 +70,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
     const onSelectionRef = useRef(onSelectionChange);
     const onReadyRef = useRef(onEditorReady);
     const onAnnotationClickRef = useRef(onAnnotationClick);
+    const [isEmpty, setIsEmpty] = useState(initialContent.trim().length === 0);
     onUpdateRef.current = onUpdate;
     onSelectionRef.current = onSelectionChange;
     onReadyRef.current = onEditorReady;
@@ -147,7 +148,8 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           return false;
         },
       },
-      onUpdate() {
+      onUpdate({ editor }) {
+        setIsEmpty(editor.isEmpty);
         onUpdateRef.current();
       },
       onSelectionUpdate({ editor }) {
@@ -222,6 +224,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           // it emit would fire onUpdate -> markDirty and flag every freshly
           // opened document as dirty. Programmatic loads are not user edits.
           editor.commands.setContent(md, { emitUpdate: false });
+          setIsEmpty(editor.isEmpty);
         },
         getEditor() {
           return editor;
@@ -232,6 +235,14 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
 
     return (
       <div className="editor-page">
+        {isEmpty && (
+          <div className="editor-empty-state" aria-hidden="true">
+            <div className="editor-empty-title">Untitled</div>
+            <p>
+              Start writing… select text to comment, or press <kbd>⌘/</kbd> to ask Claude.
+            </p>
+          </div>
+        )}
         <EditorContent editor={editor} className="editor-content" />
       </div>
     );

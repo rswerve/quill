@@ -81,6 +81,33 @@ async function setZoom(page: Page, zoom: number) {
 // SECTION 1 — Basic typing & text content
 // ────────────────────────────────────────────────────────────────────────────
 
+test('blank document and comments panel show restrained Studio empty states', async ({ page }) => {
+  const { editor } = await setup(page);
+
+  const documentEmpty = page.locator('.editor-empty-state');
+  await expect(documentEmpty.locator('.editor-empty-title')).toHaveText('Untitled');
+  await expect(documentEmpty).toContainText('Start writing… select text to comment');
+  await expect(documentEmpty.locator('kbd')).toHaveText('⌘/');
+
+  const commentsEmpty = page.locator('.comments-empty-state');
+  await expect(commentsEmpty).toBeVisible();
+  await expect(commentsEmpty).toContainText('No comments yet');
+  await expect(commentsEmpty).toContainText('Select text and press +, or type @claude.');
+
+  // The empty prompt is chrome, not editor content or saved Markdown.
+  await expect(editor).not.toContainText('Untitled');
+  await page.keyboard.type('First word');
+  await expect(documentEmpty).toHaveCount(0);
+});
+
+test('Cmd+/ opens the same Ask Claude review flow advertised by the empty state', async ({
+  page,
+}) => {
+  await setup(page);
+  await page.keyboard.press('ControlOrMeta+/');
+  await expect(page.locator('.review-modal')).toBeVisible();
+});
+
 test('editor mounts and is focusable', async ({ page }) => {
   const { editor } = await setup(page);
   await expect(editor).toBeVisible();
@@ -798,6 +825,7 @@ test('submitting a comment creates a comment card', async ({ page }) => {
   await addCommentViaPlusButton(page, 'this needs work');
   await expect(page.locator('.comment-card').first()).toBeVisible();
   await expect(page.locator('.comment-card').first()).toContainText('this needs work');
+  await expect(page.locator('.comments-empty-state')).toHaveCount(0);
 });
 
 test('commented text is wrapped in <mark data-comment-id>', async ({ page }) => {

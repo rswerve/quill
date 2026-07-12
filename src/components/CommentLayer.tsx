@@ -519,6 +519,18 @@ export default function CommentLayer({
         />
       )}
 
+      {comments.length === 0 && suggestionGroups.length === 0 && !commentComposer && (
+        <div className="comments-empty-state">
+          <span className="comments-empty-quote" aria-hidden>
+            ”
+          </span>
+          <strong>No comments yet</strong>
+          <p>
+            Select text and press <b>+</b>, or type <code>@claude</code>.
+          </p>
+        </div>
+      )}
+
       {/* Cards are positioned in document space (anchor offset + scrollTop), so
           translating this wrapper by -scrollTop makes the comment column scroll
           in lockstep with the editor — like Google Docs. */}

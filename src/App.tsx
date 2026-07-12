@@ -968,6 +968,12 @@ export default function App() {
         return;
       }
 
+      if (e.key === '/' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        setReviewOpen(true);
+        return;
+      }
+
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
         setZoom((z) => clampZoom(Math.round((z + 0.12) * 100) / 100));

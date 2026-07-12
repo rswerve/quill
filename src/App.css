@@ -710,6 +710,7 @@ select {
 }
 
 .editor-page {
+  position: relative;
   width: var(--page-max-width);
   flex-shrink: 0;
   background: var(--color-page);
@@ -913,13 +914,37 @@ select {
   cursor: pointer;
 }
 
-.ProseMirror p.is-editor-empty:first-child::before {
-  content: 'Start writing...';
-  color: var(--color-ink-light);
+.editor-empty-state {
+  position: absolute;
+  top: var(--page-padding-y);
+  left: var(--page-padding-x);
+  z-index: 1;
   pointer-events: none;
-  float: left;
-  height: 0;
-  font-weight: 300;
+}
+.editor-empty-title {
+  color: var(--dot);
+  font-family: var(--font-doc-heading);
+  font-size: var(--text-doc-title);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.5px;
+}
+.editor-empty-state p {
+  margin-top: 12px;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.editor-empty-state kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-color: var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-app);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 /* ── Comment marks ──────────────────────────────────────────────── */
@@ -2406,6 +2431,10 @@ del.track-delete {
   border-radius: 0;
   background: transparent;
 }
+.studio-body .editor-empty-state {
+  top: 56px;
+  left: 24px;
+}
 
 .comments.comment-layer {
   position: relative;
@@ -2525,6 +2554,45 @@ del.track-delete {
   background: var(--bg-card);
   color: var(--text-faint);
   font-size: 12.5px;
+}
+.comments-empty-state {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  left: 24px;
+  z-index: 3;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--text-muted);
+  text-align: center;
+  pointer-events: none;
+}
+.comments-empty-quote {
+  height: 35px;
+  color: var(--dot);
+  font-family: var(--font-doc-heading);
+  font-size: var(--text-doc-title);
+  line-height: 1;
+}
+.comments-empty-state strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.comments-empty-state p {
+  margin-top: 5px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.comments-empty-state b {
+  color: var(--text-dim);
+}
+.comments-empty-state code {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 /* Selection comments use the hybrid flow from Design Q4: the trigger stays

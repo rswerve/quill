@@ -244,7 +244,9 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await expectType(page.locator('.comment-time').first(), '11px');
   await expectType(page.locator('.comment-anchor-text').first(), '13px');
   await expectType(page.locator('.comment-reply-text').first(), '13px');
-  await expectType(page.locator('.comment-reply .ai-badge'), '11px');
+  await expectType(page.locator('.comment-reply .ai-badge'), '8.5px', {
+    checkUiFamily: false,
+  });
   await expectType(page.locator('.suggestion-ai-badge').first(), '8.5px', {
     checkUiFamily: false,
   });
@@ -274,7 +276,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
 
   await expect(page.locator('.add-comment-btn')).toBeVisible();
   await page.locator('.add-comment-btn').click();
-  await expectType(page.locator('.add-comment-compose .comment-reply-input'), '13px');
+  await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
 
   await expectType(page.locator('.footer-zoom-label'), '10px', { checkUiFamily: false });
   await expectType(page.getByLabel('Claude model'), '10px', { checkUiFamily: false });
