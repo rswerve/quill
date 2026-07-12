@@ -1,3 +1,15 @@
+#![warn(clippy::pedantic, clippy::nursery)]
+// Tauri IPC deserializes command arguments into owned values at the boundary.
+#![allow(clippy::needless_pass_by_value)]
+// Command Results are part of the stable frontend IPC success/error contract.
+#![allow(clippy::unnecessary_wraps)]
+// The app bootstrap intentionally panics only when Tauri itself cannot start.
+#![allow(clippy::missing_panics_doc)]
+// Process orchestration stays cohesive so cleanup and event ordering remain visible.
+#![allow(clippy::too_many_lines)]
+// Extension checks below operate on strings already normalized to lowercase.
+#![allow(clippy::case_sensitive_file_extension_comparisons)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -7,7 +19,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 
 /// Document-like paths Quill is allowed to touch through the general file
@@ -167,9 +180,8 @@ fn collect_context_files(root: &std::path::Path, max: usize) -> Vec<String> {
     let mut scanned = 0usize;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
         };
         for entry in entries.flatten() {
             if scanned >= scan_limit {
@@ -192,8 +204,7 @@ fn collect_context_files(root: &std::path::Path, max: usize) -> Vec<String> {
             let ext_ok = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| CONTEXT_FILE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-                .unwrap_or(false);
+                .is_some_and(|e| CONTEXT_FILE_EXTENSIONS.contains(&e.to_lowercase().as_str()));
             if !ext_ok {
                 continue;
             }
@@ -660,7 +671,9 @@ mod tests {
     fn quill_created_session_uses_create_then_resume_and_retries_create_without_transcript() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _lock = HOME_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tempdir().unwrap();
         let _home = HomeEnvGuard::set(home.path());
         let project = home.path().join(".claude/projects/-tmp-quill-doc");
@@ -1117,7 +1130,7 @@ struct ChildRegistry(Mutex<HashMap<String, Arc<ChildHandle>>>);
 /// Holds a deep-link path that arrived before the frontend was ready to receive
 /// the `deep-link-open` event. On a cold start macOS launches the app *because*
 /// of the `quill://open?file=…` URL, and `on_open_url` fires during `.setup()`
-/// — before the WebView has mounted and registered its listener — so the emit is
+/// — before the `WebView` has mounted and registered its listener — so the emit is
 /// dropped. We stash the path here and let the frontend pull it on mount via
 /// `take_pending_deep_link`.
 #[derive(Default)]
@@ -1131,7 +1144,7 @@ struct PendingDeepLink(Mutex<Option<String>>);
 fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn claude_projects_dir() -> Result<PathBuf, String> {
@@ -1218,17 +1231,18 @@ fn iso_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |duration| duration.as_secs());
     // Plain ISO-8601 (UTC). Crude but enough for sidecar timestamps.
     let days_from_epoch = secs / 86400;
     let secs_in_day = secs % 86400;
-    let h = secs_in_day / 3600;
-    let m = (secs_in_day % 3600) / 60;
-    let s = secs_in_day % 60;
+    let hour = secs_in_day / 3600;
+    let minute = (secs_in_day % 3600) / 60;
+    let second = secs_in_day % 60;
     // Use chrono-free approximation: relies on serde elsewhere having stricter dates.
-    let (y, mo, d) = days_to_ymd(days_from_epoch as i64);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, m, s)
+    let days_from_epoch =
+        i64::try_from(days_from_epoch).expect("a u64 count of days always fits in i64");
+    let (year, month, day) = days_to_ymd(days_from_epoch);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
@@ -1259,15 +1273,15 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
         31,
     ];
     let mut month = 1u32;
-    let mut d = days as u32;
-    for &ml in month_lengths.iter() {
-        if d < ml {
+    let mut day = u32::try_from(days).expect("remaining day-of-year fits in u32");
+    for &month_length in &month_lengths {
+        if day < month_length {
             break;
         }
-        d -= ml;
+        day -= month_length;
         month += 1;
     }
-    (year, month, d + 1)
+    (year, month, day + 1)
 }
 
 #[tauri::command]
@@ -1291,18 +1305,19 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
     for project_entry in read.flatten() {
         if !project_entry
             .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
+            .is_ok_and(|file_type| file_type.is_dir())
         {
             continue;
         }
-        let session_iter = match std::fs::read_dir(project_entry.path()) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(session_iter) = std::fs::read_dir(project_entry.path()) else {
+            continue;
         };
         for entry in session_iter.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e != "jsonl").unwrap_or(true) {
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "jsonl")
+            {
                 continue;
             }
             let last_used = entry
@@ -1310,8 +1325,7 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .map_or(0, |duration| duration.as_secs());
             candidates.push((path, last_used));
         }
     }
@@ -1321,9 +1335,8 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
 
     let mut matches: Vec<AutoBindResult> = Vec::new();
     for (path, _) in &candidates {
-        let file = match std::fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => continue,
+        let Ok(file) = std::fs::File::open(path) else {
+            continue;
         };
         let reader = BufReader::new(file);
         let mut sess_id = String::new();
@@ -1336,13 +1349,13 @@ fn find_session_for_markdown(content: String) -> Result<Option<AutoBindResult>, 
             };
             if sess_id.is_empty() {
                 if let Some(id) = &rec.session_id {
-                    sess_id = id.clone();
+                    sess_id.clone_from(id);
                 }
             }
             if sess_cwd.is_empty() {
                 if let Some(c) = &rec.cwd {
                     if !c.is_empty() {
-                        sess_cwd = c.clone();
+                        sess_cwd.clone_from(c);
                     }
                 }
             }
@@ -1385,20 +1398,21 @@ fn find_session_jsonl(session_id: &str) -> Result<Option<std::path::PathBuf>, St
     };
 
     for project_entry in read.flatten() {
-        let session_iter = match std::fs::read_dir(project_entry.path()) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(session_iter) = std::fs::read_dir(project_entry.path()) else {
+            continue;
         };
         for entry in session_iter.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e != "jsonl").unwrap_or(true) {
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "jsonl")
+            {
                 continue;
             }
             if path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| s == session_id)
-                .unwrap_or(false)
+                .is_some_and(|stem| stem == session_id)
             {
                 return Ok(Some(path));
             }
@@ -1477,40 +1491,41 @@ fn list_claude_sessions() -> Result<Vec<SessionSummary>, String> {
     for project_entry in read.flatten() {
         if !project_entry
             .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
+            .is_ok_and(|file_type| file_type.is_dir())
         {
             continue;
         }
         let project_path = project_entry.path();
-        let session_iter = match std::fs::read_dir(&project_path) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(session_iter) = std::fs::read_dir(&project_path) else {
+            continue;
         };
         for entry in session_iter.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e != "jsonl").unwrap_or(true) {
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "jsonl")
+            {
                 continue;
             }
-            let meta = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(meta) = entry.metadata() else {
+                continue;
             };
             let last_used = meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .map_or(0, |duration| duration.as_secs());
 
-            let (session_id, cwd, title) = scan_session_head(&path).unwrap_or((
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string(),
-                String::new(),
-                None,
-            ));
+            let (session_id, cwd, title) = scan_session_head(&path).unwrap_or_else(|| {
+                (
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    String::new(),
+                    None,
+                )
+            });
 
             summaries.push(SessionSummary {
                 session_id,
@@ -1590,13 +1605,13 @@ fn read_claude_session_preview(jsonl_path: String) -> Result<SessionPreview, Str
         };
         if session_id.is_empty() {
             if let Some(id) = &rec.session_id {
-                session_id = id.clone();
+                session_id.clone_from(id);
             }
         }
         if cwd.is_empty() {
             if let Some(c) = &rec.cwd {
                 if !c.is_empty() {
-                    cwd = c.clone();
+                    cwd.clone_from(c);
                 }
             }
         }
@@ -1616,7 +1631,7 @@ fn read_claude_session_preview(jsonl_path: String) -> Result<SessionPreview, Str
                         let mut chars = trimmed.chars();
                         let snippet: String = chars.by_ref().take(400).collect();
                         let suffix = if chars.next().is_some() { "…" } else { "" };
-                        assistant_texts.push(format!("{}{}", snippet, suffix));
+                        assistant_texts.push(format!("{snippet}{suffix}"));
                     }
                 }
             }
@@ -1885,9 +1900,7 @@ fn classify_claude_outcome(
         .filter(|m| !m.trim().is_empty())
         .or(stderr_tail)
         .unwrap_or_else(|| {
-            let code = exit_code
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            let code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
             format!("claude exited without producing a reply (exit code {code})")
         });
     Err(message)
@@ -2013,7 +2026,7 @@ fn spawn_claude_resume(
     }
 
     let token_for_thread = token.clone();
-    let app_for_thread = app.clone();
+    let app_for_thread = app;
 
     std::thread::spawn(move || {
         let mut any_delta = false;
@@ -2045,13 +2058,13 @@ fn spawn_claude_resume(
             // Terminal result line: { type: "result", is_error: bool,
             //                         subtype: "...", result: "..." }
             if parsed.get("type").and_then(|t| t.as_str()) == Some("result") {
-                result_is_error = parsed.get("is_error").and_then(|v| v.as_bool());
+                result_is_error = parsed.get("is_error").and_then(serde_json::Value::as_bool);
                 // Prefer the human-readable `result`, fall back to `subtype`.
                 result_message = parsed
                     .get("result")
                     .and_then(|v| v.as_str())
                     .or_else(|| parsed.get("subtype").and_then(|v| v.as_str()))
-                    .map(|s| s.to_string());
+                    .map(ToString::to_string);
                 return;
             }
             // Partial messages: { type: "stream_event", event: { type: "content_block_delta",
@@ -2091,7 +2104,7 @@ fn spawn_claude_resume(
 
         let cancelled = handle.cancelled.load(Ordering::SeqCst);
         let exit_code = status.and_then(|s| s.code());
-        let exit_ok = status.map(|s| s.success()).unwrap_or(false);
+        let exit_ok = status.is_some_and(|status| status.success());
 
         if cancelled {
             let _ = on_event.send(ChunkEvent::Cancelled);
@@ -2147,11 +2160,10 @@ struct Diagnostics {
 
 #[tauri::command]
 fn get_diagnostics(app: tauri::AppHandle) -> Result<Diagnostics, String> {
-    let log_dir = app
-        .path()
-        .app_log_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "<unknown>".to_string());
+    let log_dir = app.path().app_log_dir().map_or_else(
+        |_| "<unknown>".to_string(),
+        |path| path.to_string_lossy().into_owned(),
+    );
     Ok(Diagnostics {
         version: app.package_info().version.to_string(),
         os: std::env::consts::OS.to_string(),
@@ -2177,14 +2189,14 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}", l.file(), l.line()))
-            .unwrap_or_else(|| "<unknown>".to_string());
+        let location = info.location().map_or_else(
+            || "<unknown>".to_string(),
+            |location| format!("{}:{}", location.file(), location.line()),
+        );
         let payload = info
             .payload()
             .downcast_ref::<&str>()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
         log::error!("panic at {location}: {payload}");
@@ -2226,8 +2238,6 @@ pub fn run() {
 
             build_menu(app.handle(), &[])?;
 
-            use tauri::Emitter;
-
             // Registered once here (not in build_menu): `update_recent_menu`
             // rebuilds the menu at runtime, and re-registering the handler on
             // every rebuild would stack listeners.
@@ -2252,7 +2262,6 @@ pub fn run() {
                     let _ = app.emit(id, ());
                 }
             });
-            use tauri_plugin_deep_link::DeepLinkExt;
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
@@ -2307,10 +2316,10 @@ pub fn run() {
 /// Label for an Open Recent entry: the file name, falling back to the full
 /// path when there is no final component.
 fn recent_menu_label(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
+    std::path::Path::new(path).file_name().map_or_else(
+        || path.to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// Build the native application menu and route File-menu clicks to frontend
@@ -2368,8 +2377,10 @@ fn build_menu(app: &tauri::AppHandle, recent: &[String]) -> Result<(), Box<dyn s
         None::<&str>,
     )?;
     recent_items.push(Box::new(clear_recent_item));
-    let recent_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        recent_items.iter().map(|i| i.as_ref()).collect();
+    let recent_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = recent_items
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let open_recent_menu = Submenu::with_items(app, "Open Recent", true, &recent_refs)?;
 
     let file_menu = Submenu::with_items(
@@ -2503,7 +2514,9 @@ fn percent_decode(s: &str) -> String {
             let hi = (bytes[i + 1] as char).to_digit(16);
             let lo = (bytes[i + 2] as char).to_digit(16);
             if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8);
+                out.push(
+                    u8::try_from(h * 16 + l).expect("two hexadecimal digits always fit in u8"),
+                );
                 i += 3;
                 continue;
             }
@@ -2538,7 +2551,7 @@ fn take_pending_deep_link(pending: State<'_, PendingDeepLink>) -> Result<Option<
 /// shortcuts in JS, so this command (absent from the e2e IPC mock) is the
 /// authoritative signal.
 #[tauri::command]
-fn has_native_menu() -> bool {
+const fn has_native_menu() -> bool {
     true
 }
 
