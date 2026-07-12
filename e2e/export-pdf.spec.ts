@@ -56,13 +56,13 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     const screenSize = await page
       .locator('.ProseMirror')
       .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
-    expect(screenSize).toBeCloseTo(32.4, 1);
+    expect(screenSize).toBeCloseTo(43.2, 1);
 
     await page.emulateMedia({ media: 'print' });
     const printSize = await page
       .locator('.ProseMirror')
       .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
-    expect(printSize).toBeCloseTo(13.5, 1);
+    expect(printSize).toBeCloseTo(18, 1);
   });
 
   test('renders suggesting-mode markup as an accepted clean copy', async ({ page }) => {

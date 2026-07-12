@@ -170,6 +170,7 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
         getComputedStyle(document.documentElement).getPropertyValue('--font-sans'),
       );
       return elements
+        .filter((element) => !element.closest('.footer'))
         .map((element) => ({
           element: `${element.tagName.toLowerCase()}.${element.className}`,
           family: primaryFamily(getComputedStyle(element).fontFamily),
@@ -180,16 +181,16 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
   expect(mismatches).toEqual([]);
 }
 
-test('document typography stays pinned while all six themes keep chrome vertically contained', async ({
+test('document typography stays pinned while both themes keep chrome vertically contained', async ({
   page,
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.editor-scroll-area'), '12px');
-  await expectType(page.locator('.ProseMirror'), '13.5px', { checkUiFamily: false });
+  await expectType(page.locator('.editor-scroll-area'), '18px');
+  await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
   await expectType(page.locator('.toolbar-btn').first(), '13px');
-  await expectType(page.locator('.mode-switch'), '12px');
-  await expectType(page.locator('.theme-selector-trigger'), '12px');
+  await expectType(page.locator('.mode-switch'), '12.5px');
+  await expectType(page.locator('.theme-selector-trigger'), '12.5px');
   await expect(
     page.locator(
       '.editor-scroll-area button, .editor-scroll-area input, .editor-scroll-area textarea, .editor-scroll-area select',
@@ -197,20 +198,13 @@ test('document typography stays pinned while all six themes keep chrome vertical
   ).toHaveCount(0);
   await expectVisibleControlsUseUiFamily(page);
 
-  const themes = [
-    'Paper',
-    'Sage',
-    'Mocha · Dragonfly',
-    'Watery · Adirondack',
-    'Rodeo · Ecological',
-    'Gruvbox',
-  ];
+  const themes = ['Paper', 'Gruvbox'];
   for (const theme of themes) {
     if (theme !== 'Paper') {
       await page.locator('.theme-selector-trigger').click();
       await page.locator('.theme-selector-item').filter({ hasText: theme }).click();
     }
-    await expectType(page.locator('.ProseMirror'), '13.5px', { checkUiFamily: false });
+    await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
     await expectVerticallyContained(page.locator('.toolbar button:visible'));
     await expectVerticallyContained(page.locator('.toolbar label:visible'));
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
@@ -218,7 +212,7 @@ test('document typography stays pinned while all six themes keep chrome vertical
   }
 
   await page.emulateMedia({ media: 'print' });
-  await expectType(page.locator('.ProseMirror'), '13.5px', { checkUiFamily: false });
+  await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
   await expect(page.locator('.footer')).toHaveCSS('display', 'none');
   await page.emulateMedia({ media: 'screen' });
 });
@@ -234,7 +228,7 @@ test('review modal uses control text for the ask and checkbox labels', async ({ 
   ).toBe('13px');
   await expectType(page.locator('.review-modal-check').first(), '13px');
   await expectType(page.locator('.app-modal-title'), '15px');
-  await expectType(page.locator('.review-modal .btn-primary'), '12px');
+  await expectType(page.locator('.review-modal .btn-primary'), '12.5px');
   await expectVisibleControlsUseUiFamily(page);
 });
 
@@ -243,17 +237,17 @@ test('form controls and every review-card kind use the intended UI scale and fam
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.comment-author').first(), '12px');
+  await expectType(page.locator('.comment-author').first(), '12.5px');
   await expectType(page.locator('.comment-avatar').first(), '11px');
   await expectType(page.locator('.comment-time').first(), '11px');
   await expectType(page.locator('.comment-anchor-text').first(), '13px');
   await expectType(page.locator('.comment-reply-text').first(), '13px');
   await expectType(page.locator('.ai-badge'), '11px');
-  await expectType(page.locator('.suggestion-type-badge.insert'), '12px');
-  await expectType(page.locator('.suggestion-type-badge.delete'), '12px');
-  await expectType(page.locator('.suggestion-type-badge.replace'), '12px');
-  await expectType(page.locator('.suggestion-type-badge.format'), '12px');
-  await expectType(page.locator('.formatting-change-description'), '12px');
+  await expectType(page.locator('.suggestion-type-badge.insert'), '12.5px');
+  await expectType(page.locator('.suggestion-type-badge.delete'), '12.5px');
+  await expectType(page.locator('.suggestion-type-badge.replace'), '12.5px');
+  await expectType(page.locator('.suggestion-type-badge.format'), '12.5px');
+  await expectType(page.locator('.formatting-change-description'), '12.5px');
   await expectType(page.locator('.suggestion-accept-btn').first(), '13px');
 
   await expectType(page.locator('.comment-reply-trigger'), '13px');
@@ -262,7 +256,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
 
   await page.keyboard.press('ControlOrMeta+f');
   await expectType(page.locator('.find-bar-input').first(), '13px');
-  await expectType(page.locator('.find-bar-btn-text').first(), '12px');
+  await expectType(page.locator('.find-bar-btn-text').first(), '12.5px');
   await page.locator('.find-bar-btn[title="Close (Esc)"]').click();
 
   const editor = page.locator('.ProseMirror');
@@ -270,16 +264,18 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await selectLastCharacters(page, 4);
   await page.keyboard.press('ControlOrMeta+k');
   await expectType(page.locator('.link-popover-input'), '13px');
-  await expectType(page.locator('.link-popover-btn').first(), '12px');
+  await expectType(page.locator('.link-popover-btn').first(), '12.5px');
   await page.keyboard.press('Escape');
 
   await expect(page.locator('.add-comment-btn')).toBeVisible();
   await page.locator('.add-comment-btn').click();
   await expectType(page.locator('.add-comment-compose .comment-reply-input'), '13px');
 
-  await expectType(page.locator('.footer-zoom-label'), '12px');
-  await expectType(page.getByLabel('Claude model'), '12px');
-  await expectType(page.locator('.footer-context-binding'), '12px');
+  await expectType(page.locator('.footer-zoom-label'), '12.5px', { checkUiFamily: false });
+  await expectType(page.getByLabel('Claude model'), '12.5px', { checkUiFamily: false });
+  await expectType(page.locator('.footer-context-binding'), '12.5px', {
+    checkUiFamily: false,
+  });
   await expectVisibleControlsUseUiFamily(page);
 });
 
@@ -320,8 +316,8 @@ test('session picker body text and controls inherit the app font', async ({ page
   await expectType(page.locator('.session-row-meta'), '11px');
   await page.locator('.session-row').click();
   await expectType(page.locator('.session-preview-msg'), '13px');
-  await expectType(page.locator('.session-picker-preview-meta'), '12px');
-  await expectType(page.locator('.session-picker-footer .btn-primary'), '12px');
+  await expectType(page.locator('.session-picker-preview-meta'), '12.5px');
+  await expectType(page.locator('.session-picker-footer .btn-primary'), '12.5px');
   await expectVisibleControlsUseUiFamily(page);
 });
 
@@ -330,8 +326,8 @@ test('app modal and update banner chrome use the intended scale', async ({ page 
   await page.locator('.ProseMirror').fill('dirty');
   await page.keyboard.press('ControlOrMeta+n');
   await expectType(page.locator('.app-modal-title'), '15px');
-  await expectType(page.locator('.app-modal-message'), '12px');
-  await expectType(page.locator('.app-modal .btn-primary'), '12px');
+  await expectType(page.locator('.app-modal-message'), '12.5px');
+  await expectType(page.locator('.app-modal .btn-primary'), '12.5px');
 
   await page.locator('.app-modal .btn-ghost').click();
   await page.evaluate(() => {

@@ -39,7 +39,7 @@ interface ToolbarProps {
   hasPendingChanges: boolean;
 }
 
-type ThemeId = 'paper' | 'sage' | 'warm' | 'cool' | 'earth' | 'gruvbox';
+type ThemeId = 'paper' | 'gruvbox';
 
 interface ThemeDef {
   id: ThemeId;
@@ -50,24 +50,14 @@ interface ThemeDef {
 }
 
 const THEMES: ThemeDef[] = [
-  { id: 'paper', label: 'Paper', swatches: ['#FFFEFA', '#315F7D', '#202124'] },
-  { id: 'sage', label: 'Sage', swatches: ['#B8C2BA', '#5C7A62', '#222722'] },
-  { id: 'warm', label: 'Mocha · Dragonfly', swatches: ['#C9BFAE', '#6B8682', '#2C3438'] },
-  { id: 'cool', label: 'Watery · Adirondack', swatches: ['#BFCED1', '#4F6B82', '#1F2A36'] },
-  { id: 'earth', label: 'Rodeo · Ecological', swatches: ['#C2A988', '#7A8466', '#3A2A1F'] },
-  { id: 'gruvbox', label: 'Gruvbox', swatches: ['#282828', '#83A598', '#EBDBB2'] },
+  { id: 'paper', label: 'Paper', swatches: ['#FBFAF7', '#B65C38', '#23201B'] },
+  { id: 'gruvbox', label: 'Gruvbox', swatches: ['#282828', '#D65D0E', '#EBDBB2'] },
 ];
 
 const THEME_STORAGE_KEY = 'quill-theme';
 
 function applyTheme(id: ThemeId) {
-  const root = document.documentElement;
-  // Clear any prior theme class when HMR or a persisted choice reuses the same
-  // document, then apply the selected stable id.
-  for (const className of [...root.classList]) {
-    if (className.startsWith('theme-')) root.classList.remove(className);
-  }
-  root.classList.add(`theme-${id}`);
+  document.documentElement.dataset.theme = id;
 }
 
 interface ButtonProps {

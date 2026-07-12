@@ -1,54 +1,42 @@
 import { expect, test } from '@playwright/test';
 
-const THEME_LABELS = [
-  'Paper',
-  'Sage',
-  'Mocha · Dragonfly',
-  'Watery · Adirondack',
-  'Rodeo · Ecological',
-  'Gruvbox',
-];
+const THEME_LABELS = ['Paper', 'Gruvbox'];
 
-test('theme selector offers all six themes and persists Gruvbox', async ({ page }) => {
+test('theme selector offers only Paper and Gruvbox and persists Gruvbox', async ({ page }) => {
   await page.goto('/');
   await page.locator('.ProseMirror').waitFor();
 
-  await expect(page.locator('html')).toHaveClass(/theme-paper/);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
   await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Paper');
 
   await page.locator('.theme-selector-trigger').click();
   const options = page.locator('.theme-selector-item');
-  await expect(options).toHaveCount(6);
+  await expect(options).toHaveCount(2);
   await expect(options.locator('.theme-label')).toHaveText(THEME_LABELS);
   await options.filter({ hasText: 'Gruvbox' }).click();
 
-  await expect(page.locator('html')).toHaveClass(/theme-gruvbox/);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'gruvbox');
   expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('gruvbox');
 
   await page.reload();
-  await expect(page.locator('html')).toHaveClass(/theme-gruvbox/);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'gruvbox');
   await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Gruvbox');
 });
 
-test('the four original persisted theme ids remain valid', async ({ page }) => {
+test('retired persisted theme ids fall back to Paper and are normalized', async ({ page }) => {
   await page.goto('/');
   await page.locator('.ProseMirror').waitFor();
 
-  for (const [id, label] of [
-    ['sage', 'Sage'],
-    ['warm', 'Mocha · Dragonfly'],
-    ['cool', 'Watery · Adirondack'],
-    ['earth', 'Rodeo · Ecological'],
-  ]) {
+  for (const id of ['sage', 'warm', 'cool', 'earth']) {
     await page.evaluate((themeId) => localStorage.setItem('quill-theme', themeId), id);
     await page.reload();
-    await expect(page.locator('html')).toHaveClass(new RegExp(`theme-${id}`));
-    await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText(label);
-    expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe(id);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
+    await expect(page.locator('.theme-selector-trigger .theme-label')).toHaveText('Paper');
+    expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('paper');
   }
 });
 
-test('review actions stay tonal, borderless, and distinct in all six themes', async ({ page }) => {
+test('review actions stay tonal, borderless, and distinct in both themes', async ({ page }) => {
   await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor();

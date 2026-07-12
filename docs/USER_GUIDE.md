@@ -106,7 +106,7 @@ Quill opens the file with comments, suggestions, and the session link restored �
 ## Tips
 
 - **Zoom** the document with the slider in the bottom bar (double-click the percentage to reset).
-- **Themes:** the color-swatch dropdown at the right end of the toolbar offers four color themes; your choice is remembered.
+- **Themes:** the color-swatch dropdown at the right end of the toolbar offers Paper and Gruvbox; your choice is remembered.
 - A failed save or open is always reported in a dialog — if you see the unsaved dot (`•`), your latest changes are not on disk yet.
 
 ## Something not working?

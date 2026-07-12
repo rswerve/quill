@@ -15,7 +15,7 @@ async function seedHeadingAndBody(page: Page) {
   await page.keyboard.type('body text');
 }
 
-test('uses fixed Mulish body, Lora headings, and 13.5px body text', async ({ page }) => {
+test('uses Source Serif 4 for 18px body text and 38px headings', async ({ page }) => {
   const { editor } = await setup(page);
   await seedHeadingAndBody(page);
 
@@ -27,13 +27,22 @@ test('uses fixed Mulish body, Lora headings, and 13.5px body text', async ({ pag
     const style = getComputedStyle(element);
     return { family: style.fontFamily, size: parseFloat(style.fontSize) };
   });
-  expect(body.family).toContain('Mulish Variable');
-  expect(body.size).toBeCloseTo(13.5, 1);
+  expect(body.family).toContain('Source Serif 4 Variable');
+  expect(body.size).toBeCloseTo(18, 1);
 
-  const headingFont = await editor
-    .locator('h1')
-    .evaluate((element) => getComputedStyle(element).fontFamily);
-  expect(headingFont).toContain('Lora Variable');
+  const heading = await editor.locator('h1').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      family: style.fontFamily,
+      size: parseFloat(style.fontSize),
+      weight: style.fontWeight,
+      lineHeight: parseFloat(style.lineHeight),
+    };
+  });
+  expect(heading.family).toContain('Source Serif 4 Variable');
+  expect(heading.size).toBeCloseTo(38, 1);
+  expect(heading.weight).toBe('600');
+  expect(heading.lineHeight).toBeCloseTo(38 * 1.15, 1);
 });
 
 test('keeps fixed document fonts separate from chrome and clears retired picker keys', async ({
@@ -58,9 +67,13 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
   const chromeFont = await page
     .locator('.mode-switch-label')
     .evaluate((element) => getComputedStyle(element).fontFamily);
-  expect(documentFont).toContain('Mulish Variable');
-  expect(chromeFont).toContain('Mulish Variable');
-  expect(chromeFont).not.toContain('Lora Variable');
+  const statusFont = await page
+    .locator('.footer')
+    .evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(documentFont).toContain('Source Serif 4 Variable');
+  expect(chromeFont).toContain('Instrument Sans Variable');
+  expect(chromeFont).not.toContain('Source Serif 4 Variable');
+  expect(statusFont).toContain('JetBrains Mono Variable');
 });
 
 test('places the Editing toggle directly after the link divider', async ({ page }) => {
@@ -83,7 +96,7 @@ test('persists zoom across reloads and restores the document scale', async ({ pa
   const zoomedSize = await editor.evaluate((element) =>
     parseFloat(getComputedStyle(element).fontSize),
   );
-  expect(zoomedSize).toBeCloseTo(13.5 * 1.8, 1);
+  expect(zoomedSize).toBeCloseTo(18 * 1.8, 1);
 
   await page.reload();
   await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
@@ -92,5 +105,5 @@ test('persists zoom across reloads and restores the document scale', async ({ pa
   const restoredSize = await page
     .locator('.ProseMirror')
     .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
-  expect(restoredSize).toBeCloseTo(13.5 * 1.8, 1);
+  expect(restoredSize).toBeCloseTo(18 * 1.8, 1);
 });

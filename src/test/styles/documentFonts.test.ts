@@ -12,16 +12,20 @@ describe('bundled document fonts', () => {
     expect(html).not.toContain('fonts.gstatic.com');
   });
 
-  it('drops the old CDN faces entirely', () => {
+  it('drops the retired document faces entirely', () => {
     expect(css).not.toContain('Lato');
     expect(css).not.toContain('Playfair');
+    expect(css).not.toContain('Mulish');
+    expect(css).not.toContain('Lora');
+    expect(main).not.toContain('@fontsource-variable/mulish');
+    expect(main).not.toContain('@fontsource-variable/lora');
   });
 
-  it('imports the variable faces with true italics in main.tsx', () => {
-    expect(main).toContain("@fontsource-variable/mulish'");
-    expect(main).toContain("@fontsource-variable/mulish/wght-italic.css'");
-    expect(main).toContain("@fontsource-variable/lora'");
-    expect(main).toContain("@fontsource-variable/lora/wght-italic.css'");
+  it('imports all three variable faces and true document italics in main.tsx', () => {
+    expect(main).toContain("@fontsource-variable/instrument-sans'");
+    expect(main).toContain("@fontsource-variable/source-serif-4'");
+    expect(main).toContain("@fontsource-variable/source-serif-4/wght-italic.css'");
+    expect(main).toContain("@fontsource-variable/jetbrains-mono'");
   });
 
   it('routes document typography through the doc variables, not the UI tokens', () => {
@@ -33,10 +37,11 @@ describe('bundled document fonts', () => {
         new RegExp(`\\.ProseMirror ${level} \\{[^}]*font-family: var\\(--font-doc-heading\\)`),
       );
     }
-    // …and the fixed defaults resolve to the bundled pair.
-    expect(css).toMatch(/--font-doc-body: var\(--font-sans\)/);
+    // …and body/headings resolve to the same bundled serif as specified.
+    expect(css).toMatch(/--font-doc-body: var\(--font-serif\)/);
     expect(css).toMatch(/--font-doc-heading: var\(--font-serif\)/);
-    expect(css).toMatch(/--font-sans: 'Mulish Variable'/);
-    expect(css).toMatch(/--font-serif: 'Lora Variable'/);
+    expect(css).toMatch(/--font-sans: 'Instrument Sans Variable'/);
+    expect(css).toMatch(/--font-serif: 'Source Serif 4 Variable'/);
+    expect(css).toMatch(/--font-mono: 'JetBrains Mono Variable'/);
   });
 });

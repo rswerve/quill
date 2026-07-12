@@ -14,9 +14,9 @@ function ruleBody(selector: string): string {
 describe('UI type scale', () => {
   it('keeps the three chrome sizes and the independent document base explicit', () => {
     expect(css).toContain('--text-ui: 13px');
-    expect(css).toContain('--text-meta: 12px');
+    expect(css).toContain('--text-meta: 12.5px');
     expect(css).toContain('--text-label: 11px');
-    expect(css).toContain('--text-doc-base: 12px');
+    expect(css).toContain('--text-doc-base: 18px');
     expect(ruleBody('.editor-scroll-area')).toContain('font-size: var(--text-doc-base)');
   });
 

@@ -8,259 +8,187 @@
 }
 
 /* ── Design tokens ──────────────────────────────────────────────── */
-/* Paper is the conservative default: neutral chrome, a warm-white document,
-   and a restrained blue interaction color. Review states remain semantic and
-   deliberately distinct — green insertions, red deletions, yellow comments. */
-:root,
-:root.theme-paper {
-  color-scheme: light;
-  --color-bg: #e4e5e2;
-  --color-chrome: #f0f1ee;
-  --color-chrome-dark: #d9dbd7;
-  --color-page: #fffefa;
-  --color-ink: #202124;
-  --color-ink-mid: #4f5359;
-  --color-ink-light: #696d73;
-  --color-border: #c5c8c3;
-  --color-border-light: #dedfdb;
-  --color-accent: #315f7d;
-  --color-accent-light: #e3edf4;
-  --color-accent-mid: #86a7bd;
-  --color-accent-dark: #21465f;
-  --color-ai-bg: #edf2f6;
-  --color-ai-text: #35566e;
-  --color-human-avatar-bg: #ede2d2;
-  --color-human-avatar-text: #654827;
-  --color-track-add-bg: #e2f3e7;
-  --color-track-add-text: #1d5a34;
-  --color-track-add-line: #2f7d4a;
-  --color-track-del-bg: #f9e5e2;
-  --color-track-del-text: #782d29;
-  --color-track-del-line: #b44b43;
-  --color-highlight-bg: #fff1b8;
-  --color-highlight-border: #b88b13;
-  --color-action-accept-bg: #eef4ef;
-  --color-action-accept-hover: #e3ece5;
-  --color-action-accept-active: #d8e5dc;
-  --color-action-accept-text: #365744;
-  --color-action-reject-bg: #f6f1f0;
-  --color-action-reject-hover: #eee4e2;
-  --color-action-reject-active: #e6d8d5;
-  --color-action-reject-text: #714742;
+/* ---------- Design tokens ---------- */
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  --bg-app:        #FBFAF7;   /* main writing surface */
+  --bg-rail:       #F4F1E9;   /* left tool rail + status bar */
+  --bg-panel:      #FBFAF7;   /* comments panel (matches app here) */
+  --bg-card:       #FFFFFF;   /* comment card / inputs */
+  --bg-card-sub:   #F7F4EC;   /* nested Claude reply block */
+  --bg-hover:      #EFEBE0;
+  --bg-hover-rail: #EAE5D8;
+  --bg-quote:      #F1EDE2;
+
+  --border:        #E6E1D4;
+  --border-strong: #E2DCCD;
+  --border-card:   #E3DECF;
+
+  --text:          #23201B;
+  --text-body:     #33302A;
+  --text-muted:    #57503F;
+  --text-dim:      #8B8371;
+  --text-faint:    #A29A87;
+  --dot:           #C9C2AF;
+
+  --accent:        #B65C38;   /* Claude / primary */
+  --accent-hover:  #9E4B2B;
+  --accent-ink:    #FBFAF7;   /* text on accent */
+  --accent-soft:   rgba(182,92,56,0.13);
+
+  --hl-bg:         #FBEFC9;   /* text highlight (comment anchor) */
+  --hl-line:       #D79921;
+
+  --shadow-frame:  0 24px 60px rgba(50,42,25,0.10);
+  --shadow-pop:    0 32px 80px rgba(40,32,16,0.25);
+
+  /* Semantic review colors (track-changes) — all >=4.5:1 as text on --bg-card */
+  --added:      #2E7A4C;                 /* 5.3:1 on #FFFFFF */
+  --added-bg:   rgba(46,122,76,0.08);    /* Accept button wash */
+  --removed:    #BC3B2E;                 /* 5.5:1 on #FFFFFF */
+  --removed-bg: rgba(188,59,46,0.07);    /* Reject button wash */
+  --sugg-replace: #B65C38;               /* Replacement badge = accent */
+  --sugg-format:  #8B8371;               /* Formatting badge = neutral */
+  --badge-format-bg: #EFEBE0;
 }
 
-/* Gruvbox dark uses the canonical bg/fg and classic accent set as its base.
-   Review washes are adapted darker so bright semantic text remains legible;
-   deletion text is intentionally lighter than stock red because it is struck. */
-:root.theme-gruvbox {
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
+  --bg-app:        #282828;
+  --bg-rail:       #1D2021;
+  --bg-panel:      #1D2021;
+  --bg-card:       #32302F;
+  --bg-card-sub:   #2C2A29;
+  --bg-hover:      #32302F;
+  --bg-hover-rail: #32302F;
+  --bg-quote:      #282828;
+
+  --border:        #3C3836;
+  --border-strong: #3C3836;
+  --border-card:   #504945;
+
+  --text:          #EBDBB2;
+  --text-body:     #D5C4A1;
+  --text-muted:    #A89984;
+  --text-dim:      #928374;
+  --text-faint:    #7C6F64;
+  --dot:           #665C54;
+
+  --accent:        #D65D0E;
+  --accent-hover:  #C4550D;
+  --accent-ink:    #FBF1C7;
+  --accent-soft:   rgba(254,128,25,0.13);
+  --accent-text:   #FE8019;   /* orange used as text/glyph in dark */
+
+  --hl-bg:         #453D20;
+  --hl-line:       #D79921;
+
+  --shadow-frame:  0 24px 60px rgba(20,18,10,0.35);
+  --shadow-pop:    0 32px 80px rgba(0,0,0,0.5);
+
+  /* Semantic review colors (track-changes) — text values clear >=4.5:1 on --bg-card #32302F */
+  --added:      #B8BB26;                 /* 6.3:1 on #32302F */
+  --added-bg:   rgba(184,187,38,0.12);
+  --removed:    #FB6F63;                 /* 4.7:1 on #32302F (lifted from canonical #FB4934, which is ~3.8:1 as text) */
+  --removed-bg: rgba(251,111,99,0.12);
+  --removed-accent: #FB4934;             /* optional: stripe / strikethrough / icons only (graphical, 3:1) */
+  --sugg-replace: #FE8019;               /* Replacement badge = accent */
+  --sugg-format:  #A89984;               /* Formatting badge = neutral */
+  --badge-format-bg: #3C3836;
+}
+/* prettier-ignore */
+:root[data-theme="paper"]   { --accent-text: var(--accent); }
+
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  color-scheme: light;
+}
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
   color-scheme: dark;
-  --color-bg: #1d2021;
-  --color-chrome: #282828;
-  --color-chrome-dark: #1d2021;
-  --color-page: #282828;
-  --color-ink: #ebdbb2;
-  --color-ink-mid: #d5c4a1;
-  --color-ink-light: #bdae93;
-  --color-border: #504945;
-  --color-border-light: #3c3836;
-  --color-accent: #83a598;
-  --color-accent-light: #364442;
-  --color-accent-mid: #458588;
-  --color-accent-dark: #a9c7bc;
-  --color-ai-bg: #32383a;
-  --color-ai-text: #8ec07c;
-  --color-human-avatar-bg: #504945;
-  --color-human-avatar-text: #fabd2f;
-  --color-track-add-bg: #303d2d;
-  --color-track-add-text: #d5dc63;
-  --color-track-add-line: #98971a;
-  --color-track-del-bg: #49302f;
-  --color-track-del-text: #ff8a80;
-  --color-track-del-line: #fb4934;
-  --color-highlight-bg: #4c412b;
-  --color-highlight-border: #fabd2f;
-  --color-action-accept-bg: #31382f;
-  --color-action-accept-hover: #3a4435;
-  --color-action-accept-active: #424e3b;
-  --color-action-accept-text: #b8bb86;
-  --color-action-reject-bg: #392f2e;
-  --color-action-reject-hover: #463432;
-  --color-action-reject-active: #523a37;
-  --color-action-reject-text: #e5a09a;
 }
 
-/* Original Sage palette, retained under its stable persisted id. */
-:root.theme-sage {
-  color-scheme: light;
-  --color-bg: #b8c2ba;
-  --color-chrome: #aebab1;
-  --color-chrome-dark: #a6b2a9;
-  --color-page: #f8f9f6;
-  --color-ink: #222722;
-  --color-ink-mid: #4e564e;
-  --color-ink-light: #838e83;
-  --color-border: #9eab9f;
-  --color-border-light: #c4cec5;
-  --color-accent: #5c7a62;
-  --color-accent-light: #dde6de;
-  --color-accent-mid: #8ead93;
-  --color-accent-dark: #3a5c3f;
-  --color-ai-bg: #e8ecf0;
-  --color-ai-text: #5a6e82;
-  --color-human-avatar-bg: #ddd8ce;
-  --color-human-avatar-text: #6b5e4a;
-  --color-track-add-bg: #dde6de;
-  --color-track-add-text: #2e4a32;
-  --color-track-add-line: #5c7a62;
-  --color-track-del-bg: #e6d8d2;
-  --color-track-del-text: #573b32;
-  --color-track-del-line: #8e6857;
-  --color-highlight-bg: #eae8c8;
-  --color-highlight-border: #b0ac6a;
-  --color-action-accept-bg: #e5ece6;
-  --color-action-accept-hover: #d9e4db;
-  --color-action-accept-active: #cddbcf;
-  --color-action-accept-text: #38533d;
-  --color-action-reject-bg: #eee4e0;
-  --color-action-reject-hover: #e7d9d4;
-  --color-action-reject-active: #decac3;
-  --color-action-reject-text: #68473b;
+/* LEGACY SEMANTIC ALIASES — remove as review components migrate */
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  --color-track-add-bg: var(--added-bg);
+  --color-track-add-text: var(--added);
+  --color-track-add-line: var(--added);
+  --color-track-del-bg: var(--removed-bg);
+  --color-track-del-text: var(--removed);
+  --color-track-del-line: var(--removed);
+  --color-action-accept-bg: var(--added-bg);
+  --color-action-accept-hover: rgba(46,122,76,0.14);
+  --color-action-accept-active: rgba(46,122,76,0.14);
+  --color-action-accept-text: var(--added);
+  --color-action-reject-bg: var(--removed-bg);
+  --color-action-reject-hover: rgba(188,59,46,0.13);
+  --color-action-reject-active: rgba(188,59,46,0.13);
+  --color-action-reject-text: var(--removed);
 }
 
-/* Warm neutral + Dragonfly accent (original stable id: warm). */
-:root.theme-warm {
-  color-scheme: light;
-  --color-bg: #c9bfae;
-  --color-chrome: #e2dacd;
-  --color-chrome-dark: #d4cbbc;
-  --color-page: #f1ece2;
-  --color-ink: #2c3438;
-  --color-ink-mid: #555e61;
-  --color-ink-light: #8a8e8a;
-  --color-border: #c0b5a2;
-  --color-border-light: #ded5c5;
-  --color-accent: #6b8682;
-  --color-accent-light: #dce3e0;
-  --color-accent-mid: #9ab1ac;
-  --color-accent-dark: #4a615e;
-  --color-ai-bg: #ece5d6;
-  --color-ai-text: #6b5e4a;
-  --color-human-avatar-bg: #ddd0bb;
-  --color-human-avatar-text: #6b5239;
-  --color-track-add-bg: #dce3e0;
-  --color-track-add-text: #3a4d4a;
-  --color-track-add-line: #6b8682;
-  --color-track-del-bg: #e8d6ce;
-  --color-track-del-text: #5a3628;
-  --color-track-del-line: #9c5e4a;
-  --color-highlight-bg: #e8dec0;
-  --color-highlight-border: #b59e66;
-  --color-action-accept-bg: #e4e9e7;
-  --color-action-accept-hover: #d8e1de;
-  --color-action-accept-active: #cdd8d5;
-  --color-action-accept-text: #405651;
-  --color-action-reject-bg: #f0e4df;
-  --color-action-reject-hover: #e8d8d1;
-  --color-action-reject-active: #decac1;
-  --color-action-reject-text: #6a4032;
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
+  --color-track-add-bg: var(--added-bg);
+  --color-track-add-text: var(--added);
+  --color-track-add-line: var(--added);
+  --color-track-del-bg: var(--removed-bg);
+  --color-track-del-text: var(--removed);
+  --color-track-del-line: var(--removed-accent);
+  --color-action-accept-bg: var(--added-bg);
+  --color-action-accept-hover: rgba(184,187,38,0.18);
+  --color-action-accept-active: rgba(184,187,38,0.18);
+  --color-action-accept-text: var(--added);
+  --color-action-reject-bg: var(--removed-bg);
+  --color-action-reject-hover: rgba(251,111,99,0.18);
+  --color-action-reject-active: rgba(251,111,99,0.18);
+  --color-action-reject-text: var(--removed);
 }
 
-/* Cool slate + Watery/Adirondack accents (original stable id: cool). */
-:root.theme-cool {
-  color-scheme: light;
-  --color-bg: #bfced1;
-  --color-chrome: #d6e0e2;
-  --color-chrome-dark: #c7d2d5;
-  --color-page: #fbfbf8;
-  --color-ink: #1f2a36;
-  --color-ink-mid: #475866;
-  --color-ink-light: #8593a0;
-  --color-border: #a8b7bc;
-  --color-border-light: #ccd8dc;
-  --color-accent: #4f6b82;
-  --color-accent-light: #dce4ec;
-  --color-accent-mid: #7e94a8;
-  --color-accent-dark: #2f4a60;
-  --color-ai-bg: #dce4ec;
-  --color-ai-text: #2f4a60;
-  --color-human-avatar-bg: #d7cfcc;
-  --color-human-avatar-text: #5a4244;
-  --color-track-add-bg: #dce4ec;
-  --color-track-add-text: #273d51;
-  --color-track-add-line: #4f6b82;
-  --color-track-del-bg: #e8d6d9;
-  --color-track-del-text: #4d232b;
-  --color-track-del-line: #8b4453;
-  --color-highlight-bg: #ecddb4;
-  --color-highlight-border: #b89344;
-  --color-action-accept-bg: #e4eaf0;
-  --color-action-accept-hover: #d8e2eb;
-  --color-action-accept-active: #ccd9e4;
-  --color-action-accept-text: #30495e;
-  --color-action-reject-bg: #f0e3e5;
-  --color-action-reject-hover: #e8d6da;
-  --color-action-reject-active: #dec8cd;
-  --color-action-reject-text: #63333d;
-}
-
-/* Earthy desert with Ecological accent (original stable id: earth). */
-:root.theme-earth {
-  color-scheme: light;
-  --color-bg: #c2a988;
-  --color-chrome: #d2b999;
-  --color-chrome-dark: #c2a988;
-  --color-page: #efe5d3;
-  --color-ink: #3a2a1f;
-  --color-ink-mid: #5f4636;
-  --color-ink-light: #8e7b68;
-  --color-border: #b19a7b;
-  --color-border-light: #d6c2a6;
-  --color-accent: #7a8466;
-  --color-accent-light: #dde2cf;
-  --color-accent-mid: #a2ac8c;
-  --color-accent-dark: #56603f;
-  --color-ai-bg: #e2d7c0;
-  --color-ai-text: #5f4636;
-  --color-human-avatar-bg: #d6b89a;
-  --color-human-avatar-text: #4a2f1e;
-  --color-track-add-bg: #dde2cf;
-  --color-track-add-text: #445030;
-  --color-track-add-line: #7a8466;
-  --color-track-del-bg: #e8d2c5;
-  --color-track-del-text: #5a3322;
-  --color-track-del-line: #a06a4a;
-  --color-highlight-bg: #ead49a;
-  --color-highlight-border: #b89344;
-  --color-action-accept-bg: #e7eadf;
-  --color-action-accept-hover: #dde2d1;
-  --color-action-accept-active: #d2d9c2;
-  --color-action-accept-text: #4c5938;
-  --color-action-reject-bg: #f0e1d8;
-  --color-action-reject-hover: #e8d4c8;
-  --color-action-reject-active: #dfc6b7;
-  --color-action-reject-text: #6a3b28;
+/* LEGACY ALIASES — remove as components migrate */
+:root {
+  --color-bg: var(--bg-app);
+  --color-chrome: var(--bg-rail);
+  --color-chrome-dark: var(--bg-hover-rail);
+  --color-page: var(--bg-card);
+  --color-ink: var(--text);
+  --color-ink-mid: var(--text-muted);
+  --color-ink-light: var(--text-dim);
+  --color-ink-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-border-light: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-light: var(--accent-soft);
+  --color-accent-mid: var(--accent-text);
+  --color-accent-dark: var(--accent-hover);
+  --color-ai-bg: var(--bg-card-sub);
+  --color-ai-text: var(--accent-text);
+  --color-human-avatar-bg: var(--border-card);
+  --color-human-avatar-text: var(--text);
+  --color-highlight-bg: var(--hl-bg);
+  --color-highlight-border: var(--hl-line);
 }
 
 /* ── Non-color tokens (shared across themes) ────────────────────── */
 :root {
-  --font-serif: 'Lora Variable', Georgia, serif;
-  --font-sans: 'Mulish Variable', system-ui, sans-serif;
-  /* Fixed, opinionated document typography. Headings keep a serif-contrast
-     partner face by decision; UI chrome uses the same base tokens without
-     inheriting document zoom. */
-  --font-doc-body: var(--font-sans);
+  --font-serif: 'Source Serif 4 Variable', Georgia, serif;
+  --font-sans: 'Instrument Sans Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', monospace;
+  /* Fixed, opinionated document typography. Document prose and headings share
+     Source Serif 4; UI chrome stays on its own scale outside document zoom. */
+  --font-doc-body: var(--font-serif);
   --font-doc-heading: var(--font-serif);
 
   /* Document typography is em-based against --text-doc-base (pinned on the
      editor scroll area) so the zoom wrapper's percentage font-size scales
      text and reflows within the fixed page — and so UI-chrome type-scale
      changes never rescale the page text. */
-  --text-doc-base: 12px;
-  --text-doc-title: 1.925926em; /* 26 / 13.5 */
-  --text-doc-h2: 1.185185em; /* 16 / 13.5 */
-  --text-body: 1.125em; /* 13.5 / 12 */
+  --text-doc-base: 18px;
+  --text-doc-title: 2.111111em; /* 38 / 18 */
+  --text-doc-h2: 1.444444em; /* 26 / 18 */
+  --text-body: 1em;
   --text-ui: 13px;
-  --text-meta: 12px;
+  --text-meta: 12.5px;
   --text-label: 11px;
 
   --leading-tight: 1.25;
@@ -803,7 +731,7 @@ select {
   font-family: var(--font-doc-body);
   font-size: var(--text-body);
   font-weight: 400;
-  line-height: 1.35;
+  line-height: 1.8;
   color: var(--color-ink);
   word-break: break-word;
 }
@@ -818,9 +746,10 @@ select {
 .ProseMirror h1 {
   font-family: var(--font-doc-heading);
   font-size: var(--text-doc-title);
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: -0.5px;
   color: var(--color-ink);
-  line-height: var(--leading-tight);
+  line-height: 1.15;
   margin-top: 5px;
   margin-bottom: 10px;
 }
@@ -828,17 +757,19 @@ select {
 .ProseMirror h2 {
   font-family: var(--font-doc-heading);
   font-size: var(--text-doc-h2);
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: -0.2px;
   color: var(--color-ink);
-  line-height: var(--leading-tight);
+  line-height: normal;
   margin-top: 5px;
   margin-bottom: 10px;
 }
 
 .ProseMirror h3 {
   font-family: var(--font-doc-heading);
-  font-size: 1.037037em; /* 14 / 13.5 */
-  font-weight: 500;
+  /* INTERIM — H3 absent from handoff scale, PENDING Design */
+  font-size: 1.166667em; /* 21 / 18 */
+  font-weight: 600;
   color: var(--color-ink);
   line-height: var(--leading-tight);
   margin-top: 5px;
@@ -853,7 +784,7 @@ select {
 }
 .ProseMirror li {
   margin-bottom: 0;
-  line-height: 1.35;
+  line-height: inherit;
 }
 .ProseMirror li p {
   margin-bottom: 0;
@@ -863,6 +794,9 @@ select {
   border-left: 0.5px solid var(--color-border);
   padding-left: 1em;
   margin: 14px 0;
+  font-family: var(--font-doc-body);
+  font-size: 1.055556em; /* 19 / 18 */
+  line-height: 1.65;
   color: var(--color-ink-light);
   font-style: italic;
 }
@@ -1712,6 +1646,7 @@ del.track-delete {
   border-top: 0.5px solid var(--color-border);
   flex-shrink: 0;
   user-select: none;
+  font-family: var(--font-mono);
 }
 
 .footer-filename {
@@ -1792,6 +1727,7 @@ del.track-delete {
   align-items: center;
 }
 .comment-reply-model {
+  font-family: var(--font-mono);
   color: var(--color-ink-light);
   font-size: var(--text-label);
   font-weight: 500;
