@@ -2,12 +2,13 @@ import { useState } from 'react';
 import type { ReviewOptions, ReviewPhase } from '../hooks/useDocumentReview';
 
 /**
- * Pre-filled into the guidance box so a plain "Submit" already asks for a
- * useful review; the user edits or replaces it for a focused pass
- * ("make 20% shorter", "check against the interview notes", …).
+ * The "Ask Claude to…" box is deliberately free-form and empty by default:
+ * what the user types is the ONLY substantive direction the review prompt
+ * carries (the fixed scaffold is wire-format plumbing plus comment/edit
+ * routing). The placeholder completes the label's sentence.
  */
-export const DEFAULT_REVIEW_GUIDANCE =
-  'Review for tone, clarity, and flow. Flag anything confusing, redundant, or inconsistent.';
+export const REVIEW_ASK_PLACEHOLDER =
+  'review for tone and flow, make it 20% shorter, check the dates against the reference folder… — or leave blank';
 
 interface ReviewModalProps {
   phase: ReviewPhase;
@@ -46,7 +47,7 @@ export default function ReviewModal({
   onCancelStream,
   onClose,
 }: ReviewModalProps) {
-  const [guidance, setGuidance] = useState(DEFAULT_REVIEW_GUIDANCE);
+  const [guidance, setGuidance] = useState('');
   const [makeComments, setMakeComments] = useState(true);
   const [makeSuggestions, setMakeSuggestions] = useState(true);
 
@@ -66,13 +67,14 @@ export default function ReviewModal({
         {composing && (
           <>
             <label className="review-modal-label" htmlFor="review-guidance">
-              Guidance for this review
+              Ask Claude to…
             </label>
             <textarea
               id="review-guidance"
               className="review-modal-guidance"
               value={guidance}
               onChange={(e) => setGuidance(e.target.value)}
+              placeholder={REVIEW_ASK_PLACEHOLDER}
               rows={3}
               autoFocus
             />

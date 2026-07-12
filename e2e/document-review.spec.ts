@@ -99,15 +99,17 @@ async function openReviewModal(page: Page, docText: string) {
   await expect(page.locator('.review-modal')).toBeVisible({ timeout: 2000 });
 }
 
-test('Review: button opens the modal with an editable default prompt and both boxes checked', async ({
+test('Review: button opens the modal with an empty free-form ask and both boxes checked', async ({
   page,
 }) => {
   await setupWithMock(page, [{ kind: 'done' }]);
   await openReviewModal(page, 'alpha beta gamma');
 
-  // Default guidance is pre-filled — a plain Submit is already a useful review.
+  // The ask box is free-form and empty by default — nothing substantive is
+  // sent unless the user writes it (a placeholder shows examples).
   const guidance = page.locator('#review-guidance');
-  await expect(guidance).toHaveValue(/tone, clarity/);
+  await expect(guidance).toHaveValue('');
+  await expect(guidance).toHaveAttribute('placeholder', /review for tone and flow/);
   const checks = page.locator('.review-modal-check input[type="checkbox"]');
   await expect(checks.nth(0)).toBeChecked();
   await expect(checks.nth(1)).toBeChecked();
@@ -208,7 +210,7 @@ test('Review: prompt carries the guidance, checkbox choices, and full document',
   );
   expect(args).toMatchObject({ sessionId: ipcFixtures.autoBindSession.sessionId });
   const prompt = (args as { prompt: string }).prompt;
-  expect(prompt).toContain('User guidance for this review: make it 20% shorter');
+  expect(prompt).toContain('The user asked you to: make it 20% shorter');
   expect(prompt).toContain('alpha beta gamma');
   expect(prompt).toContain('```quill-edits');
   expect(prompt).not.toContain('```quill-comments');

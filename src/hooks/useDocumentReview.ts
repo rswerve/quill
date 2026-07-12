@@ -107,15 +107,16 @@ export function buildReviewPrompt(
       : 'You are reviewing a markdown document you previously authored, now edited by the user in Quill.',
     '',
     'The user asked for a review of the FULL document.',
-    guidance
-      ? `User guidance for this review: ${guidance}`
-      : 'No specific guidance was given — review for clarity, correctness, and flow.',
+    // The user's ask is the ONLY substantive direction this prompt carries.
+    // Everything else below is wire-format plumbing (how Quill parses the
+    // reply) — never editorial guidance about the document.
+    guidance ? `The user asked you to: ${guidance}` : 'The user gave no further instructions.',
     '',
   ];
 
   const respond: string[] = [
     'HOW TO RESPOND:',
-    'Start with a one-or-two sentence overall assessment in prose.',
+    'Any prose you write outside the fenced blocks below is shown to the user as the review summary.',
   ];
 
   if (options.makeComments) {
@@ -127,7 +128,7 @@ export function buildReviewPrompt(
       '{"comments":[{"find":"<exact substring of the document text>","comment":"<concise, actionable remark>"}]}',
       '```',
       '',
-      'Each comment is anchored to the text matched by its "find". Prefer a handful of high-value comments over many trivial ones.',
+      'Each comment is anchored to the text matched by its "find".',
     );
   }
   if (options.makeSuggestions) {

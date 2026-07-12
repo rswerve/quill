@@ -72,16 +72,29 @@ describe('fenceHoldback', () => {
 });
 
 describe('buildReviewPrompt', () => {
-  it('includes the guidance verbatim and the document', () => {
+  it('includes the ask verbatim and the document', () => {
     const prompt = buildReviewPrompt(BOTH, 'doc body here', null);
-    expect(prompt).toContain('User guidance for this review: tighten it');
+    expect(prompt).toContain('The user asked you to: tighten it');
     expect(prompt).toContain('doc body here');
     expect(prompt).toContain('review of the FULL document');
   });
 
-  it('falls back to a generic review when guidance is blank', () => {
+  it('states factually that no instructions were given when the ask is blank', () => {
     const prompt = buildReviewPrompt({ ...BOTH, guidance: '  ' }, 'doc', null);
-    expect(prompt).toContain('No specific guidance was given');
+    expect(prompt).toContain('The user gave no further instructions.');
+  });
+
+  it('carries no substantive editorial defaults — the ask is the only direction', () => {
+    // Maz directive 2026-07-12: the fixed scaffold is wire-format plumbing
+    // plus the comments-vs-edits routing and no-changes rules; any editorial
+    // preference about the document itself must come from the user's ask.
+    const prompt = buildReviewPrompt({ ...BOTH, guidance: '' }, 'doc', null);
+    expect(prompt).not.toContain('overall assessment');
+    expect(prompt).not.toContain('high-value comments');
+    expect(prompt).not.toContain('clarity, correctness, and flow');
+    // The two rules deliberately kept:
+    expect(prompt).toContain('Use comments for judgment calls');
+    expect(prompt).toContain('If the document needs no changes, say so in the prose');
   });
 
   it('describes both blocks when both outputs are requested', () => {
