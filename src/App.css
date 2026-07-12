@@ -851,14 +851,19 @@ body,
   border-radius: var(--radius-sm);
   padding: 0.1em 0.3em;
   font-size: 0.88em;
-  /* ui-monospace resolves to SF Mono in WebKit — 'SFMono-Regular' does NOT
-     exist as a web-exposed family in WKWebView, and Consolas/Liberation are
-     Windows/Linux fonts, so the old stack silently fell through. */
-  font-family: ui-monospace, 'Menlo', 'Monaco', 'Courier New', monospace;
+  /* Menlo first, explicitly: it exists on every macOS and resolves
+     identically in WKWebView for inline and block code. ui-monospace/SF Mono
+     proved unreliable inside <pre> in the real webview (rendered differently
+     from inline code with the same rule); revisit with the font feature. */
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   color: var(--color-ink);
 }
 
 .ProseMirror pre {
+  /* Belt and braces: some engines resolve the child <code>'s family against
+     pre's inherited context — pin the same stack here so block code can never
+     diverge from inline code. */
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   background: var(--color-ink);
   border-radius: var(--radius-sm);
   padding: 1em;
