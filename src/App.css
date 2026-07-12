@@ -851,7 +851,10 @@ body,
   border-radius: var(--radius-sm);
   padding: 0.1em 0.3em;
   font-size: 0.88em;
-  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+  /* ui-monospace resolves to SF Mono in WebKit — 'SFMono-Regular' does NOT
+     exist as a web-exposed family in WKWebView, and Consolas/Liberation are
+     Windows/Linux fonts, so the old stack silently fell through. */
+  font-family: ui-monospace, 'Menlo', 'Monaco', 'Courier New', monospace;
   color: var(--color-ink);
 }
 
