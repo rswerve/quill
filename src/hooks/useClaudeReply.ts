@@ -238,8 +238,15 @@ export function buildPrompt(
     'Do not re-propose or conflict with these pending tracked changes.',
     ...(pendingSuggestions.length > 0
       ? pendingSuggestions.map((s) => {
-          const kind = s.operation === 'insert' ? 'insertion' : 'deletion';
           const origin = s.originCommentId ? ` (from comment ${s.originCommentId})` : '';
+          if (s.operation === 'format') {
+            const adds = [...new Set(s.segments.flatMap((seg) => seg.adds))].sort();
+            const removes = [...new Set(s.segments.flatMap((seg) => seg.removes))].sort();
+            const delta = [...adds.map((n) => `+${n}`), ...removes.map((n) => `-${n}`)].join(' ');
+            const text = s.segments.map((seg) => seg.text).join(' … ');
+            return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
+          }
+          const kind = s.operation === 'insert' ? 'insertion' : 'deletion';
           return `- [${kind}] "${clip(s.text, 80)}"${origin}`;
         })
       : ['(none)']),

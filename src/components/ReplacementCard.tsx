@@ -1,11 +1,11 @@
-import type { Comment, TrackedChangeInfo } from '../types';
+import type { Comment, TrackedTextChange } from '../types';
 import { timeAgo, clip } from '../utils/format';
 
 interface ReplacementCardProps {
   /** The delete half — the original text being replaced. */
-  del: TrackedChangeInfo;
+  del: TrackedTextChange;
   /** The insert half — the replacement text. */
-  ins: TrackedChangeInfo;
+  ins: TrackedTextChange;
   isActive: boolean;
   /** The still-existing comment this replacement originated from, or null
    *  (no provenance, or the comment was deleted — degrade to no chip). */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrompt, classifyReplyError, splitVisible } from '../../hooks/useClaudeReply';
-import type { Comment, Reply, TrackedChangeInfo } from '../../types';
+import type { Comment, Reply, TrackedTextChange } from '../../types';
 
 function makeComment(replies: Partial<Reply>[]): Comment {
   return {
@@ -167,7 +167,7 @@ describe('buildPrompt document-scale edit protocol', () => {
 });
 
 describe('buildPrompt pending suggestions', () => {
-  function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
+  function makeChange(overrides: Partial<TrackedTextChange> = {}): TrackedTextChange {
     return {
       id: 'ch1',
       operation: 'insert',

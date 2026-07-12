@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Editor } from '@tiptap/react';
-import type { Comment, TrackedChangeInfo } from '../types';
+import type { Comment, TrackedChangeInfo, TrackedTextChange } from '../types';
 import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
@@ -62,13 +62,16 @@ export function computeBottomSpacer(
 // the two halves of a replacement, presented and resolved together. The
 // replacement card is keyed and positioned by the shared pairId.
 type SuggestionGroup =
-  | { kind: 'single'; cardId: string; change: TrackedChangeInfo }
-  | { kind: 'replacement'; cardId: string; del: TrackedChangeInfo; ins: TrackedChangeInfo };
+  | { kind: 'single'; cardId: string; change: TrackedTextChange }
+  | { kind: 'replacement'; cardId: string; del: TrackedTextChange; ins: TrackedTextChange };
 
 function groupChanges(changes: TrackedChangeInfo[]): SuggestionGroup[] {
   const groups: SuggestionGroup[] = [];
-  const byPair = new Map<string, TrackedChangeInfo[]>();
+  const byPair = new Map<string, TrackedTextChange[]>();
   for (const c of changes) {
+    // TODO(codex): render format changes as a dedicated formatting card;
+    // until then they resolve via Accept all / Reject all only.
+    if (c.operation === 'format') continue;
     if (c.pairId) {
       const list = byPair.get(c.pairId) ?? [];
       list.push(c);

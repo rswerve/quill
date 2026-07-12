@@ -94,21 +94,11 @@ export interface FileState {
   isDirty: boolean;
 }
 
-export interface TrackedChangeInfo {
+interface TrackedChangeBase {
   id: string;
-  operation: 'insert' | 'delete';
-  from: number;
-  to: number;
-  text: string;
   authorID: string;
   status: 'pending' | 'accepted' | 'rejected';
   createdAt: number;
-  /**
-   * Set on both halves of a replacement (a delete and an insert made by the
-   * same step). Halves sharing a pairId render as one card and are accepted
-   * or rejected together — pass the pairId to acceptChange / rejectChange.
-   */
-  pairId?: string;
   /**
    * The id of the comment whose @claude request produced this change. Stamped
    * at mint time (like authorID), absent for user-typed changes and for
@@ -117,6 +107,42 @@ export interface TrackedChangeInfo {
    */
   originCommentId?: string;
 }
+
+export interface TrackedTextChange extends TrackedChangeBase {
+  operation: 'insert' | 'delete';
+  from: number;
+  to: number;
+  text: string;
+  /**
+   * Set on both halves of a replacement (a delete and an insert made by the
+   * same step). Halves sharing a pairId render as one card and are accepted
+   * or rejected together — pass the pairId to acceptChange / rejectChange.
+   */
+  pairId?: string;
+}
+
+/**
+ * One homogeneous span of a formatting suggestion. A flat add/remove delta is
+ * only exact per span whose prior format state was uniform, so one logical
+ * format change is a list of segments, not a single range.
+ */
+export interface FormatSegment {
+  from: number;
+  to: number;
+  text: string;
+  /** Mark names this suggestion turns on over the span (sorted). */
+  adds: string[];
+  /** Mark names this suggestion turns off over the span (sorted). */
+  removes: string[];
+}
+
+export interface TrackedFormatChange extends TrackedChangeBase {
+  operation: 'format';
+  /** All spans of the logical change, in document order. */
+  segments: FormatSegment[];
+}
+
+export type TrackedChangeInfo = TrackedTextChange | TrackedFormatChange;
 
 /**
  * One quote-based edit Claude proposes inside a comment: replace the first

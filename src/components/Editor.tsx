@@ -10,7 +10,12 @@ import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
 import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
-import { TrackedInsert, TrackedDelete, TrackChanges } from '../extensions/TrackChanges';
+import {
+  TrackedInsert,
+  TrackedDelete,
+  TrackedFormat,
+  TrackChanges,
+} from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 
 export const toolbarSelectionStore = {
@@ -94,6 +99,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         AnnotationFocus,
         TrackedInsert,
         TrackedDelete,
+        TrackedFormat,
         TrackChanges,
       ],
       content: initialContent,

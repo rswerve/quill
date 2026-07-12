@@ -8,7 +8,7 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { suggestionsFromTrackedChanges, restoreReviewMarks } from '../../utils/reviewPersistence';
-import type { Suggestion, TrackedChangeInfo } from '../../types';
+import type { Suggestion, TrackedTextChange } from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -20,7 +20,7 @@ function makeEditor(content = '<p>Hello world</p>') {
   });
 }
 
-function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
+function makeChange(overrides: Partial<TrackedTextChange> = {}): TrackedTextChange {
   return {
     id: 'ch1',
     operation: 'insert',

@@ -1036,6 +1036,16 @@ del.track-delete {
   padding: 0 1px;
 }
 
+/* A pending formatting suggestion. The proposed formatting itself is already
+   visible, so the marker is only a restrained tint locating the suggestion —
+   an underline indicator would collide with real underlines and spellcheck
+   squiggles. Engine placeholder: final treatment ships with the format card. */
+span.track-format {
+  background: color-mix(in srgb, var(--color-track-add-bg) 55%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 /* Review actions are intentionally tonal rather than filled: the tracked text
    is the primary signal, while these controls remain immediately scannable. */
 .toolbar-btn-accept,

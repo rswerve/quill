@@ -977,7 +977,8 @@ export default function App() {
       // A replacement half promotes to its pairId, so the whole pair — old
       // and new text — focuses together along with its single card.
       if (winner.kind === 'suggestion') {
-        const pairId = trackedChanges.find((c) => c.id === winner.id)?.pairId;
+        const change = trackedChanges.find((c) => c.id === winner.id);
+        const pairId = change && change.operation !== 'format' ? change.pairId : undefined;
         if (pairId) {
           setActiveAnnotation({ kind: 'suggestion', id: pairId });
           return;

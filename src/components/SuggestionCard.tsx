@@ -1,8 +1,8 @@
-import type { Comment, TrackedChangeInfo } from '../types';
+import type { Comment, TrackedTextChange } from '../types';
 import { timeAgo, clip } from '../utils/format';
 
 interface SuggestionCardProps {
-  change: TrackedChangeInfo;
+  change: TrackedTextChange;
   isActive: boolean;
   /** The still-existing comment this change originated from, or null (either
    *  no provenance, or the comment was deleted — degrade to no chip). */

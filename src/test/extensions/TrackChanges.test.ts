@@ -8,6 +8,13 @@ import {
   TrackedDelete,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
+import type { TrackedTextChange } from '../../types';
+
+// Every change in this file is a text op; the guard narrows the union so
+// tests can reach .text/.pairId without repeating the discriminant check.
+function textChanges(editor: Editor): TrackedTextChange[] {
+  return getTrackedChanges(editor).filter((c): c is TrackedTextChange => c.operation !== 'format');
+}
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -102,7 +109,9 @@ describe('TrackChanges extension', () => {
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(true);
     });
 
-    it('bold formatting is NOT tracked (only ReplaceSteps are intercepted)', () => {
+    // This editor doesn't register the TrackedFormat mark, so format tracking
+    // degrades to the old passthrough (TrackedFormat.test.ts covers tracking).
+    it('bold formatting is not tracked when the TrackedFormat mark is absent', () => {
       editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
       // Bold should be applied
       const hasBold = (() => {
@@ -135,7 +144,7 @@ describe('TrackChanges extension', () => {
       });
       expect(insertNodes.length).toBeGreaterThan(1);
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const inserts = changes.filter((c) => c.operation === 'insert');
       expect(inserts).toHaveLength(1);
       expect(inserts[0].text).toBe('beautiful ');
@@ -150,7 +159,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesAuthor('alice');
       editor.commands.insertContentAt(7, 'beautiful ');
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       const id = changes[0].id;
 
@@ -164,7 +173,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesEnabled(true);
       editor.commands.deleteRange({ from: 1, to: 6 });
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       const id = changes[0].id;
 
@@ -180,7 +189,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesEnabled(true);
       editor.commands.insertContentAt(7, 'beautiful ');
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const id = changes[0].id;
 
       editor.commands.rejectChange(id);
@@ -193,7 +202,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesEnabled(true);
       editor.commands.deleteRange({ from: 1, to: 6 });
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const id = changes[0].id;
 
       editor.commands.rejectChange(id);
@@ -247,7 +256,7 @@ describe('TrackChanges extension', () => {
     it('tracks a back-to-front Replace All without moving either replacement', () => {
       replaceAllAlphaWithGamma();
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(
         changes
           .filter((change) => change.operation === 'delete')
@@ -292,7 +301,7 @@ describe('TrackChanges extension', () => {
       editor.chain().setTextSelection({ from: 4, to: 7 }).insertContent('Q').run();
 
       expect(getTextContent(editor)).toBe('abcQ');
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0]).toMatchObject({ operation: 'insert', text: 'Q', authorID: 'alice' });
     });
@@ -302,7 +311,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesEnabled(true);
       editor.chain().setTextSelection(7).insertContent('<p>pasted one</p><p>pasted two</p>').run();
 
-      const inserted = getTrackedChanges(editor)
+      const inserted = textChanges(editor)
         .filter((change) => change.operation === 'insert')
         .map((change) => change.text)
         .join(' ');
@@ -325,7 +334,7 @@ describe('TrackChanges extension', () => {
 
     it('replacing text gives both halves a shared pairId', () => {
       replaceHelloWithHi();
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const del = changes.find((c) => c.operation === 'delete');
       const ins = changes.find((c) => c.operation === 'insert');
       expect(del?.pairId).toBeTruthy();
@@ -334,25 +343,25 @@ describe('TrackChanges extension', () => {
 
     it('a pure insertion has no pairId', () => {
       editor.commands.insertContentAt(7, 'beautiful ');
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0].pairId).toBeUndefined();
     });
 
     it('a pure deletion has no pairId', () => {
       editor.commands.deleteRange({ from: 1, to: 6 });
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0].pairId).toBeUndefined();
     });
 
     it('continued typing after a replacement extends the same pair', () => {
       replaceHelloWithHi();
-      const pairId = getTrackedChanges(editor).find((c) => c.operation === 'insert')?.pairId;
+      const pairId = textChanges(editor).find((c) => c.operation === 'insert')?.pairId;
       // The caret sits at the end of "Hi" (position 3); keep typing there.
       editor.commands.insertContentAt(3, '!');
 
-      const inserts = getTrackedChanges(editor).filter((c) => c.operation === 'insert');
+      const inserts = textChanges(editor).filter((c) => c.operation === 'insert');
       expect(inserts).toHaveLength(1);
       expect(inserts[0].text).toBe('Hi!');
       expect(inserts[0].pairId).toBe(pairId);
@@ -360,7 +369,7 @@ describe('TrackChanges extension', () => {
 
     it('acceptChange(pairId) resolves both halves: old text removed, new text kept', () => {
       replaceHelloWithHi();
-      const pairId = getTrackedChanges(editor)[0].pairId!;
+      const pairId = textChanges(editor)[0].pairId!;
 
       editor.commands.acceptChange(pairId);
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
@@ -370,7 +379,7 @@ describe('TrackChanges extension', () => {
 
     it('rejectChange(pairId) resolves both halves: old text restored, new text removed', () => {
       replaceHelloWithHi();
-      const pairId = getTrackedChanges(editor)[0].pairId!;
+      const pairId = textChanges(editor)[0].pairId!;
 
       editor.commands.rejectChange(pairId);
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
@@ -380,7 +389,7 @@ describe('TrackChanges extension', () => {
 
     it('resolving by pairId is a single undo step', () => {
       replaceHelloWithHi();
-      const pairId = getTrackedChanges(editor)[0].pairId!;
+      const pairId = textChanges(editor)[0].pairId!;
 
       // Close the history group so undo targets the accept alone — without
       // this, the accept merges into the replacement's group (newGroupDelay).
@@ -404,7 +413,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesOrigin('comment-1');
       editor.commands.insertContentAt(7, 'beautiful ');
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0].originCommentId).toBe('comment-1');
     });
@@ -413,7 +422,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesOrigin('comment-1');
       editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('Hi').run();
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const del = changes.find((c) => c.operation === 'delete');
       const ins = changes.find((c) => c.operation === 'insert');
       expect(del?.originCommentId).toBe('comment-1');
@@ -422,7 +431,7 @@ describe('TrackChanges extension', () => {
 
     it('omits originCommentId when no origin is set (default)', () => {
       editor.commands.insertContentAt(7, 'beautiful ');
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0].originCommentId).toBeUndefined();
     });
@@ -434,7 +443,7 @@ describe('TrackChanges extension', () => {
       // A fresh change elsewhere in the doc (not adjacent to the first one).
       editor.commands.deleteRange({ from: 1, to: 3 });
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       const ins = changes.find((c) => c.operation === 'insert');
       const del = changes.find((c) => c.operation === 'delete');
       expect(ins?.originCommentId).toBe('comment-1');
@@ -450,7 +459,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesOrigin('comment-2');
       editor.commands.insertContentAt(16, ' shiny');
 
-      const inserts = getTrackedChanges(editor).filter((c) => c.operation === 'insert');
+      const inserts = textChanges(editor).filter((c) => c.operation === 'insert');
       expect(inserts).toHaveLength(1);
       expect(inserts[0].text).toBe('beautiful shiny');
       expect(inserts[0].originCommentId).toBe('comment-1');
@@ -469,7 +478,7 @@ describe('TrackChanges extension', () => {
       editor.commands.setTrackChangesAuthor('bob');
       editor.commands.insertContentAt(7, 'beautiful ');
 
-      const changes = getTrackedChanges(editor);
+      const changes = textChanges(editor);
       expect(changes).toHaveLength(1);
       expect(changes[0]).toMatchObject({
         operation: 'insert',

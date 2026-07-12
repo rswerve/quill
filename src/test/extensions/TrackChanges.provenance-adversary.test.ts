@@ -7,6 +7,7 @@ import {
   TrackedDelete,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
+import type { TrackedTextChange } from '../../types';
 
 describe('provenance adversary', () => {
   let editor: Editor;
@@ -28,7 +29,9 @@ describe('provenance adversary', () => {
     editor.commands.setTrackChangesOrigin(null);
     editor.commands.insertContentAt(9, ' user');
 
-    const inserts = getTrackedChanges(editor).filter((change) => change.operation === 'insert');
+    const inserts = getTrackedChanges(editor).filter(
+      (change): change is TrackedTextChange => change.operation === 'insert',
+    );
     expect(inserts).toHaveLength(2);
     expect(
       inserts.map(({ authorID, originCommentId, text }) => ({ authorID, originCommentId, text })),

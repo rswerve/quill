@@ -1,5 +1,5 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Comment, Suggestion, TrackedChangeInfo } from '../types';
+import type { Comment, Suggestion, TrackedChangeInfo, TrackedTextChange } from '../types';
 
 /**
  * Review persistence: tracked-change and comment marks are the runtime truth,
@@ -14,21 +14,26 @@ import type { Comment, Suggestion, TrackedChangeInfo } from '../types';
 
 /** Serialize live tracked changes into sidecar-shaped suggestion records. */
 export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Suggestion[] {
-  return changes
-    .filter((c) => c.status === 'pending')
-    .map((c) => ({
-      id: c.id,
-      type: c.operation === 'insert' ? ('insertion' as const) : ('deletion' as const),
-      from: c.from,
-      to: c.to,
-      originalText: c.operation === 'delete' ? c.text : '',
-      suggestedText: c.operation === 'insert' ? c.text : '',
-      author: c.authorID,
-      createdAt: new Date(c.createdAt).toISOString(),
-      status: 'pending' as const,
-      ...(c.pairId ? { pairId: c.pairId } : {}),
-      ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
-    }));
+  return (
+    changes
+      .filter((c) => c.status === 'pending')
+      // TODO(codex): persist format suggestions as a sidecar union variant with
+      // segments; until that lands they are runtime-only and dropped at save.
+      .filter((c): c is TrackedTextChange => c.operation !== 'format')
+      .map((c) => ({
+        id: c.id,
+        type: c.operation === 'insert' ? ('insertion' as const) : ('deletion' as const),
+        from: c.from,
+        to: c.to,
+        originalText: c.operation === 'delete' ? c.text : '',
+        suggestedText: c.operation === 'insert' ? c.text : '',
+        author: c.authorID,
+        createdAt: new Date(c.createdAt).toISOString(),
+        status: 'pending' as const,
+        ...(c.pairId ? { pairId: c.pairId } : {}),
+        ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
+      }))
+  );
 }
 
 /**

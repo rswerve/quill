@@ -1,9 +1,9 @@
 import { Extension, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
-import { Mapping, ReplaceStep } from '@tiptap/pm/transform';
-import type { Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
+import { AddMarkStep, Mapping, RemoveMarkStep, ReplaceStep } from '@tiptap/pm/transform';
+import type { MarkType, Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
-import type { TrackedChangeInfo } from '../types';
+import type { FormatSegment, TrackedChangeInfo } from '../types';
 
 export interface TrackChangesStorage {
   enabled: boolean;
@@ -32,6 +32,14 @@ declare module '@tiptap/core' {
 
 const TRACK_PLUGIN_KEY = new PluginKey<TrackChangesStorage>('trackChanges');
 const SKIP_TRACKING_META = 'skipTracking';
+
+/**
+ * Mark names whose add/remove becomes a tracked formatting suggestion in
+ * suggesting mode. Deliberately excludes underline (doesn't survive Markdown
+ * serialization with html:false, so a tracked toggle couldn't honestly
+ * persist), and code/link (untracked passthrough by design).
+ */
+export const TRACKED_FORMAT_MARK_NAMES = new Set(['bold', 'italic', 'strike']);
 
 export const TrackedInsert = Mark.create({
   name: 'tracked_insert',
@@ -109,6 +117,56 @@ export const TrackedDelete = Mark.create({
   },
 });
 
+/**
+ * Marker for a pending formatting suggestion. Unlike tracked_insert/delete it
+ * never owns text — the real formatting marks are applied immediately; this
+ * mark records the net delta so the change can be rejected (inverted) or
+ * accepted (marker dropped). One marker per homogeneous span; `excludes`
+ * itself so re-marking an overlap replaces the prior net delta there.
+ */
+export const TrackedFormat = Mark.create({
+  name: 'tracked_format',
+  // Typing at the edge of a formatting suggestion must not extend it.
+  inclusive: false,
+  excludes: 'tracked_format',
+
+  addAttributes() {
+    return {
+      dataTracked: {
+        default: null,
+        parseHTML: (el) => {
+          const raw = el.getAttribute('data-tracked');
+          try {
+            return raw ? JSON.parse(raw) : null;
+          } catch {
+            return null;
+          }
+        },
+        renderHTML: (attrs) => ({
+          'data-tracked': JSON.stringify(attrs.dataTracked),
+        }),
+      },
+      changeId: {
+        default: null,
+        parseHTML: (el) => el.getAttribute('data-change-id'),
+        renderHTML: (attrs) => (attrs.changeId ? { 'data-change-id': attrs.changeId } : {}),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-tracked-format]' }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      'span',
+      mergeAttributes(HTMLAttributes, { 'data-tracked-format': 'true', class: 'track-format' }),
+      0,
+    ];
+  },
+});
+
 export const TrackChanges = Extension.create<TrackChangesStorage>({
   name: 'trackChanges',
 
@@ -158,11 +216,12 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
                 const schema = editorView.state.schema;
                 const insertType = schema.marks['tracked_insert'];
                 const deleteType = schema.marks['tracked_delete'];
+                const formatType = schema.marks['tracked_format'];
+                const isTrackMark = (m: { type: MarkType }) =>
+                  m.type === insertType || m.type === deleteType || m.type === formatType;
                 const stored = tr.storedMarks ?? editorView.state.storedMarks;
-                if (stored && stored.some((m) => m.type === insertType || m.type === deleteType)) {
-                  tr.setStoredMarks(
-                    stored.filter((m) => m.type !== insertType && m.type !== deleteType),
-                  );
+                if (stored && stored.some(isTrackMark)) {
+                  tr.setStoredMarks(stored.filter((m) => !isTrackMark(m)));
                 }
                 // Also strip tracked marks from any text the transaction just
                 // inserted (cursor at the boundary of a marked region inherits
@@ -173,6 +232,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
                     if (newEnd > newStart) {
                       tr.removeMark(newStart, newEnd, insertType);
                       tr.removeMark(newStart, newEnd, deleteType);
+                      if (formatType) tr.removeMark(newStart, newEnd, formatType);
                     }
                   });
                   void step;
@@ -218,6 +278,20 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
+          const formatType = schema.marks['tracked_format'];
+
+          // Accepted formatting keeps its marks; only the markers come off.
+          // Mark removals never shift positions, so they run before the text
+          // deletions below can invalidate document offsets.
+          if (formatType) {
+            doc.descendants((node, pos) => {
+              node.marks.forEach((mark) => {
+                if (mark.type === formatType && mark.attrs.dataTracked?.id === id) {
+                  tr.removeMark(pos, pos + node.nodeSize, formatType);
+                }
+              });
+            });
+          }
 
           const positions: Array<{ from: number; to: number; operation: string }> = [];
           doc.descendants((node, pos) => {
@@ -256,6 +330,30 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
+          const formatType = schema.marks['tracked_format'];
+
+          // Rejected formatting is inverted per span (each span's delta is
+          // exact for that span), then the marker comes off. Mark operations
+          // never shift positions, so this runs before any text deletion.
+          if (formatType) {
+            doc.descendants((node, pos) => {
+              node.marks.forEach((mark) => {
+                if (mark.type !== formatType || mark.attrs.dataTracked?.id !== id) return;
+                const from = pos;
+                const to = pos + node.nodeSize;
+                const delta = mark.attrs.dataTracked?.delta ?? {};
+                for (const name of delta.adds ?? []) {
+                  const t = schema.marks[name];
+                  if (t) tr.removeMark(from, to, t);
+                }
+                for (const name of delta.removes ?? []) {
+                  const t = schema.marks[name];
+                  if (t) tr.addMark(from, to, t.create());
+                }
+                tr.removeMark(from, to, formatType);
+              });
+            });
+          }
 
           const positions: Array<{ from: number; to: number; operation: string }> = [];
           doc.descendants((node, pos) => {
@@ -293,6 +391,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
+          const formatType = schema.marks['tracked_format'];
 
           const deletes: Array<{ from: number; to: number }> = [];
           doc.descendants((node, pos) => {
@@ -303,11 +402,19 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
             });
           });
 
-          // Remove insert marks first
+          // Remove insert and format markers first (accepted formatting keeps
+          // its marks); mark removals don't shift the delete positions below.
           doc.descendants((node, pos) => {
             node.marks.forEach((mark) => {
               if (mark.type === insertType && mark.attrs.dataTracked?.status === 'pending') {
                 tr.removeMark(pos, pos + node.nodeSize, insertType);
+              }
+              if (
+                formatType &&
+                mark.type === formatType &&
+                mark.attrs.dataTracked?.status === 'pending'
+              ) {
+                tr.removeMark(pos, pos + node.nodeSize, formatType);
               }
             });
           });
@@ -330,6 +437,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
+          const formatType = schema.marks['tracked_format'];
 
           const inserts: Array<{ from: number; to: number }> = [];
           doc.descendants((node, pos) => {
@@ -339,6 +447,30 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
               }
             });
           });
+
+          // Invert pending formatting FIRST — a format span may sit on text
+          // that the insert deletions below are about to remove, and mark
+          // operations only stay valid while positions haven't shifted.
+          if (formatType) {
+            doc.descendants((node, pos) => {
+              node.marks.forEach((mark) => {
+                if (mark.type !== formatType || mark.attrs.dataTracked?.status !== 'pending')
+                  return;
+                const from = pos;
+                const to = pos + node.nodeSize;
+                const delta = mark.attrs.dataTracked?.delta ?? {};
+                for (const name of delta.adds ?? []) {
+                  const t = schema.marks[name];
+                  if (t) tr.removeMark(from, to, t);
+                }
+                for (const name of delta.removes ?? []) {
+                  const t = schema.marks[name];
+                  if (t) tr.addMark(from, to, t.create());
+                }
+                tr.removeMark(from, to, formatType);
+              });
+            });
+          }
 
           // Remove delete marks first
           doc.descendants((node, pos) => {
@@ -363,12 +495,25 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
   },
 });
 
+function sameDelta(
+  a: { adds: string[]; removes: string[] },
+  b: { adds: string[]; removes: string[] },
+): boolean {
+  return (
+    a.adds.length === b.adds.length &&
+    a.removes.length === b.removes.length &&
+    a.adds.every((v, i) => v === b.adds[i]) &&
+    a.removes.every((v, i) => v === b.removes[i])
+  );
+}
+
 export function getTrackedChanges(editor: {
   state: { doc: ProseMirrorNode; schema: Schema };
 }): TrackedChangeInfo[] {
   const { doc, schema } = editor.state;
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
+  const formatType = schema.marks['tracked_format'];
   const changes = new Map<string, TrackedChangeInfo>();
 
   if (!insertType || !deleteType) return [];
@@ -379,6 +524,41 @@ export function getTrackedChanges(editor: {
     // the same id appears on multiple marks (defensive against stacked marks).
     const seen = new Set<string>();
     for (const mark of node.marks) {
+      if (formatType && mark.type === formatType) {
+        const data = mark.attrs.dataTracked;
+        if (!data) continue;
+        const { id, authorID, status, createdAt, originCommentId, delta } = data;
+        const segment: FormatSegment = {
+          from: pos,
+          to: pos + node.nodeSize,
+          text: node.text ?? '',
+          adds: [...(delta?.adds ?? [])],
+          removes: [...(delta?.removes ?? [])],
+        };
+        const existing = changes.get(id);
+        if (!existing) {
+          changes.set(id, {
+            id,
+            operation: 'format',
+            segments: [segment],
+            authorID,
+            status,
+            createdAt,
+            ...(originCommentId ? { originCommentId } : {}),
+          });
+        } else if (existing.operation === 'format') {
+          const last = existing.segments[existing.segments.length - 1];
+          if (last.to === segment.from && sameDelta(last, segment)) {
+            // Adjacent spans carrying the same delta were split only by an
+            // unrelated mark boundary — one span in the read model.
+            last.to = segment.to;
+            last.text += segment.text;
+          } else {
+            existing.segments.push(segment);
+          }
+        }
+        continue;
+      }
       if (mark.type !== insertType && mark.type !== deleteType) continue;
       if (!mark.attrs.dataTracked) continue;
       const { id, operation, authorID, status, createdAt, pairId, originCommentId } =
@@ -400,6 +580,7 @@ export function getTrackedChanges(editor: {
         });
       } else {
         const existing = changes.get(id)!;
+        if (existing.operation === 'format') continue;
         // A tracked id is minted across one contiguous change, but that change
         // may span block boundaries (a multi-block paste): the next node
         // carrying it then sits after structure tokens, not directly adjacent.
@@ -508,6 +689,202 @@ function adjacentTracked(
   return null;
 }
 
+type FormatDelta = { adds: string[]; removes: string[] };
+
+type FormatDataTracked = {
+  id: string;
+  operation: 'format';
+  authorID: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  originCommentId?: string;
+  delta: FormatDelta;
+};
+
+/**
+ * Fold one add/remove of a mark into an existing net delta: an add cancels a
+ * pending remove of the same mark (and vice versa) instead of stacking.
+ * Arrays stay sorted so equal deltas compare equal (Mark.eq / segment merge).
+ */
+function composeDelta(
+  existing: FormatDelta | null,
+  action: 'add' | 'remove',
+  markName: string,
+): FormatDelta {
+  const adds = new Set(existing?.adds ?? []);
+  const removes = new Set(existing?.removes ?? []);
+  if (action === 'add') {
+    if (removes.has(markName)) removes.delete(markName);
+    else adds.add(markName);
+  } else if (adds.has(markName)) {
+    adds.delete(markName);
+  } else {
+    removes.add(markName);
+  }
+  return { adds: [...adds].sort(), removes: [...removes].sort() };
+}
+
+// Identity fields shared by every span of one logical format change. Kept on
+// gesture state so a multi-step gesture (unsetBold over disjoint bold runs
+// emits one RemoveMarkStep per run) still yields ONE suggestion id.
+type FormatIdentity = Omit<FormatDataTracked, 'delta'>;
+
+/**
+ * Rebuild one scoped AddMarkStep/RemoveMarkStep as tracked formatting: apply
+ * the real format change per allowed segment and stamp/compose a
+ * tracked_format marker recording the net delta. Positions come pre-mapped
+ * into newTr's frame; mark operations never change document size, so segments
+ * snapshotted before mutation stay valid throughout.
+ */
+function applyFormatStep(
+  newTr: import('@tiptap/pm/state').Transaction,
+  step: AddMarkStep | RemoveMarkStep,
+  from: number,
+  to: number,
+  ctx: {
+    insertType: MarkType;
+    formatType: MarkType;
+    authorID: string;
+    originCommentId: string | null;
+    gesture: { identity: FormatIdentity | null };
+  },
+): void {
+  const { insertType, formatType, authorID, originCommentId, gesture } = ctx;
+  const isAdd = step instanceof AddMarkStep;
+  if (to <= from) return;
+
+  // Plan pass (read-only): split the step's range into homogeneous segments.
+  // Text nodes already break at every mark boundary, so per-node clipping
+  // covers all four boundary kinds (prior format state, existing marker,
+  // pending-insert ownership, block edges) at once.
+  type SegmentPlan = {
+    from: number;
+    to: number;
+    /** raw = same author's pending insertion owns the text: format folds in, no marker. */
+    kind: 'suggest' | 'raw';
+    existing: FormatDataTracked | null;
+  };
+  const segments: SegmentPlan[] = [];
+  newTr.doc.nodesBetween(from, to, (node, pos) => {
+    if (!node.isText) return;
+    const segFrom = Math.max(pos, from);
+    const segTo = Math.min(pos + node.nodeSize, to);
+    if (segTo <= segFrom) return;
+
+    // Segments whose format state wouldn't change carry no suggestion.
+    const hasMark = step.mark.isInSet(node.marks);
+    if (isAdd ? hasMark : !hasMark) return;
+
+    const marker = node.marks.find((m) => m.type === formatType);
+    const markerData = (marker?.attrs.dataTracked ?? null) as FormatDataTracked | null;
+    const pendingMarker = markerData?.status === 'pending' ? markerData : null;
+
+    if (pendingMarker && pendingMarker.authorID !== authorID) {
+      // v1 cross-author policy: another author's pending format suggestion
+      // owns this span — skip it; the gesture proceeds on the other segments.
+      return;
+    }
+
+    const ownPendingInsert = node.marks.some(
+      (m) =>
+        m.type === insertType &&
+        m.attrs.dataTracked?.status === 'pending' &&
+        m.attrs.dataTracked?.authorID === authorID,
+    );
+
+    segments.push({
+      from: segFrom,
+      to: segTo,
+      kind: ownPendingInsert ? 'raw' : 'suggest',
+      existing: pendingMarker,
+    });
+  });
+  if (segments.length === 0) return;
+
+  // Choose the identity for this step's suggest-segments: the OLDEST pending
+  // same-author id the gesture touches wins (deterministic union; ties break
+  // on id). Candidates are markers overlapped by this step plus the identity
+  // already minted/reused by an earlier step of the same gesture.
+  const candidates = new Map<string, FormatIdentity>();
+  for (const seg of segments) {
+    if (seg.existing) {
+      const { delta: _delta, ...identity } = seg.existing;
+      candidates.set(identity.id, identity);
+    }
+  }
+  if (gesture.identity) candidates.set(gesture.identity.id, gesture.identity);
+
+  let identity: FormatIdentity;
+  const ranked = [...candidates.values()].sort(
+    (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
+  );
+  if (ranked.length > 0) {
+    identity = ranked[0];
+  } else {
+    const now = Date.now();
+    identity = {
+      id: uuidv4(),
+      operation: 'format',
+      authorID,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+      ...(originCommentId ? { originCommentId } : {}),
+    };
+  }
+  gesture.identity = identity;
+
+  // Mutation pass. The original step is never replayed wholesale — a blocked
+  // segment must not receive the format — so each allowed segment gets the
+  // real format change explicitly, then its recomposed marker.
+  for (const seg of segments) {
+    if (isAdd) newTr.addMark(seg.from, seg.to, step.mark);
+    else newTr.removeMark(seg.from, seg.to, step.mark.type);
+
+    if (seg.kind === 'raw') continue;
+
+    const delta = composeDelta(
+      seg.existing?.delta ?? null,
+      isAdd ? 'add' : 'remove',
+      step.mark.type.name,
+    );
+    if (delta.adds.length === 0 && delta.removes.length === 0) {
+      // The gesture restored this span's original formatting — nothing left
+      // to suggest here.
+      newTr.removeMark(seg.from, seg.to, formatType);
+    } else {
+      newTr.addMark(
+        seg.from,
+        seg.to,
+        formatType.create({ dataTracked: { ...identity, delta }, changeId: identity.id }),
+      );
+    }
+  }
+
+  // Union: every span still carrying a merged-away id — including spans the
+  // gesture never touched — is rewritten to the winning identity (keeping its
+  // own delta), so one logical change never splinters across ids. updatedAt
+  // rides along unchanged: spans sharing an id must stay Mark.eq-compatible.
+  const loserIds = new Set(ranked.slice(1).map((d) => d.id));
+  if (loserIds.size > 0) {
+    newTr.doc.descendants((node, pos) => {
+      if (!node.isText) return;
+      const m = node.marks.find((mm) => mm.type === formatType);
+      const data = m?.attrs.dataTracked as FormatDataTracked | undefined;
+      if (!m || !data || !loserIds.has(data.id)) return;
+      newTr.addMark(
+        pos,
+        pos + node.nodeSize,
+        formatType.create({
+          dataTracked: { ...identity, delta: data.delta },
+          changeId: identity.id,
+        }),
+      );
+    });
+  }
+}
+
 function transformForTracking(
   tr: import('@tiptap/pm/state').Transaction,
   state: import('@tiptap/pm/state').EditorState,
@@ -517,6 +894,7 @@ function transformForTracking(
   const schema = state.schema;
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
+  const formatType = schema.marks['tracked_format'];
 
   if (!insertType || !deleteType) return tr;
 
@@ -548,15 +926,40 @@ function transformForTracking(
 
   let lastDeleteLeftmost: number | null = null;
   let lastInsertEnd: number | null = null;
+  // One toolbar gesture may emit several scoped mark steps (unsetBold over
+  // disjoint bold runs); sharing this identity keeps them one suggestion.
+  const formatGesture: { identity: FormatIdentity | null } = { identity: null };
 
   for (const step of tr.steps) {
     const newTrStepsBefore = newTr.steps.length;
 
+    if (
+      formatType &&
+      (step instanceof AddMarkStep || step instanceof RemoveMarkStep) &&
+      TRACKED_FORMAT_MARK_NAMES.has(step.mark.type.name)
+    ) {
+      // Scoped formatting becomes a tracked suggestion. Positions translate
+      // into newTr's frame first (this transaction may also carry replace
+      // steps), biased inward like the replace path so struck-through text
+      // kept at the edges is never swallowed.
+      const from = mapToNew.map(step.from, 1);
+      const to = Math.max(from, mapToNew.map(step.to, -1));
+      applyFormatStep(newTr, step, from, to, {
+        insertType,
+        formatType,
+        authorID,
+        originCommentId,
+        gesture: formatGesture,
+      });
+      rebase(step, newTrStepsBefore);
+      continue;
+    }
+
     if (!(step instanceof ReplaceStep)) {
-      // Mark steps (bold, link edits) and structural wrappers pass through
-      // untracked by design — but their positions still have to be translated
-      // into newTr's frame, or they land on the wrong text once any deletion
-      // has been kept.
+      // Remaining mark steps (link edits, code) and structural wrappers pass
+      // through untracked by design — but their positions still have to be
+      // translated into newTr's frame, or they land on the wrong text once
+      // any deletion has been kept.
       const mapped = step.map(mapToNew);
       if (mapped) {
         try {
@@ -723,6 +1126,10 @@ function transformForTracking(
       // change (misattributing user text to an adjacent Claude suggestion).
       if (inserted > 0) {
         newTr.removeMark(insertAt, insertEnd, insertType);
+        // Inherited format markers come off too: fresh text belongs to the
+        // insertion suggestion; its formatting is part of that insert, never
+        // a formatting suggestion of its own.
+        if (formatType) newTr.removeMark(insertAt, insertEnd, formatType);
         newTr.addMark(
           insertAt,
           insertEnd,
