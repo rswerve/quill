@@ -214,6 +214,20 @@ test('Review: prompt carries the guidance, checkbox choices, and full document',
   expect(prompt).not.toContain('```quill-comments');
 });
 
+test('Review: selected model and effort reach the full-document spawn', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'delta', text: 'Looks good.' }, { kind: 'done' }]);
+  await page.getByLabel('Claude model').selectOption('haiku');
+  await page.getByLabel('Claude effort').selectOption('xhigh');
+  await openReviewModal(page, 'alpha beta gamma');
+  await page.locator('.review-modal .btn-primary').click();
+  await expect(page.locator('.review-modal-summary')).toBeVisible({ timeout: 3000 });
+
+  const args = await page.evaluate(
+    () => (window as unknown as { __lastSpawnArgs: unknown }).__lastSpawnArgs,
+  );
+  expect(args).toMatchObject({ model: 'haiku', effort: 'xhigh' });
+});
+
 test('Review: cancel mid-stream discards partial output and returns to the form', async ({
   page,
 }) => {

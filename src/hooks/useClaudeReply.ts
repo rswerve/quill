@@ -6,6 +6,7 @@ import type {
   EditScope,
   QuillEdit,
   QuillEditsBlock,
+  ClaudeRunOptions,
   TrackedChangeInfo,
 } from '../types';
 import { clip } from '../utils/format';
@@ -48,6 +49,8 @@ interface UseClaudeReplyOptions {
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
    *  what is already proposed and awaiting review. */
   getPendingSuggestions: () => TrackedChangeInfo[];
+  /** Global model/effort choices, read immediately before each spawn. */
+  getRunOptions?: () => ClaudeRunOptions;
 }
 
 /** The linked context folder and its file manifest, for the prompt. */
@@ -280,6 +283,8 @@ interface QuillMock {
       prompt: string;
       addDir: string | null;
       allowCreate: boolean;
+      model: ClaudeRunOptions['model'];
+      effort: ClaudeRunOptions['effort'];
     },
     onEvent: (event: ChunkEvent) => void,
   ) => string; // returns cancel token
@@ -499,6 +504,9 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         }
       };
 
+      // Read after asynchronous preflight work so a just-changed footer choice
+      // governs the child we are about to spawn.
+      const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
       if (mock) {
         spawnToken = mock.spawn(
           {
@@ -507,6 +515,8 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             prompt,
             addDir: contextFolder,
             allowCreate: fresh,
+            model: runOptions.model,
+            effort: runOptions.effort,
           },
           dispatch,
         );
@@ -524,6 +534,8 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           prompt,
           addDir: contextFolder,
           allowCreate: fresh,
+          model: runOptions.model,
+          effort: runOptions.effort,
           onEvent: channel,
         });
         spawnToken = cancelToken;

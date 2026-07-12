@@ -27,6 +27,18 @@ export interface AISessionBinding {
   createdByQuill?: boolean;
 }
 
+/** Curated Claude Code model aliases exposed by Quill's global run settings. */
+export type ClaudeModelAlias = 'fable' | 'opus' | 'sonnet' | 'haiku';
+
+/** Claude Code effort levels accepted by the installed CLI. */
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** Null means defer to Claude Code's own default by omitting the CLI flag. */
+export interface ClaudeRunOptions {
+  model: ClaudeModelAlias | null;
+  effort: ClaudeEffort | null;
+}
+
 export interface Comment {
   id: string;
   anchorText: string;

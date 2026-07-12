@@ -1,5 +1,6 @@
 import type { Editor } from '@tiptap/react';
-import type { AISessionBinding } from '../types';
+import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
+import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
 import { basename } from '../utils/path';
 
 interface FooterProps {
@@ -11,6 +12,10 @@ interface FooterProps {
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
   lastKnownModel: string | null;
+  claudeModel: ClaudeModelAlias | null;
+  claudeEffort: ClaudeEffort | null;
+  onClaudeModelChange: (model: ClaudeModelAlias | null) => void;
+  onClaudeEffortChange: (effort: ClaudeEffort | null) => void;
   onOpenSessionPicker: () => void;
   onUnlinkSession: () => void;
   contextFolder: string | null;
@@ -34,6 +39,10 @@ export default function Footer({
   onZoomChange,
   aiSession,
   lastKnownModel,
+  claudeModel,
+  claudeEffort,
+  onClaudeModelChange,
+  onClaudeEffortChange,
   onOpenSessionPicker,
   onUnlinkSession,
   contextFolder,
@@ -130,8 +139,44 @@ export default function Footer({
             : 'No Claude reply has reported a model yet'
         }
       >
-        Model {lastKnownModel ?? '—'}
+        Reported {lastKnownModel ?? '—'}
       </span>
+
+      <label className="footer-claude-setting">
+        <span>Model:</span>
+        <select
+          aria-label="Claude model"
+          value={claudeModel ?? ''}
+          onChange={(event) =>
+            onClaudeModelChange((event.target.value || null) as ClaudeModelAlias | null)
+          }
+        >
+          <option value="">Default</option>
+          {CLAUDE_MODEL_ALIASES.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="footer-claude-setting">
+        <span>Effort:</span>
+        <select
+          aria-label="Claude effort"
+          value={claudeEffort ?? ''}
+          onChange={(event) =>
+            onClaudeEffortChange((event.target.value || null) as ClaudeEffort | null)
+          }
+        >
+          <option value="">Default</option>
+          {CLAUDE_EFFORT_LEVELS.map((effort) => (
+            <option key={effort} value={effort}>
+              {effort}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {aiSession ? (
         <span className="footer-ai-binding linked">

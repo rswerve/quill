@@ -63,6 +63,7 @@ Comments and suggestions share one **focus** model, mirroring Google Docs:
 ### 3.4 AI replies (`@claude`) — the differentiator
 
 - A document can be **linked to a Claude Code session** via the footer ("Link to Claude session…"), choosing from a session picker. Once linked, the footer shows the linked session (`🔗 Claude <id>`) and offers an unlink (×).
+- The footer reports the **actual model named by the latest stream init event** and provides global model and effort controls for future spawns. Model choices are Default (omit the flag), `fable`, `opus`, `sonnet`, and `haiku`; effort choices are Default (omit the flag), `low`, `medium`, `high`, `xhigh`, and `max`. Choices persist across launches and apply to both comment replies and full-document reviews; the reported-model label remains stream truth if the CLI resolves an alias differently.
 - In a comment thread, the user can request a reply from Claude. The request is sent to the linked session and the **answer streams back inline** as an AI-authored reply in the thread.
 - Tagging `@claude` **before a session is linked** — in a new comment or a reply — opens the session picker, and the request fires automatically once a session is chosen (it is never silently dropped).
 - **Start new session (cold start):** the picker also offers **"Start new session"** for documents no Claude session wrote — e.g. one someone sent you. Quill mints a binding (`createdByQuill: true`) under a fresh UUID; the actual session is created on the **first** `@claude` request (spawned with `--session-id` in the document's folder as its working directory) and resumed like any other session afterwards. The button is disabled until the document is saved, since the session needs the doc's folder. Prompts to such a session never claim Claude authored the document (and skip the compaction probe, which only exists to pick the note wording for sessions that actually wrote the doc).
@@ -100,7 +101,7 @@ Comments and suggestions share one **focus** model, mirroring Google Docs:
 
 ### 3.6 Status bar (footer)
 
-Live **filename**, **word count**, **character count**, **line/column**, suggesting badge, zoom control, the reference-folder link control, and the Claude session link control.
+Live **filename**, **word count**, **character count**, **line/column**, suggesting badge, zoom control, the reference-folder link control, the stream-reported Claude model plus global model/effort controls, and the Claude session link control.
 
 ## 4. Data model (contract)
 

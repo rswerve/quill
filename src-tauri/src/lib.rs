@@ -617,7 +617,15 @@ mod tests {
 
     #[test]
     fn claude_resume_args_terminate_variadic_add_dir_before_the_prompt() {
-        let args = claude_resume_args("session-123", "prompt text", Some("/refs"), false).unwrap();
+        let args = claude_resume_args(
+            "session-123",
+            "prompt text",
+            Some("/refs"),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             args,
             vec![
@@ -638,7 +646,8 @@ mod tests {
 
     #[test]
     fn claude_resume_args_protect_a_prompt_without_an_additional_directory() {
-        let args = claude_resume_args("session-123", "--prompt-like-text", None, false).unwrap();
+        let args = claude_resume_args("session-123", "--prompt-like-text", None, false, None, None)
+            .unwrap();
         assert_eq!(
             args[args.len() - 2..],
             ["--".to_string(), "--prompt-like-text".to_string()]
@@ -676,7 +685,7 @@ fi
         let transcript = project.join(format!("{session_id}.jsonl"));
         let argv_log = home.path().join("argv.log");
         let create_args =
-            claude_resume_args(session_id, "prompt text", Some("/refs"), true).unwrap();
+            claude_resume_args(session_id, "prompt text", Some("/refs"), true, None, None).unwrap();
         assert_eq!(&create_args[..2], ["--session-id", session_id]);
         assert_eq!(
             &create_args[create_args.len() - 4..],
@@ -691,13 +700,15 @@ fi
         assert!(first.status.success());
         assert!(transcript.is_file());
 
-        let resume_args = claude_resume_args(session_id, "follow-up", Some("/refs"), true).unwrap();
+        let resume_args =
+            claude_resume_args(session_id, "follow-up", Some("/refs"), true, None, None).unwrap();
         assert_eq!(&resume_args[..2], ["--resume", session_id]);
 
         let failed_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
         let failed_transcript = project.join(format!("{failed_id}.jsonl"));
         let failed_args =
-            claude_resume_args(failed_id, "first attempt", Some("/refs"), true).unwrap();
+            claude_resume_args(failed_id, "first attempt", Some("/refs"), true, None, None)
+                .unwrap();
         let failed = Command::new(&fake)
             .args(&failed_args)
             .env("FAKE_ARGV_LOG", &argv_log)
@@ -707,8 +718,62 @@ fi
             .unwrap();
         assert!(failed.status.success());
         assert!(!failed_transcript.exists());
-        let retry_args = claude_resume_args(failed_id, "retry", Some("/refs"), true).unwrap();
+        let retry_args =
+            claude_resume_args(failed_id, "retry", Some("/refs"), true, None, None).unwrap();
         assert_eq!(&retry_args[..2], ["--session-id", failed_id]);
+    }
+
+    #[test]
+    fn claude_resume_args_include_curated_model_and_effort_before_the_prompt() {
+        let args = claude_resume_args(
+            "session-123",
+            "prompt text",
+            Some("/refs"),
+            false,
+            Some("opus"),
+            Some("max"),
+        )
+        .unwrap();
+        assert_eq!(
+            &args[7..],
+            [
+                "--model",
+                "opus",
+                "--effort",
+                "max",
+                "--add-dir",
+                "/refs",
+                "--",
+                "prompt text",
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_resume_args_reject_unsupported_model_or_effort() {
+        let bad_model =
+            claude_resume_args("session-123", "prompt", None, false, Some("latest"), None)
+                .unwrap_err();
+        assert!(bad_model.contains("unsupported Claude model"));
+
+        let bad_effort =
+            claude_resume_args("session-123", "prompt", None, false, None, Some("extreme"))
+                .unwrap_err();
+        assert!(bad_effort.contains("unsupported Claude effort"));
+    }
+
+    #[test]
+    fn claude_resume_args_accept_every_picker_value() {
+        for model in ["fable", "opus", "sonnet", "haiku"] {
+            let args = claude_resume_args("session-123", "prompt", None, false, Some(model), None)
+                .unwrap();
+            assert!(args.windows(2).any(|pair| pair == ["--model", model]));
+        }
+        for effort in ["low", "medium", "high", "xhigh", "max"] {
+            let args = claude_resume_args("session-123", "prompt", None, false, None, Some(effort))
+                .unwrap();
+            assert!(args.windows(2).any(|pair| pair == ["--effort", effort]));
+        }
     }
 
     #[test]
@@ -1833,6 +1898,8 @@ fn claude_resume_args(
     prompt: &str,
     add_dir: Option<&str>,
     allow_create: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let create_new = allow_create && find_session_jsonl(session_id)?.is_none();
     let mut args = vec![
@@ -1848,6 +1915,20 @@ fn claude_resume_args(
         "--include-partial-messages".to_string(),
         "--verbose".to_string(),
     ];
+    if let Some(model) = model {
+        if !matches!(model, "fable" | "opus" | "sonnet" | "haiku") {
+            return Err(format!("unsupported Claude model alias: {model}"));
+        }
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if let Some(effort) = effort {
+        if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
+            return Err(format!("unsupported Claude effort level: {effort}"));
+        }
+        args.push("--effort".to_string());
+        args.push(effort.to_string());
+    }
     if let Some(dir) = add_dir.filter(|dir| !dir.is_empty()) {
         args.push("--add-dir".to_string());
         args.push(dir.to_string());
@@ -1861,6 +1942,10 @@ fn claude_resume_args(
 }
 
 #[tauri::command]
+// Tauri exposes these as named IPC fields. Keeping the flat command contract
+// makes the mock seam and production invocation identical; grouping only to
+// satisfy this lint would add a wrapper object at every caller.
+#[allow(clippy::too_many_arguments)]
 fn spawn_claude_resume(
     app: tauri::AppHandle,
     session_id: String,
@@ -1868,6 +1953,8 @@ fn spawn_claude_resume(
     prompt: String,
     add_dir: Option<String>,
     allow_create: bool,
+    model: Option<String>,
+    effort: Option<String>,
     on_event: Channel<ChunkEvent>,
 ) -> Result<String, String> {
     let claude_bin = resolve_claude_binary()?;
@@ -1880,6 +1967,8 @@ fn spawn_claude_resume(
         &prompt,
         add_dir.as_deref(),
         allow_create,
+        model.as_deref(),
+        effort.as_deref(),
     )?);
     // A packaged .app launched from Finder inherits launchd's minimal PATH,
     // which lacks Node — and `claude` is a node script, so it would die with

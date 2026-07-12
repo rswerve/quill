@@ -160,7 +160,7 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
     { kind: 'done' },
   ]);
 
-  await expect(page.locator('.footer-model')).toHaveText('Model —');
+  await expect(page.locator('.footer-model')).toHaveText('Reported —');
 
   await addCommentWithAIReply(page, 'hello world', '@claude what is the answer?');
 
@@ -175,7 +175,38 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
   await expect(aiReply.locator('.comment-reply-model')).toHaveText('claude-fable-5');
-  await expect(page.locator('.footer-model')).toHaveText('Model claude-fable-5');
+  await expect(page.locator('.footer-model')).toHaveText('Reported claude-fable-5');
+});
+
+test('Claude model and effort choices persist and reach an @claude spawn', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'delta', text: 'Done.' }, { kind: 'done' }]);
+
+  const model = page.getByLabel('Claude model');
+  const effort = page.getByLabel('Claude effort');
+  await expect(model.locator('option')).toHaveText(['Default', 'fable', 'opus', 'sonnet', 'haiku']);
+  await expect(effort.locator('option')).toHaveText([
+    'Default',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]);
+
+  await model.selectOption('opus');
+  await effort.selectOption('max');
+  await page.reload();
+  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await expect(page.getByLabel('Claude model')).toHaveValue('opus');
+  await expect(page.getByLabel('Claude effort')).toHaveValue('max');
+
+  await page.locator('.ProseMirror').click();
+  await addCommentWithAIReply(page, 'hello world', '@claude revise this');
+  await expect(page.locator('.comment-reply-ai .ai-spinner')).toHaveCount(0, { timeout: 3000 });
+  const args = await page.evaluate(
+    () => (window as unknown as { __lastSpawnArgs: unknown }).__lastSpawnArgs,
+  );
+  expect(args).toMatchObject({ model: 'opus', effort: 'max' });
 });
 
 test('AI reply: @claude in the initial comment triggers a reply', async ({ page }) => {
