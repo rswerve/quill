@@ -49,6 +49,22 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     expect(await display(page, '.comment-layer')).toBe('none');
   });
 
+  test('screen text zoom does not carry into print', async ({ page }) => {
+    await setup(page);
+    await page.locator('.footer-zoom-slider').fill('2.4');
+    await expect(page.locator('.footer-zoom-label')).toHaveText('240%');
+    const screenSize = await page
+      .locator('.ProseMirror')
+      .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+    expect(screenSize).toBeCloseTo(32.4, 1);
+
+    await page.emulateMedia({ media: 'print' });
+    const printSize = await page
+      .locator('.ProseMirror')
+      .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+    expect(printSize).toBeCloseTo(13.5, 1);
+  });
+
   test('renders suggesting-mode markup as an accepted clean copy', async ({ page }) => {
     const { editor } = await setup(page);
 

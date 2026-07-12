@@ -291,8 +291,9 @@ export default function CommentLayer({
     };
   }, [editor, reflow]);
 
-  // `zoom` is a dependency because the anchors' viewport rects scale with CSS
-  // zoom — without it, cards keep stale positions until the next edit.
+  // `zoom` is an invalidation signal: changing inherited document font-size
+  // reflows lines and moves anchor rects. No numeric scale compensation is
+  // needed, but cards must be measured again after that reflow.
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(reflow);

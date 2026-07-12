@@ -246,9 +246,11 @@
   --font-serif: 'Playfair Display', Georgia, serif;
   --font-sans: 'Lato', system-ui, sans-serif;
 
-  --text-doc-title: 26px;
-  --text-doc-h2: 16px;
-  --text-body: 13.5px;
+  /* Document typography is relative to the shell's 12px base so changing the
+     zoom wrapper's font-size scales text and reflows within the fixed page. */
+  --text-doc-title: 1.925926em; /* 26 / 13.5 */
+  --text-doc-h2: 1.185185em; /* 16 / 13.5 */
+  --text-body: 1.125em; /* 13.5 / 12 */
   --text-ui: 12px;
   --text-meta: 11px;
   --text-label: 10px;
@@ -752,6 +754,13 @@ body,
 }
 
 /* ── Page surface ───────────────────────────────────────────────── */
+.editor-page-zoom-wrapper {
+  /* App sets a percentage here. Unlike CSS zoom/transform, inherited
+     font-size changes only document typography: the 816px page stays fixed
+     and text reflows naturally inside it. */
+  font-size: 100%;
+}
+
 .editor-page {
   width: var(--page-max-width);
   flex-shrink: 0;
@@ -807,7 +816,7 @@ body,
 
 .ProseMirror h3 {
   font-family: var(--font-serif);
-  font-size: 14px;
+  font-size: 1.037037em; /* 14 / 13.5 */
   font-weight: 500;
   color: var(--color-ink);
   line-height: var(--leading-tight);
@@ -2131,10 +2140,10 @@ del.track-delete {
     align-items: stretch !important;
   }
 
-  /* Drop the screen zoom; the page is the paper now.
+  /* Drop the screen text scaling; the page is the paper now.
      Full-width, no page card border or rounded corners. */
   .editor-page-zoom-wrapper {
-    zoom: 1 !important;
+    font-size: 100% !important;
   }
   .editor-page {
     width: auto !important;

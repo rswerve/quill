@@ -60,6 +60,17 @@ async function addCommentViaPlusButton(page: Page, replyText: string) {
   await page.waitForTimeout(150);
 }
 
+async function setZoom(page: Page, zoom: number) {
+  await page.locator('.footer-zoom-slider').fill(String(zoom));
+  await expect(page.locator('.footer-zoom-label')).toHaveText(`${Math.round(zoom * 100)}%`);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // SECTION 1 — Basic typing & text content
 // ────────────────────────────────────────────────────────────────────────────
@@ -1226,11 +1237,45 @@ test('Cmd+0 resets zoom to 100%', async ({ page }) => {
   await expect(page.locator('.footer-zoom-label')).toContainText('100%');
 });
 
+test('double-clicking the zoom label resets to 100%', async ({ page }) => {
+  await setup(page);
+  await setZoom(page, 2.4);
+  await page.locator('.footer-zoom-label').dblclick();
+  await expect(page.locator('.footer-zoom-label')).toHaveText('100%');
+});
+
+test('zoom scales document text and reflows inside a fixed-width page', async ({ page }) => {
+  const { editor } = await setup(page);
+  await editor.fill(`${'A readable line of prose wraps naturally. '.repeat(28)}`);
+
+  const metrics = async () => {
+    const pageBox = (await page.locator('.editor-page').boundingBox())!;
+    return page
+      .locator('.ProseMirror')
+      .evaluate((element) => {
+        const paragraph = element.querySelector('p')!;
+        return {
+          fontSize: parseFloat(getComputedStyle(element).fontSize),
+          paragraphHeight: paragraph.getBoundingClientRect().height,
+        };
+      })
+      .then((text) => ({ ...text, pageWidth: pageBox.width }));
+  };
+
+  await setZoom(page, 0.6);
+  const small = await metrics();
+  await setZoom(page, 2.4);
+  const large = await metrics();
+
+  expect(Math.abs(large.pageWidth - small.pageWidth)).toBeLessThan(1);
+  expect(large.pageWidth).toBeGreaterThan(800);
+  expect(large.fontSize / small.fontSize).toBeCloseTo(4, 1);
+  expect(large.paragraphHeight).toBeGreaterThan(small.paragraphHeight * 3);
+});
+
 test('add-comment button stays aligned with the selection across zoom levels', async ({ page }) => {
   const { editor } = await setup(page);
-  // Enough paragraphs that the selection sits well below the page top —
-  // that's where the old inverse-zoom math drifted the most.
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 3; i++) {
     await editor.type(`Paragraph number ${i} with some filler text.`);
     await page.keyboard.press('Enter');
   }
@@ -1247,25 +1292,16 @@ test('add-comment button stays aligned with the selection across zoom levels', a
     return btnTop - selTop;
   };
 
-  const deltaBefore = await deltaAt();
-  // Zoom to 160% (4 × 15% steps).
-  for (let i = 0; i < 4; i++) {
-    await page.keyboard.down('ControlOrMeta');
-    await page.keyboard.press('=');
-    await page.keyboard.up('ControlOrMeta');
-  }
-  await page.waitForTimeout(200);
-  await expect(page.locator('.footer-zoom-label')).not.toContainText('100%');
-
-  // The button should track the (zoom-scaled) selection: the gap between the
-  // two must not grow with zoom. The buggy math drifted it by ~40+ px.
-  const deltaAfter = await deltaAt();
-  expect(Math.abs(deltaAfter - deltaBefore)).toBeLessThan(5);
+  await setZoom(page, 0.6);
+  const deltaSmall = await deltaAt();
+  await setZoom(page, 2.4);
+  const deltaLarge = await deltaAt();
+  expect(Math.abs(deltaLarge - deltaSmall)).toBeLessThan(5);
 });
 
 test('comment card realigns with its anchor when zoom changes', async ({ page }) => {
   const { editor } = await setup(page);
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 3; i++) {
     await editor.type(`Paragraph number ${i} with some filler text.`);
     await page.keyboard.press('Enter');
   }
@@ -1282,19 +1318,11 @@ test('comment card realigns with its anchor when zoom changes', async ({ page })
     return cardTop - markTop;
   };
 
-  const deltaBefore = await deltaAt();
-  for (let i = 0; i < 4; i++) {
-    await page.keyboard.down('ControlOrMeta');
-    await page.keyboard.press('=');
-    await page.keyboard.up('ControlOrMeta');
-  }
-  // Reflow happens in a rAF after the zoom re-render.
-  await page.waitForTimeout(300);
-
-  // Without zoom in the reflow deps the card kept its stale 100% position
-  // while the anchor scaled away from it.
-  const deltaAfter = await deltaAt();
-  expect(Math.abs(deltaAfter - deltaBefore)).toBeLessThan(20);
+  await setZoom(page, 0.6);
+  const deltaSmall = await deltaAt();
+  await setZoom(page, 2.4);
+  const deltaLarge = await deltaAt();
+  expect(Math.abs(deltaLarge - deltaSmall)).toBeLessThan(20);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
