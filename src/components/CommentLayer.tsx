@@ -51,7 +51,6 @@ interface CardCatalogEntry extends AnchoredCardInput {
 const CARD_HEIGHT_ESTIMATE = 120;
 const CARD_GAP = 12;
 const PANEL_HEADER_HEIGHT = 44;
-const PANEL_BOTTOM_CHROME_HEIGHT = 62;
 const COMMENT_COMPOSER_CARD_ID = 'comment-composer';
 const EMPTY_LAYOUT: AnchoredPanelLayout = { positions: [], above: [], below: [] };
 
@@ -318,7 +317,7 @@ export default function CommentLayer({
     const panelHeight = containerRef.current?.clientHeight ?? 0;
     const viewportTop = scrollTopRef.current;
     const viewportBottom =
-      panelHeight > PANEL_HEADER_HEIGHT + PANEL_BOTTOM_CHROME_HEIGHT
+      panelHeight > PANEL_HEADER_HEIGHT
         ? scrollTopRef.current + panelHeight
         : Number.POSITIVE_INFINITY;
     const next = layoutAnchoredCards(catalog, {
@@ -326,8 +325,8 @@ export default function CommentLayer({
       viewportBottom,
       cardViewportTop: scrollTopRef.current + PANEL_HEADER_HEIGHT,
       cardViewportBottom:
-        panelHeight > PANEL_HEADER_HEIGHT + PANEL_BOTTOM_CHROME_HEIGHT
-          ? scrollTopRef.current + panelHeight - PANEL_BOTTOM_CHROME_HEIGHT
+        panelHeight > PANEL_HEADER_HEIGHT
+          ? scrollTopRef.current + panelHeight
           : Number.POSITIVE_INFINITY,
       activeCardId,
       gap: CARD_GAP,
@@ -637,9 +636,8 @@ export default function CommentLayer({
         })}
       </div>
 
-      <div className="comments-compose-chrome">
-        <div className="new-comment general-comment-field">General comment — no selection</div>
-      </div>
+      {/* MAZ OVERRIDE (2026-07-12): Quill supports anchored comments only.
+          Design Q4's unwired general-comment field is intentionally omitted. */}
     </div>
   );
 }

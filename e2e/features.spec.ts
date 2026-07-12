@@ -769,7 +769,6 @@ test('clicking "+" opens compose box', async ({ page }) => {
   await expect(composer).toBeVisible();
   await expect(composer.locator('.comment-composer-quote')).toContainText('hello world');
   await expect(page.locator('.add-comment-compose textarea')).toBeFocused();
-  await expect(page.locator('.comments .general-comment-field')).toBeVisible();
 });
 
 test('selected range stays highlighted while composing a comment', async ({ page }) => {
@@ -1362,7 +1361,9 @@ test('comment card realigns with its anchor when zoom changes', async ({ page })
     const panelBox = (await page.locator('.comments').boundingBox())!;
     const expectedTop = Math.min(
       Math.max(markBox.y, panelBox.y + 44),
-      panelBox.y + panelBox.height - 62 - cardBox.height,
+      // Maz removed the 62px general-comment chrome; anchored cards now use
+      // the full panel height and clamp directly above its bottom edge.
+      panelBox.y + panelBox.height - cardBox.height,
     );
     return Math.abs(cardBox.y - expectedTop);
   };

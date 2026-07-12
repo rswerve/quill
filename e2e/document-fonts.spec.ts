@@ -45,6 +45,31 @@ test('uses Source Serif 4 for 18px body text and 38px headings', async ({ page }
   expect(heading.lineHeight).toBeCloseTo(38 * 1.15, 1);
 });
 
+test('locks the confirmed 21px H3 step in the document scale', async ({ page }) => {
+  const { editor } = await setup(page);
+  await page.keyboard.type('### Subheading');
+
+  const heading = editor.locator('h3');
+  await expect(heading).toHaveText('Subheading');
+  const style = await heading.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return {
+      family: computed.fontFamily,
+      size: parseFloat(computed.fontSize),
+      weight: computed.fontWeight,
+      lineHeight: parseFloat(computed.lineHeight),
+      letterSpacing: computed.letterSpacing,
+      color: computed.color,
+    };
+  });
+  expect(style.family).toContain('Source Serif 4 Variable');
+  expect(style.size).toBeCloseTo(21, 1);
+  expect(style.weight).toBe('600');
+  expect(style.lineHeight).toBeCloseTo(21 * 1.3, 1);
+  expect(style.letterSpacing).toBe('-0.1px');
+  expect(style.color).toBe('rgb(35, 32, 27)');
+});
+
 test('keeps fixed document fonts separate from chrome and clears retired picker keys', async ({
   page,
 }) => {

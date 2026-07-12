@@ -105,9 +105,9 @@ describe('theme catalog', () => {
         '--shadow-frame': '0 24px 60px rgba(50,42,25,0.10)',
         '--shadow-pop': '0 32px 80px rgba(40,32,16,0.25)',
         '--added': '#2E7A4C',
-        '--added-bg': 'rgba(46,122,76,0.08)',
+        '--added-bg': 'rgba(46,122,76,0.06)',
         '--removed': '#BC3B2E',
-        '--removed-bg': 'rgba(188,59,46,0.07)',
+        '--removed-bg': 'rgba(188,59,46,0.05)',
         '--sugg-replace': '#B65C38',
         '--sugg-format': '#8B8371',
         '--badge-format-bg': '#EFEBE0',
@@ -140,9 +140,9 @@ describe('theme catalog', () => {
         '--shadow-frame': '0 24px 60px rgba(20,18,10,0.35)',
         '--shadow-pop': '0 32px 80px rgba(0,0,0,0.5)',
         '--added': '#B8BB26',
-        '--added-bg': 'rgba(184,187,38,0.12)',
+        '--added-bg': 'rgba(184,187,38,0.08)',
         '--removed': '#FB6F63',
-        '--removed-bg': 'rgba(251,111,99,0.12)',
+        '--removed-bg': 'rgba(251,111,99,0.08)',
         '--removed-accent': '#FB4934',
         '--sugg-replace': '#FE8019',
         '--sugg-format': '#A89984',
@@ -176,6 +176,7 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
     expect(tokenContrast(body, '--added', '--bg-card')).toBeGreaterThanOrEqual(4.5);
     expect(tokenContrast(body, '--removed', '--bg-card')).toBeGreaterThanOrEqual(4.5);
     expect(tokenContrast(body, '--text', '--hl-bg')).toBeGreaterThanOrEqual(4.5);
+    expect(tokenContrast(body, '--text-muted', '--bg-rail')).toBeGreaterThanOrEqual(4.5);
 
     // Stripes and decoration rules are graphical elements; Design permits the
     // canonical Gruvbox red here while reserving --removed for all text.
@@ -187,7 +188,8 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
     const acceptBackground = tokenValue(body, '--color-action-accept-bg');
     const rejectBackground = tokenValue(body, '--color-action-reject-bg');
 
-    expect(acceptBackground).not.toBe(rejectBackground);
+    expect(acceptBackground).toBe('transparent');
+    expect(rejectBackground).toBe('transparent');
     expect(tokenValue(body, '--color-action-accept-text')).toBe('var(--added)');
     expect(tokenValue(body, '--color-action-reject-text')).toBe('var(--removed)');
     expect(tokenContrast(body, '--color-action-accept-text', '--bg-card')).toBeGreaterThanOrEqual(
@@ -196,12 +198,8 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
     expect(tokenContrast(body, '--color-action-reject-text', '--bg-card')).toBeGreaterThanOrEqual(
       4.5,
     );
-    expect(tokenValue(body, '--color-action-accept-hover')).toBe(
-      id === 'paper' ? 'rgba(46,122,76,0.14)' : 'rgba(184,187,38,0.18)',
-    );
-    expect(tokenValue(body, '--color-action-reject-hover')).toBe(
-      id === 'paper' ? 'rgba(188,59,46,0.13)' : 'rgba(251,111,99,0.18)',
-    );
+    expect(tokenValue(body, '--color-action-accept-hover')).toBe('var(--added-bg)');
+    expect(tokenValue(body, '--color-action-reject-hover')).toBe('var(--removed-bg)');
     expect(tokenValue(body, '--color-action-accept-active')).toBe(
       tokenValue(body, '--color-action-accept-hover'),
     );
@@ -209,34 +207,24 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
       tokenValue(body, '--color-action-reject-hover'),
     );
 
-    /* KNOWN sub-AA — Design verified text-on-card, not wash-over-card;
-       pending Design ratify AM. Record every composited state so the known
-       shortfall cannot drift silently while the verbatim contract stays put. */
-    const expectedRatios =
+    // Design #4 makes the AA-critical rest state label-on-card and uses its
+    // exact reduced washes only as transient hover feedback. Pin the truthful
+    // composited ratios: Design's claim that every hover remains >=4.5 has one
+    // factual slip (Gruvbox Reject is 4.22), documented without changing the
+    // shared token contract or pretending that transient state passes AA.
+    const expectedHoverRatios =
       id === 'paper'
-        ? {
-            acceptBase: 4.71866,
-            acceptHover: 4.347606,
-            rejectBase: 4.983611,
-            rejectHover: 4.552042,
-          }
-        : {
-            acceptBase: 5.035921,
-            acceptHover: 4.454262,
-            rejectBase: 3.974327,
-            rejectHover: 3.619006,
-          };
-    expect(
-      tokenContrast(body, '--color-action-accept-text', '--color-action-accept-bg'),
-    ).toBeCloseTo(expectedRatios.acceptBase, 5);
+        ? { accept: 4.846736884, reject: 5.133484429 }
+        : { accept: 5.456505128, reject: 4.220492207 };
     expect(
       tokenContrast(body, '--color-action-accept-text', '--color-action-accept-hover'),
-    ).toBeCloseTo(expectedRatios.acceptHover, 5);
-    expect(
-      tokenContrast(body, '--color-action-reject-text', '--color-action-reject-bg'),
-    ).toBeCloseTo(expectedRatios.rejectBase, 5);
+    ).toBeCloseTo(expectedHoverRatios.accept, 8);
     expect(
       tokenContrast(body, '--color-action-reject-text', '--color-action-reject-hover'),
-    ).toBeCloseTo(expectedRatios.rejectHover, 5);
+    ).toBeCloseTo(expectedHoverRatios.reject, 8);
   });
+});
+
+it('renders status-bar text with the AA-safe muted foreground', () => {
+  expect(css).toMatch(/\.footer\.status\s*\{[^}]*color:\s*var\(--text-muted\)/s);
 });
