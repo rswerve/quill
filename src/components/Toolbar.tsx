@@ -1,34 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import { toolbarSelectionStore } from './Editor';
-
-/**
- * Schemes a link mark is allowed to carry. Anything else — most importantly
- * `javascript:` and `data:` — is rejected rather than passed through, because
- * the href is persisted into the saved `.md` and is later clickable: an
- * untrusted scheme in a shared document would be a stored script-execution
- * vector. The list is the set of navigations a Markdown link legitimately needs.
- */
-const ALLOWED_LINK_SCHEMES = ['http', 'https', 'mailto', 'tel'];
-
-/**
- * Make a typed URL usable as an href: a value with an allowed explicit scheme
- * (https:, mailto:, tel:) or an in-page/relative reference passes through; a
- * bare domain like "example.com" gets https://. A value carrying any other
- * scheme (e.g. `javascript:`) is rejected and returns empty. Empty input stays
- * empty.
- */
-export function normalizeHref(raw: string): string {
-  const url = raw.trim();
-  if (!url) return '';
-  // In-page / relative references (#anchor, /path, ./sibling) are always safe.
-  if (/^[#/.]/.test(url)) return url;
-  const schemeMatch = url.match(/^([a-z][a-z0-9+.-]*):/i);
-  if (schemeMatch) {
-    return ALLOWED_LINK_SCHEMES.includes(schemeMatch[1].toLowerCase()) ? url : '';
-  }
-  return `https://${url}`;
-}
+import {
+  applyLinkTarget,
+  captureLinkTarget,
+  removeLinkTarget,
+  type LinkTarget,
+} from '../utils/linkEditing';
 
 export type ThemeId = 'paper' | 'gruvbox';
 
@@ -202,7 +180,7 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
   const [url, setUrl] = useState('');
   // The popover's input steals focus from the editor, so capture the target
   // range when opening and re-apply it when the link is committed.
-  const [range, setRange] = useState<{ from: number; to: number } | null>(null);
+  const [target, setTarget] = useState<LinkTarget | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const onLink = editor.isActive('link');
@@ -210,41 +188,31 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
   const canLink = onLink || from !== to;
 
   const openPopover = () => {
-    const sel = editor.state.selection;
-    if (sel.from === sel.to && !editor.isActive('link')) return;
-    setUrl((editor.getAttributes('link').href as string | undefined) ?? '');
-    setRange({ from: sel.from, to: sel.to });
+    const nextTarget = captureLinkTarget(editor);
+    if (!nextTarget) return;
+    setUrl(nextTarget.href);
+    setTarget(nextTarget);
     setOpen(true);
   };
 
   const close = () => {
     setOpen(false);
-    setRange(null);
+    setTarget(null);
     editor.commands.focus();
   };
 
   const apply = () => {
-    if (!range) return;
-    const href = normalizeHref(url);
-    // extendMarkRange covers the whole existing link when the cursor sits
-    // inside one; on plain text it leaves the selection alone. An empty URL
-    // removes the link, same as the explicit Remove button.
-    const chain = editor.chain().focus().setTextSelection(range).extendMarkRange('link');
-    if (href) {
-      chain.setLink({ href });
-    } else {
-      chain.unsetLink();
-    }
-    chain.run();
+    if (!target) return;
+    applyLinkTarget(editor, target, url);
     setOpen(false);
-    setRange(null);
+    setTarget(null);
   };
 
   const remove = () => {
-    if (!range) return;
-    editor.chain().focus().setTextSelection(range).extendMarkRange('link').unsetLink().run();
+    if (!target) return;
+    removeLinkTarget(editor, target);
     setOpen(false);
-    setRange(null);
+    setTarget(null);
   };
 
   // Cmd+K from anywhere (the editor owns focus most of the time).
@@ -252,10 +220,10 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
     function onKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
         e.preventDefault();
-        const sel = editor.state.selection;
-        if (sel.from === sel.to && !editor.isActive('link')) return;
-        setUrl((editor.getAttributes('link').href as string | undefined) ?? '');
-        setRange({ from: sel.from, to: sel.to });
+        const nextTarget = captureLinkTarget(editor);
+        if (!nextTarget) return;
+        setUrl(nextTarget.href);
+        setTarget(nextTarget);
         setOpen(true);
       }
     }

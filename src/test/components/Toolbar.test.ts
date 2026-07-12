@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeHref } from '../../components/Toolbar';
+import { normalizeHref } from '../../utils/linkEditing';
 
 describe('normalizeHref', () => {
   it('passes through URLs with an explicit scheme', () => {
