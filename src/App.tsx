@@ -433,10 +433,10 @@ export default function App() {
     setBottomSpacer((prev) => (prev === next ? prev : next));
   }, [maxCardBottom, bottomSpacer, scrollTick, zoom, editor]);
 
-  // Re-render once after a zoom change so the add-comment button re-reads
-  // coordsAtPos: the render that applies the new zoom still measures the old
-  // layout (the style lands in the DOM after render), so without this the
-  // button sits one zoom level behind.
+  // Re-render once after a text-size change so the add-comment button re-reads
+  // coordsAtPos after the editor has reflowed. The style lands in the DOM after
+  // render, so measuring in that same render would leave the button one layout
+  // behind.
   useEffect(() => {
     const raf = requestAnimationFrame(() => setScrollTick((t) => t + 1));
     return () => cancelAnimationFrame(raf);
@@ -1300,7 +1300,11 @@ export default function App() {
           />
         )}
         <div className="editor-scroll-area">
-          <div className="editor-page-zoom-wrapper" style={{ zoom }}>
+          <div
+            className="editor-page-zoom-wrapper"
+            style={{ fontSize: `${Math.round(zoom * 100)}%` }}
+            data-editor-zoom={zoom}
+          >
             <QuillEditor
               key={editorKey}
               ref={editorRef}
@@ -1325,8 +1329,8 @@ export default function App() {
           (() => {
             const commentLayer = commentLayerRef.current;
             const commentLayerRect = commentLayer?.getBoundingClientRect();
-            // Fixed positioning: coordsAtPos already returns viewport coordinates
-            // scaled by CSS zoom, so they're used as-is — no zoom math.
+            // Fixed positioning: coordsAtPos reports the post-reflow viewport
+            // coordinates directly, so no scale compensation is needed.
             const top = editor
               ? editor.view.coordsAtPos(selectionInfo.from).top
               : selectionInfo.top;

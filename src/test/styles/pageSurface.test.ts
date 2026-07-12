@@ -81,3 +81,17 @@ describe('reading measure (spec 12 — wider surface)', () => {
     expect(96).not.toBeLessThanOrEqual(72);
   });
 });
+
+describe('document zoom reflows text without scaling the page box', () => {
+  it('uses inherited font sizing and never CSS zoom on the page wrapper', () => {
+    expect(css).toMatch(/\.editor-page-zoom-wrapper\s*{[^}]*font-size:\s*100%/s);
+    expect(css).not.toMatch(/(^|[;{\s])zoom\s*:/m);
+    expect(ruleBody(css, '.ProseMirror')).toMatch(/font-size:\s*var\(--text-body\)/);
+  });
+
+  it('resets the inherited screen scale for print', () => {
+    const print = css.slice(css.indexOf('@media print'));
+    expect(print).toMatch(/\.editor-page-zoom-wrapper\s*{[^}]*font-size:\s*100%\s*!important/s);
+    expect(print).not.toMatch(/\.editor-page-zoom-wrapper\s*{[^}]*zoom\s*:/s);
+  });
+});
