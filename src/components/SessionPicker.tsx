@@ -159,18 +159,25 @@ export default function SessionPicker({
         </div>
 
         <div className="session-picker-footer">
-          <button
-            className="btn-ghost session-picker-new"
-            onClick={handleStartNew}
-            disabled={!newSessionCwd}
-            title={
-              newSessionCwd
-                ? `Bind a fresh Claude session running in ${newSessionCwd}`
-                : 'Save the document first — the new session runs in the document’s folder'
-            }
-          >
-            Start new session
-          </button>
+          <div className="session-picker-new-group">
+            <button
+              className="btn-ghost session-picker-new"
+              onClick={handleStartNew}
+              disabled={!newSessionCwd}
+              title={
+                newSessionCwd
+                  ? `Bind a fresh Claude session running in ${newSessionCwd}`
+                  : 'Save the document first — the new session runs in the document’s folder'
+              }
+            >
+              Start new session
+            </button>
+            {!newSessionCwd && (
+              <span className="session-picker-new-hint">
+                Save the document first — a new session runs in its folder
+              </span>
+            )}
+          </div>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>

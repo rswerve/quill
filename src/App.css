@@ -271,7 +271,7 @@
   --radius-full: 50%;
 
   --toolbar-height: 42px;
-  --statusbar-height: 28px;
+  --statusbar-height: 34px;
   --comment-panel-width: 260px;
   --page-max-width: 816px;
   /* 816 − 2×64 = 688px measure (~85 chars). Trim padding, not width, so the
@@ -2050,12 +2050,21 @@ del.track-delete {
   padding: 10px 16px;
   border-top: 1px solid var(--color-border);
 }
-.session-picker-new {
+.session-picker-new-group {
   margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
 }
 .session-picker-new:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
+}
+/* Explains the disabled state inline — a hover-only tooltip fails silently
+   for anyone who doesn't think to hover a dead-looking button. */
+.session-picker-new-hint {
+  font-size: var(--text-meta);
+  color: var(--color-ink-muted, #888);
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────── */
