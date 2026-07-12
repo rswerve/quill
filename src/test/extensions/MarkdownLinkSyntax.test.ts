@@ -105,6 +105,29 @@ describe('MarkdownLinkSyntax', () => {
     expectLink(editor, 'text and', 'https://www.thenalink.com');
   });
 
+  it.each([false, true])(
+    'keeps continued typing outside a converted Markdown link (suggesting=%s)',
+    (suggesting) => {
+      const editor = createEditor(suggesting);
+      typeText(editor, '[a](https://x.com) more');
+
+      expect(editor.state.doc.textContent).toBe('a more');
+      const linkedText: string[] = [];
+      editor.state.doc.descendants((node) => {
+        if (node.isText && node.marks.some((mark) => mark.type.name === 'link')) {
+          linkedText.push(node.text ?? '');
+        }
+      });
+      expect(linkedText).toEqual(['a']);
+    },
+  );
+
+  it('keeps an isolated converted Markdown link exact', () => {
+    const editor = createEditor();
+    typeText(editor, '[a](https://x.com)');
+    expectLink(editor, 'a', 'https://x.com');
+  });
+
   it('converts every pasted Markdown link before bare-URL autolinking', () => {
     const editor = createEditor();
     editor.commands.insertContent(`${exactMarkdownLink} + [two](https://two.example)`, {

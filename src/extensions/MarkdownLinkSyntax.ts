@@ -33,12 +33,18 @@ function replaceMarkdownLink(
   range: { from: number; to: number },
   data: MarkdownLinkData | undefined,
 ): void | null {
-  if (!data || !state.schema.marks['link']) return null;
+  const linkType = state.schema.marks['link'];
+  if (!data || !linkType) return null;
   const href = normalizeHref(data.href);
   if (!href) return null;
 
   const marks = replacementMarks(state, range.from, range.to, href);
-  state.tr.replaceWith(range.from, range.to, state.schema.text(data.text, marks));
+  state.tr
+    .replaceWith(range.from, range.to, state.schema.text(data.text, marks))
+    // Link is inclusive while StarterKit autolinking is enabled. Make the
+    // post-rule caret state explicit so the next character starts outside
+    // the link without disabling bare-URL autolink globally.
+    .removeStoredMark(linkType);
 }
 
 /**

@@ -241,6 +241,22 @@ test.describe('Markdown link shortcuts', () => {
     await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
   });
 
+  test('continued typing stays outside a converted Markdown link', async ({ page }) => {
+    const { editor } = await setup(page);
+    await page.keyboard.type('[a](https://x.com) more');
+
+    await expect(editor).toHaveText('a more');
+    await expect(editor.locator('a[href="https://x.com"]')).toHaveText('a');
+  });
+
+  test('an isolated converted Markdown link keeps its exact label', async ({ page }) => {
+    const { editor } = await setup(page);
+    await page.keyboard.type('[a](https://x.com)');
+
+    await expect(editor).toHaveText('a');
+    await expect(editor.locator('a[href="https://x.com"]')).toHaveText('a');
+  });
+
   test('pasting the exact Markdown syntax converts it before bare-URL autolinking', async ({
     page,
   }) => {

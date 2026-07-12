@@ -1267,5 +1267,12 @@ function transformForTracking(
     }
   }
 
+  // Input rules can deliberately set the marks for what the user types next
+  // (Markdown links remove their inclusive link mark at the closing `)`).
+  // Apply this AFTER setting the translated selection above because changing
+  // a transaction's selection clears its stored marks. `null` means "derive
+  // from the cursor" and must stay untouched.
+  if (tr.storedMarks !== null) newTr.setStoredMarks(tr.storedMarks);
+
   return newTr;
 }
