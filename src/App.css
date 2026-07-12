@@ -1036,14 +1036,13 @@ del.track-delete {
   padding: 0 1px;
 }
 
-/* A pending formatting suggestion. The proposed formatting itself is already
-   visible, so the marker is only a restrained tint locating the suggestion —
-   an underline indicator would collide with real underlines and spellcheck
-   squiggles. Engine placeholder: final treatment ships with the format card. */
-span.track-format {
-  background: color-mix(in srgb, var(--color-track-add-bg) 55%, transparent);
+/* Pending formatting is already applied; this restrained wash indicates that
+   the formatting itself still needs review without competing with ins/del. */
+.ProseMirror span.track-format {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   border-radius: 2px;
-  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 /* Review actions are intentionally tonal rather than filled: the tracked text
@@ -1563,6 +1562,9 @@ span.track-format {
 .suggestion-card-replace .comment-thread-line {
   background: linear-gradient(var(--color-track-del-line), var(--color-track-add-line));
 }
+.suggestion-card-format .comment-thread-line {
+  background: var(--color-accent-mid);
+}
 
 .suggestion-type-badge {
   font-size: 11px;
@@ -1582,6 +1584,16 @@ span.track-format {
 .suggestion-type-badge.replace {
   background: var(--color-highlight-bg);
   color: var(--color-ink);
+}
+.suggestion-type-badge.format {
+  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+  color: var(--color-accent);
+}
+.formatting-change-description {
+  margin: 6px 12px 0;
+  color: var(--color-ink-mid);
+  font-size: var(--text-meta);
+  font-weight: 600;
 }
 
 /* Provenance chip: links a Claude suggestion card back to the comment whose
@@ -2197,6 +2209,10 @@ span.track-format {
   }
   del.track-delete {
     display: none !important;
+  }
+  .ProseMirror span.track-format {
+    background: none !important;
+    padding: 0 !important;
   }
   mark.comment-mark,
   .ProseMirror .pending-comment,

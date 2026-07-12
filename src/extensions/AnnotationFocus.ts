@@ -18,7 +18,9 @@ function nodeMatches(node: ProseMirrorNode, target: AnnotationFocusTarget): bool
   return node.marks.some((mark) =>
     target.kind === 'comment'
       ? mark.type.name === 'comment' && mark.attrs.commentId === target.id
-      : (mark.type.name === 'tracked_insert' || mark.type.name === 'tracked_delete') &&
+      : (mark.type.name === 'tracked_insert' ||
+          mark.type.name === 'tracked_delete' ||
+          mark.type.name === 'tracked_format') &&
         (mark.attrs.dataTracked?.id === target.id || mark.attrs.dataTracked?.pairId === target.id),
   );
 }

@@ -31,6 +31,19 @@ const validSuggestion = {
   status: 'pending',
 };
 
+const validFormatSuggestion = {
+  id: 'fmt1',
+  type: 'format',
+  author: 'Claude',
+  createdAt: '2026-01-01T00:00:00Z',
+  status: 'pending',
+  originCommentId: 'c1',
+  segments: [
+    { from: 8, to: 12, text: 'late', adds: ['strike', 'bold', 'bold'], removes: [] },
+    { from: 1, to: 4, text: 'new', adds: [], removes: ['italic'] },
+  ],
+};
+
 describe('sanitizeComments', () => {
   it('keeps a well-formed comment', () => {
     expect(sanitizeComments([validComment])).toEqual([validComment]);
@@ -143,6 +156,57 @@ describe('sanitizeSuggestions', () => {
     expect('originCommentId' in empty).toBe(false);
     const [numeric] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: 7 }]);
     expect('originCommentId' in numeric).toBe(false);
+  });
+
+  it('keeps format suggestions and canonicalizes segment and mark order', () => {
+    expect(sanitizeSuggestions([validFormatSuggestion])).toEqual([
+      {
+        ...validFormatSuggestion,
+        segments: [
+          { from: 1, to: 4, text: 'new', adds: [], removes: ['italic'] },
+          { from: 8, to: 12, text: 'late', adds: ['bold', 'strike'], removes: [] },
+        ],
+      },
+    ]);
+  });
+
+  it('filters unknown format names but retains the valid delta', () => {
+    const [suggestion] = sanitizeSuggestions([
+      {
+        ...validFormatSuggestion,
+        segments: [{ from: 1, to: 4, text: 'new', adds: ['bold', 'underline'], removes: [] }],
+      },
+    ]);
+    expect(suggestion).toMatchObject({
+      type: 'format',
+      segments: [{ from: 1, to: 4, text: 'new', adds: ['bold'], removes: [] }],
+    });
+  });
+
+  it('drops malformed format suggestions rather than restoring an inexact inverse', () => {
+    const malformed = [
+      { ...validFormatSuggestion, segments: [] },
+      {
+        ...validFormatSuggestion,
+        segments: [{ from: 2, to: 2, text: '', adds: ['bold'], removes: [] }],
+      },
+      {
+        ...validFormatSuggestion,
+        segments: [{ from: 1, to: 4, text: 'new', adds: ['bold'], removes: ['bold'] }],
+      },
+      {
+        ...validFormatSuggestion,
+        segments: [
+          { from: 1, to: 5, text: 'first', adds: ['bold'], removes: [] },
+          { from: 4, to: 8, text: 'overlap', adds: ['italic'], removes: [] },
+        ],
+      },
+      {
+        ...validFormatSuggestion,
+        segments: [{ from: 1, to: 4, text: 'new', adds: ['underline'], removes: [] }],
+      },
+    ];
+    expect(sanitizeSuggestions(malformed)).toEqual([]);
   });
 });
 

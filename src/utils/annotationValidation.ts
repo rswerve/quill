@@ -2,9 +2,9 @@ import type {
   Comment,
   Reply,
   Suggestion,
-  SuggestionType,
   SuggestionStatus,
   AISessionBinding,
+  FormatSegment,
 } from '../types';
 
 /**
@@ -76,31 +76,81 @@ function sanitizeComment(raw: unknown): Comment | null {
   };
 }
 
-const SUGGESTION_TYPES: SuggestionType[] = ['insertion', 'deletion'];
 const SUGGESTION_STATUSES: SuggestionStatus[] = ['pending', 'accepted', 'rejected'];
+const FORMAT_MARKS = ['bold', 'italic', 'strike'] as const;
+
+function sanitizeFormatNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [
+    ...new Set(
+      raw.filter(
+        (name): name is string =>
+          typeof name === 'string' && (FORMAT_MARKS as readonly string[]).includes(name),
+      ),
+    ),
+  ].sort();
+}
+
+function sanitizeFormatSegment(raw: unknown): FormatSegment | null {
+  if (!isObject(raw)) return null;
+  const from = toPosition(raw.from);
+  const to = toPosition(raw.to);
+  if (from === null || to === null) return null;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  if (start === end) return null;
+
+  const adds = sanitizeFormatNames(raw.adds);
+  const removes = sanitizeFormatNames(raw.removes);
+  if (adds.length === 0 && removes.length === 0) return null;
+  if (adds.some((name) => removes.includes(name))) return null;
+
+  return {
+    from: start,
+    to: end,
+    text: typeof raw.text === 'string' ? raw.text : '',
+    adds,
+    removes,
+  };
+}
 
 function sanitizeSuggestion(raw: unknown): Suggestion | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id)) return null;
-  if (!SUGGESTION_TYPES.includes(raw.type as SuggestionType)) return null;
-  const from = toPosition(raw.from);
-  const to = toPosition(raw.to);
-  if (from === null || to === null) return null;
   const status = SUGGESTION_STATUSES.includes(raw.status as SuggestionStatus)
     ? (raw.status as SuggestionStatus)
     : 'pending';
-  return {
+  const base = {
     id: raw.id,
-    type: raw.type as SuggestionType,
+    author: typeof raw.author === 'string' ? raw.author : '',
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+    status,
+    ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
+  };
+
+  if (raw.type === 'format') {
+    if (!Array.isArray(raw.segments)) return null;
+    const segments = raw.segments.map(sanitizeFormatSegment);
+    if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
+    const canonical = (segments as FormatSegment[]).sort((a, b) => a.from - b.from || a.to - b.to);
+    if (canonical.some((segment, index) => index > 0 && canonical[index - 1].to > segment.from)) {
+      return null;
+    }
+    return { ...base, type: 'format', segments: canonical };
+  }
+
+  if (raw.type !== 'insertion' && raw.type !== 'deletion') return null;
+  const from = toPosition(raw.from);
+  const to = toPosition(raw.to);
+  if (from === null || to === null) return null;
+  return {
+    ...base,
+    type: raw.type,
     from: Math.min(from, to),
     to: Math.max(from, to),
     originalText: typeof raw.originalText === 'string' ? raw.originalText : '',
     suggestedText: typeof raw.suggestedText === 'string' ? raw.suggestedText : '',
-    author: typeof raw.author === 'string' ? raw.author : '',
-    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
-    status,
     ...(isNonEmptyString(raw.pairId) ? { pairId: raw.pairId } : {}),
-    ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
   };
 }
 

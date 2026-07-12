@@ -1,5 +1,5 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Comment, Suggestion, TrackedChangeInfo, TrackedTextChange } from '../types';
+import type { Comment, Suggestion, TrackedChangeInfo } from '../types';
 
 /**
  * Review persistence: tracked-change and comment marks are the runtime truth,
@@ -14,26 +14,37 @@ import type { Comment, Suggestion, TrackedChangeInfo, TrackedTextChange } from '
 
 /** Serialize live tracked changes into sidecar-shaped suggestion records. */
 export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Suggestion[] {
-  return (
-    changes
-      .filter((c) => c.status === 'pending')
-      // TODO(codex): persist format suggestions as a sidecar union variant with
-      // segments; until that lands they are runtime-only and dropped at save.
-      .filter((c): c is TrackedTextChange => c.operation !== 'format')
-      .map((c) => ({
+  return changes
+    .filter((c) => c.status === 'pending')
+    .map((c): Suggestion => {
+      const base = {
         id: c.id,
-        type: c.operation === 'insert' ? ('insertion' as const) : ('deletion' as const),
+        author: c.authorID,
+        createdAt: new Date(c.createdAt).toISOString(),
+        status: 'pending' as const,
+        ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
+      };
+      if (c.operation === 'format') {
+        return {
+          ...base,
+          type: 'format',
+          segments: c.segments.map((segment) => ({
+            ...segment,
+            adds: [...segment.adds],
+            removes: [...segment.removes],
+          })),
+        };
+      }
+      return {
+        ...base,
+        type: c.operation === 'insert' ? 'insertion' : 'deletion',
         from: c.from,
         to: c.to,
         originalText: c.operation === 'delete' ? c.text : '',
         suggestedText: c.operation === 'insert' ? c.text : '',
-        author: c.authorID,
-        createdAt: new Date(c.createdAt).toISOString(),
-        status: 'pending' as const,
         ...(c.pairId ? { pairId: c.pairId } : {}),
-        ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
-      }))
-  );
+      };
+    });
 }
 
 /**
@@ -74,6 +85,7 @@ export function restoreReviewMarks(
   const commentType = schema.marks['comment'];
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
+  const formatType = schema.marks['tracked_format'];
   const size = doc.content.size;
   const clamp = (p: number) => Math.max(0, Math.min(p, size));
 
@@ -87,14 +99,36 @@ export function restoreReviewMarks(
     }
   }
 
-  if (insertType && deleteType) {
-    for (const s of suggestions) {
-      if (s.status !== 'pending') continue;
+  for (const s of suggestions) {
+    if (s.status !== 'pending') continue;
+    const createdAt = Date.parse(s.createdAt) || Date.now();
+
+    if (s.type === 'format') {
+      if (!formatType) continue;
+      for (const segment of s.segments) {
+        const from = clamp(segment.from);
+        const to = clamp(segment.to);
+        if (to <= from) continue;
+        const dataTracked = {
+          id: s.id,
+          operation: 'format',
+          authorID: s.author,
+          status: 'pending',
+          createdAt,
+          updatedAt: createdAt,
+          ...(s.originCommentId ? { originCommentId: s.originCommentId } : {}),
+          delta: { adds: [...segment.adds], removes: [...segment.removes] },
+        };
+        tr.addMark(from, to, formatType.create({ dataTracked, changeId: s.id }));
+      }
+      continue;
+    }
+
+    if (insertType && deleteType) {
       const from = clamp(s.from);
       const to = clamp(s.to);
       if (to <= from) continue;
       const operation = s.type === 'insertion' ? 'insert' : 'delete';
-      const createdAt = Date.parse(s.createdAt) || Date.now();
       const dataTracked = {
         id: s.id,
         operation,
