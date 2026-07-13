@@ -157,6 +157,40 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
   await expect(activeEditor(page)).not.toContainText('Throw this away');
 });
 
+for (const [label, workspace] of [
+  ['malformed JSON', '{ not valid JSON'],
+  [
+    'an unsupported version',
+    JSON.stringify({ version: 99, savedAt: '2026-07-13T05:00:00.000Z', tabs: [] }),
+  ],
+] as const) {
+  test(`${label} is preserved and never overwritten before recovery is acknowledged`, async ({
+    page,
+  }) => {
+    await setupMemoryTauri(page, { workspace });
+
+    const recovery = page.locator('.app-modal');
+    await expect(recovery).toContainText('Workspace recovery could not be read');
+    const stateBeforeAcknowledgement = await page.evaluate(() => ({
+      raw: sessionStorage.getItem('__quill_test_workspace'),
+      writes: (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.filter(
+        (call) => call.cmd === 'write_draft',
+      ).length,
+    }));
+    expect(stateBeforeAcknowledgement).toEqual({ raw: workspace, writes: 0 });
+
+    await recovery.getByRole('button', { name: 'Preserve & Continue' }).click();
+    await expect(recovery).toHaveCount(0);
+    const stateAfterAcknowledgement = await page.evaluate(() => ({
+      quarantined: sessionStorage.getItem('__quill_test_quarantined_workspace'),
+      quarantineCalls: (
+        window as unknown as { __quillCalls: Array<{ cmd: string }> }
+      ).__quillCalls.filter((call) => call.cmd === 'quarantine_draft').length,
+    }));
+    expect(stateAfterAcknowledgement).toEqual({ quarantined: workspace, quarantineCalls: 1 });
+  });
+}
+
 test('legacy draft.json payload migrates into a one-tab workspace recovery', async ({ page }) => {
   const legacyDraft = {
     version: 1,

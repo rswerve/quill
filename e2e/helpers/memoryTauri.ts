@@ -93,6 +93,13 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             sessionStorage.removeItem(workspaceKey);
             return null;
           }
+          if (cmd === 'quarantine_draft') {
+            const raw = sessionStorage.getItem(workspaceKey);
+            if (raw === null) return null;
+            sessionStorage.setItem('__quill_test_quarantined_workspace', raw);
+            sessionStorage.removeItem(workspaceKey);
+            return '/app/workspace.corrupt-test.json';
+          }
           if (cmd === 'take_pending_deep_link') return null;
           if (cmd === 'has_native_menu') return false;
           if (cmd === 'show_open_dialog') return openPath ?? null;

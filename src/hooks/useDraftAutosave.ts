@@ -23,10 +23,16 @@ interface UseWorkspaceAutosaveOptions {
 }
 
 interface UseWorkspaceAutosaveReturn {
-  readWorkspace: () => Promise<WorkspaceFile | null>;
+  readWorkspace: () => Promise<WorkspaceReadResult>;
   writeWorkspace: (workspace?: WorkspaceFile) => Promise<boolean>;
   deleteWorkspace: () => Promise<void>;
+  quarantineWorkspace: () => Promise<string | null>;
 }
+
+export type WorkspaceReadResult =
+  | { status: 'missing' }
+  | { status: 'valid'; workspace: WorkspaceFile }
+  | { status: 'invalid'; reason: string };
 
 /**
  * Validate and sanitize a parsed draft. The draft is JSON from disk that may
@@ -103,7 +109,9 @@ export function sanitizeWorkspace(raw: unknown): WorkspaceFile | null {
   const tabs: WorkspaceTab[] = [];
   for (const candidate of workspace.tabs) {
     const tab = sanitizeWorkspaceTab(candidate);
-    if (!tab || seen.has(tab.tabId)) continue;
+    // Recovery is atomic: never silently restore and later overwrite only a
+    // valid subset of a workspace whose other tabs are malformed.
+    if (!tab || seen.has(tab.tabId)) return null;
     seen.add(tab.tabId);
     tabs.push(tab);
   }
@@ -154,6 +162,14 @@ export function useWorkspaceAutosave({
     }
   }, []);
 
+  const quarantineWorkspace = useCallback(async (): Promise<string | null> => {
+    try {
+      return await invoke<string | null>('quarantine_draft');
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     void writeWorkspace();
@@ -162,16 +178,28 @@ export function useWorkspaceAutosave({
     return () => clearInterval(timer);
   }, [enabled, hasDirtyTabs, revision, writeWorkspace]);
 
-  const readWorkspace = useCallback(async (): Promise<WorkspaceFile | null> => {
+  const readWorkspace = useCallback(async (): Promise<WorkspaceReadResult> => {
     try {
       const raw = await invoke<string | null>('read_draft');
-      if (!raw) return null;
-      const parsed: unknown = JSON.parse(raw);
-      return sanitizeWorkspace(parsed);
+      if (!raw) return { status: 'missing' };
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { status: 'invalid', reason: 'The workspace file is not valid JSON.' };
+      }
+      const workspace = sanitizeWorkspace(parsed);
+      return workspace
+        ? { status: 'valid', workspace }
+        : {
+            status: 'invalid',
+            reason: 'The workspace version or one of its document snapshots is unsupported.',
+          };
     } catch {
-      return null;
+      // Outside Tauri the persistence commands are intentionally unavailable.
+      return { status: 'missing' };
     }
   }, []);
 
-  return { readWorkspace, writeWorkspace, deleteWorkspace };
+  return { readWorkspace, writeWorkspace, deleteWorkspace, quarantineWorkspace };
 }

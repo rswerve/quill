@@ -57,6 +57,10 @@ function deleteCalls() {
   return mockInvoke.mock.calls.filter(([cmd]) => cmd === 'delete_draft');
 }
 
+function quarantineCalls() {
+  return mockInvoke.mock.calls.filter(([cmd]) => cmd === 'quarantine_draft');
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockInvoke.mockResolvedValue(undefined);
@@ -173,7 +177,10 @@ describe('useWorkspaceAutosave', () => {
           getWorkspace: () => WORKSPACE,
         }),
       );
-      expect(await result.current.readWorkspace()).toEqual(WORKSPACE);
+      expect(await result.current.readWorkspace()).toEqual({
+        status: 'valid',
+        workspace: WORKSPACE,
+      });
     });
 
     it('migrates a legacy single-document draft into one dirty workspace tab', async () => {
@@ -220,10 +227,10 @@ describe('useWorkspaceAutosave', () => {
           getWorkspace: () => WORKSPACE,
         }),
       );
-      expect(await result.current.readWorkspace()).toBeNull();
+      expect(await result.current.readWorkspace()).toEqual({ status: 'missing' });
     });
 
-    it('drops malformed tabs and rejects an unusable envelope', async () => {
+    it('rejects malformed JSON, unsupported versions, and any malformed tab atomically', async () => {
       const { result } = renderHook(() =>
         useWorkspaceAutosave({
           enabled: false,
@@ -234,18 +241,25 @@ describe('useWorkspaceAutosave', () => {
       );
 
       mockInvoke.mockResolvedValue('not json {');
-      expect(await result.current.readWorkspace()).toBeNull();
+      expect(await result.current.readWorkspace()).toEqual({
+        status: 'invalid',
+        reason: 'The workspace file is not valid JSON.',
+      });
 
       mockInvoke.mockResolvedValue(JSON.stringify({ version: 99, tabs: [] }));
-      expect(await result.current.readWorkspace()).toBeNull();
+      expect(await result.current.readWorkspace()).toMatchObject({ status: 'invalid' });
 
       mockInvoke.mockResolvedValue(
-        JSON.stringify({ version: 1, activeTabId: 'bad', tabs: [{ tabId: 'bad' }] }),
+        JSON.stringify({
+          version: 1,
+          activeTabId: 'good',
+          tabs: [WORKSPACE.tabs[0], { tabId: 'bad' }],
+        }),
       );
-      expect(await result.current.readWorkspace()).toBeNull();
+      expect(await result.current.readWorkspace()).toMatchObject({ status: 'invalid' });
     });
 
-    it('returns null when invoke throws (non-Tauri context)', async () => {
+    it('returns missing when invoke throws (non-Tauri context)', async () => {
       mockInvoke.mockRejectedValue(new Error('not in tauri'));
       const { result } = renderHook(() =>
         useWorkspaceAutosave({
@@ -255,7 +269,28 @@ describe('useWorkspaceAutosave', () => {
           getWorkspace: () => WORKSPACE,
         }),
       );
-      expect(await result.current.readWorkspace()).toBeNull();
+      expect(await result.current.readWorkspace()).toEqual({ status: 'missing' });
+    });
+
+    it('quarantines invalid recovery only when explicitly requested', async () => {
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === 'read_draft') return 'not json {';
+        if (command === 'quarantine_draft') return '/app/workspace.corrupt-1.json';
+        return undefined;
+      });
+      const { result } = renderHook(() =>
+        useWorkspaceAutosave({
+          enabled: false,
+          hasDirtyTabs: false,
+          revision: '',
+          getWorkspace: () => WORKSPACE,
+        }),
+      );
+
+      expect(await result.current.readWorkspace()).toMatchObject({ status: 'invalid' });
+      expect(quarantineCalls()).toHaveLength(0);
+      expect(await result.current.quarantineWorkspace()).toBe('/app/workspace.corrupt-1.json');
+      expect(quarantineCalls()).toHaveLength(1);
     });
   });
 });

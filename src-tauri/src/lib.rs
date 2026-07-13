@@ -157,6 +157,43 @@ fn delete_workspace_at(
     Ok(())
 }
 
+fn quarantine_workspace_at(
+    workspace_path: &std::path::Path,
+    legacy_draft_path: &std::path::Path,
+) -> Result<Option<PathBuf>, String> {
+    let source = if workspace_path.exists() {
+        workspace_path
+    } else if legacy_draft_path.exists() {
+        legacy_draft_path
+    } else {
+        return Ok(None);
+    };
+    let stem = source
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("workspace");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let mut sequence = 0_u32;
+    loop {
+        let suffix = if sequence == 0 {
+            String::new()
+        } else {
+            format!("-{sequence}")
+        };
+        let target = source.with_file_name(format!("{stem}.corrupt-{timestamp}{suffix}.json"));
+        if !target.exists() {
+            std::fs::rename(source, &target).map_err(|error| error.to_string())?;
+            return Ok(Some(target));
+        }
+        sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| "could not choose a unique recovery filename".to_string())?;
+    }
+}
+
 #[tauri::command]
 fn write_draft(app: tauri::AppHandle, content: String) -> Result<(), String> {
     let (workspace, _) = workspace_file_paths(&app)?;
@@ -173,6 +210,13 @@ fn read_draft(app: tauri::AppHandle) -> Result<Option<String>, String> {
 fn delete_draft(app: tauri::AppHandle) -> Result<(), String> {
     let (workspace, legacy) = workspace_file_paths(&app)?;
     delete_workspace_at(&workspace, &legacy)
+}
+
+#[tauri::command]
+fn quarantine_draft(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (workspace, legacy) = workspace_file_paths(&app)?;
+    quarantine_workspace_at(&workspace, &legacy)
+        .map(|path| path.map(|value| value.to_string_lossy().into_owned()))
 }
 
 /// Document-like extensions worth surfacing in the context-folder manifest.
@@ -349,6 +393,26 @@ mod tests {
         std::fs::write(&legacy, "legacy").unwrap();
         delete_workspace_at(&workspace, &legacy).unwrap();
         assert_eq!(read_workspace_at(&workspace, &legacy).unwrap(), None);
+    }
+
+    #[test]
+    fn workspace_quarantine_preserves_invalid_bytes_under_a_new_name() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace.json");
+        let legacy = dir.path().join("draft.json");
+        let invalid = b"{ not valid JSON";
+        std::fs::write(&workspace, invalid).unwrap();
+
+        let quarantined = quarantine_workspace_at(&workspace, &legacy)
+            .unwrap()
+            .expect("an existing workspace should be quarantined");
+        assert!(!workspace.exists());
+        assert!(quarantined.exists());
+        assert_eq!(std::fs::read(&quarantined).unwrap(), invalid);
+        assert!(quarantined
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| name.starts_with("workspace.corrupt-") && name.ends_with(".json")));
     }
 
     // --- read_file ---
@@ -2334,6 +2398,7 @@ pub fn run() {
             write_draft,
             read_draft,
             delete_draft,
+            quarantine_draft,
             list_claude_sessions,
             read_claude_session_preview,
             spawn_claude_resume,

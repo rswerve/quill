@@ -14,6 +14,7 @@ import type { TabStripItem } from './components/TabStrip';
 import Topbar from './components/Topbar';
 import UpdateBanner from './components/UpdateBanner';
 import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
+import type { WorkspaceReadResult } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
 import {
   readClaudeRunOptions,
@@ -157,6 +158,10 @@ export default function App() {
   const [closeGuardTabId, setCloseGuardTabId] = useState<string | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<WorkspaceFile | null>(null);
+  const [invalidWorkspace, setInvalidWorkspace] = useState<Extract<
+    WorkspaceReadResult,
+    { status: 'invalid' }
+  > | null>(null);
   const [persistenceSuspended, setPersistenceSuspended] = useState(false);
   const [tabHandleRevision, setTabHandleRevision] = useState(0);
   const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
@@ -221,12 +226,13 @@ export default function App() {
     tabHandleRevision,
     ...tabs.map((tab) => `${tab.id}:${tab.filePath ?? ''}:${tab.isDirty ? 1 : 0}`),
   ].join('|');
-  const { readWorkspace, writeWorkspace, deleteWorkspace } = useWorkspaceAutosave({
-    enabled: workspaceReady && !pendingRecovery && !persistenceSuspended,
-    hasDirtyTabs: tabs.some((tab) => tab.isDirty),
-    revision: workspaceRevision,
-    getWorkspace: getCurrentWorkspace,
-  });
+  const { readWorkspace, writeWorkspace, deleteWorkspace, quarantineWorkspace } =
+    useWorkspaceAutosave({
+      enabled: workspaceReady && !pendingRecovery && !persistenceSuspended,
+      hasDirtyTabs: tabs.some((tab) => tab.isDirty),
+      revision: workspaceRevision,
+      getWorkspace: getCurrentWorkspace,
+    });
 
   const handleTabRef = useCallback((tabId: string, handle: DocumentTabHandle | null) => {
     const previous = tabHandlesRef.current.get(tabId);
@@ -324,11 +330,16 @@ export default function App() {
     if (hydrationStartedRef.current) return;
     hydrationStartedRef.current = true;
     void (async () => {
-      const workspace = await readWorkspace();
-      if (workspace) {
+      const result = await readWorkspace();
+      if (result.status === 'valid') {
+        const { workspace } = result;
         const hasDirtyTabs = workspace.tabs.some((tab) => tab.dirty);
         applyWorkspaceState(workspace, !hasDirtyTabs);
         if (hasDirtyTabs) setPendingRecovery(workspace);
+      } else if (result.status === 'invalid') {
+        persistenceSuspendedRef.current = true;
+        setPersistenceSuspended(true);
+        setInvalidWorkspace(result);
       }
       workspaceReadyRef.current = true;
       setWorkspaceReady(true);
@@ -877,6 +888,33 @@ export default function App() {
                 const discarded = buildDiscardedRecoveryWorkspaceFile(pendingRecovery);
                 if (discarded) applyWorkspaceState(discarded, true);
                 setPendingRecovery(null);
+              },
+            },
+          ]}
+        />
+      )}
+
+      {invalidWorkspace && (
+        <AppModal
+          title="Workspace recovery could not be read"
+          message={`${invalidWorkspace.reason} Quill will preserve the original file for manual recovery before starting a fresh workspace.`}
+          buttons={[
+            {
+              label: 'Preserve & Continue',
+              kind: 'primary',
+              onClick: async () => {
+                const preservedPath = await quarantineWorkspace();
+                if (!preservedPath) {
+                  showNotice({
+                    title: 'Could not preserve workspace recovery',
+                    message:
+                      'Quill has not overwritten the recovery file. Check app-data permissions and try again.',
+                  });
+                  return;
+                }
+                setInvalidWorkspace(null);
+                persistenceSuspendedRef.current = false;
+                setPersistenceSuspended(false);
               },
             },
           ]}
