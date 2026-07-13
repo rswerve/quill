@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftSnapshot } from '../../hooks/useDraftAutosave';
 import {
+  buildDiscardedRecoveryWorkspaceFile,
   buildDiscardedWorkspaceFile,
   buildWorkspaceFile,
   type WorkspaceTabSource,
@@ -73,5 +74,26 @@ describe('workspacePersistence', () => {
     ]);
     expect(workspace?.tabs[0].snapshot).toBeUndefined();
     expect(workspace?.tabs[1].snapshot?.content).toBe('unsaved');
+  });
+
+  it('applies the same discard policy to a persisted recovery envelope', () => {
+    const workspace = buildWorkspaceFile(
+      [
+        { id: 'saved-dirty', filePath: '/docs/saved.md', isDirty: true },
+        { id: 'untitled-dirty', filePath: null, isDirty: true },
+      ],
+      'untitled-dirty',
+      () => snapshot,
+      savedAt,
+    );
+    expect(workspace).not.toBeNull();
+
+    const discarded = buildDiscardedRecoveryWorkspaceFile(workspace!);
+    expect(discarded).toEqual({
+      version: 1,
+      savedAt,
+      activeTabId: 'saved-dirty',
+      tabs: [{ tabId: 'saved-dirty', filePath: '/docs/saved.md', dirty: false }],
+    });
   });
 });

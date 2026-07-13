@@ -34,6 +34,7 @@ import {
   saveZoomPreference,
 } from './utils/zoomPreference';
 import {
+  buildDiscardedRecoveryWorkspaceFile,
   buildDiscardedWorkspaceFile,
   buildWorkspaceFile,
   type WorkspaceTabSource,
@@ -872,7 +873,11 @@ export default function App() {
             {
               label: 'Discard',
               kind: 'danger',
-              onClick: () => setPendingRecovery(null),
+              onClick: () => {
+                const discarded = buildDiscardedRecoveryWorkspaceFile(pendingRecovery);
+                if (discarded) applyWorkspaceState(discarded, true);
+                setPendingRecovery(null);
+              },
             },
           ]}
         />

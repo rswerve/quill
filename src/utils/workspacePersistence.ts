@@ -71,3 +71,35 @@ export function buildDiscardedWorkspaceFile(
   if (kept.length === 0) return null;
   return buildWorkspaceFile(kept, activeTabId, getSnapshot, savedAt);
 }
+
+function snapshotFromDraft(draft: DraftFile): DraftSnapshot {
+  return {
+    filePath: draft.filePath,
+    content: draft.content,
+    comments: draft.comments,
+    suggestions: draft.suggestions,
+    aiSession: draft.aiSession,
+    contextFolder: draft.contextFolder,
+    ...(draft.chat ? { chat: draft.chat } : {}),
+  };
+}
+
+/** Apply the same Discard-All policy to a persisted recovery envelope. */
+export function buildDiscardedRecoveryWorkspaceFile(
+  workspace: WorkspaceFile,
+): WorkspaceFile | null {
+  const tabsById = new Map(workspace.tabs.map((tab) => [tab.tabId, tab]));
+  return buildDiscardedWorkspaceFile(
+    workspace.tabs.map((tab) => ({
+      id: tab.tabId,
+      filePath: tab.filePath,
+      isDirty: tab.dirty,
+    })),
+    workspace.activeTabId,
+    (tabId) => {
+      const snapshot = tabsById.get(tabId)?.snapshot;
+      return snapshot ? snapshotFromDraft(snapshot) : null;
+    },
+    workspace.savedAt,
+  );
+}

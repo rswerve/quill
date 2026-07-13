@@ -128,28 +128,32 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await expect(page.locator('.dirty-dot')).toBeVisible();
 });
 
-test('Discard removes dirty snapshots while clean saved tabs still reopen', async ({ page }) => {
-  const cleanPath = '/tmp/clean-after-discard.md';
+test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled tabs', async ({
+  page,
+}) => {
+  const savedPath = '/tmp/saved-after-discard.md';
   await setupMemoryTauri(page, {
-    openPath: cleanPath,
+    openPath: savedPath,
     files: {
-      [cleanPath]: 'Clean saved document',
-      ['/tmp/clean-after-discard.comments.json']: linkedSidecar,
+      [savedPath]: 'Last saved content on disk',
+      ['/tmp/saved-after-discard.comments.json']: linkedSidecar,
     },
   });
   await openMemoryFile(page);
   await page.locator('.document-tab').first().click();
   await page.locator('.document-tab.active .document-tab-close').click();
+  await activeEditor(page).fill('Unsaved edit in the saved tab');
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('Throw this away');
-  await waitForDirtyTabCount(page, 1);
+  await waitForDirtyTabCount(page, 2);
 
   await page.reload();
   await page.locator('.app-modal').getByRole('button', { name: 'Discard' }).click();
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
-  await expect(page.locator('.document-tab.active')).toContainText('clean-after-discard.md');
-  await expect(activeEditor(page)).toHaveText('Clean saved document');
+  await expect(page.locator('.document-tab.active')).toContainText('saved-after-discard.md');
+  await expect(activeEditor(page)).toHaveText('Last saved content on disk');
+  await expect(activeEditor(page)).not.toContainText('Unsaved edit in the saved tab');
   await expect(activeEditor(page)).not.toContainText('Throw this away');
 });
 
