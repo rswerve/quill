@@ -23,6 +23,12 @@ interface MemoryTauriOptions {
   sessionPreviews?: Record<string, unknown>;
   /** Documents whose pre-seeded sidecars represent bindings approved locally. */
   trustedSidecarPaths?: string[];
+  /** Deep link waiting before the frontend subscribes to runtime events. */
+  pendingDeepLink?: string;
+  /** Desktop diagnostics returned to Help → Copy Diagnostics. */
+  diagnostics?: { version: string; os: string; arch: string; log_dir: string };
+  /** Whether the frontend should yield file shortcuts to a real native menu. */
+  hasNativeMenu?: boolean;
 }
 
 interface SeededDocumentPermission {
@@ -86,6 +92,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       claudeSessions,
       sessionPreviews,
       sidecarPermissions,
+      pendingDeepLink,
+      diagnostics,
+      hasNativeMenu,
     }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
@@ -149,6 +158,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
         });
       }
       globals.__TAURI_INTERNALS__ = {
+        metadata: { currentWindow: { label: 'main' } },
+        convertFileSrc: (filePath: string, protocol = 'asset') =>
+          `${protocol}://localhost/${encodeURIComponent(filePath)}`,
         transformCallback: (callback: (payload: unknown) => void) => {
           const id = nextCallbackId++;
           callbacks.set(id, callback);
@@ -180,8 +192,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             sessionStorage.removeItem(workspaceKey);
             return '/app/workspace.corrupt-test.json';
           }
-          if (cmd === 'take_pending_deep_link') return null;
-          if (cmd === 'has_native_menu') return false;
+          if (cmd === 'take_pending_deep_link') return pendingDeepLink ?? null;
+          if (cmd === 'has_native_menu') return hasNativeMenu;
+          if (cmd === 'get_diagnostics') return diagnostics;
           if (cmd === 'show_open_dialog') return openPath ?? null;
           if (cmd === 'show_save_dialog') return savePath ?? null;
           if (cmd === 'show_folder_dialog') return folderPath ?? null;
@@ -253,6 +266,14 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       claudeSessions: options.claudeSessions ?? [],
       sessionPreviews: options.sessionPreviews ?? {},
       sidecarPermissions: seededSidecarPermissions(options),
+      pendingDeepLink: options.pendingDeepLink ?? null,
+      diagnostics: options.diagnostics ?? {
+        version: '1.1.2-test',
+        os: 'macOS',
+        arch: 'aarch64',
+        log_dir: '/tmp/quill-logs',
+      },
+      hasNativeMenu: options.hasNativeMenu ?? false,
     },
   );
 
