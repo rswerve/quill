@@ -209,22 +209,28 @@ export function buildPendingSuggestionsLines(pendingSuggestions: TrackedChangeIn
           } else if (suggestion.originChatMessageId) {
             origin = ` (from chat ${suggestion.originChatMessageId})`;
           }
-          if (suggestion.operation === 'format') {
-            const adds = [
-              ...new Set(suggestion.segments.flatMap((segment) => segment.adds)),
-            ].sort();
+          const formatSegments = suggestion.segments.filter((segment) => segment.kind === 'format');
+          const insertions = suggestion.segments.filter((segment) => segment.kind === 'insert');
+          const deletions = suggestion.segments.filter((segment) => segment.kind === 'delete');
+          if (formatSegments.length > 0 && insertions.length === 0 && deletions.length === 0) {
+            const adds = [...new Set(formatSegments.flatMap((segment) => segment.adds))].sort();
             const removes = [
-              ...new Set(suggestion.segments.flatMap((segment) => segment.removes)),
+              ...new Set(formatSegments.flatMap((segment) => segment.removes)),
             ].sort();
             const delta = [
               ...adds.map((name) => `+${name}`),
               ...removes.map((name) => `-${name}`),
             ].join(' ');
-            const text = suggestion.segments.map((segment) => segment.text).join(' … ');
+            const text = formatSegments.map((segment) => segment.text).join(' … ');
             return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
           }
-          const kind = suggestion.operation === 'insert' ? 'insertion' : 'deletion';
-          return `- [${kind}] "${clip(suggestion.text, 80)}"${origin}`;
+          const inserted = insertions.map((segment) => segment.text).join(' … ');
+          const deleted = deletions.map((segment) => segment.text).join(' … ');
+          if (insertions.length > 0 && deletions.length > 0) {
+            return `- [replacement] "${clip(deleted, 80)}" → "${clip(inserted, 80)}"${origin}`;
+          }
+          const kind = insertions.length > 0 ? 'insertion' : 'deletion';
+          return `- [${kind}] "${clip(inserted || deleted, 80)}"${origin}`;
         })
       : ['(none)']),
     '',

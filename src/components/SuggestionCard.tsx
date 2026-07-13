@@ -1,9 +1,11 @@
-import type { Comment, TrackedTextChange } from '../types';
+import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
 
 interface SuggestionCardProps {
-  change: TrackedTextChange;
+  change: TrackedChangeInfo;
+  operation: 'insert' | 'delete';
+  segments: TrackedTextSegment[];
   isActive: boolean;
   /** The still-existing comment this change originated from, or null (either
    *  no provenance, or the comment was deleted — degrade to no chip). */
@@ -22,6 +24,8 @@ interface SuggestionCardProps {
 
 export default function SuggestionCard({
   change,
+  operation,
+  segments,
   isActive,
   originComment,
   originChatMessageId,
@@ -33,8 +37,8 @@ export default function SuggestionCard({
   onActivateComment,
   onActivateChatMessage,
 }: SuggestionCardProps) {
-  const isInsert = change.operation === 'insert';
-  const preview = clip(change.text);
+  const isInsert = operation === 'insert';
+  const preview = clip(segments.map((segment) => segment.text).join(' … '));
 
   return (
     <SuggestionCardShell

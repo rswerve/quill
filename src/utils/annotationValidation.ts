@@ -5,6 +5,7 @@ import type {
   SuggestionStatus,
   AISessionBinding,
   FormatSegment,
+  TrackedChangeSegment,
   ChatMessage,
   DocumentChatThread,
 } from '../types';
@@ -124,14 +125,28 @@ function sanitizeFormatSegment(raw: unknown): FormatSegment | null {
   };
 }
 
-function sanitizeSuggestion(raw: unknown): Suggestion | null {
+function sanitizeTrackedChangeSegment(raw: unknown): TrackedChangeSegment | null {
   if (!isObject(raw)) return null;
-  if (!isNonEmptyString(raw.id)) return null;
+  if (raw.kind === 'format') {
+    const segment = sanitizeFormatSegment(raw);
+    return segment ? { ...segment, kind: 'format' } : null;
+  }
+  if (raw.kind !== 'insert' && raw.kind !== 'delete') return null;
+  const from = toPosition(raw.from);
+  const to = toPosition(raw.to);
+  if (from === null || to === null) return null;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  if (start === end || typeof raw.text !== 'string') return null;
+  return { kind: raw.kind, from: start, to: end, text: raw.text };
+}
+
+function suggestionBase(raw: Record<string, unknown>) {
   const status = SUGGESTION_STATUSES.includes(raw.status as SuggestionStatus)
     ? (raw.status as SuggestionStatus)
     : 'pending';
-  const base = {
-    id: raw.id,
+  return {
+    id: raw.id as string,
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
@@ -140,18 +155,42 @@ function sanitizeSuggestion(raw: unknown): Suggestion | null {
       ? { originChatMessageId: raw.originChatMessageId }
       : {}),
   };
+}
 
-  if (raw.type === 'format') {
-    if (!Array.isArray(raw.segments)) return null;
-    const segments = raw.segments.map(sanitizeFormatSegment);
-    if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
-    const canonical = (segments as FormatSegment[]).sort((a, b) => a.from - b.from || a.to - b.to);
-    if (canonical.some((segment, index) => index > 0 && canonical[index - 1].to > segment.from)) {
-      return null;
-    }
-    return { ...base, type: 'format', segments: canonical };
+function sanitizeLogicalSuggestion(
+  raw: Record<string, unknown>,
+  base: ReturnType<typeof suggestionBase>,
+): Suggestion | null {
+  if (!Array.isArray(raw.segments)) return null;
+  const segments = raw.segments.map(sanitizeTrackedChangeSegment);
+  if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
+  return {
+    ...base,
+    type: 'change',
+    segments: (segments as TrackedChangeSegment[]).sort(
+      (a, b) => a.from - b.from || a.to - b.to || a.kind.localeCompare(b.kind),
+    ),
+  };
+}
+
+function sanitizeLegacyFormatSuggestion(
+  raw: Record<string, unknown>,
+  base: ReturnType<typeof suggestionBase>,
+): Suggestion | null {
+  if (!Array.isArray(raw.segments)) return null;
+  const segments = raw.segments.map(sanitizeFormatSegment);
+  if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
+  const canonical = (segments as FormatSegment[]).sort((a, b) => a.from - b.from || a.to - b.to);
+  if (canonical.some((segment, index) => index > 0 && canonical[index - 1].to > segment.from)) {
+    return null;
   }
+  return { ...base, type: 'format', segments: canonical };
+}
 
+function sanitizeLegacyTextSuggestion(
+  raw: Record<string, unknown>,
+  base: ReturnType<typeof suggestionBase>,
+): Suggestion | null {
   if (raw.type !== 'insertion' && raw.type !== 'deletion') return null;
   const from = toPosition(raw.from);
   const to = toPosition(raw.to);
@@ -165,6 +204,15 @@ function sanitizeSuggestion(raw: unknown): Suggestion | null {
     suggestedText: typeof raw.suggestedText === 'string' ? raw.suggestedText : '',
     ...(isNonEmptyString(raw.pairId) ? { pairId: raw.pairId } : {}),
   };
+}
+
+function sanitizeSuggestion(raw: unknown): Suggestion | null {
+  if (!isObject(raw)) return null;
+  if (!isNonEmptyString(raw.id)) return null;
+  const base = suggestionBase(raw);
+  if (raw.type === 'change') return sanitizeLogicalSuggestion(raw, base);
+  if (raw.type === 'format') return sanitizeLegacyFormatSuggestion(raw, base);
+  return sanitizeLegacyTextSuggestion(raw, base);
 }
 
 /** Drop any non-array input and any record that fails the shape check. */

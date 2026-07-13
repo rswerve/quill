@@ -8,12 +8,33 @@ import {
   TrackedDelete,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
-import type { TrackedTextChange } from '../../types';
+import type { TrackedChangeInfo, TrackedTextSegment } from '../../types';
 
-// Every change in this file is a text op; the guard narrows the union so
-// tests can reach .text/.pairId without repeating the discriminant check.
-function textChanges(editor: Editor): TrackedTextChange[] {
-  return getTrackedChanges(editor).filter((c): c is TrackedTextChange => c.operation !== 'format');
+type TestTextChange = Omit<TrackedChangeInfo, 'segments'> &
+  TrackedTextSegment & { operation: 'insert' | 'delete' };
+
+// Most historical assertions are segment-level. Flatten the canonical logical
+// cards locally without reintroducing the old two-record runtime model.
+function textChanges(editor: Editor): TestTextChange[] {
+  return getTrackedChanges(editor).flatMap((change) =>
+    change.segments.flatMap((segment) => {
+      if (segment.kind === 'format') return [];
+      return [
+        {
+          id: change.id,
+          authorID: change.authorID,
+          status: change.status,
+          createdAt: change.createdAt,
+          ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+          ...(change.originChatMessageId
+            ? { originChatMessageId: change.originChatMessageId }
+            : {}),
+          ...segment,
+          operation: segment.kind,
+        },
+      ];
+    }),
+  );
 }
 
 function makeEditor(content = '<p>Hello world</p>') {
@@ -317,7 +338,7 @@ describe('TrackChanges extension', () => {
     });
   });
 
-  describe('replacement pairing', () => {
+  describe('logical replacements', () => {
     beforeEach(() => {
       editor = makeEditor('<p>Hello world</p>');
       editor.commands.setTrackChangesEnabled(true);
@@ -329,69 +350,70 @@ describe('TrackChanges extension', () => {
       editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('Hi').run();
     }
 
-    it('replacing text gives both halves a shared pairId', () => {
+    it('replacing text produces one logical change with delete and insert segments', () => {
       replaceHelloWithHi();
-      const changes = textChanges(editor);
-      const del = changes.find((c) => c.operation === 'delete');
-      const ins = changes.find((c) => c.operation === 'insert');
-      expect(del?.pairId).toBeTruthy();
-      expect(del?.pairId).toBe(ins?.pairId);
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].segments.map((segment) => segment.kind).sort()).toEqual([
+        'delete',
+        'insert',
+      ]);
     });
 
-    it('a pure insertion has no pairId', () => {
+    it('a pure insertion is one logical change', () => {
       editor.commands.insertContentAt(7, 'beautiful ');
-      const changes = textChanges(editor);
+      const changes = getTrackedChanges(editor);
       expect(changes).toHaveLength(1);
-      expect(changes[0].pairId).toBeUndefined();
+      expect(changes[0].segments.map((segment) => segment.kind)).toEqual(['insert']);
     });
 
-    it('a pure deletion has no pairId', () => {
+    it('a pure deletion is one logical change', () => {
       editor.commands.deleteRange({ from: 1, to: 6 });
-      const changes = textChanges(editor);
+      const changes = getTrackedChanges(editor);
       expect(changes).toHaveLength(1);
-      expect(changes[0].pairId).toBeUndefined();
+      expect(changes[0].segments.map((segment) => segment.kind)).toEqual(['delete']);
     });
 
-    it('continued typing after a replacement extends the same pair', () => {
+    it('continued typing after a replacement extends the same logical change', () => {
       replaceHelloWithHi();
-      const pairId = textChanges(editor).find((c) => c.operation === 'insert')?.pairId;
+      const logicalId = getTrackedChanges(editor)[0].id;
       // The caret sits at the end of "Hi" (position 3); keep typing there.
       editor.commands.insertContentAt(3, '!');
 
       const inserts = textChanges(editor).filter((c) => c.operation === 'insert');
       expect(inserts).toHaveLength(1);
       expect(inserts[0].text).toBe('Hi!');
-      expect(inserts[0].pairId).toBe(pairId);
+      expect(inserts[0].id).toBe(logicalId);
     });
 
-    it('acceptChange(pairId) resolves both halves: old text removed, new text kept', () => {
+    it('resolveChange resolves both halves: old text removed, new text kept', () => {
       replaceHelloWithHi();
-      const pairId = textChanges(editor)[0].pairId!;
+      const id = getTrackedChanges(editor)[0].id;
 
-      editor.commands.acceptChange(pairId);
+      editor.commands.resolveChange(id, 'accept');
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(false);
       expect(getTextContent(editor)).toBe('Hi world');
     });
 
-    it('rejectChange(pairId) resolves both halves: old text restored, new text removed', () => {
+    it('resolveChange reject resolves both halves: old text restored, new text removed', () => {
       replaceHelloWithHi();
-      const pairId = textChanges(editor)[0].pairId!;
+      const id = getTrackedChanges(editor)[0].id;
 
-      editor.commands.rejectChange(pairId);
+      editor.commands.resolveChange(id, 'reject');
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(false);
       expect(getTextContent(editor)).toBe('Hello world');
     });
 
-    it('resolving by pairId is a single undo step', () => {
+    it('resolving a logical replacement is a single undo step', () => {
       replaceHelloWithHi();
-      const pairId = textChanges(editor)[0].pairId!;
+      const id = getTrackedChanges(editor)[0].id;
 
       // Close the history group so undo targets the accept alone — without
       // this, the accept merges into the replacement's group (newGroupDelay).
       editor.view.dispatch(closeHistory(editor.state.tr));
-      editor.commands.acceptChange(pairId);
+      editor.commands.resolveChange(id, 'accept');
       editor.commands.undo();
       // One undo restores BOTH halves — they were resolved in one transaction.
       expect(hasMarkOfType(editor, 'tracked_insert')).toBe(true);
@@ -450,10 +472,10 @@ describe('TrackChanges extension', () => {
     it('a reused (coalesced) change keeps the origin it was minted with', () => {
       editor.commands.setTrackChangesOrigin('comment-1');
       editor.commands.insertContentAt(7, 'beautiful');
-      // The origin moves on (new comment / cleared), but continued typing
-      // adjacent to the pending insertion coalesces into the SAME change —
-      // which must keep its original provenance, not adopt the new one.
-      editor.commands.setTrackChangesOrigin('comment-2');
+      // Continued typing from the same request coalesces into the SAME change
+      // and retains that request's provenance. A different origin intentionally
+      // mints a separate card (covered by the provenance-adversary suite).
+      editor.commands.setTrackChangesOrigin('comment-1');
       editor.commands.insertContentAt(16, ' shiny');
 
       const inserts = textChanges(editor).filter((c) => c.operation === 'insert');

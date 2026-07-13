@@ -23,7 +23,8 @@ type DataTracked = {
   status: string;
   createdAt: number;
   updatedAt: number;
-  pairId?: string;
+  /** Retains logical replacement identity if one fragment is temporarily absent. */
+  logicalKind?: 'replacement';
   originCommentId?: string;
   originChatMessageId?: string;
 };
@@ -295,6 +296,7 @@ function adjacentTracked(
   deleteType: MarkType,
   authorID: string,
   wantOperation: 'insert' | 'delete',
+  originCommentId: string | null,
   originChatMessageId: string | null,
 ): DataTracked | null {
   function pendingTracked(node: ProseMirrorNode): DataTracked | null {
@@ -304,6 +306,7 @@ function adjacentTracked(
         mark.attrs.dataTracked?.status === 'pending' &&
         mark.attrs.dataTracked?.authorID === authorID &&
         mark.attrs.dataTracked?.operation === wantOperation &&
+        (mark.attrs.dataTracked?.originCommentId ?? null) === originCommentId &&
         (mark.attrs.dataTracked?.originChatMessageId ?? null) === originChatMessageId
       ) {
         return mark.attrs.dataTracked as DataTracked;
@@ -341,39 +344,64 @@ function adjacentTracked(
   return null;
 }
 
-function resolveReplacementPairId(
+type ChangeIdentity = Omit<DataTracked, 'operation'>;
+
+function identityFromTracked(existing: DataTracked): ChangeIdentity {
+  // eslint-disable-next-line sonarjs/no-unused-vars -- destructure-to-omit: operation is segment-local
+  const { operation: _operation, ...identity } = existing;
+  return identity;
+}
+
+function newChangeIdentity(
+  authorID: string,
+  originCommentId: string | null,
+  originChatMessageId: string | null,
+  logicalKind?: 'replacement',
+): ChangeIdentity {
+  const now = Date.now();
+  return {
+    id: uuidv4(),
+    authorID,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+    ...(logicalKind ? { logicalKind } : {}),
+    ...(originCommentId ? { originCommentId } : {}),
+    ...(originChatMessageId ? { originChatMessageId } : {}),
+  };
+}
+
+function resolveChangeIdentities(
   hasDelete: boolean,
   hasInsert: boolean,
   existingDelete: DataTracked | null,
   existingInsert: DataTracked | null,
-): string | undefined {
-  if (!hasDelete || !hasInsert) return undefined;
-  const existingPairId = existingDelete?.pairId ?? existingInsert?.pairId;
-  if (existingPairId) return existingPairId;
-  return !existingDelete && !existingInsert ? uuidv4() : undefined;
-}
-
-function trackedData(
-  existing: DataTracked | null,
-  operation: DataTracked['operation'],
   authorID: string,
-  pairId: string | undefined,
   originCommentId: string | null,
   originChatMessageId: string | null,
-): DataTracked {
-  return (
-    existing ?? {
-      id: uuidv4(),
-      operation,
-      authorID,
-      status: 'pending',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      ...(pairId ? { pairId } : {}),
-      ...(originCommentId ? { originCommentId } : {}),
-      ...(originChatMessageId ? { originChatMessageId } : {}),
-    }
-  );
+): { deletion: ChangeIdentity | null; insertion: ChangeIdentity | null } {
+  const fresh = (logicalKind?: 'replacement') =>
+    newChangeIdentity(authorID, originCommentId, originChatMessageId, logicalKind);
+  if (hasDelete && hasInsert && !existingDelete && !existingInsert) {
+    const shared = fresh('replacement');
+    return { deletion: shared, insertion: shared };
+  }
+  const reuseOrCreate = (
+    existing: DataTracked | null,
+    counterpart: DataTracked | null,
+  ): ChangeIdentity => {
+    if (existing) return identityFromTracked(existing);
+    if (counterpart?.logicalKind === 'replacement') return identityFromTracked(counterpart);
+    return fresh();
+  };
+  return {
+    deletion: hasDelete ? reuseOrCreate(existingDelete, existingInsert) : null,
+    insertion: hasInsert ? reuseOrCreate(existingInsert, existingDelete) : null,
+  };
+}
+
+function trackedData(operation: DataTracked['operation'], identity: ChangeIdentity): DataTracked {
+  return { ...identity, operation };
 }
 
 function applyTrackedDeletion(
@@ -470,6 +498,7 @@ function applyTrackedReplaceStep(
         ctx.deleteType,
         ctx.authorID,
         'delete',
+        ctx.originCommentId,
         ctx.originChatMessageId,
       )
     : null;
@@ -482,36 +511,31 @@ function applyTrackedReplaceStep(
         ctx.deleteType,
         ctx.authorID,
         'insert',
+        ctx.originCommentId,
         ctx.originChatMessageId,
       )
     : null;
-  const pairId = resolveReplacementPairId(hasDelete, hasInsert, existingDelete, existingInsert);
+  const identities = resolveChangeIdentities(
+    hasDelete,
+    hasInsert,
+    existingDelete,
+    existingInsert,
+    ctx.authorID,
+    ctx.originCommentId,
+    ctx.originChatMessageId,
+  );
 
   let deleteLeftmost: number | null = null;
   let deleteHistoryGroupId: string | null = null;
   if (hasDelete) {
-    const deletion = trackedData(
-      existingDelete,
-      'delete',
-      ctx.authorID,
-      pairId,
-      ctx.originCommentId,
-      ctx.originChatMessageId,
-    );
+    const deletion = trackedData('delete', identities.deletion!);
     deleteLeftmost = applyTrackedDeletion(tr, from, deletedRanges, ctx.deleteType, deletion);
     if (!hasInsert && deletedRanges.normalRanges.length > 0) deleteHistoryGroupId = deletion.id;
   }
 
   let insertEnd: number | null = null;
   if (hasInsert) {
-    const insertion = trackedData(
-      existingInsert,
-      'insert',
-      ctx.authorID,
-      pairId,
-      ctx.originCommentId,
-      ctx.originChatMessageId,
-    );
+    const insertion = trackedData('insert', identities.insertion!);
     insertEnd = applyTrackedInsertion(
       tr,
       mapToNew,

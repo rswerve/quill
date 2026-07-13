@@ -9,7 +9,7 @@ import {
   TrackedFormat,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
-import type { TrackedFormatChange, TrackedTextChange } from '../../types';
+import type { TrackedChangeInfo, TrackedFormatSegment, TrackedTextSegment } from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -24,14 +24,42 @@ function makeEditor(content = '<p>Hello world</p>') {
   return editor;
 }
 
-function formatChanges(editor: Editor): TrackedFormatChange[] {
-  return getTrackedChanges(editor).filter(
-    (c): c is TrackedFormatChange => c.operation === 'format',
-  );
+type CanonicalFormatChange = Omit<TrackedChangeInfo, 'segments'> & {
+  segments: TrackedFormatSegment[];
+};
+
+function formatChanges(editor: Editor): CanonicalFormatChange[] {
+  return getTrackedChanges(editor).flatMap((change) => {
+    const segments = change.segments.filter(
+      (segment): segment is TrackedFormatSegment => segment.kind === 'format',
+    );
+    return segments.length === change.segments.length ? [{ ...change, segments }] : [];
+  });
 }
 
-function textChanges(editor: Editor): TrackedTextChange[] {
-  return getTrackedChanges(editor).filter((c): c is TrackedTextChange => c.operation !== 'format');
+function textChanges(
+  editor: Editor,
+): Array<Omit<TrackedChangeInfo, 'segments'> & TrackedTextSegment & { operation: string }> {
+  return getTrackedChanges(editor).flatMap((change) =>
+    change.segments.flatMap((segment) =>
+      segment.kind === 'format'
+        ? []
+        : [
+            {
+              id: change.id,
+              authorID: change.authorID,
+              status: change.status,
+              createdAt: change.createdAt,
+              ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+              ...(change.originChatMessageId
+                ? { originChatMessageId: change.originChatMessageId }
+                : {}),
+              ...segment,
+              operation: segment.kind,
+            },
+          ],
+    ),
+  );
 }
 
 /** Whether the text node whose text is exactly `text` carries `markName`. */
@@ -46,7 +74,7 @@ function textHasMark(editor: Editor, text: string, markName: string): boolean {
 }
 
 /** Simplified view of a format change's segments for assertions. */
-function segmentShapes(change: TrackedFormatChange) {
+function segmentShapes(change: CanonicalFormatChange) {
   return change.segments.map(({ text, adds, removes }) => ({ text, adds, removes }));
 }
 

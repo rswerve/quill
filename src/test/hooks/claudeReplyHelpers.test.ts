@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrompt, classifyReplyError, splitVisible } from '../../hooks/useClaudeReply';
-import type { Comment, Reply, TrackedTextChange } from '../../types';
+import type { Comment, Reply, TrackedChangeInfo } from '../../types';
 
 function makeComment(replies: Partial<Reply>[]): Comment {
   return {
@@ -182,24 +182,24 @@ describe('buildPrompt document-scale edit protocol', () => {
 });
 
 describe('buildPrompt pending suggestions', () => {
-  function makeChange(overrides: Partial<TrackedTextChange> = {}): TrackedTextChange {
+  function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
     return {
       id: 'ch1',
-      operation: 'insert',
-      from: 1,
-      to: 6,
-      text: 'added text',
       authorID: 'claude',
       status: 'pending',
       createdAt: Date.now(),
+      segments: [{ kind: 'insert', from: 1, to: 6, text: 'added text' }],
       ...overrides,
     };
   }
 
   it('lists each pending change with its kind, clipped text, and origin comment', () => {
     const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [
-      makeChange({ operation: 'insert', text: 'added text', originCommentId: 'c42' }),
-      makeChange({ id: 'ch2', operation: 'delete', text: 'removed text' }),
+      makeChange({ originCommentId: 'c42' }),
+      makeChange({
+        id: 'ch2',
+        segments: [{ kind: 'delete', from: 1, to: 6, text: 'removed text' }],
+      }),
     ]);
     expect(prompt).toContain('=== PENDING SUGGESTIONS (already proposed, awaiting review) ===');
     expect(prompt).toContain('- [insertion] "added text" (from comment c42)');
@@ -211,10 +211,45 @@ describe('buildPrompt pending suggestions', () => {
   it('clips long suggestion text to ~80 characters', () => {
     const long = 'x'.repeat(200);
     const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [
-      makeChange({ text: long }),
+      makeChange({ segments: [{ kind: 'insert', from: 1, to: 201, text: long }] }),
     ]);
     expect(prompt).toContain(`- [insertion] "${'x'.repeat(80)}…"`);
     expect(prompt).not.toContain('x'.repeat(81));
+  });
+
+  it('renders one logical replacement and one multi-segment format card', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [
+      makeChange({
+        segments: [
+          { kind: 'delete', from: 1, to: 4, text: 'old' },
+          { kind: 'insert', from: 1, to: 4, text: 'new' },
+        ],
+      }),
+      makeChange({
+        id: 'format-1',
+        segments: [
+          {
+            kind: 'format',
+            from: 5,
+            to: 8,
+            text: 'one',
+            adds: ['bold'],
+            removes: [],
+          },
+          {
+            kind: 'format',
+            from: 9,
+            to: 12,
+            text: 'two',
+            adds: [],
+            removes: ['italic'],
+          },
+        ],
+      }),
+    ]);
+
+    expect(prompt).toContain('- [replacement] "old" → "new"');
+    expect(prompt).toContain('- [formatting +bold -italic] "one … two"');
   });
 
   it('renders (none) when nothing is pending', () => {

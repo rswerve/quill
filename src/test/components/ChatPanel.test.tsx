@@ -11,32 +11,20 @@ const messages: ChatMessage[] = [
     text: 'I tightened it.',
     createdAt: 'later',
     model: 'claude-sonnet',
-    suggestionIds: ['s1', 's2'],
+    suggestionIds: ['replacement'],
   },
 ];
 
 const trackedChanges: TrackedChangeInfo[] = [
   {
-    id: 's1',
-    pairId: 'replacement',
-    operation: 'delete',
-    from: 1,
-    to: 2,
-    text: 'old',
+    id: 'replacement',
     authorID: 'claude',
     status: 'pending',
     createdAt: 1,
-  },
-  {
-    id: 's2',
-    pairId: 'replacement',
-    operation: 'insert',
-    from: 1,
-    to: 2,
-    text: 'new',
-    authorID: 'claude',
-    status: 'pending',
-    createdAt: 1,
+    segments: [
+      { kind: 'delete', from: 1, to: 4, text: 'old' },
+      { kind: 'insert', from: 1, to: 4, text: 'new' },
+    ],
   },
 ];
 
@@ -67,7 +55,7 @@ describe('ChatPanel', () => {
     expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /1 suggestion in the doc/ }));
-    expect(props.onViewSuggestions).toHaveBeenCalledWith(['s1', 's2']);
+    expect(props.onViewSuggestions).toHaveBeenCalledWith(['replacement']);
   });
 
   it('sends with Command-Enter and disables sending while a response streams', () => {

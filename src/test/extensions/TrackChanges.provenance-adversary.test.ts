@@ -7,7 +7,23 @@ import {
   TrackedDelete,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
-import type { TrackedTextChange } from '../../types';
+
+function insertionShapes(editor: Editor) {
+  return getTrackedChanges(editor).flatMap((change) =>
+    change.segments.flatMap((segment) =>
+      segment.kind === 'insert'
+        ? [
+            {
+              authorID: change.authorID,
+              originCommentId: change.originCommentId,
+              originChatMessageId: change.originChatMessageId,
+              text: segment.text,
+            },
+          ]
+        : [],
+    ),
+  );
+}
 
 describe('provenance adversary', () => {
   let editor: Editor;
@@ -29,9 +45,7 @@ describe('provenance adversary', () => {
     editor.commands.setTrackChangesOrigin(null);
     editor.commands.insertContentAt(9, ' user');
 
-    const inserts = getTrackedChanges(editor).filter(
-      (change): change is TrackedTextChange => change.operation === 'insert',
-    );
+    const inserts = insertionShapes(editor);
     expect(inserts).toHaveLength(2);
     expect(
       inserts.map(({ authorID, originCommentId, text }) => ({ authorID, originCommentId, text })),
@@ -55,9 +69,7 @@ describe('provenance adversary', () => {
     editor.commands.insertContentAt(6, 'second');
     editor.commands.setTrackChangesOrigin(null);
 
-    const inserts = getTrackedChanges(editor).filter(
-      (change): change is TrackedTextChange => change.operation === 'insert',
-    );
+    const inserts = insertionShapes(editor);
     expect(inserts).toHaveLength(2);
     expect(inserts.map(({ originChatMessageId, text }) => ({ originChatMessageId, text }))).toEqual(
       [
@@ -65,5 +77,26 @@ describe('provenance adversary', () => {
         { originChatMessageId: 'chat-2', text: 'second' },
       ],
     );
+  });
+
+  it('does not coalesce adjacent Claude edits from different comment requests', () => {
+    editor = new Editor({
+      extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackChanges],
+      content: '<p></p>',
+    });
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+
+    editor.commands.setTrackChangesOrigin('comment-1');
+    editor.commands.insertContentAt(1, 'first');
+    editor.commands.setTrackChangesOrigin('comment-2');
+    editor.commands.insertContentAt(6, 'second');
+
+    expect(
+      insertionShapes(editor).map(({ originCommentId, text }) => ({ originCommentId, text })),
+    ).toEqual([
+      { originCommentId: 'comment-1', text: 'first' },
+      { originCommentId: 'comment-2', text: 'second' },
+    ]);
   });
 });

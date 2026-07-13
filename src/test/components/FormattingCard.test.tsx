@@ -1,19 +1,27 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import FormattingCard, { describeFormatSegments } from '../../components/FormattingCard';
-import type { Comment, TrackedFormatChange } from '../../types';
+import type { Comment, TrackedChangeInfo, TrackedFormatSegment } from '../../types';
 
-const change: TrackedFormatChange = {
+const segments: TrackedFormatSegment[] = [
+  { kind: 'format', from: 1, to: 4, text: 'one', adds: ['bold'], removes: [] },
+  {
+    kind: 'format',
+    from: 9,
+    to: 12,
+    text: 'two',
+    adds: ['italic'],
+    removes: ['strike'],
+  },
+];
+
+const change: TrackedChangeInfo = {
   id: 'fmt1',
-  operation: 'format',
   authorID: 'claude',
   status: 'pending',
   createdAt: Date.parse('2026-07-11T12:00:00Z'),
   originCommentId: 'c1',
-  segments: [
-    { from: 1, to: 4, text: 'one', adds: ['bold'], removes: [] },
-    { from: 9, to: 12, text: 'two', adds: ['italic'], removes: ['strike'] },
-  ],
+  segments,
 };
 
 const originComment: Comment = {
@@ -29,7 +37,7 @@ const originComment: Comment = {
 
 describe('describeFormatSegments', () => {
   it('summarizes unique operations in deterministic order', () => {
-    expect(describeFormatSegments(change.segments)).toBe(
+    expect(describeFormatSegments(segments)).toBe(
       'bold added · italic added · strikethrough removed',
     );
   });
@@ -40,6 +48,7 @@ describe('FormattingCard', () => {
     render(
       <FormattingCard
         change={change}
+        segments={segments}
         isActive={false}
         originComment={originComment}
         originActive={false}
@@ -72,6 +81,7 @@ describe('FormattingCard', () => {
     const { container } = render(
       <FormattingCard
         change={change}
+        segments={segments}
         isActive
         originComment={originComment}
         originActive

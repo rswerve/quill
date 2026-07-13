@@ -4,9 +4,11 @@ import type { Transaction } from '@tiptap/pm/state';
 import type {
   Comment,
   FormatSuggestion,
+  LogicalSuggestion,
   Suggestion,
   TextSuggestion,
   TrackedChangeInfo,
+  TrackedChangeSegment,
 } from '../types';
 
 export interface ReviewRestoreMismatch {
@@ -46,36 +48,88 @@ export function mergeQuarantinedSuggestions(
 export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Suggestion[] {
   return changes
     .filter((c) => c.status === 'pending')
-    .map((c): Suggestion => {
-      const base = {
-        id: c.id,
-        author: c.authorID,
-        createdAt: new Date(c.createdAt).toISOString(),
-        status: 'pending' as const,
-        ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
-        ...(c.originChatMessageId ? { originChatMessageId: c.originChatMessageId } : {}),
-      };
-      if (c.operation === 'format') {
-        return {
-          ...base,
-          type: 'format',
-          segments: c.segments.map((segment) => ({
-            ...segment,
-            adds: [...segment.adds],
-            removes: [...segment.removes],
-          })),
-        };
-      }
-      return {
-        ...base,
-        type: c.operation === 'insert' ? 'insertion' : 'deletion',
-        from: c.from,
-        to: c.to,
-        originalText: c.operation === 'delete' ? c.text : '',
-        suggestedText: c.operation === 'insert' ? c.text : '',
-        ...(c.pairId ? { pairId: c.pairId } : {}),
-      };
-    });
+    .map(
+      (change): LogicalSuggestion => ({
+        id: change.id,
+        author: change.authorID,
+        createdAt: new Date(change.createdAt).toISOString(),
+        status: 'pending',
+        ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+        ...(change.originChatMessageId ? { originChatMessageId: change.originChatMessageId } : {}),
+        type: 'change',
+        segments: change.segments.map((segment) =>
+          segment.kind === 'format'
+            ? {
+                ...segment,
+                adds: [...segment.adds],
+                removes: [...segment.removes],
+              }
+            : { ...segment },
+        ),
+      }),
+    );
+}
+
+function legacyTextSegment(suggestion: TextSuggestion): TrackedChangeSegment {
+  return {
+    kind: suggestion.type === 'insertion' ? 'insert' : 'delete',
+    from: suggestion.from,
+    to: suggestion.to,
+    text: suggestion.type === 'insertion' ? suggestion.suggestedText : suggestion.originalText,
+  };
+}
+
+function logicalFromLegacy(
+  suggestion: TextSuggestion | FormatSuggestion,
+  id = suggestion.id,
+  segments?: TrackedChangeSegment[],
+): LogicalSuggestion {
+  return {
+    id,
+    author: suggestion.author,
+    createdAt: suggestion.createdAt,
+    status: suggestion.status,
+    ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
+    ...(suggestion.originChatMessageId
+      ? { originChatMessageId: suggestion.originChatMessageId }
+      : {}),
+    type: 'change',
+    segments:
+      segments ??
+      (suggestion.type === 'format'
+        ? suggestion.segments.map((segment) => ({ ...segment, kind: 'format' as const }))
+        : [legacyTextSegment(suggestion)]),
+  };
+}
+
+/** Normalize version-2 pair records into the one-record runtime contract. */
+export function normalizePersistedSuggestions(suggestions: Suggestion[]): LogicalSuggestion[] {
+  const logical: LogicalSuggestion[] = [];
+  const byPair = new Map<string, TextSuggestion[]>();
+  for (const suggestion of suggestions) {
+    if (suggestion.type === 'change') logical.push(suggestion);
+    else if (suggestion.type === 'format') logical.push(logicalFromLegacy(suggestion));
+    else if (suggestion.pairId) {
+      const members = byPair.get(suggestion.pairId) ?? [];
+      members.push(suggestion);
+      byPair.set(suggestion.pairId, members);
+    } else logical.push(logicalFromLegacy(suggestion));
+  }
+  for (const [pairId, members] of byPair) {
+    const insertion = members.find((member) => member.type === 'insertion');
+    const deletion = members.find((member) => member.type === 'deletion');
+    if (insertion && deletion && members.length === 2) {
+      logical.push(
+        logicalFromLegacy(deletion, pairId, [
+          legacyTextSegment(deletion),
+          legacyTextSegment(insertion),
+        ]),
+      );
+    } else {
+      for (const member of members) logical.push(logicalFromLegacy(member));
+    }
+  }
+  return logical;
 }
 
 function clampRange(from: number, to: number, size: number): { from: number; to: number } | null {
@@ -103,67 +157,82 @@ function restoreCommentMarks(
   }
 }
 
-function restoreFormatSuggestion(
-  tr: Transaction,
-  formatType: MarkType | undefined,
-  suggestion: FormatSuggestion,
-  createdAt: number,
-  size: number,
-): void {
-  if (!formatType) return;
-  for (const segment of suggestion.segments) {
-    const range = clampRange(segment.from, segment.to, size);
-    if (!range) continue;
-    const dataTracked = {
-      id: suggestion.id,
-      operation: 'format',
-      authorID: suggestion.author,
-      status: 'pending',
-      createdAt,
-      updatedAt: createdAt,
-      ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
-      ...(suggestion.originChatMessageId
-        ? { originChatMessageId: suggestion.originChatMessageId }
-        : {}),
-      delta: { adds: [...segment.adds], removes: [...segment.removes] },
-    };
-    tr.addMark(range.from, range.to, formatType.create({ dataTracked, changeId: suggestion.id }));
-  }
-}
-
-function restoreTextSuggestion(
+function restoreLogicalSuggestion(
   tr: Transaction,
   insertType: MarkType | undefined,
   deleteType: MarkType | undefined,
-  suggestion: TextSuggestion,
+  formatType: MarkType | undefined,
+  suggestion: LogicalSuggestion,
   createdAt: number,
   size: number,
 ): void {
-  if (!insertType || !deleteType) return;
-  const range = clampRange(suggestion.from, suggestion.to, size);
-  if (!range) return;
-  const operation = suggestion.type === 'insertion' ? 'insert' : 'delete';
+  const logicalKind =
+    suggestion.segments.some((segment) => segment.kind === 'insert') &&
+    suggestion.segments.some((segment) => segment.kind === 'delete')
+      ? ('replacement' as const)
+      : undefined;
+  for (const segment of suggestion.segments) {
+    const range = clampRange(segment.from, segment.to, size);
+    if (!range) continue;
+    restoreLogicalSegment(
+      tr,
+      range,
+      segment,
+      suggestion,
+      createdAt,
+      logicalKind,
+      insertType,
+      deleteType,
+      formatType,
+    );
+  }
+}
+
+function restoreLogicalSegment(
+  tr: Transaction,
+  range: { from: number; to: number },
+  segment: TrackedChangeSegment,
+  suggestion: LogicalSuggestion,
+  createdAt: number,
+  logicalKind: 'replacement' | undefined,
+  insertType: MarkType | undefined,
+  deleteType: MarkType | undefined,
+  formatType: MarkType | undefined,
+): void {
   const dataTracked = {
     id: suggestion.id,
-    operation,
+    operation: segment.kind,
     authorID: suggestion.author,
     status: 'pending',
     createdAt,
     updatedAt: createdAt,
-    ...(suggestion.pairId ? { pairId: suggestion.pairId } : {}),
+    ...(logicalKind ? { logicalKind } : {}),
     ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
     ...(suggestion.originChatMessageId
       ? { originChatMessageId: suggestion.originChatMessageId }
       : {}),
   };
-  const type = operation === 'insert' ? insertType : deleteType;
-  tr.addMark(range.from, range.to, type.create({ dataTracked, changeId: suggestion.id }));
+  if (segment.kind === 'format') {
+    if (!formatType) return;
+    const formatData = {
+      ...dataTracked,
+      delta: { adds: [...segment.adds], removes: [...segment.removes] },
+    };
+    tr.addMark(
+      range.from,
+      range.to,
+      formatType.create({ dataTracked: formatData, changeId: suggestion.id }),
+    );
+    return;
+  }
+  const type = segment.kind === 'insert' ? insertType : deleteType;
+  if (type) tr.addMark(range.from, range.to, type.create({ dataTracked, changeId: suggestion.id }));
 }
 
 function restoreSuggestionMarks(
   tr: Transaction,
   schema: TiptapEditor['schema'],
-  suggestions: Suggestion[],
+  suggestions: LogicalSuggestion[],
   size: number,
 ): void {
   const insertType = schema.marks['tracked_insert'];
@@ -173,11 +242,7 @@ function restoreSuggestionMarks(
   for (const suggestion of suggestions) {
     if (suggestion.status !== 'pending') continue;
     const createdAt = Date.parse(suggestion.createdAt) || Date.now();
-    if (suggestion.type === 'format') {
-      restoreFormatSuggestion(tr, formatType, suggestion, createdAt, size);
-    } else {
-      restoreTextSuggestion(tr, insertType, deleteType, suggestion, createdAt, size);
-    }
+    restoreLogicalSuggestion(tr, insertType, deleteType, formatType, suggestion, createdAt, size);
   }
 }
 
@@ -195,19 +260,9 @@ function exactRangeText(
 
 function suggestionMismatches(
   doc: TiptapEditor['state']['doc'],
-  suggestion: Suggestion,
+  suggestion: LogicalSuggestion,
 ): ReviewRestoreMismatch[] {
-  const spans =
-    suggestion.type === 'format'
-      ? suggestion.segments.map(({ from, to, text }) => ({ from, to, expected: text }))
-      : [
-          {
-            from: suggestion.from,
-            to: suggestion.to,
-            expected:
-              suggestion.type === 'insertion' ? suggestion.suggestedText : suggestion.originalText,
-          },
-        ];
+  const spans = suggestion.segments.map(({ from, to, text }) => ({ from, to, expected: text }));
   return spans.flatMap(({ from, to, expected }) => {
     const actual = exactRangeText(doc, from, to);
     return actual === expected ? [] : [{ suggestionId: suggestion.id, from, to, expected, actual }];
@@ -216,28 +271,14 @@ function suggestionMismatches(
 
 function quarantineMismatchedSuggestions(
   doc: TiptapEditor['state']['doc'],
-  suggestions: Suggestion[],
-): ReviewRestoreResult & { restorableSuggestions: Suggestion[] } {
+  suggestions: LogicalSuggestion[],
+): ReviewRestoreResult & { restorableSuggestions: LogicalSuggestion[] } {
   const mismatches = suggestions
     .filter((suggestion) => suggestion.status === 'pending')
     .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
   const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
-  const mismatchedPairIds = new Set(
-    suggestions
-      .filter(
-        (suggestion): suggestion is TextSuggestion =>
-          suggestion.type !== 'format' &&
-          Boolean(suggestion.pairId) &&
-          mismatchedIds.has(suggestion.id),
-      )
-      .map((suggestion) => suggestion.pairId!),
-  );
   const isQuarantined = (suggestion: Suggestion) =>
-    suggestion.status === 'pending' &&
-    (mismatchedIds.has(suggestion.id) ||
-      (suggestion.type !== 'format' &&
-        Boolean(suggestion.pairId) &&
-        mismatchedPairIds.has(suggestion.pairId!)));
+    suggestion.status === 'pending' && mismatchedIds.has(suggestion.id);
   return {
     quarantinedSuggestions: suggestions.filter(isQuarantined),
     restorableSuggestions: suggestions.filter((suggestion) => !isQuarantined(suggestion)),
@@ -264,8 +305,9 @@ export function restoreReviewMarks(
   const { tr, doc, schema } = state;
   const commentType = schema.marks['comment'];
   const size = doc.content.size;
+  const logicalSuggestions = normalizePersistedSuggestions(suggestions);
   const { quarantinedSuggestions, restorableSuggestions, mismatches } =
-    quarantineMismatchedSuggestions(doc, suggestions);
+    quarantineMismatchedSuggestions(doc, logicalSuggestions);
 
   restoreCommentMarks(tr, commentType, comments, size);
   restoreSuggestionMarks(tr, schema, restorableSuggestions, size);

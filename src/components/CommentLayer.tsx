@@ -247,12 +247,10 @@ export default function CommentLayer({
     }
 
     for (const group of suggestionGroupsRef.current) {
-      // A replacement is anchored by its delete half — the original text's
-      // location, where the eye lands first.
-      const anchor = group.kind === 'replacement' ? group.del : group.change;
-      const fallbackFrom =
-        anchor.operation === 'format' ? (anchor.segments[0]?.from ?? 0) : anchor.from;
-      const top = getChangeAnchorTop(ed, anchor.id) ?? getDocumentPositionTop(ed, fallbackFrom);
+      const anchor = group.kind === 'replacement' ? group.deletions[0] : group.segments[0];
+      const fallbackFrom = anchor?.from ?? 0;
+      const top =
+        getChangeAnchorTop(ed, group.change.id) ?? getDocumentPositionTop(ed, fallbackFrom);
       catalog.push({
         cardId: group.cardId,
         type: 'suggestion',
@@ -283,12 +281,7 @@ export default function CommentLayer({
     const groups = suggestionGroupsRef.current;
     const activeSuggestionId = activeSuggestionIdRef.current;
     const activeSuggestionCard = activeSuggestionId
-      ? groups.find(
-          (group) =>
-            group.cardId === activeSuggestionId ||
-            (group.kind === 'replacement' &&
-              (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
-        )?.cardId
+      ? groups.find((group) => group.cardId === activeSuggestionId)?.cardId
       : null;
     const activeCardId = composer
       ? COMMENT_COMPOSER_CARD_ID
@@ -467,12 +460,7 @@ export default function CommentLayer({
     panelLayout.positions.map((position) => [position.cardId, position]),
   );
   const activeSuggestionCardId = activeSuggestionId
-    ? suggestionGroups.find(
-        (group) =>
-          group.cardId === activeSuggestionId ||
-          (group.kind === 'replacement' &&
-            (group.del.id === activeSuggestionId || group.ins.id === activeSuggestionId)),
-      )?.cardId
+    ? suggestionGroups.find((group) => group.cardId === activeSuggestionId)?.cardId
     : null;
   const activePanelCardId = commentComposer
     ? COMMENT_COMPOSER_CARD_ID
@@ -572,30 +560,20 @@ export default function CommentLayer({
             if (!position) return null;
             // Provenance link: the change's origin comment, only while it still
             // exists (a deleted comment degrades to no chip and no outline).
-            const originId =
-              group.kind === 'replacement'
-                ? (group.del.originCommentId ?? group.ins.originCommentId)
-                : group.change.originCommentId;
+            const originId = group.change.originCommentId;
             const originComment = originId
               ? (comments.find((c) => c.id === originId) ?? null)
               : null;
-            const originChatMessageId =
-              group.kind === 'replacement'
-                ? (group.del.originChatMessageId ?? group.ins.originChatMessageId)
-                : group.change.originChatMessageId;
+            const originChatMessageId = group.change.originChatMessageId;
             const originActive = originComment !== null && originComment.id === activeCommentId;
             if (group.kind === 'replacement') {
-              const { del, ins } = group;
               return (
                 <ReplacementCard
                   key={group.cardId}
-                  del={del}
-                  ins={ins}
-                  isActive={
-                    activeSuggestionId === group.cardId ||
-                    activeSuggestionId === del.id ||
-                    activeSuggestionId === ins.id
-                  }
+                  change={group.change}
+                  deletions={group.deletions}
+                  insertions={group.insertions}
+                  isActive={activeSuggestionId === group.cardId}
                   originComment={originComment}
                   originChatMessageId={originChatMessageId}
                   originActive={originActive}
@@ -614,6 +592,7 @@ export default function CommentLayer({
                 <FormattingCard
                   key={change.id}
                   change={change}
+                  segments={group.segments}
                   isActive={change.id === activeSuggestionId}
                   originComment={originComment}
                   originChatMessageId={originChatMessageId}
@@ -632,6 +611,8 @@ export default function CommentLayer({
               <SuggestionCard
                 key={change.id}
                 change={change}
+                operation={group.operation}
+                segments={group.segments}
                 isActive={change.id === activeSuggestionId}
                 originComment={originComment}
                 originChatMessageId={originChatMessageId}

@@ -1,9 +1,10 @@
-import type { Comment, FormatSegment, TrackedFormatChange } from '../types';
+import type { Comment, FormatSegment, TrackedChangeInfo, TrackedFormatSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
 
 interface FormattingCardProps {
-  change: TrackedFormatChange;
+  change: TrackedChangeInfo;
+  segments: TrackedFormatSegment[];
   isActive: boolean;
   originComment: Comment | null;
   originChatMessageId?: string;
@@ -44,6 +45,7 @@ function previewText(segments: FormatSegment[]): string {
 
 export default function FormattingCard({
   change,
+  segments,
   isActive,
   originComment,
   originChatMessageId,
@@ -55,8 +57,8 @@ export default function FormattingCard({
   onActivateComment,
   onActivateChatMessage,
 }: FormattingCardProps) {
-  const description = describeFormatSegments(change.segments);
-  const preview = previewText(change.segments);
+  const description = describeFormatSegments(segments);
+  const preview = previewText(segments);
 
   return (
     <SuggestionCardShell

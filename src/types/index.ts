@@ -73,7 +73,7 @@ export interface Comment {
   replies: Reply[];
 }
 
-export type SuggestionType = 'insertion' | 'deletion' | 'format';
+export type SuggestionType = 'change' | 'insertion' | 'deletion' | 'format';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected';
 
 interface SuggestionBase {
@@ -87,27 +87,29 @@ interface SuggestionBase {
   originChatMessageId?: string;
 }
 
+export interface LogicalSuggestion extends SuggestionBase {
+  type: 'change';
+  /** One persisted logical card; every fragment shares this record's id. */
+  segments: TrackedChangeSegment[];
+}
+
+/** Version-2 sidecar compatibility; normalized before marks are restored. */
 export interface TextSuggestion extends SuggestionBase {
   type: 'insertion' | 'deletion';
   from: number;
   to: number;
   originalText: string;
   suggestedText: string;
-  /**
-   * Shared by the deletion and insertion halves of a replacement so they
-   * reload as one paired card. Optional and backward compatible: sidecars
-   * written before suggestions persisted don't have it.
-   */
   pairId?: string;
 }
 
+/** Version-2 sidecar compatibility; normalized before marks are restored. */
 export interface FormatSuggestion extends SuggestionBase {
   type: 'format';
-  /** Homogeneous spans for one logical formatting suggestion. */
   segments: FormatSegment[];
 }
 
-export type Suggestion = TextSuggestion | FormatSuggestion;
+export type Suggestion = LogicalSuggestion | TextSuggestion | FormatSuggestion;
 
 export interface SidecarFile {
   version: 2;
@@ -128,7 +130,7 @@ export interface FileState {
   isDirty: boolean;
 }
 
-interface TrackedChangeBase {
+export interface TrackedChangeBase {
   id: string;
   authorID: string;
   status: 'pending' | 'accepted' | 'rejected';
@@ -144,7 +146,8 @@ interface TrackedChangeBase {
   originChatMessageId?: string;
 }
 
-export interface TrackedTextChange extends TrackedChangeBase {
+/** Slice-1 rollback shape emitted by the legacy collector only. */
+export interface LegacyTrackedTextChange extends TrackedChangeBase {
   operation: 'insert' | 'delete';
   from: number;
   to: number;
@@ -172,13 +175,35 @@ export interface FormatSegment {
   removes: string[];
 }
 
-export interface TrackedFormatChange extends TrackedChangeBase {
+/** Slice-1 rollback shape emitted by the legacy collector only. */
+export interface LegacyTrackedFormatChange extends TrackedChangeBase {
   operation: 'format';
   /** All spans of the logical change, in document order. */
   segments: FormatSegment[];
 }
 
-export type TrackedChangeInfo = TrackedTextChange | TrackedFormatChange;
+export type LegacyTrackedChangeInfo = LegacyTrackedTextChange | LegacyTrackedFormatChange;
+/** Temporary source-compatible aliases for Slice-1 oracle tests. */
+export type TrackedTextChange = LegacyTrackedTextChange;
+export type TrackedFormatChange = LegacyTrackedFormatChange;
+
+export interface TrackedTextSegment {
+  kind: 'insert' | 'delete';
+  from: number;
+  to: number;
+  text: string;
+}
+
+export interface TrackedFormatSegment extends FormatSegment {
+  kind: 'format';
+}
+
+export type TrackedChangeSegment = TrackedTextSegment | TrackedFormatSegment;
+
+/** Canonical runtime model: exactly one record per review card. */
+export interface TrackedChangeInfo extends TrackedChangeBase {
+  segments: TrackedChangeSegment[];
+}
 
 /**
  * One quote-based text edit Claude proposes: replace the first occurrence of

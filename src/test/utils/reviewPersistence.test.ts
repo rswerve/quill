@@ -13,12 +13,7 @@ import {
   suggestionsFromTrackedChanges,
   restoreReviewMarks,
 } from '../../utils/reviewPersistence';
-import type {
-  FormatSuggestion,
-  TextSuggestion,
-  TrackedFormatChange,
-  TrackedTextChange,
-} from '../../types';
+import type { FormatSuggestion, TrackedChangeInfo, TextSuggestion } from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -30,30 +25,26 @@ function makeEditor(content = '<p>Hello world</p>') {
   });
 }
 
-function makeChange(overrides: Partial<TrackedTextChange> = {}): TrackedTextChange {
+function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
   return {
     id: 'ch1',
-    operation: 'insert',
-    from: 1,
-    to: 6,
-    text: 'Hello',
     authorID: 'claude',
     status: 'pending',
     createdAt: Date.parse('2026-07-11T12:00:00Z'),
+    segments: [{ kind: 'insert', from: 1, to: 6, text: 'Hello' }],
     ...overrides,
   };
 }
 
-function makeFormatChange(overrides: Partial<TrackedFormatChange> = {}): TrackedFormatChange {
+function makeFormatChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
   return {
     id: 'fmt1',
-    operation: 'format',
     authorID: 'claude',
     status: 'pending',
     createdAt: Date.parse('2026-07-11T12:00:00Z'),
     segments: [
-      { from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
-      { from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
+      { kind: 'format', from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
+      { kind: 'format', from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
     ],
     ...overrides,
   };
@@ -77,20 +68,30 @@ describe('suggestionsFromTrackedChanges', () => {
     editor.destroy();
   });
 
-  it('omits originCommentId when the change has none (like pairId)', () => {
+  it('omits originCommentId when the change has none', () => {
     const [s] = suggestionsFromTrackedChanges([makeChange()]);
     expect('originCommentId' in s).toBe(false);
-    expect('pairId' in s).toBe(false);
   });
 
-  it('still carries pairId alongside originCommentId', () => {
+  it('serializes a replacement as one logical record with both segments', () => {
     const [s] = suggestionsFromTrackedChanges([
-      makeChange({ pairId: 'p1', originCommentId: 'c42' }),
+      makeChange({
+        originCommentId: 'c42',
+        segments: [
+          { kind: 'delete', from: 1, to: 6, text: 'Hello' },
+          { kind: 'insert', from: 1, to: 3, text: 'Hi' },
+        ],
+      }),
     ]);
-    expect(s.type).not.toBe('format');
-    if (s.type === 'format') throw new Error('expected a text suggestion');
-    expect(s.pairId).toBe('p1');
-    expect(s.originCommentId).toBe('c42');
+    expect(s).toMatchObject({
+      id: 'ch1',
+      type: 'change',
+      originCommentId: 'c42',
+      segments: [
+        { kind: 'delete', from: 1, to: 6, text: 'Hello' },
+        { kind: 'insert', from: 1, to: 3, text: 'Hi' },
+      ],
+    });
   });
 
   it('serializes every homogeneous span of a format change', () => {
@@ -100,14 +101,14 @@ describe('suggestionsFromTrackedChanges', () => {
 
     expect(suggestion).toEqual({
       id: 'fmt1',
-      type: 'format',
+      type: 'change',
       author: 'claude',
       createdAt: '2026-07-11T12:00:00.000Z',
       status: 'pending',
       originCommentId: 'c42',
       segments: [
-        { from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
-        { from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
+        { kind: 'format', from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
+        { kind: 'format', from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
       ],
     });
   });
@@ -153,14 +154,13 @@ describe('restoreReviewMarks', () => {
 
   it('stamps originCommentId back into the restored dataTracked', () => {
     editor = makeEditor('<p>Hello world</p>');
-    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42', pairId: 'p1' })]);
+    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42' })]);
 
     const [change] = getTrackedChanges(editor);
     expect(change).toMatchObject({
       id: 's1',
-      operation: 'insert',
       originCommentId: 'c42',
-      pairId: 'p1',
+      segments: [expect.objectContaining({ kind: 'insert', text: 'Hello' })],
     });
   });
 
@@ -200,12 +200,11 @@ describe('restoreReviewMarks', () => {
     expect(getTrackedChanges(editor)).toEqual([
       expect.objectContaining({
         id: 'fmt1',
-        operation: 'format',
         authorID: 'claude',
         originCommentId: 'c42',
         segments: [
-          { from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
-          { from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
+          { kind: 'format', from: 1, to: 6, text: 'Hello', adds: ['bold'], removes: [] },
+          { kind: 'format', from: 7, to: 12, text: 'world', adds: [], removes: ['italic'] },
         ],
       }),
     ]);
@@ -214,15 +213,19 @@ describe('restoreReviewMarks', () => {
   it('round-trips a multi-span format change without aliasing its delta arrays', () => {
     const live = makeFormatChange({ originCommentId: 'c42' });
     const [record] = suggestionsFromTrackedChanges([live]);
-    expect(record.type).toBe('format');
-    if (record.type !== 'format') throw new Error('expected a format suggestion');
+    expect(record.type).toBe('change');
+    if (record.type !== 'change') throw new Error('expected a logical suggestion');
     expect(record.segments).not.toBe(live.segments);
-    expect(record.segments[0].adds).not.toBe(live.segments[0].adds);
+    const recordSegment = record.segments[0];
+    const liveSegment = live.segments[0];
+    if (recordSegment.kind !== 'format' || liveSegment.kind !== 'format') {
+      throw new Error('expected format segments');
+    }
+    expect(recordSegment.adds).not.toBe(liveSegment.adds);
 
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
     restoreReviewMarks(editor, [], [record]);
     expect(getTrackedChanges(editor)[0]).toMatchObject({
-      operation: 'format',
       originCommentId: 'c42',
       segments: live.segments,
     });
@@ -235,7 +238,11 @@ describe('restoreReviewMarks', () => {
     const result = restoreReviewMarks(editor, [], [suggestion()]);
 
     expect(result.quarantinedSuggestions).toEqual([
-      expect.objectContaining({ id: 's1', suggestedText: 'Hello' }),
+      expect.objectContaining({
+        id: 's1',
+        type: 'change',
+        segments: [expect.objectContaining({ kind: 'insert', text: 'Hello' })],
+      }),
     ]);
     expect(result.mismatches).toEqual([
       expect.objectContaining({ suggestionId: 's1', expected: 'Hello', actual: 'Other' }),
@@ -245,7 +252,7 @@ describe('restoreReviewMarks', () => {
     expect(editor.getJSON()).toEqual(before);
   });
 
-  it('quarantines an entire replacement pair when either half mismatches', () => {
+  it('migrates and quarantines an entire legacy replacement when either half mismatches', () => {
     editor = makeEditor('<p>Old New</p>');
     const records: TextSuggestion[] = [
       suggestion({
@@ -269,11 +276,43 @@ describe('restoreReviewMarks', () => {
 
     const result = restoreReviewMarks(editor, [], records);
 
-    expect(result.quarantinedSuggestions.map((record) => record.id)).toEqual([
-      'delete-half',
-      'insert-half',
-    ]);
+    expect(result.quarantinedSuggestions.map((record) => record.id)).toEqual(['pair-1']);
     expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('migrates a valid legacy pair into one resolvable logical replacement', () => {
+    editor = makeEditor('<p>Old New</p>');
+    const records: TextSuggestion[] = [
+      suggestion({
+        id: 'delete-half',
+        type: 'deletion',
+        from: 1,
+        to: 4,
+        originalText: 'Old',
+        suggestedText: '',
+        pairId: 'pair-1',
+      }),
+      suggestion({
+        id: 'insert-half',
+        from: 5,
+        to: 8,
+        originalText: '',
+        suggestedText: 'New',
+        pairId: 'pair-1',
+      }),
+    ];
+
+    expect(restoreReviewMarks(editor, [], records).mismatches).toEqual([]);
+    const [change] = getTrackedChanges(editor);
+    expect(change).toMatchObject({
+      id: 'pair-1',
+      segments: [
+        expect.objectContaining({ kind: 'delete', text: 'Old' }),
+        expect.objectContaining({ kind: 'insert', text: 'New' }),
+      ],
+    });
+    editor.commands.resolveChange(change.id, 'accept');
+    expect(editor.state.doc.textContent).toBe(' New');
   });
 
   it('quarantines every segment of a format suggestion when one segment mismatches', () => {
@@ -282,7 +321,7 @@ describe('restoreReviewMarks', () => {
     const result = restoreReviewMarks(editor, [], [formatSuggestion()]);
 
     expect(result.quarantinedSuggestions).toEqual([
-      expect.objectContaining({ id: 'fmt1', type: 'format' }),
+      expect.objectContaining({ id: 'fmt1', type: 'change' }),
     ]);
     expect(result.mismatches).toEqual([
       expect.objectContaining({ suggestionId: 'fmt1', expected: 'world', actual: 'other' }),
@@ -308,11 +347,15 @@ describe('restoreReviewMarks', () => {
       editor.commands.insertContentAt(3, 'X');
 
       const records = suggestionsFromTrackedChanges(getTrackedChanges(editor));
-      const format = records.find((record) => record.type === 'format');
-      expect(format?.type).toBe('format');
-      if (!format || format.type !== 'format') throw new Error('format record missing');
-      expect(format.segments.map((segment) => segment.text).join('')).toBe('Hello');
-      expect(format.segments.some((segment) => segment.text.includes('X'))).toBe(false);
+      const format = records.find(
+        (record) =>
+          record.type === 'change' && record.segments.some((segment) => segment.kind === 'format'),
+      );
+      expect(format?.type).toBe('change');
+      if (!format || format.type !== 'change') throw new Error('format record missing');
+      const formatSegments = format.segments.filter((segment) => segment.kind === 'format');
+      expect(formatSegments.map((segment) => segment.text).join('')).toBe('Hello');
+      expect(formatSegments.some((segment) => segment.text.includes('X'))).toBe(false);
       editor.destroy();
 
       // Markdown persists the now-applied bold but not review marks. This is

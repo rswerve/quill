@@ -1104,19 +1104,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       }
       candidates.sort((a, b) => a.size - b.size);
       const winner = candidates[0];
-      // A replacement half promotes to its pairId, so the whole pair — old
-      // and new text — focuses together along with its single card.
-      if (winner.kind === 'suggestion') {
-        const change = trackedChanges.find((c) => c.id === winner.id);
-        const pairId = change && change.operation !== 'format' ? change.pairId : undefined;
-        if (pairId) {
-          setActiveAnnotation({ kind: 'suggestion', id: pairId });
-          return;
-        }
-      }
       setActiveAnnotation({ kind: winner.kind, id: winner.id });
     },
-    [editor, trackedChanges],
+    [editor],
   );
 
   const queueAutoResolveForTrackedRemoval = useCallback(
@@ -1164,19 +1154,19 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const handleAcceptAll = useCallback(() => {
     if (!editor) return;
     prepareCommentsForAccept();
-    editor.commands.acceptAllChanges();
+    editor.commands.resolveChange(null, 'accept');
   }, [editor, prepareCommentsForAccept]);
 
   const handleRejectAll = useCallback(() => {
     if (!editor) return;
     queueAutoResolveForTrackedRemoval('tracked_insert');
-    editor.commands.rejectAllChanges();
+    editor.commands.resolveChange(null, 'reject');
   }, [editor, queueAutoResolveForTrackedRemoval]);
 
   const handleAcceptChange = useCallback(
     (id: string) => {
       prepareCommentsForAccept(id);
-      editor?.commands.acceptChange(id);
+      editor?.commands.resolveChange(id, 'accept');
       clearActiveIf('suggestion', id);
     },
     [editor, clearActiveIf, prepareCommentsForAccept],
@@ -1185,7 +1175,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const handleRejectChange = useCallback(
     (id: string) => {
       queueAutoResolveForTrackedRemoval('tracked_insert', id);
-      editor?.commands.rejectChange(id);
+      editor?.commands.resolveChange(id, 'reject');
       clearActiveIf('suggestion', id);
     },
     [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
@@ -1382,8 +1372,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         prev?.kind === 'suggestion' && prev.id === id ? null : { kind: 'suggestion', id },
       );
       if (editor) {
-        // `id` may be a replacement's pairId, which no data-change-id
-        // attribute carries — resolve the live range and scroll to its start.
         const range = findAnnotationRange(editor.state.doc, 'suggestion', id);
         if (range) {
           const { node } = editor.view.domAtPos(range.from);
@@ -1405,7 +1393,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         (candidate) => suggestionIds.includes(candidate.id) && candidate.status === 'pending',
       );
       if (!change) return;
-      const cardId = change.operation !== 'format' && change.pairId ? change.pairId : change.id;
+      const cardId = change.id;
       setActiveAnnotation({ kind: 'suggestion', id: cardId });
       if (editor) {
         const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);

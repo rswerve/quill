@@ -1,38 +1,114 @@
-import type { TrackedChangeInfo, TrackedFormatChange, TrackedTextChange } from '../types';
+import type {
+  LegacyTrackedChangeInfo,
+  LegacyTrackedFormatChange,
+  LegacyTrackedTextChange,
+  TrackedChangeInfo,
+  TrackedFormatSegment,
+  TrackedTextSegment,
+} from '../types';
 
-/** One review-panel card's worth of pending tracked changes. */
+/** One review-panel card. Canonical changes no longer need a grouping pass. */
 export type SuggestionCardGroup =
-  | { kind: 'single'; cardId: string; change: TrackedTextChange }
-  | { kind: 'replacement'; cardId: string; del: TrackedTextChange; ins: TrackedTextChange }
-  | { kind: 'format'; cardId: string; change: TrackedFormatChange };
+  | {
+      kind: 'single';
+      cardId: string;
+      change: TrackedChangeInfo;
+      operation: 'insert' | 'delete';
+      segments: TrackedTextSegment[];
+    }
+  | {
+      kind: 'replacement';
+      cardId: string;
+      change: TrackedChangeInfo;
+      deletions: TrackedTextSegment[];
+      insertions: TrackedTextSegment[];
+    }
+  | {
+      kind: 'format';
+      cardId: string;
+      change: TrackedChangeInfo;
+      segments: TrackedFormatSegment[];
+    };
 
-/**
- * Group live tracked-change marks exactly as the review panel presents them:
- * one card per insertion, deletion, or formatting operation, and one shared
- * card for the two halves of a replacement.
- */
 export function groupSuggestionCards(changes: TrackedChangeInfo[]): SuggestionCardGroup[] {
-  const groups: SuggestionCardGroup[] = [];
-  const byPair = new Map<string, TrackedTextChange[]>();
+  return changes.flatMap((change): SuggestionCardGroup[] => {
+    const insertions = change.segments.filter(
+      (segment): segment is TrackedTextSegment => segment.kind === 'insert',
+    );
+    const deletions = change.segments.filter(
+      (segment): segment is TrackedTextSegment => segment.kind === 'delete',
+    );
+    const formats = change.segments.filter(
+      (segment): segment is TrackedFormatSegment => segment.kind === 'format',
+    );
+    if (formats.length > 0 && insertions.length === 0 && deletions.length === 0) {
+      return [{ kind: 'format', cardId: change.id, change, segments: formats }];
+    }
+    if (insertions.length > 0 && deletions.length > 0) {
+      return [
+        {
+          kind: 'replacement',
+          cardId: change.id,
+          change,
+          deletions,
+          insertions,
+        },
+      ];
+    }
+    const segments = insertions.length > 0 ? insertions : deletions;
+    if (segments.length === 0) return [];
+    return [
+      {
+        kind: 'single',
+        cardId: change.id,
+        change,
+        operation: insertions.length > 0 ? 'insert' : 'delete',
+        segments,
+      },
+    ];
+  });
+}
 
+export function countLogicalSuggestionCards(changes: TrackedChangeInfo[]): number {
+  return groupSuggestionCards(changes).length;
+}
+
+export function countLinkedSuggestionCards(
+  changes: TrackedChangeInfo[],
+  suggestionIds: string[],
+): number {
+  const linkedIds = new Set(suggestionIds);
+  return countLogicalSuggestionCards(changes.filter((change) => linkedIds.has(change.id)));
+}
+
+/** Slice-1 card projection retained as the equivalence oracle. */
+export type LegacySuggestionCardGroup =
+  | { kind: 'single'; cardId: string; change: LegacyTrackedTextChange }
+  | {
+      kind: 'replacement';
+      cardId: string;
+      del: LegacyTrackedTextChange;
+      ins: LegacyTrackedTextChange;
+    }
+  | { kind: 'format'; cardId: string; change: LegacyTrackedFormatChange };
+
+export function groupLegacySuggestionCards(
+  changes: LegacyTrackedChangeInfo[],
+): LegacySuggestionCardGroup[] {
+  const groups: LegacySuggestionCardGroup[] = [];
+  const byPair = new Map<string, LegacyTrackedTextChange[]>();
   for (const change of changes) {
     if (change.operation === 'format') {
       groups.push({ kind: 'format', cardId: change.id, change });
-      continue;
-    }
-    if (change.pairId) {
+    } else if (change.pairId) {
       const members = byPair.get(change.pairId) ?? [];
       members.push(change);
       byPair.set(change.pairId, members);
-    } else {
-      groups.push({ kind: 'single', cardId: change.id, change });
-    }
+    } else groups.push({ kind: 'single', cardId: change.id, change });
   }
-
   for (const members of byPair.values()) {
     const deletion = members.find((change) => change.operation === 'delete');
     const insertion = members.find((change) => change.operation === 'insert');
-    // A dangling pairId renders as a standalone card until both halves exist.
     if (deletion && insertion && members.length === 2) {
       groups.push({
         kind: 'replacement',
@@ -46,27 +122,5 @@ export function groupSuggestionCards(changes: TrackedChangeInfo[]): SuggestionCa
       }
     }
   }
-
   return groups;
-}
-
-export function countLogicalSuggestionCards(changes: TrackedChangeInfo[]): number {
-  return groupSuggestionCards(changes).length;
-}
-
-/** Count the still-live logical cards linked from one persisted chat turn. */
-export function countLinkedSuggestionCards(
-  changes: TrackedChangeInfo[],
-  suggestionIds: string[],
-): number {
-  const linkedIds = new Set(suggestionIds);
-  return countLogicalSuggestionCards(
-    changes.filter(
-      (change) =>
-        linkedIds.has(change.id) ||
-        (change.operation !== 'format' &&
-          change.pairId !== undefined &&
-          linkedIds.has(change.pairId)),
-    ),
-  );
 }

@@ -432,7 +432,9 @@ describe('trackedEdits helpers', () => {
       }
       editor.commands.setTrackChangesOrigin(null);
 
-      const formats = getTrackedChanges(editor).filter((c) => c.operation === 'format');
+      const formats = getTrackedChanges(editor).filter((change) =>
+        change.segments.some((segment) => segment.kind === 'format'),
+      );
       expect(formats).toHaveLength(1);
       expect(formats[0]).toMatchObject({
         authorID: 'claude',
@@ -464,16 +466,18 @@ describe('trackedEdits helpers', () => {
         .insertContent(content!)
         .run();
       const change = getTrackedChanges(editor).find(
-        (candidate) => candidate.operation !== 'format',
+        (candidate) =>
+          candidate.segments.some((segment) => segment.kind === 'delete') &&
+          candidate.segments.some((segment) => segment.kind === 'insert'),
       );
       if (!change) throw new Error('expected tracked text change');
-      return change.pairId ?? change.id;
+      return change.id;
     }
 
     it('accepts or rejects a Markdown-link replacement with the correct href', () => {
       editor = makeEditor('<p><a href="https://old.example">old label</a></p>');
       const acceptedId = applyPlannedLinkReplacement('new label', 'https://new.example');
-      editor.commands.acceptChange(acceptedId);
+      editor.commands.resolveChange(acceptedId, 'accept');
       expect(editor.view.dom.querySelector('a')).toMatchObject({
         href: 'https://new.example/',
         textContent: 'new label',
@@ -482,7 +486,7 @@ describe('trackedEdits helpers', () => {
       editor.destroy();
       editor = makeEditor('<p><a href="https://old.example">old label</a></p>');
       const rejectedId = applyPlannedLinkReplacement('new label', 'https://new.example');
-      editor.commands.rejectChange(rejectedId);
+      editor.commands.resolveChange(rejectedId, 'reject');
       expect(editor.view.dom.querySelector('a')).toMatchObject({
         href: 'https://old.example/',
         textContent: 'old label',
@@ -513,7 +517,9 @@ describe('trackedEdits helpers', () => {
       const changes = getTrackedChanges(editor);
       expect(changes.length).toBeGreaterThan(0);
       expect(changes.every((c) => c.authorID === 'claude')).toBe(true);
-      const ops = new Set(changes.map((c) => c.operation));
+      const ops = new Set(
+        changes.flatMap((change) => change.segments.map((segment) => segment.kind)),
+      );
       expect(ops.has('delete')).toBe(true);
       expect(ops.has('insert')).toBe(true);
 

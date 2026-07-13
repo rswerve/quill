@@ -45,6 +45,19 @@ const validFormatSuggestion = {
   ],
 };
 
+const validLogicalSuggestion = {
+  id: 'change-1',
+  type: 'change',
+  author: 'Claude',
+  createdAt: '2026-01-01T00:00:00Z',
+  status: 'pending',
+  originChatMessageId: 'turn-1',
+  segments: [
+    { kind: 'insert', from: 8, to: 11, text: 'new' },
+    { kind: 'delete', from: 1, to: 4, text: 'old' },
+  ],
+};
+
 describe('sanitizeComments', () => {
   it('keeps a well-formed comment', () => {
     expect(sanitizeComments([validComment])).toEqual([validComment]);
@@ -152,6 +165,29 @@ describe('sanitizeComments', () => {
 describe('sanitizeSuggestions', () => {
   it('keeps a well-formed suggestion', () => {
     expect(sanitizeSuggestions([validSuggestion])).toEqual([validSuggestion]);
+  });
+
+  it('keeps one logical replacement record and canonicalizes segment order', () => {
+    expect(sanitizeSuggestions([validLogicalSuggestion])).toEqual([
+      {
+        ...validLogicalSuggestion,
+        segments: [
+          { kind: 'delete', from: 1, to: 4, text: 'old' },
+          { kind: 'insert', from: 8, to: 11, text: 'new' },
+        ],
+      },
+    ]);
+  });
+
+  it('drops a logical record if any segment is malformed', () => {
+    expect(
+      sanitizeSuggestions([
+        {
+          ...validLogicalSuggestion,
+          segments: [...validLogicalSuggestion.segments, { kind: 'insert', from: 3, to: 3 }],
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it('drops suggestions with an unknown type', () => {

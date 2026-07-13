@@ -51,11 +51,13 @@ function applyReplacement(editor: Editor, from: number, to: number, replacement:
   editor.commands.setTrackChangesOrigin(null);
 }
 
-function replacementPairId(editor: Editor): string | undefined {
+function replacementId(editor: Editor): string | undefined {
   const change = getTrackedChanges(editor).find(
-    (candidate) => candidate.operation !== 'format' && candidate.pairId,
+    (candidate) =>
+      candidate.segments.some((segment) => segment.kind === 'delete') &&
+      candidate.segments.some((segment) => segment.kind === 'insert'),
   );
-  return change && change.operation !== 'format' ? change.pairId : undefined;
+  return change?.id;
 }
 
 describe('tracked comment resolution', () => {
@@ -69,41 +71,41 @@ describe('tracked comment resolution', () => {
   it('captures a comment fully contained by one replacement deletion half', () => {
     editor = makeEditor();
     applyReplacement(editor, 1, 6, 'goodbye');
-    const pairId = replacementPairId(editor);
-    expect(pairId).toBeTruthy();
+    const changeId = replacementId(editor);
+    expect(changeId).toBeTruthy();
 
     expect(
-      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
+      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', changeId),
     ).toEqual([{ id: COMMENT.id, from: 8, to: 13, anchorText: 'hello' }]);
   });
 
   it('does not capture partial-overlap or non-overlap replacements', () => {
     editor = makeEditor();
     applyReplacement(editor, 2, 5, 'ipp');
-    let pairId = replacementPairId(editor);
+    let changeId = replacementId(editor);
     expect(
-      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
+      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', changeId),
     ).toEqual([]);
     editor.destroy();
 
     editor = makeEditor();
     applyReplacement(editor, 7, 12, 'planet');
-    pairId = replacementPairId(editor);
+    changeId = replacementId(editor);
     expect(
-      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
+      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', changeId),
     ).toEqual([]);
   });
 
-  it('captures an accepted replacement origin by pairId even without geometric overlap', () => {
+  it('captures an accepted replacement origin by logical id without geometric overlap', () => {
     editor = makeEditor();
     applyReplacement(editor, 7, 12, 'planet');
     const changes = getTrackedChanges(editor);
-    const pairId = replacementPairId(editor);
+    const changeId = replacementId(editor);
 
     expect(
-      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
+      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', changeId),
     ).toEqual([]);
-    expect(captureCommentsResolvedByAccept(editor.state.doc, changes, pairId)).toEqual({
+    expect(captureCommentsResolvedByAccept(editor.state.doc, changes, changeId)).toEqual({
       captured: [{ id: COMMENT.id, from: 1, to: 6, anchorText: 'hello' }],
       provenanceCommentIds: [COMMENT.id],
     });

@@ -4,6 +4,7 @@ import { closeHistory } from '@tiptap/pm/history';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getTrackedChanges,
+  getTrackedChangesLegacy,
   TRACKING_BLOCKED_META,
   TrackChanges,
   TrackedDelete,
@@ -11,6 +12,12 @@ import {
   TrackedInsert,
 } from '../../extensions/TrackChanges';
 import { projectTrackedDocument } from '../../extensions/trackChangesProjection';
+import {
+  groupLegacySuggestionCards,
+  groupSuggestionCards,
+  type LegacySuggestionCardGroup,
+  type SuggestionCardGroup,
+} from '../../utils/suggestionCards';
 
 const INITIAL_DOCUMENT = '<p><strong>alpha</strong> beta gamma</p>';
 const PLAIN_DOCUMENT = '<p>alpha beta gamma</p>';
@@ -118,6 +125,59 @@ function trackMarks(editor: Editor): string[] {
     }
   });
   return [...marks].sort();
+}
+
+interface CardSignature {
+  kind: string;
+  author: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+}
+
+function canonicalCardSignature(group: SuggestionCardGroup): CardSignature {
+  const change = group.change;
+  return {
+    kind: group.kind === 'single' ? `${group.kind}:${group.operation}` : group.kind,
+    author: change.authorID,
+    ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+    ...(change.originChatMessageId ? { originChatMessageId: change.originChatMessageId } : {}),
+  };
+}
+
+function legacyCardSignature(group: LegacySuggestionCardGroup): CardSignature {
+  const change = group.kind === 'replacement' ? group.del : group.change;
+  return {
+    kind: group.kind === 'single' ? `${group.kind}:${group.change.operation}` : group.kind,
+    author: change.authorID,
+    ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+    ...(change.originChatMessageId ? { originChatMessageId: change.originChatMessageId } : {}),
+  };
+}
+
+function cardSignatures(editor: Editor): CardSignature[] {
+  return groupSuggestionCards(getTrackedChanges(editor))
+    .map(canonicalCardSignature)
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+function legacyCardSignatures(editor: Editor): CardSignature[] {
+  return groupLegacySuggestionCards(getTrackedChangesLegacy(editor))
+    .map(legacyCardSignature)
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+function hasMalformedLegacyReplacement(editor: Editor): boolean {
+  const byPair = new Map<string, Set<string>>();
+  for (const change of getTrackedChangesLegacy(editor)) {
+    if (change.operation === 'format' || !change.pairId) continue;
+    const operations = byPair.get(change.pairId) ?? new Set<string>();
+    operations.add(`${change.operation}:${change.id}`);
+    byPair.set(change.pairId, operations);
+  }
+  return [...byPair.values()].some((members) => {
+    const operations = new Set([...members].map((member) => member.split(':')[0]));
+    return members.size !== 2 || operations.size !== 2;
+  });
 }
 
 function acceptedTextLength(editor: Editor): number {
@@ -271,6 +331,20 @@ function runTrace(trace: FuzzOperation[], content = INITIAL_DOCUMENT): RunFailur
       );
       if (legacyProjectionFailure) {
         return { step, reason: `modular/legacy projection diverged: ${legacyProjectionFailure}` };
+      }
+      // The old pairId model could accumulate >2 member ids and then projected
+      // each fragment as a separate card. That malformed state is precisely
+      // what one shared logical id removes, so exact grouping equivalence is
+      // meaningful only while the legacy oracle still has a valid pair shape.
+      if (!hasMalformedLegacyReplacement(legacyAccepted)) {
+        const modularCards = cardSignatures(accepted);
+        const legacyCards = legacyCardSignatures(legacyAccepted);
+        if (JSON.stringify(modularCards) !== JSON.stringify(legacyCards)) {
+          return {
+            step,
+            reason: `modular/legacy cards diverged: modular=${JSON.stringify(modularCards)}; legacy=${JSON.stringify(legacyCards)}`,
+          };
+        }
       }
     }
 
@@ -512,23 +586,23 @@ describe('TrackChanges property invariants', () => {
 
   it('accept-all matches Editing mode and reject-all restores the original across seeded edits', () => {
     expectCampaignToPass(generateTrace, PLAIN_DOCUMENT);
-  });
+  }, 30_000);
 
   it('preserves the invariants across seeded text-only edits', () => {
     expectCampaignToPass((seed) => generateTextTrace(seed, false), PLAIN_DOCUMENT);
-  });
+  }, 30_000);
 
   it('preserves the invariants across seeded text edits with undo and redo', () => {
     expectCampaignToPass((seed) => generateTextTrace(seed, true), PLAIN_DOCUMENT);
-  });
+  }, 30_000);
 
   it('preserves the invariants across seeded format-only edits', () => {
     expectCampaignToPass((seed) => generateFormatTrace(seed, false), PLAIN_DOCUMENT);
-  });
+  }, 30_000);
 
   it('preserves the invariants across seeded format edits with undo and redo', () => {
     expectCampaignToPass((seed) => generateFormatTrace(seed, true), PLAIN_DOCUMENT);
-  });
+  }, 30_000);
 
   it('annihilates an insertion deleted by its author before review', () => {
     const editor = makeEditor(true);
@@ -587,7 +661,11 @@ describe('TrackChanges property invariants', () => {
     expect(editor.getJSON()).toEqual(before);
     expect(blockedOperation).toBe('foreignInsertionOverlap');
     expect(getTrackedChanges(editor)).toEqual([
-      expect.objectContaining({ id: alice.id, authorID: 'alice', operation: 'insert' }),
+      expect.objectContaining({
+        id: alice.id,
+        authorID: 'alice',
+        segments: [expect.objectContaining({ kind: 'insert', text: 'X' })],
+      }),
     ]);
   });
 

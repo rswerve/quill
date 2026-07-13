@@ -1,43 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import type { TrackedChangeInfo, TrackedTextChange } from '../../types';
+import type { LegacyTrackedChangeInfo, TrackedChangeInfo } from '../../types';
 import {
   countLinkedSuggestionCards,
   countLogicalSuggestionCards,
+  groupLegacySuggestionCards,
   groupSuggestionCards,
 } from '../../utils/suggestionCards';
 
-function textChange(
-  id: string,
-  operation: 'insert' | 'delete',
-  pairId?: string,
-): TrackedTextChange {
+function textChange(id: string, operation: 'insert' | 'delete'): TrackedChangeInfo {
   return {
     id,
-    operation,
-    pairId,
-    from: 1,
-    to: 2,
-    text: id,
     authorID: 'reviewer',
     status: 'pending',
     createdAt: 1,
+    segments: [{ kind: operation, from: 1, to: 2, text: id }],
   };
 }
 
 const changes: TrackedChangeInfo[] = [
-  textChange('delete-half', 'delete', 'replacement'),
-  textChange('insert-half', 'insert', 'replacement'),
-  textChange('insertion', 'insert'),
-  textChange('deletion', 'delete'),
   {
-    id: 'format',
-    operation: 'format',
+    id: 'replacement',
     authorID: 'reviewer',
     status: 'pending',
     createdAt: 1,
     segments: [
-      { from: 3, to: 4, text: 'a', adds: ['bold'], removes: [] },
-      { from: 6, to: 7, text: 'b', adds: ['bold'], removes: [] },
+      { kind: 'delete', from: 1, to: 2, text: 'delete-half' },
+      { kind: 'insert', from: 1, to: 2, text: 'insert-half' },
+    ],
+  },
+  textChange('insertion', 'insert'),
+  textChange('deletion', 'delete'),
+  {
+    id: 'format',
+    authorID: 'reviewer',
+    status: 'pending',
+    createdAt: 1,
+    segments: [
+      { kind: 'format', from: 3, to: 4, text: 'a', adds: ['bold'], removes: [] },
+      { kind: 'format', from: 6, to: 7, text: 'b', adds: ['bold'], removes: [] },
     ],
   },
 ];
@@ -45,23 +45,32 @@ const changes: TrackedChangeInfo[] = [
 describe('logical suggestion cards', () => {
   it('counts a replacement pair, standalone changes, and a multi-segment format as cards', () => {
     expect(groupSuggestionCards(changes).map((group) => group.cardId)).toEqual([
+      'replacement',
       'insertion',
       'deletion',
       'format',
-      'replacement',
     ]);
     expect(countLogicalSuggestionCards(changes)).toBe(4);
   });
 
-  it('counts both persisted replacement-half ids as one linked chat card', () => {
-    expect(countLinkedSuggestionCards(changes, ['delete-half', 'insert-half'])).toBe(1);
-  });
-
-  it('also accepts a logical pairId link and ignores unrelated cards', () => {
+  it('counts the logical replacement id once and ignores unrelated cards', () => {
     expect(countLinkedSuggestionCards(changes, ['replacement'])).toBe(1);
   });
 
-  it('keeps a dangling pair half as one visible card', () => {
-    expect(countLogicalSuggestionCards([textChange('only-half', 'delete', 'pair')])).toBe(1);
+  it('keeps legacy dangling pair halves visible in the migration oracle', () => {
+    const legacy: LegacyTrackedChangeInfo[] = [
+      {
+        id: 'only-half',
+        pairId: 'pair',
+        operation: 'delete',
+        from: 1,
+        to: 2,
+        text: 'old',
+        authorID: 'reviewer',
+        status: 'pending',
+        createdAt: 1,
+      },
+    ];
+    expect(groupLegacySuggestionCards(legacy)).toHaveLength(1);
   });
 });

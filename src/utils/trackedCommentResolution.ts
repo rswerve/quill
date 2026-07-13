@@ -39,8 +39,7 @@ function mergeRanges(ranges: Range[]): Range[] {
 /**
  * Capture live comments whose complete marked range will be removed by a
  * tracked-change resolution. Accept removes tracked deletions; reject removes
- * tracked insertions. `targetId` may be one change id or a replacement pairId;
- * omitting it models the corresponding All action.
+ * tracked insertions. Omitting `targetId` models the corresponding All action.
  */
 export function captureCommentsConsumedByTrackedRemoval(
   doc: ProseMirrorNode,
@@ -61,7 +60,7 @@ export function captureCommentsConsumedByTrackedRemoval(
       if (mark.type.name !== removalMarkName) continue;
       const tracked = mark.attrs.dataTracked;
       if (tracked?.status !== 'pending') continue;
-      if (targetId && tracked.id !== targetId && tracked.pairId !== targetId) continue;
+      if (targetId && tracked.id !== targetId) continue;
       removalRanges.push({ from: pos, to: pos + node.nodeSize });
     }
   });
@@ -84,8 +83,7 @@ export function captureCommentsConsumedByTrackedRemoval(
 
 function matchesAcceptedTarget(change: TrackedChangeInfo, targetId?: string): boolean {
   if (change.status !== 'pending') return false;
-  if (!targetId || change.id === targetId) return true;
-  return change.operation !== 'format' && change.pairId === targetId;
+  return !targetId || change.id === targetId;
 }
 
 function acceptedOriginCommentIds(changes: TrackedChangeInfo[], targetId?: string): string[] {
@@ -113,8 +111,8 @@ function captureLiveCommentAnchors(
 /**
  * Capture the union of comments protected by Accept: comments whose live text
  * will be deleted, plus origin comments whose own linked suggestion is being
- * accepted. A replacement pair resolves one origin even though both halves
- * carry the same pairId and provenance.
+ * accepted. A logical replacement carries one provenance record even though
+ * it contains both inserted and deleted segments.
  */
 export function captureCommentsResolvedByAccept(
   doc: ProseMirrorNode,

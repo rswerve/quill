@@ -113,11 +113,8 @@ describe('shared link editing', () => {
     expect(html).toContain('href="https://new.example.com"><ins');
     expect(html).toContain('href="https://old.example.com"><del');
     const changes = getTrackedChanges(editor);
-    expect(changes).toHaveLength(2);
-    expect(changes[0].operation === 'format' ? undefined : changes[0].pairId).toBeTruthy();
-    expect(changes[0].operation === 'format' ? undefined : changes[0].pairId).toBe(
-      changes[1].operation === 'format' ? undefined : changes[1].pairId,
-    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0].segments.map((segment) => segment.kind).sort()).toEqual(['delete', 'insert']);
   });
 
   it('removes a whole cursor link without removing its text', () => {

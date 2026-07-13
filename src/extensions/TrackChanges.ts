@@ -7,13 +7,21 @@ import type {
   Node as ProseMirrorNode,
   Schema,
 } from '@tiptap/pm/model';
-import type { FormatSegment, TrackedChangeInfo } from '../types';
+import type {
+  FormatSegment,
+  LegacyTrackedChangeInfo,
+  TrackedChangeInfo,
+  TrackedChangeSegment,
+  TrackedFormatSegment,
+} from '../types';
 import {
   LegacyTrackingTransactionAdapter,
   reconcileFormatDeltasLegacy,
 } from './trackChangesLegacyTransform';
 import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
 import { SKIP_TRACKING_META } from './trackChangesMeta';
+import { resolveTrackedChanges } from './trackChangesResolution';
+import type { ChangeResolution } from './trackChangesResolution';
 import { reconcileEditingFormatDeltas, TrackingTransactionAdapter } from './trackChangesTransform';
 
 export type { TrackingBlockedInfo } from './trackChangesPolicy';
@@ -48,6 +56,7 @@ declare module '@tiptap/core' {
       setTrackChangesEnabled: (enabled: boolean) => ReturnType;
       setTrackChangesAuthor: (authorID: string) => ReturnType;
       setTrackChangesOrigin: (origin: string | TrackChangesOrigin | null) => ReturnType;
+      resolveChange: (id: string | null, action: ChangeResolution) => ReturnType;
       acceptChange: (id: string) => ReturnType;
       rejectChange: (id: string) => ReturnType;
       acceptAllChanges: () => ReturnType;
@@ -301,6 +310,7 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
   },
 
   addCommands() {
+    const useLegacyTransform = this.options.transformEngine === 'legacy';
     return {
       setTrackChangesEnabled: (enabled: boolean) => () => {
         this.storage.enabled = enabled;
@@ -320,12 +330,24 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
         return true;
       },
 
+      resolveChange:
+        (id: string | null, action: ChangeResolution) =>
+        ({ state, dispatch }) => {
+          if (!dispatch) return true;
+          dispatch(resolveTrackedChanges(state, id, action));
+          return true;
+        },
+
       // `id` may be a change id or a pairId: passing a replacement's pairId
       // resolves both halves in one transaction (a single undo step).
       acceptChange:
         (id: string) =>
         ({ state, dispatch }) => {
           if (!dispatch) return true;
+          if (!useLegacyTransform) {
+            dispatch(resolveTrackedChanges(state, id, 'accept'));
+            return true;
+          }
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
@@ -378,6 +400,10 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
         (id: string) =>
         ({ state, dispatch }) => {
           if (!dispatch) return true;
+          if (!useLegacyTransform) {
+            dispatch(resolveTrackedChanges(state, id, 'reject'));
+            return true;
+          }
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
@@ -439,6 +465,10 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
         () =>
         ({ state, dispatch }) => {
           if (!dispatch) return true;
+          if (!useLegacyTransform) {
+            dispatch(resolveTrackedChanges(state, null, 'accept'));
+            return true;
+          }
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
@@ -485,6 +515,10 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
         () =>
         ({ state, dispatch }) => {
           if (!dispatch) return true;
+          if (!useLegacyTransform) {
+            dispatch(resolveTrackedChanges(state, null, 'reject'));
+            return true;
+          }
           const { tr, doc, schema } = state;
           const insertType = schema.marks['tracked_insert'];
           const deleteType = schema.marks['tracked_delete'];
@@ -559,7 +593,7 @@ function sameDelta(
 }
 
 function collectFormatChange(
-  changes: Map<string, TrackedChangeInfo>,
+  changes: Map<string, LegacyTrackedChangeInfo>,
   node: ProseMirrorNode,
   pos: number,
   mark: ProseMirrorMark,
@@ -574,9 +608,10 @@ function collectFormatChange(
     adds: [...(delta?.adds ?? [])],
     removes: [...(delta?.removes ?? [])],
   };
-  const existing = changes.get(id);
+  const key = `format:${id}`;
+  const existing = changes.get(key);
   if (!existing) {
-    changes.set(id, {
+    changes.set(key, {
       id,
       operation: 'format',
       segments: [segment],
@@ -602,7 +637,7 @@ function collectFormatChange(
 }
 
 function extendTextChange(
-  existing: Exclude<TrackedChangeInfo, { operation: 'format' }>,
+  existing: Exclude<LegacyTrackedChangeInfo, { operation: 'format' }>,
   doc: ProseMirrorNode,
   node: ProseMirrorNode,
   pos: number,
@@ -618,7 +653,7 @@ function extendTextChange(
 }
 
 function collectTextChange(
-  changes: Map<string, TrackedChangeInfo>,
+  changes: Map<string, LegacyTrackedChangeInfo>,
   doc: ProseMirrorNode,
   node: ProseMirrorNode,
   pos: number,
@@ -637,12 +672,13 @@ function collectTextChange(
     originCommentId,
     originChatMessageId,
   } = data;
-  if (seen.has(id)) return;
-  seen.add(id);
+  const key = `${operation}:${id}`;
+  if (seen.has(key)) return;
+  seen.add(key);
 
-  const existing = changes.get(id);
+  const existing = changes.get(key);
   if (!existing) {
-    changes.set(id, {
+    changes.set(key, {
       id,
       operation,
       from: pos,
@@ -660,14 +696,14 @@ function collectTextChange(
   if (existing.operation !== 'format') extendTextChange(existing, doc, node, pos);
 }
 
-export function getTrackedChanges(editor: {
+export function getTrackedChangesLegacy(editor: {
   state: { doc: ProseMirrorNode; schema: Schema };
-}): TrackedChangeInfo[] {
+}): LegacyTrackedChangeInfo[] {
   const { doc, schema } = editor.state;
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
   const formatType = schema.marks['tracked_format'];
-  const changes = new Map<string, TrackedChangeInfo>();
+  const changes = new Map<string, LegacyTrackedChangeInfo>();
 
   if (!insertType || !deleteType) return [];
 
@@ -687,4 +723,179 @@ export function getTrackedChanges(editor: {
   });
 
   return Array.from(changes.values());
+}
+
+type LegacyPairShape = { ids: Set<string>; operations: Set<'insert' | 'delete'> };
+
+function validLegacyPairIds(doc: ProseMirrorNode): Set<string> {
+  const pairs = new Map<string, LegacyPairShape>();
+  doc.descendants((node) => {
+    if (!node.isText) return;
+    for (const mark of node.marks) {
+      const data = mark.attrs.dataTracked as
+        | { id?: string; pairId?: string; operation?: string }
+        | undefined;
+      if (!data?.pairId || !data.id) continue;
+      if (data.operation !== 'insert' && data.operation !== 'delete') continue;
+      const shape = pairs.get(data.pairId) ?? {
+        ids: new Set<string>(),
+        operations: new Set<'insert' | 'delete'>(),
+      };
+      shape.ids.add(data.id);
+      shape.operations.add(data.operation);
+      pairs.set(data.pairId, shape);
+    }
+  });
+  return new Set(
+    [...pairs]
+      .filter(
+        ([, shape]) =>
+          shape.ids.size === 2 &&
+          shape.operations.size === 2 &&
+          shape.operations.has('insert') &&
+          shape.operations.has('delete'),
+      )
+      .map(([pairId]) => pairId),
+  );
+}
+
+function sameFormatSegment(a: TrackedFormatSegment, b: TrackedFormatSegment): boolean {
+  return sameDelta(a, b);
+}
+
+function appendLogicalSegment(
+  doc: ProseMirrorNode,
+  segments: TrackedChangeSegment[],
+  segment: TrackedChangeSegment,
+): void {
+  const previous = segments.at(-1);
+  if (!previous || previous.kind !== segment.kind) {
+    segments.push(segment);
+    return;
+  }
+  if (segment.kind === 'format') {
+    if (
+      previous.kind === 'format' &&
+      previous.to === segment.from &&
+      sameFormatSegment(previous, segment)
+    ) {
+      previous.to = segment.to;
+      previous.text += segment.text;
+    } else segments.push(segment);
+    return;
+  }
+  if (previous.kind === 'format') {
+    segments.push(segment);
+    return;
+  }
+  if (previous.to === segment.from) {
+    previous.to = segment.to;
+    previous.text += segment.text;
+  } else if (segment.from > previous.to && doc.textBetween(previous.to, segment.from) === '') {
+    previous.to = segment.to;
+    previous.text += `\n${segment.text}`;
+  } else segments.push(segment);
+}
+
+type LogicalMarkData = {
+  id: string;
+  pairId?: string;
+  operation: 'insert' | 'delete' | 'format';
+  authorID: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: number;
+  originCommentId?: string;
+  originChatMessageId?: string;
+  delta?: { adds?: string[]; removes?: string[] };
+};
+
+function ensureLogicalChange(
+  changes: Map<string, TrackedChangeInfo>,
+  logicalId: string,
+  data: LogicalMarkData,
+): TrackedChangeInfo {
+  const existing = changes.get(logicalId);
+  if (existing) return existing;
+  const change: TrackedChangeInfo = {
+    id: logicalId,
+    authorID: data.authorID,
+    status: data.status,
+    createdAt: data.createdAt,
+    ...(data.originCommentId ? { originCommentId: data.originCommentId } : {}),
+    ...(data.originChatMessageId ? { originChatMessageId: data.originChatMessageId } : {}),
+    segments: [],
+  };
+  changes.set(logicalId, change);
+  return change;
+}
+
+function logicalSegment(
+  doc: ProseMirrorNode,
+  node: ProseMirrorNode,
+  pos: number,
+  data: LogicalMarkData,
+  isFormat: boolean,
+): TrackedChangeSegment {
+  const text = node.text ?? doc.textBetween(pos, pos + node.nodeSize, '\n', ' ');
+  if (!isFormat) {
+    return {
+      kind: data.operation as 'insert' | 'delete',
+      from: pos,
+      to: pos + node.nodeSize,
+      text,
+    };
+  }
+  return {
+    kind: 'format',
+    from: pos,
+    to: pos + node.nodeSize,
+    text,
+    adds: [...(data.delta?.adds ?? [])],
+    removes: [...(data.delta?.removes ?? [])],
+  };
+}
+
+function compareLogicalSegments(a: TrackedChangeSegment, b: TrackedChangeSegment): number {
+  if (a.from !== b.from) return a.from - b.from;
+  if (a.to !== b.to) return a.to - b.to;
+  if (a.kind === b.kind) return 0;
+  if (a.kind === 'delete') return -1;
+  if (b.kind === 'delete') return 1;
+  return a.kind.localeCompare(b.kind);
+}
+
+/** Canonical collector: every returned record is exactly one logical card. */
+export function getTrackedChanges(editor: {
+  state: { doc: ProseMirrorNode; schema: Schema };
+}): TrackedChangeInfo[] {
+  const { doc, schema } = editor.state;
+  const insertType = schema.marks['tracked_insert'];
+  const deleteType = schema.marks['tracked_delete'];
+  const formatType = schema.marks['tracked_format'];
+  if (!insertType || !deleteType) return [];
+  const validPairs = validLegacyPairIds(doc);
+  const changes = new Map<string, TrackedChangeInfo>();
+
+  doc.descendants((node, pos) => {
+    if (!node.isInline) return;
+    const seen = new Set<string>();
+    for (const mark of node.marks) {
+      const isFormat = formatType && mark.type === formatType;
+      if (!isFormat && mark.type !== insertType && mark.type !== deleteType) continue;
+      const data = mark.attrs.dataTracked as LogicalMarkData | undefined;
+      if (!data?.id) continue;
+      if (!isFormat && data.operation !== 'insert' && data.operation !== 'delete') continue;
+      const logicalId = data.pairId && validPairs.has(data.pairId) ? data.pairId : data.id;
+      const segmentKey = `${logicalId}:${data.operation}`;
+      if (seen.has(segmentKey)) continue;
+      seen.add(segmentKey);
+      const change = ensureLogicalChange(changes, logicalId, data);
+      const segment = logicalSegment(doc, node, pos, data, Boolean(isFormat));
+      appendLogicalSegment(doc, change.segments, segment);
+    }
+  });
+  return [...changes.values()].map((change) => ({
+    ...change,
+    segments: [...change.segments].sort(compareLogicalSegments),
+  }));
 }
