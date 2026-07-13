@@ -213,11 +213,7 @@ export interface QuillCommentsBlock {
   comments: QuillComment[];
 }
 
-/**
- * Snapshot of unsaved work, written to `draft.json` in the app data dir while
- * the document is dirty and offered for recovery on the next launch. Deleted
- * when the document becomes clean (save / discard / new).
- */
+/** One document snapshot embedded in the workspace recovery envelope. */
 export interface DraftFile {
   version: 1;
   savedAt: string;
@@ -228,4 +224,23 @@ export interface DraftFile {
   suggestions: Suggestion[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
+}
+
+/**
+ * One open document in the persisted workspace. Clean saved documents carry
+ * only their path; dirty and untitled documents embed a complete DraftFile.
+ */
+export interface WorkspaceTab {
+  tabId: string;
+  filePath: string | null;
+  dirty: boolean;
+  snapshot?: DraftFile;
+}
+
+/** Browser-style open-tab session plus atomic recovery for all unsaved tabs. */
+export interface WorkspaceFile {
+  version: 1;
+  savedAt: string;
+  activeTabId: string;
+  tabs: WorkspaceTab[];
 }

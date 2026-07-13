@@ -6,9 +6,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
-import { useDraftAutosave } from '../../hooks/useDraftAutosave';
+import { sanitizeWorkspace, useWorkspaceAutosave } from '../../hooks/useDraftAutosave';
 import type { DraftSnapshot } from '../../hooks/useDraftAutosave';
-import type { DraftFile } from '../../types';
+import type { DraftFile, WorkspaceFile } from '../../types';
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -25,6 +25,21 @@ const VALID_DRAFT: DraftFile = {
   version: 1,
   savedAt: '2026-06-11T00:00:00.000Z',
   ...SNAPSHOT,
+};
+
+const WORKSPACE: WorkspaceFile = {
+  version: 1,
+  savedAt: '2026-07-13T00:00:00.000Z',
+  activeTabId: 'tab-dirty',
+  tabs: [
+    { tabId: 'tab-clean', filePath: '/docs/clean.md', dirty: false },
+    {
+      tabId: 'tab-dirty',
+      filePath: '/docs/test.md',
+      dirty: true,
+      snapshot: VALID_DRAFT,
+    },
+  ],
 };
 
 function writeCalls() {
@@ -45,15 +60,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('useDraftAutosave', () => {
-  it('writes the draft immediately when the document becomes dirty, then on every tick', async () => {
+describe('useWorkspaceAutosave', () => {
+  it('writes the full workspace immediately, then every five seconds while any tab is dirty', async () => {
     const { rerender } = renderHook(
-      ({ isDirty }) => useDraftAutosave({ isDirty, getSnapshot: () => SNAPSHOT }),
-      { initialProps: { isDirty: false } },
+      ({ enabled, hasDirtyTabs, revision }) =>
+        useWorkspaceAutosave({
+          enabled,
+          hasDirtyTabs,
+          revision,
+          getWorkspace: () => WORKSPACE,
+        }),
+      { initialProps: { enabled: false, hasDirtyTabs: true, revision: 'initial' } },
     );
     expect(writeCalls()).toHaveLength(0);
 
-    rerender({ isDirty: true });
+    rerender({ enabled: true, hasDirtyTabs: true, revision: 'ready' });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -65,38 +86,51 @@ describe('useDraftAutosave', () => {
     expect(writeCalls()).toHaveLength(2);
 
     const [, args] = writeCalls()[0] as [string, { content: string }];
-    const written = JSON.parse(args.content) as DraftFile;
+    const written = JSON.parse(args.content) as WorkspaceFile;
     expect(written.version).toBe(1);
-    expect(written.content).toBe('# Hello');
-    expect(written.filePath).toBe('/docs/test.md');
-    expect(typeof written.savedAt).toBe('string');
+    expect(written.activeTabId).toBe('tab-dirty');
+    expect(written.tabs).toEqual(WORKSPACE.tabs);
   });
 
-  it('deletes the draft on the dirty→clean transition and stops the timer', async () => {
+  it('writes clean open-set revisions but does not keep an interval running', async () => {
     const { rerender } = renderHook(
-      ({ isDirty }) => useDraftAutosave({ isDirty, getSnapshot: () => SNAPSHOT }),
-      { initialProps: { isDirty: true } },
+      ({ revision }) =>
+        useWorkspaceAutosave({
+          enabled: true,
+          hasDirtyTabs: false,
+          revision,
+          getWorkspace: () => WORKSPACE,
+        }),
+      { initialProps: { revision: 'tab-1' } },
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(writeCalls()).toHaveLength(1);
 
-    rerender({ isDirty: false });
+    rerender({ revision: 'tab-1,tab-2' });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(deleteCalls()).toHaveLength(1);
+    expect(writeCalls()).toHaveLength(2);
+    expect(deleteCalls()).toHaveLength(0);
 
     // The interval is gone: time passing writes nothing more.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20000);
     });
-    expect(writeCalls()).toHaveLength(1);
+    expect(writeCalls()).toHaveLength(2);
   });
 
-  it('does NOT delete the draft on a clean mount (it may be the recovery draft)', async () => {
-    renderHook(() => useDraftAutosave({ isDirty: false, getSnapshot: () => SNAPSHOT }));
+  it('does not read, write, or delete before shell hydration enables persistence', async () => {
+    renderHook(() =>
+      useWorkspaceAutosave({
+        enabled: false,
+        hasDirtyTabs: true,
+        revision: 'loading',
+        getWorkspace: () => WORKSPACE,
+      }),
+    );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20000);
     });
@@ -106,63 +140,97 @@ describe('useDraftAutosave', () => {
 
   it('swallows invoke failures (non-Tauri context is a no-op)', async () => {
     mockInvoke.mockRejectedValue(new Error('not in tauri'));
-    const { rerender } = renderHook(
-      ({ isDirty }) => useDraftAutosave({ isDirty, getSnapshot: () => SNAPSHOT }),
-      { initialProps: { isDirty: true } },
+    const { result } = renderHook(() =>
+      useWorkspaceAutosave({
+        enabled: true,
+        hasDirtyTabs: true,
+        revision: 'dirty',
+        getWorkspace: () => WORKSPACE,
+      }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
-    rerender({ isDirty: false });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    // No unhandled rejection — reaching here is the assertion.
-    expect(writeCalls().length).toBeGreaterThan(0);
+    expect(await result.current.writeWorkspace()).toBe(false);
+    await result.current.deleteWorkspace();
   });
 
-  describe('readDraft', () => {
-    it('returns a valid draft', async () => {
-      mockInvoke.mockResolvedValue(JSON.stringify(VALID_DRAFT));
+  describe('readWorkspace', () => {
+    it('returns a valid workspace', async () => {
+      mockInvoke.mockResolvedValue(JSON.stringify(WORKSPACE));
       const { result } = renderHook(() =>
-        useDraftAutosave({ isDirty: false, getSnapshot: () => SNAPSHOT }),
+        useWorkspaceAutosave({
+          enabled: false,
+          hasDirtyTabs: false,
+          revision: '',
+          getWorkspace: () => WORKSPACE,
+        }),
       );
-      const draft = await result.current.readDraft();
-      expect(draft).toEqual(VALID_DRAFT);
+      expect(await result.current.readWorkspace()).toEqual(WORKSPACE);
     });
 
-    it('returns null when no draft exists', async () => {
+    it('migrates a legacy single-document draft into one dirty workspace tab', async () => {
+      expect(sanitizeWorkspace(VALID_DRAFT)).toEqual({
+        version: 1,
+        savedAt: VALID_DRAFT.savedAt,
+        activeTabId: 'legacy-draft',
+        tabs: [
+          {
+            tabId: 'legacy-draft',
+            filePath: VALID_DRAFT.filePath,
+            dirty: true,
+            snapshot: VALID_DRAFT,
+          },
+        ],
+      });
+    });
+
+    it('returns null when no workspace exists', async () => {
       mockInvoke.mockResolvedValue(null);
       const { result } = renderHook(() =>
-        useDraftAutosave({ isDirty: false, getSnapshot: () => SNAPSHOT }),
+        useWorkspaceAutosave({
+          enabled: false,
+          hasDirtyTabs: false,
+          revision: '',
+          getWorkspace: () => WORKSPACE,
+        }),
       );
-      expect(await result.current.readDraft()).toBeNull();
+      expect(await result.current.readWorkspace()).toBeNull();
     });
 
-    it('returns null for malformed JSON or an invalid shape', async () => {
+    it('drops malformed tabs and rejects an unusable envelope', async () => {
       const { result } = renderHook(() =>
-        useDraftAutosave({ isDirty: false, getSnapshot: () => SNAPSHOT }),
+        useWorkspaceAutosave({
+          enabled: false,
+          hasDirtyTabs: false,
+          revision: '',
+          getWorkspace: () => WORKSPACE,
+        }),
       );
 
       mockInvoke.mockResolvedValue('not json {');
-      expect(await result.current.readDraft()).toBeNull();
+      expect(await result.current.readWorkspace()).toBeNull();
 
-      mockInvoke.mockResolvedValue(JSON.stringify({ version: 99, content: 'x' }));
-      expect(await result.current.readDraft()).toBeNull();
+      mockInvoke.mockResolvedValue(JSON.stringify({ version: 99, tabs: [] }));
+      expect(await result.current.readWorkspace()).toBeNull();
 
-      mockInvoke.mockResolvedValue(JSON.stringify({ version: 1, content: 42, filePath: null }));
-      expect(await result.current.readDraft()).toBeNull();
-
-      mockInvoke.mockResolvedValue(JSON.stringify({ version: 1, content: 'x', filePath: 7 }));
-      expect(await result.current.readDraft()).toBeNull();
+      mockInvoke.mockResolvedValue(
+        JSON.stringify({ version: 1, activeTabId: 'bad', tabs: [{ tabId: 'bad' }] }),
+      );
+      expect(await result.current.readWorkspace()).toBeNull();
     });
 
     it('returns null when invoke throws (non-Tauri context)', async () => {
       mockInvoke.mockRejectedValue(new Error('not in tauri'));
       const { result } = renderHook(() =>
-        useDraftAutosave({ isDirty: false, getSnapshot: () => SNAPSHOT }),
+        useWorkspaceAutosave({
+          enabled: false,
+          hasDirtyTabs: false,
+          revision: '',
+          getWorkspace: () => WORKSPACE,
+        }),
       );
-      expect(await result.current.readDraft()).toBeNull();
+      expect(await result.current.readWorkspace()).toBeNull();
     });
   });
 });

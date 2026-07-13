@@ -83,7 +83,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
   ) => Promise<string | null>;
   newFile: () => void;
-  restoreDraft: (path: string | null) => void;
+  restoreDraft: (path: string | null, dirty?: boolean) => void;
 }
 
 /**
@@ -278,9 +278,9 @@ export function useFileManager(
   // Adopt a recovered draft: point at its file (if any) without reading disk —
   // the draft's content is newer than the file — and mark dirty so the user is
   // prompted to save the recovered work.
-  const restoreDraft = useCallback((path: string | null) => {
+  const restoreDraft = useCallback((path: string | null, dirty = true) => {
     setFilePath(path);
-    setIsDirty(true);
+    setIsDirty(dirty);
     setSidecarProtected(false);
   }, []);
 

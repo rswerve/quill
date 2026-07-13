@@ -5,11 +5,9 @@ import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
 import CommentLayer, { computeBottomSpacer } from './CommentLayer';
 import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
-import AppModal from './AppModal';
 import ReviewModal from './ReviewModal';
 import FormattingInspector from './FormattingInspector';
 import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
-import { useDraftAutosave } from '../hooks/useDraftAutosave';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
@@ -108,7 +106,7 @@ export interface DocumentTabHandle {
   unlinkSession: () => void;
   linkContextFolder: () => void;
   unlinkContextFolder: () => void;
-  deleteDraft: () => Promise<void>;
+  getWorkspaceSnapshot: () => DraftSnapshot;
 }
 
 export interface DocumentTabMetaSnapshot {
@@ -121,16 +119,18 @@ interface DocumentTabProps {
   tabId: string;
   isActive: boolean;
   initialFilePath?: string | null;
+  initialWorkspaceSnapshot?: DraftFile | null;
+  initialWorkspaceDirty?: boolean;
+  restoredFromWorkspace?: boolean;
   defaultZoom: number;
   getClaudeRunOptions: () => ClaudeRunOptions;
   onChromeChange: (tabId: string, snapshot: DocumentTabChromeSnapshot) => void;
   onMetaChange: (tabId: string, snapshot: DocumentTabMetaSnapshot) => void;
   onInitialFileLoaded: (tabId: string, loaded: boolean) => void;
+  onInitialWorkspaceLoaded: (tabId: string) => void;
   onOpenSessionPicker: (tabId: string) => void;
   onNotice: (notice: { title: string; message: string }) => void;
   onRecentFile: (path: string) => void;
-  shellModalOpen: boolean;
-  allowDraftRecovery?: boolean;
 }
 
 function countWords(text: string): number {
@@ -162,22 +162,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     tabId,
     isActive,
     initialFilePath = null,
+    initialWorkspaceSnapshot = null,
+    initialWorkspaceDirty = true,
+    restoredFromWorkspace = false,
     defaultZoom,
     getClaudeRunOptions,
     onChromeChange,
     onMetaChange,
     onInitialFileLoaded,
+    onInitialWorkspaceLoaded,
     onOpenSessionPicker,
     onNotice,
     onRecentFile,
-    shellModalOpen,
-    allowDraftRecovery = true,
   },
   ref,
 ) {
   const [editor, setEditor] = useState<TiptapEditor | null>(null);
   const [chromeRevision, setChromeRevision] = useState(0);
   const initialOpenStartedRef = useRef(false);
+  const initialWorkspaceRestoreStartedRef = useRef(false);
   const editorRef = useRef<EditorRef>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   // The one annotation (comment or suggestion) currently in focus: its card
@@ -279,39 +282,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [comments, suggestions]);
 
-  // Crash-recovery autosave: while dirty, the document (plus annotations and
-  // links) is snapshotted to draft.json every few seconds; a clean state
-  // deletes it. On launch we offer any leftover draft for recovery below.
-  const getDraftSnapshot = useCallback((): DraftSnapshot => {
+  // The shell owns persistence and asks each mounted tab for a live snapshot.
+  // Keep transient AI reply state out of this second on-disk write path just as
+  // the regular sidecar serializer does.
+  const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
     const live = getLiveReviewState();
     return {
       filePath,
       content: getDocMarkdown(),
-      // draft.json is a second on-disk persistence path, so it needs the same
-      // transient-reply strip the sidecar gets — otherwise a crash mid-stream
-      // recovers a stuck spinner / dead-Retry card the fresh hook can't drive.
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
       aiSession,
       contextFolder,
     };
   }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
-  const { readDraft, deleteDraft } = useDraftAutosave({
-    isDirty,
-    getSnapshot: getDraftSnapshot,
-  });
-
-  // A draft left behind by a crashed/killed run, awaiting the user's
-  // Recover / Discard decision.
-  const [recoveryDraft, setRecoveryDraft] = useState<DraftFile | null>(null);
-
-  useEffect(() => {
-    if (!allowDraftRecovery) return;
-    void (async () => {
-      const draft = await readDraft();
-      if (draft) setRecoveryDraft(draft);
-    })();
-  }, [allowDraftRecovery, readDraft]);
 
   // Read the live document text for a comment's anchored range and its
   // enclosing paragraph, as plaintext (matching how Claude's `find` strings are
@@ -549,12 +533,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [editor, isActive]);
 
   const loadFileResult = useCallback(
-    (result: {
-      content: string;
-      sidecar: SidecarFile;
-      filePath: string;
-      sidecarError?: string | null;
-    }) => {
+    (
+      result: {
+        content: string;
+        sidecar: SidecarFile;
+        filePath: string;
+        sidecarError?: string | null;
+      },
+      promptForSession = true,
+    ) => {
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
@@ -608,7 +595,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // linked Claude session, surface the picker so the user binds one (and can
       // then call @claude from within the doc). Auto-bind is intentionally not
       // attempted — the user picks.
-      if (!session && result.content.trim().length > 0) {
+      if (promptForSession && !session && result.content.trim().length > 0) {
         openSessionPicker();
       }
     },
@@ -685,10 +672,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [openFile, loadFileResult]);
 
   const performOpenPath = useCallback(
-    async (path: string) => {
+    async (path: string, promptForSession = true) => {
       const result = await openFilePath(path);
       if (!result) return false;
-      loadFileResult(result);
+      loadFileResult(result, promptForSession);
       return true;
     },
     [openFilePath, loadFileResult],
@@ -697,8 +684,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   useEffect(() => {
     if (!editor || !initialFilePath || initialOpenStartedRef.current) return;
     initialOpenStartedRef.current = true;
-    void performOpenPath(initialFilePath).then((loaded) => onInitialFileLoaded(tabId, loaded));
-  }, [editor, initialFilePath, onInitialFileLoaded, performOpenPath, tabId]);
+    void performOpenPath(initialFilePath, !restoredFromWorkspace).then((loaded) =>
+      onInitialFileLoaded(tabId, loaded),
+    );
+  }, [editor, initialFilePath, onInitialFileLoaded, performOpenPath, restoredFromWorkspace, tabId]);
 
   const performNew = useCallback(() => {
     newFile();
@@ -713,42 +702,53 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setLastSavedAt(null);
   }, [newFile, setComments, setSuggestions]);
 
-  // Adopt the recovered draft as the open (dirty) document. The draft's
-  // content is newer than anything on disk, so nothing is read from the file —
-  // the user decides whether to save over it.
-  const handleRecoverDraft = useCallback(() => {
-    const draft = recoveryDraft;
-    if (!draft) return;
-    setRecoveryDraft(null);
-    restoreDraft(draft.filePath);
-    setLastSavedAt(null);
-    const liveEditor = editorRef.current?.getEditor();
-    if (liveEditor) {
-      setImageBaseDir(liveEditor, draft.filePath ? dirname(draft.filePath) : null);
-    }
-    editorRef.current?.setContent(draft.content);
-    const draftComments = draft.comments ?? [];
-    const draftSuggestions = draft.suggestions ?? [];
-    setComments(draftComments);
-    setLastKnownModel(lastReplyModel(draftComments));
-    setSuggestions(draftSuggestions);
-    // The draft's annotations need their marks stamped back just like a file
-    // load — the snapshot's content is serialized Markdown, which drops them
-    // (and the same manual tracked-changes refresh, since the restore
-    // suppresses the update event).
-    const ed = editorRef.current?.getEditor();
-    if (ed) {
-      restoreReviewMarks(ed, draftComments, draftSuggestions);
-      setTrackedChanges(getTrackedChanges(ed));
-    }
-    setAISession(draft.aiSession ?? null);
-    setContextFolder(draft.contextFolder ?? null);
-  }, [recoveryDraft, restoreDraft, setComments, setSuggestions]);
+  // Adopt a shell-selected workspace snapshot without reading the older file
+  // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
+  // restored as clean browser-session state.
+  const restoreWorkspaceSnapshot = useCallback(
+    (draft: DraftFile, dirty: boolean) => {
+      restoreDraft(draft.filePath, dirty);
+      setLastSavedAt(null);
+      const liveEditor = editorRef.current?.getEditor();
+      if (liveEditor) {
+        setImageBaseDir(liveEditor, draft.filePath ? dirname(draft.filePath) : null);
+      }
+      editorRef.current?.setContent(draft.content);
+      const draftComments = draft.comments ?? [];
+      const draftSuggestions = draft.suggestions ?? [];
+      setComments(draftComments);
+      setLastKnownModel(lastReplyModel(draftComments));
+      setSuggestions(draftSuggestions);
+      // The draft's annotations need their marks stamped back just like a file
+      // load — the snapshot's content is serialized Markdown, which drops them
+      // (and the same manual tracked-changes refresh, since the restore
+      // suppresses the update event).
+      const ed = editorRef.current?.getEditor();
+      if (ed) {
+        restoreReviewMarks(ed, draftComments, draftSuggestions);
+        setTrackedChanges(getTrackedChanges(ed));
+      }
+      setAISession(draft.aiSession ?? null);
+      setContextFolder(draft.contextFolder ?? null);
+    },
+    [restoreDraft, setComments, setSuggestions],
+  );
 
-  const handleDiscardDraft = useCallback(() => {
-    setRecoveryDraft(null);
-    void deleteDraft();
-  }, [deleteDraft]);
+  useEffect(() => {
+    if (!editor || !initialWorkspaceSnapshot || initialWorkspaceRestoreStartedRef.current) {
+      return;
+    }
+    initialWorkspaceRestoreStartedRef.current = true;
+    restoreWorkspaceSnapshot(initialWorkspaceSnapshot, initialWorkspaceDirty);
+    onInitialWorkspaceLoaded(tabId);
+  }, [
+    editor,
+    initialWorkspaceDirty,
+    initialWorkspaceSnapshot,
+    onInitialWorkspaceLoaded,
+    restoreWorkspaceSnapshot,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1274,11 +1274,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       unlinkSession: handleUnlinkSession,
       linkContextFolder: handleLinkContextFolder,
       unlinkContextFolder: handleUnlinkContextFolder,
-      deleteDraft,
+      getWorkspaceSnapshot,
     }),
     [
-      deleteDraft,
       editor,
+      getWorkspaceSnapshot,
       handleAcceptAll,
       handleCloseSessionPicker,
       handleExportPdf,
@@ -1444,24 +1444,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           onSubmit={handleReviewSubmit}
           onCancelStream={() => void docReview.cancel()}
           onClose={handleReviewClose}
-        />
-      )}
-
-      {recoveryDraft && !shellModalOpen && (
-        <AppModal
-          title="Recover unsaved changes?"
-          message={
-            `Quill closed before ${
-              recoveryDraft.filePath
-                ? `"${basename(recoveryDraft.filePath)}"`
-                : 'an untitled document'
-            } was saved. ` +
-            `Restore the unsaved version from ${new Date(recoveryDraft.savedAt).toLocaleString()}?`
-          }
-          buttons={[
-            { label: 'Recover', kind: 'primary', onClick: handleRecoverDraft },
-            { label: 'Discard', kind: 'danger', onClick: handleDiscardDraft },
-          ]}
         />
       )}
     </>

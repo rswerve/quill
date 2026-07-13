@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { DraftFile } from '../types';
+import type { DraftFile, WorkspaceFile, WorkspaceTab } from '../types';
 import {
   sanitizeComments,
   sanitizeSuggestions,
@@ -12,22 +12,19 @@ const AUTOSAVE_INTERVAL_MS = 5000;
 
 export type DraftSnapshot = Omit<DraftFile, 'version' | 'savedAt'>;
 
-interface UseDraftAutosaveOptions {
-  isDirty: boolean;
-  /** Captures the current document + annotations. Called on every tick. */
-  getSnapshot: () => DraftSnapshot;
+interface UseWorkspaceAutosaveOptions {
+  enabled: boolean;
+  hasDirtyTabs: boolean;
+  /** Changes when tab order, paths, dirtiness, or the active tab changes. */
+  revision: string;
+  /** Captures every open tab. Null means a just-mounted tab is not ready yet. */
+  getWorkspace: () => WorkspaceFile | null;
 }
 
-interface UseDraftAutosaveReturn {
-  /** Read the recovery draft left by a previous run, if any and valid. */
-  readDraft: () => Promise<DraftFile | null>;
-  /**
-   * Delete the draft now. The hook deletes automatically when the document
-   * transitions dirty → clean, but paths that exit the app before React
-   * effects flush (the unsaved-changes guard's Save / Don't Save) must await
-   * this explicitly.
-   */
-  deleteDraft: () => Promise<void>;
+interface UseWorkspaceAutosaveReturn {
+  readWorkspace: () => Promise<WorkspaceFile | null>;
+  writeWorkspace: (workspace?: WorkspaceFile) => Promise<boolean>;
+  deleteWorkspace: () => Promise<void>;
 }
 
 /**
@@ -38,7 +35,7 @@ interface UseDraftAutosaveReturn {
  * carry positions that throw inside the editor any more than a sidecar can.
  * Returns a clean DraftFile, or null if the envelope is unusable.
  */
-function sanitizeDraft(raw: unknown): DraftFile | null {
+export function sanitizeDraft(raw: unknown): DraftFile | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const d = raw as Record<string, unknown>;
   if (d.version !== 1) return null;
@@ -56,38 +53,97 @@ function sanitizeDraft(raw: unknown): DraftFile | null {
   };
 }
 
-/**
- * Crash-recovery autosave. While the document is dirty, snapshots it to
- * `draft.json` in the app data dir (immediately, then every few seconds);
- * deletes the draft when the document becomes clean. Outside Tauri (plain
- * vitest/browser) every operation is a silent no-op.
- *
- * The draft is deleted only on a true→false dirty *transition* — never on a
- * clean mount — so the launch-time recovery check can read a draft left by a
- * crashed run before anything destroys it.
- */
-export function useDraftAutosave({
-  isDirty,
-  getSnapshot,
-}: UseDraftAutosaveOptions): UseDraftAutosaveReturn {
-  const getSnapshotRef = useRef(getSnapshot);
-  getSnapshotRef.current = getSnapshot;
-  const wasDirtyRef = useRef(false);
+function sanitizeWorkspaceTab(raw: unknown): WorkspaceTab | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const tab = raw as Record<string, unknown>;
+  if (typeof tab.tabId !== 'string' || tab.tabId.length === 0) return null;
+  if (tab.filePath !== null && typeof tab.filePath !== 'string') return null;
+  if (typeof tab.dirty !== 'boolean') return null;
 
-  const writeDraft = useCallback(async () => {
-    const draft: DraftFile = {
+  const needsSnapshot = tab.dirty || tab.filePath === null;
+  const snapshot = tab.snapshot === undefined ? null : sanitizeDraft(tab.snapshot);
+  if (needsSnapshot && !snapshot) return null;
+
+  return {
+    tabId: tab.tabId,
+    filePath: tab.filePath,
+    dirty: tab.dirty,
+    ...(needsSnapshot && snapshot ? { snapshot: { ...snapshot, filePath: tab.filePath } } : {}),
+  };
+}
+
+/** Validate a workspace envelope, including legacy one-document draft files. */
+export function sanitizeWorkspace(raw: unknown): WorkspaceFile | null {
+  const legacyDraft = sanitizeDraft(raw);
+  if (legacyDraft) {
+    const tabId = 'legacy-draft';
+    return {
       version: 1,
-      savedAt: new Date().toISOString(),
-      ...getSnapshotRef.current(),
+      savedAt: legacyDraft.savedAt,
+      activeTabId: tabId,
+      tabs: [
+        {
+          tabId,
+          filePath: legacyDraft.filePath,
+          dirty: true,
+          snapshot: legacyDraft,
+        },
+      ],
     };
+  }
+
+  if (typeof raw !== 'object' || raw === null) return null;
+  const workspace = raw as Record<string, unknown>;
+  if (workspace.version !== 1 || !Array.isArray(workspace.tabs)) return null;
+
+  const seen = new Set<string>();
+  const tabs: WorkspaceTab[] = [];
+  for (const candidate of workspace.tabs) {
+    const tab = sanitizeWorkspaceTab(candidate);
+    if (!tab || seen.has(tab.tabId)) continue;
+    seen.add(tab.tabId);
+    tabs.push(tab);
+  }
+  if (tabs.length === 0) return null;
+
+  const requestedActive =
+    typeof workspace.activeTabId === 'string' ? workspace.activeTabId : tabs[0].tabId;
+  return {
+    version: 1,
+    savedAt: typeof workspace.savedAt === 'string' ? workspace.savedAt : new Date().toISOString(),
+    activeTabId: seen.has(requestedActive) ? requestedActive : tabs[0].tabId,
+    tabs,
+  };
+}
+
+/**
+ * Shell-owned workspace persistence. Open-set changes write immediately, and
+ * any dirty tab keeps a five-second snapshot interval running. Clean sessions
+ * remain on disk so normal relaunch can restore their tab order and active tab.
+ * Outside Tauri every operation remains a silent no-op.
+ */
+export function useWorkspaceAutosave({
+  enabled,
+  hasDirtyTabs,
+  revision,
+  getWorkspace,
+}: UseWorkspaceAutosaveOptions): UseWorkspaceAutosaveReturn {
+  const getWorkspaceRef = useRef(getWorkspace);
+  getWorkspaceRef.current = getWorkspace;
+
+  const writeWorkspace = useCallback(async (override?: WorkspaceFile): Promise<boolean> => {
+    const workspace = override ?? getWorkspaceRef.current();
+    if (!workspace) return false;
     try {
-      await invoke('write_draft', { content: JSON.stringify(draft) });
+      await invoke('write_draft', { content: JSON.stringify(workspace) });
+      return true;
     } catch {
       // Best-effort: outside Tauri (or on IO failure) autosave is a no-op.
+      return false;
     }
   }, []);
 
-  const deleteDraft = useCallback(async () => {
+  const deleteWorkspace = useCallback(async () => {
     try {
       await invoke('delete_draft');
     } catch {
@@ -96,28 +152,23 @@ export function useDraftAutosave({
   }, []);
 
   useEffect(() => {
-    if (isDirty) {
-      wasDirtyRef.current = true;
-      void writeDraft();
-      const timer = setInterval(() => void writeDraft(), AUTOSAVE_INTERVAL_MS);
-      return () => clearInterval(timer);
-    }
-    if (wasDirtyRef.current) {
-      wasDirtyRef.current = false;
-      void deleteDraft();
-    }
-  }, [isDirty, writeDraft, deleteDraft]);
+    if (!enabled) return;
+    void writeWorkspace();
+    if (!hasDirtyTabs) return;
+    const timer = setInterval(() => void writeWorkspace(), AUTOSAVE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [enabled, hasDirtyTabs, revision, writeWorkspace]);
 
-  const readDraft = useCallback(async (): Promise<DraftFile | null> => {
+  const readWorkspace = useCallback(async (): Promise<WorkspaceFile | null> => {
     try {
       const raw = await invoke<string | null>('read_draft');
       if (!raw) return null;
       const parsed: unknown = JSON.parse(raw);
-      return sanitizeDraft(parsed);
+      return sanitizeWorkspace(parsed);
     } catch {
       return null;
     }
   }, []);
 
-  return { readDraft, deleteDraft };
+  return { readWorkspace, writeWorkspace, deleteWorkspace };
 }

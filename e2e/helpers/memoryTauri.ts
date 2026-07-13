@@ -9,6 +9,8 @@ interface MemoryTauriOptions {
    *  Defaults to a plain prose reply. */
   aiReplyText?: string;
   newSessionId?: string;
+  /** Initial workspace payload. The shim persists later writes across reloads. */
+  workspace?: string;
 }
 
 /**
@@ -18,10 +20,32 @@ interface MemoryTauriOptions {
  */
 export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions = {}) {
   await page.addInitScript(
-    ({ files, openPath, savePath, mockAI, aiReplyText, newSessionId }) => {
+    ({ files, openPath, savePath, mockAI, aiReplyText, newSessionId, workspace }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
-      const memoryFiles: Record<string, string> = { ...files };
+      const filesKey = '__quill_test_files';
+      const workspaceKey = '__quill_test_workspace';
+      const storedFiles = sessionStorage.getItem(filesKey);
+      const initialFiles = storedFiles
+        ? (JSON.parse(storedFiles) as Record<string, string>)
+        : { ...files };
+      const persistFiles = () => sessionStorage.setItem(filesKey, JSON.stringify(initialFiles));
+      const memoryFiles = new Proxy(initialFiles, {
+        set(target, property, value: string) {
+          target[property as string] = value;
+          persistFiles();
+          return true;
+        },
+        deleteProperty(target, property) {
+          delete target[property as string];
+          persistFiles();
+          return true;
+        },
+      });
+      if (!storedFiles) persistFiles();
+      if (workspace && sessionStorage.getItem(workspaceKey) === null) {
+        sessionStorage.setItem(workspaceKey, workspace);
+      }
       const calls: Call[] = [];
       const callbacks = new Map<number, (payload: unknown) => void>();
       const listeners: Listener[] = [];
@@ -30,12 +54,14 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       const globals = window as unknown as {
         __quillFiles: Record<string, string>;
         __quillCalls: Call[];
+        __quillListeners: Listener[];
         __TAURI_INTERNALS__: unknown;
         __quillMock?: unknown;
         [key: string]: unknown;
       };
       globals.__quillFiles = memoryFiles;
       globals.__quillCalls = calls;
+      globals.__quillListeners = listeners;
       if (newSessionId) {
         Object.defineProperty(crypto, 'randomUUID', {
           configurable: true,
@@ -58,7 +84,16 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             return args.handler;
           }
           if (cmd === 'plugin:event|unlisten') return null;
-          if (cmd === 'read_draft' || cmd === 'take_pending_deep_link') return null;
+          if (cmd === 'read_draft') return sessionStorage.getItem(workspaceKey);
+          if (cmd === 'write_draft') {
+            sessionStorage.setItem(workspaceKey, args.content as string);
+            return null;
+          }
+          if (cmd === 'delete_draft') {
+            sessionStorage.removeItem(workspaceKey);
+            return null;
+          }
+          if (cmd === 'take_pending_deep_link') return null;
           if (cmd === 'has_native_menu') return false;
           if (cmd === 'show_open_dialog') return openPath ?? null;
           if (cmd === 'show_save_dialog') return savePath ?? null;
@@ -110,6 +145,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       mockAI: options.mockAI ?? false,
       aiReplyText: options.aiReplyText ?? 'Persist this answer.',
       newSessionId: options.newSessionId ?? null,
+      workspace: options.workspace ?? null,
     },
   );
 
@@ -131,8 +167,38 @@ export async function closeSessionPickerIfOpen(page: Page) {
 }
 
 export async function openMemoryFile(page: Page) {
+  await activeEditor(page).waitFor({ timeout: 5000 });
+  await page.waitForFunction(() =>
+    (
+      window as unknown as {
+        __quillListeners?: Array<{ event: string }>;
+      }
+    ).__quillListeners?.some((listener) => listener.event === 'menu-open'),
+  );
+  const openCallsBefore = await page.evaluate(
+    () =>
+      (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.filter(
+        (call) => call.cmd === 'show_open_dialog',
+      ).length,
+  );
   await page.keyboard.press('ControlOrMeta+o');
-  await page.locator('.crumbs .cur').waitFor();
+  await page.waitForFunction(
+    (previous) =>
+      (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.filter(
+        (call) => call.cmd === 'show_open_dialog',
+      ).length > previous,
+    openCallsBefore,
+  );
+  await page.waitForFunction(
+    () => document.querySelector('.crumbs .cur')?.textContent?.trim() !== 'Untitled',
+  );
+  // filePath publishes before loadFileResult's session-picker state reaches
+  // the DOM. Let that same open settle so the helper cannot miss a late picker
+  // and leave an invisible modal intercepting the next real interaction.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
   await closeSessionPickerIfOpen(page);
 }
 

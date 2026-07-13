@@ -13,6 +13,7 @@ import TabStrip from './components/TabStrip';
 import type { TabStripItem } from './components/TabStrip';
 import Topbar from './components/Topbar';
 import UpdateBanner from './components/UpdateBanner';
+import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
 import {
   readClaudeRunOptions,
@@ -32,13 +33,27 @@ import {
   loadZoomPreference,
   saveZoomPreference,
 } from './utils/zoomPreference';
-import type { ClaudeEffort, ClaudeModelAlias, ClaudeRunOptions } from './types';
+import {
+  buildDiscardedWorkspaceFile,
+  buildWorkspaceFile,
+  type WorkspaceTabSource,
+} from './utils/workspacePersistence';
+import type {
+  ClaudeEffort,
+  ClaudeModelAlias,
+  ClaudeRunOptions,
+  DraftFile,
+  WorkspaceFile,
+  WorkspaceTab,
+} from './types';
 import './App.css';
 
 interface TabMeta extends TabStripItem {
   filePath: string | null;
   initialFilePath: string | null;
-  allowDraftRecovery: boolean;
+  initialWorkspaceSnapshot: DraftFile | null;
+  initialWorkspaceDirty: boolean;
+  restoredFromWorkspace: boolean;
 }
 
 interface DiscardGuard {
@@ -48,14 +63,16 @@ interface DiscardGuard {
 
 let nextTabNumber = 1;
 
-function createUntitledTab(allowDraftRecovery = false): TabMeta {
+function createUntitledTab(): TabMeta {
   return {
     id: `tab-${nextTabNumber++}`,
     filePath: null,
     initialFilePath: null,
     title: 'Untitled',
     isDirty: false,
-    allowDraftRecovery,
+    initialWorkspaceSnapshot: null,
+    initialWorkspaceDirty: false,
+    restoredFromWorkspace: false,
   };
 }
 
@@ -66,7 +83,45 @@ function createFileTab(path: string): TabMeta {
     initialFilePath: path,
     title: basename(path),
     isDirty: false,
-    allowDraftRecovery: false,
+    initialWorkspaceSnapshot: null,
+    initialWorkspaceDirty: false,
+    restoredFromWorkspace: false,
+  };
+}
+
+function workspaceTabMeta(tab: WorkspaceTab): TabMeta {
+  return {
+    id: tab.tabId,
+    filePath: tab.filePath,
+    initialFilePath: tab.snapshot ? null : tab.filePath,
+    initialWorkspaceSnapshot: tab.snapshot ?? null,
+    initialWorkspaceDirty: tab.dirty,
+    restoredFromWorkspace: true,
+    title: tab.filePath ? basename(tab.filePath) : 'Untitled',
+    isDirty: tab.dirty,
+  };
+}
+
+function tabsFromWorkspace(
+  workspace: WorkspaceFile,
+  includeDirty: boolean,
+): { tabs: TabMeta[]; activeTabId: string } {
+  const restored = workspace.tabs.filter((tab) => includeDirty || !tab.dirty).map(workspaceTabMeta);
+  const tabs = restored.length > 0 ? restored : [createUntitledTab()];
+  const activeTabId = tabs.some((tab) => tab.id === workspace.activeTabId)
+    ? workspace.activeTabId
+    : tabs[0].id;
+  return { tabs, activeTabId };
+}
+
+function draftSnapshot(draft: DraftFile) {
+  return {
+    filePath: draft.filePath,
+    content: draft.content,
+    comments: draft.comments,
+    suggestions: draft.suggestions,
+    aiSession: draft.aiSession,
+    contextFolder: draft.contextFolder,
   };
 }
 
@@ -87,7 +142,7 @@ function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
 }
 
 export default function App() {
-  const [tabs, setTabs] = useState<TabMeta[]>(() => [createUntitledTab(true)]);
+  const [tabs, setTabs] = useState<TabMeta[]>(() => [createUntitledTab()]);
   const [activeTabId, setActiveTabId] = useState(() => tabs[0].id);
   const [chrome, setChrome] = useState<DocumentTabChromeSnapshot>(() =>
     emptyChrome(tabs[0], loadZoomPreference()),
@@ -99,6 +154,10 @@ export default function App() {
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
   const [discardGuard, setDiscardGuard] = useState<DiscardGuard | null>(null);
   const [closeGuardTabId, setCloseGuardTabId] = useState<string | null>(null);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [pendingRecovery, setPendingRecovery] = useState<WorkspaceFile | null>(null);
+  const [persistenceSuspended, setPersistenceSuspended] = useState(false);
+  const [tabHandleRevision, setTabHandleRevision] = useState(0);
   const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
     () => readClaudeRunOptions(window.localStorage).model,
   );
@@ -115,7 +174,14 @@ export default function App() {
   chromeRef.current = chrome;
   const defaultZoomRef = useRef(defaultZoom);
   defaultZoomRef.current = defaultZoom;
+  const workspaceReadyRef = useRef(workspaceReady);
+  workspaceReadyRef.current = workspaceReady;
+  const persistenceSuspendedRef = useRef(persistenceSuspended);
+  persistenceSuspendedRef.current = persistenceSuspended;
+  const pendingOpenPathsRef = useRef<string[]>([]);
+  const hydrationStartedRef = useRef(false);
   const tabHandlesRef = useRef(new Map<string, DocumentTabHandle>());
+  const tabHandleReadyIdsRef = useRef(new Set<string>());
   const tabRefCallbacksRef = useRef(new Map<string, (handle: DocumentTabHandle | null) => void>());
   const chromeByTabRef = useRef(new Map<string, DocumentTabChromeSnapshot>());
   const runOptionsRef = useRef<ClaudeRunOptions>({
@@ -138,9 +204,38 @@ export default function App() {
     [],
   );
 
+  const getTabSnapshot = useCallback((tabId: string) => {
+    const initial = tabsRef.current.find((tab) => tab.id === tabId)?.initialWorkspaceSnapshot;
+    if (initial) return draftSnapshot(initial);
+    return tabHandlesRef.current.get(tabId)?.getWorkspaceSnapshot() ?? null;
+  }, []);
+
+  const getCurrentWorkspace = useCallback(() => {
+    if (persistenceSuspendedRef.current) return null;
+    return buildWorkspaceFile(tabsRef.current, activeTabIdRef.current, getTabSnapshot);
+  }, [getTabSnapshot]);
+
+  const workspaceRevision = [
+    activeTabId,
+    tabHandleRevision,
+    ...tabs.map((tab) => `${tab.id}:${tab.filePath ?? ''}:${tab.isDirty ? 1 : 0}`),
+  ].join('|');
+  const { readWorkspace, writeWorkspace, deleteWorkspace } = useWorkspaceAutosave({
+    enabled: workspaceReady && !pendingRecovery && !persistenceSuspended,
+    hasDirtyTabs: tabs.some((tab) => tab.isDirty),
+    revision: workspaceRevision,
+    getWorkspace: getCurrentWorkspace,
+  });
+
   const handleTabRef = useCallback((tabId: string, handle: DocumentTabHandle | null) => {
-    if (handle) tabHandlesRef.current.set(tabId, handle);
-    else tabHandlesRef.current.delete(tabId);
+    const previous = tabHandlesRef.current.get(tabId);
+    if (handle) {
+      tabHandlesRef.current.set(tabId, handle);
+      if (!previous && !tabHandleReadyIdsRef.current.has(tabId)) {
+        tabHandleReadyIdsRef.current.add(tabId);
+        setTabHandleRevision((revision) => revision + 1);
+      }
+    } else tabHandlesRef.current.delete(tabId);
   }, []);
 
   const tabRefFor = (tabId: string) => {
@@ -159,6 +254,28 @@ export default function App() {
     return tab ? emptyChrome(tab, defaultZoomRef.current) : chromeRef.current;
   }, []);
 
+  const applyWorkspaceState = useCallback((workspace: WorkspaceFile, includeDirty: boolean) => {
+    const restored = tabsFromWorkspace(workspace, includeDirty);
+    for (const tab of restored.tabs) {
+      const numericId = /^tab-(\d+)$/.exec(tab.id)?.[1];
+      if (numericId) nextTabNumber = Math.max(nextTabNumber, Number(numericId) + 1);
+    }
+    tabsRef.current = restored.tabs;
+    activeTabIdRef.current = restored.activeTabId;
+    tabHandlesRef.current.clear();
+    tabHandleReadyIdsRef.current.clear();
+    tabRefCallbacksRef.current.clear();
+    chromeByTabRef.current.clear();
+    setTabs(restored.tabs);
+    setActiveTabId(restored.activeTabId);
+    setChrome(
+      emptyChrome(
+        restored.tabs.find((tab) => tab.id === restored.activeTabId) ?? restored.tabs[0],
+        defaultZoomRef.current,
+      ),
+    );
+  }, []);
+
   const activateTab = useCallback(
     (tabId: string) => {
       if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
@@ -170,6 +287,7 @@ export default function App() {
   );
 
   const addNewTab = useCallback(() => {
+    if (!workspaceReadyRef.current) return;
     const tab = createUntitledTab();
     const nextTabs = [...tabsRef.current, tab];
     tabsRef.current = nextTabs;
@@ -179,6 +297,10 @@ export default function App() {
 
   const addOrFocusPath = useCallback(
     (path: string) => {
+      if (!workspaceReadyRef.current) {
+        if (!pendingOpenPathsRef.current.includes(path)) pendingOpenPathsRef.current.push(path);
+        return null;
+      }
       const existing = tabsRef.current.find(
         (tab) => tab.filePath === path || tab.initialFilePath === path,
       );
@@ -197,6 +319,27 @@ export default function App() {
     [activateTab],
   );
 
+  useEffect(() => {
+    if (hydrationStartedRef.current) return;
+    hydrationStartedRef.current = true;
+    void (async () => {
+      const workspace = await readWorkspace();
+      if (workspace) {
+        const hasDirtyTabs = workspace.tabs.some((tab) => tab.dirty);
+        applyWorkspaceState(workspace, !hasDirtyTabs);
+        if (hasDirtyTabs) setPendingRecovery(workspace);
+      }
+      workspaceReadyRef.current = true;
+      setWorkspaceReady(true);
+    })();
+  }, [applyWorkspaceState, readWorkspace]);
+
+  useEffect(() => {
+    if (!workspaceReady) return;
+    const pending = pendingOpenPathsRef.current.splice(0);
+    for (const path of pending) addOrFocusPath(path);
+  }, [addOrFocusPath, workspaceReady]);
+
   const closeTabImmediately = useCallback(
     (tabId: string) => {
       const currentTabs = tabsRef.current;
@@ -212,6 +355,7 @@ export default function App() {
 
       tabsRef.current = nextTabs;
       tabHandlesRef.current.delete(tabId);
+      tabHandleReadyIdsRef.current.delete(tabId);
       chromeByTabRef.current.delete(tabId);
       tabRefCallbacksRef.current.delete(tabId);
       setTabs(nextTabs);
@@ -250,6 +394,15 @@ export default function App() {
     [closeTabImmediately],
   );
 
+  const handleInitialWorkspaceLoaded = useCallback((tabId: string) => {
+    const currentTabs = tabsRef.current;
+    const nextTabs = currentTabs.map((tab) =>
+      tab.id === tabId ? { ...tab, initialWorkspaceSnapshot: null } : tab,
+    );
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+  }, []);
+
   const handleTabMetaChange = useCallback((tabId: string, snapshot: DocumentTabMetaSnapshot) => {
     const currentTabs = tabsRef.current;
     let changed = false;
@@ -257,7 +410,9 @@ export default function App() {
       if (tab.id !== tabId) return tab;
       // A file tab publishes its initial blank hook state before its async
       // load finishes. Keep the pending path/title until the real load lands.
-      if (tab.initialFilePath && snapshot.filePath === null) return tab;
+      if ((tab.initialFilePath || tab.initialWorkspaceSnapshot) && snapshot.filePath === null) {
+        return tab;
+      }
       const next = {
         ...tab,
         filePath: snapshot.filePath,
@@ -332,11 +487,12 @@ export default function App() {
   const handleQuit = useCallback(() => {
     guardDirtyTabs(() => {
       void (async () => {
+        await writeWorkspace();
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('exit_app');
       })();
     });
-  }, [guardDirtyTabs]);
+  }, [guardDirtyTabs, writeWorkspace]);
 
   const handleCopyDiagnostics = useCallback(async () => {
     try {
@@ -422,9 +578,12 @@ export default function App() {
         const win = getCurrentWindow();
         const off = await win.onCloseRequested((event) => {
           const dirtyTabIds = tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id);
-          if (dirtyTabIds.length === 0) return;
           try {
             event.preventDefault();
+            if (dirtyTabIds.length === 0) {
+              void writeWorkspace().finally(() => void win.destroy());
+              return;
+            }
             setDiscardGuard({ tabIds: dirtyTabIds, run: () => void win.destroy() });
           } catch {
             void win.destroy();
@@ -440,7 +599,7 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [writeWorkspace]);
 
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -597,8 +756,6 @@ export default function App() {
     : null;
   const pickerTargetId = pickerTabId ?? activeTabId;
   const pickerTab = tabs.find((tab) => tab.id === pickerTargetId) ?? null;
-  const shellModalOpen = Boolean(discardGuard || closeGuardTabId || notice);
-
   return (
     <div className="app">
       <Rail editor={chrome.editor} />
@@ -625,39 +782,44 @@ export default function App() {
           onReviewDocument={() => activeHandle()?.reviewDocument()}
         />
 
-        <TabStrip
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onActivate={activateTab}
-          onClose={requestCloseTab}
-          onNew={addNewTab}
-        />
+        {workspaceReady && (
+          <TabStrip
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onActivate={activateTab}
+            onClose={requestCloseTab}
+            onNew={addNewTab}
+          />
+        )}
 
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className="document-tab-host"
-            data-tab-id={tab.id}
-            hidden={tab.id !== activeTabId}
-          >
-            <DocumentTab
-              ref={tabRefFor(tab.id)}
-              tabId={tab.id}
-              isActive={tab.id === activeTabId}
-              initialFilePath={tab.initialFilePath}
-              defaultZoom={defaultZoom}
-              getClaudeRunOptions={getClaudeRunOptions}
-              onChromeChange={handleChromeChange}
-              onMetaChange={handleTabMetaChange}
-              onInitialFileLoaded={handleInitialFileLoaded}
-              onOpenSessionPicker={handleOpenSessionPicker}
-              onNotice={showNotice}
-              onRecentFile={handleRecentFile}
-              shellModalOpen={shellModalOpen}
-              allowDraftRecovery={tab.allowDraftRecovery}
-            />
-          </div>
-        ))}
+        {workspaceReady &&
+          tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className="document-tab-host"
+              data-tab-id={tab.id}
+              hidden={tab.id !== activeTabId}
+            >
+              <DocumentTab
+                ref={tabRefFor(tab.id)}
+                tabId={tab.id}
+                isActive={tab.id === activeTabId}
+                initialFilePath={tab.initialFilePath}
+                initialWorkspaceSnapshot={tab.initialWorkspaceSnapshot}
+                initialWorkspaceDirty={tab.initialWorkspaceDirty}
+                restoredFromWorkspace={tab.restoredFromWorkspace}
+                defaultZoom={defaultZoom}
+                getClaudeRunOptions={getClaudeRunOptions}
+                onChromeChange={handleChromeChange}
+                onMetaChange={handleTabMetaChange}
+                onInitialFileLoaded={handleInitialFileLoaded}
+                onInitialWorkspaceLoaded={handleInitialWorkspaceLoaded}
+                onOpenSessionPicker={handleOpenSessionPicker}
+                onNotice={showNotice}
+                onRecentFile={handleRecentFile}
+              />
+            </div>
+          ))}
 
         <Footer
           editor={chrome.editor}
@@ -693,6 +855,30 @@ export default function App() {
         }}
       />
 
+      {pendingRecovery && (
+        <AppModal
+          title="Recover unsaved workspace?"
+          message={`Restore ${pendingRecovery.tabs.filter((tab) => tab.dirty).length} unsaved document${
+            pendingRecovery.tabs.filter((tab) => tab.dirty).length === 1 ? '' : 's'
+          } from ${new Date(pendingRecovery.savedAt).toLocaleString()}?`}
+          buttons={[
+            {
+              label: 'Recover',
+              kind: 'primary',
+              onClick: () => {
+                applyWorkspaceState(pendingRecovery, true);
+                setPendingRecovery(null);
+              },
+            },
+            {
+              label: 'Discard',
+              kind: 'danger',
+              onClick: () => setPendingRecovery(null),
+            },
+          ]}
+        />
+      )}
+
       {closeGuardTab && (
         <AppModal
           title="Unsaved changes"
@@ -712,8 +898,7 @@ export default function App() {
             {
               label: "Don't Save",
               kind: 'danger',
-              onClick: async () => {
-                await tabHandlesRef.current.get(closeGuardTab.id)?.deleteDraft();
+              onClick: () => {
                 setCloseGuardTabId(null);
                 closeTabImmediately(closeGuardTab.id);
               },
@@ -740,11 +925,25 @@ export default function App() {
               label: discardGuard.tabIds.length === 1 ? 'Save' : 'Save All',
               kind: 'primary',
               onClick: async () => {
+                const savedPaths = new Map<string, string>();
                 for (const tabId of discardGuard.tabIds) {
                   const saved = await tabHandlesRef.current.get(tabId)?.save();
                   if (!saved) return;
+                  savedPaths.set(tabId, saved);
                 }
-                await tabHandlesRef.current.get(discardGuard.tabIds[0])?.deleteDraft();
+                const persistedTabs: WorkspaceTabSource[] = tabsRef.current.map((tab) => ({
+                  id: tab.id,
+                  filePath: savedPaths.get(tab.id) ?? tab.filePath,
+                  isDirty: savedPaths.has(tab.id) ? false : tab.isDirty,
+                }));
+                const workspace = buildWorkspaceFile(
+                  persistedTabs,
+                  activeTabIdRef.current,
+                  getTabSnapshot,
+                );
+                persistenceSuspendedRef.current = true;
+                setPersistenceSuspended(true);
+                if (workspace) await writeWorkspace(workspace);
                 setDiscardGuard(null);
                 discardGuard.run();
               },
@@ -753,7 +952,15 @@ export default function App() {
               label: discardGuard.tabIds.length === 1 ? "Don't Save" : 'Discard All',
               kind: 'danger',
               onClick: async () => {
-                await tabHandlesRef.current.get(discardGuard.tabIds[0])?.deleteDraft();
+                const workspace = buildDiscardedWorkspaceFile(
+                  tabsRef.current,
+                  activeTabIdRef.current,
+                  getTabSnapshot,
+                );
+                persistenceSuspendedRef.current = true;
+                setPersistenceSuspended(true);
+                if (workspace) await writeWorkspace(workspace);
+                else await deleteWorkspace();
                 setDiscardGuard(null);
                 discardGuard.run();
               },
