@@ -12,6 +12,7 @@ import type {
 } from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
 import type { FormatSegment, TrackedChangeInfo } from '../types';
+import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
 
 export interface TrackChangesStorage {
   enabled: boolean;
@@ -54,7 +55,7 @@ const SKIP_TRACKING_META = 'skipTracking';
  * serialization with html:false, so a tracked toggle couldn't honestly
  * persist), and code/link (untracked passthrough by design).
  */
-export const TRACKED_FORMAT_MARK_NAMES = new Set(['bold', 'italic', 'strike']);
+export const TRACKED_FORMAT_MARK_NAMES = TRACKED_INLINE_FORMAT_MARK_NAMES;
 
 /**
  * Transaction meta set when a formatting gesture skipped spans owned by
