@@ -22,6 +22,63 @@ async function saveNewAndReopen(page: import('@playwright/test').Page) {
   return reopened;
 }
 
+const LIVE_COMMENT = {
+  id: 'live-comment',
+  anchorText: 'hello',
+  from: 8,
+  to: 13,
+  author: 'Reviewer',
+  createdAt: '2026-07-11T18:00:00Z',
+  resolved: false,
+  replies: [],
+};
+
+async function openLiveComment(
+  page: import('@playwright/test').Page,
+  options: { resolved?: boolean; mockAI?: boolean } = {},
+) {
+  await setupMemoryTauri(page, {
+    openPath: DOC_PATH,
+    savePath: DOC_PATH,
+    mockAI: options.mockAI,
+    files: {
+      [DOC_PATH]: 'prefix hello world',
+      [SIDECAR_PATH]: sidecar({
+        comments: [{ ...LIVE_COMMENT, resolved: options.resolved ?? false }],
+        ...(options.mockAI ? { aiSession: ipcFixtures.autoBindSession } : {}),
+      }),
+    },
+  });
+  await openMemoryFile(page);
+}
+
+async function placeCaretAtDocumentStart(page: import('@playwright/test').Page) {
+  await page.locator('.ProseMirror').click();
+  await page.keyboard.press('ControlOrMeta+Home');
+}
+
+async function selectCommentSlice(page: import('@playwright/test').Page, from: number, to: number) {
+  await page.locator('mark[data-comment-id="live-comment"]').evaluate(
+    (mark, rangeOffsets) => {
+      const text = mark.firstChild;
+      if (!(text instanceof Text)) throw new Error('comment mark has no text node');
+      const range = document.createRange();
+      range.setStart(text, rangeOffsets.from);
+      range.setEnd(text, rangeOffsets.to);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      (mark.closest('.ProseMirror') as HTMLElement | null)?.focus();
+      document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+    },
+    { from, to },
+  );
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+}
+
 test.describe('review metadata survives save and reopen', () => {
   test('saving a pending replacement writes sidecar metadata for reload', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
@@ -181,6 +238,92 @@ test.describe('review metadata survives save and reopen', () => {
     await expect(editor.locator('strong')).toHaveCount(0);
     await expect(editor.locator('em')).toHaveText('two');
     await expect(card).toHaveCount(0);
+  });
+});
+
+test.describe('live comment reconciliation', () => {
+  test('document shifts keep @claude anchored to the current marked text', async ({ page }) => {
+    await openLiveComment(page, { mockAI: true });
+    await placeCaretAtDocumentStart(page);
+    await page.keyboard.type('XYZ');
+
+    await page.locator('.comment-reply-trigger').click();
+    await page.locator('.comment-reply-input').fill('@claude inspect this');
+    await page.locator('.comment-card .btn-primary').click();
+    await expect.poll(() => page.evaluate(() => Boolean(window.__quillLastSpawnArgs))).toBe(true);
+
+    const prompt = await page.evaluate(
+      () => (window.__quillLastSpawnArgs as { prompt: string }).prompt,
+    );
+    const highlighted = prompt
+      .split('=== USER IS COMMENTING ON (highlighted) ===')[1]
+      .split('=== PARAGRAPH (context) ===')[0]
+      .trim();
+    expect(highlighted).toBe('hello');
+  });
+
+  test('deleting an entire unresolved anchor removes its card and count', async ({ page }) => {
+    await openLiveComment(page);
+    await selectCommentSlice(page, 0, 'hello'.length);
+    await page.keyboard.press('Backspace');
+
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
+    await expect(page.locator('.comment-card')).toHaveCount(0);
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
+  });
+
+  test('deleting part of an anchor keeps the comment on the surviving text', async ({ page }) => {
+    await openLiveComment(page);
+    await selectCommentSlice(page, 3, 5);
+    await page.keyboard.press('Backspace');
+
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hel');
+    await expect(page.locator('.comment-card')).toHaveCount(1);
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hel"');
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+  });
+
+  test('a fully deleted anchor is not persisted or restored on reopen', async ({ page }) => {
+    await openLiveComment(page);
+    await selectCommentSlice(page, 0, 'hello'.length);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+
+    const files = await page.evaluate(() => window.__quillFiles);
+    expect(files[SIDECAR_PATH]).toBeUndefined();
+
+    const reopened = await page.context().newPage();
+    await setupMemoryTauri(reopened, { files, openPath: DOC_PATH });
+    await openMemoryFile(reopened);
+    await expect(reopened.locator('.comment-card')).toHaveCount(0);
+    await expect(reopened.locator('mark[data-comment-id]')).toHaveCount(0);
+  });
+
+  test('resolved comments survive doc updates despite having no live mark', async ({ page }) => {
+    await openLiveComment(page, { resolved: true });
+    await placeCaretAtDocumentStart(page);
+    await page.keyboard.type('X');
+
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
+    await expect(page.locator('.comments-head .filter')).toBeEnabled();
+    await page.locator('.comments-head .filter').click();
+    await expect(page.locator('.comment-card-resolved')).toBeVisible();
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+  });
+
+  test('resolving a live comment does not let mark removal delete its record', async ({ page }) => {
+    await openLiveComment(page);
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
+
+    await page.locator('.comment-resolve-btn').click();
+
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
+    await expect(page.locator('.comment-card')).toHaveCount(0);
+    await expect(page.locator('.comments-head .filter')).toBeEnabled();
+    await page.locator('.comments-head .filter').click();
+    await expect(page.locator('.comment-card-resolved')).toBeVisible();
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
   });
 });
 

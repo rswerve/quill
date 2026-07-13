@@ -50,6 +50,7 @@ A writer or editor working on Markdown documents (often ones drafted with Claude
 - Select text → a **+** button appears in the margin → add a comment anchored to that text range.
 - While the composer is open, the target range stays **visibly highlighted** (a provisional, dashed-underline version of the comment highlight) even though the textarea has focus. It becomes the real highlight on submit and disappears on cancel. Rendered as an editor decoration — never written into the document, so it can't dirty the file.
 - Comments render as **cards in the right margin**, positioned next to their anchor with a collision-avoidance nudge so they don't overlap.
+- Comment anchors **follow their marked text while editing**: inserting before the anchor moves its stored range, deleting part of it shrinks the range and card quote to the surviving text, and deleting the entire marked span removes the comment. Resolved comments are intentionally mark-less and retain their last stored anchor so they can be shown and unresolved later.
 - Each comment is a **thread**: add replies, **resolve** / **unresolve**, and **delete** (which also removes the in-text highlight).
 
 ### 3.3a Annotation focus — text ↔ card click linking

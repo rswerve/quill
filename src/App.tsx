@@ -27,11 +27,8 @@ import { detectLossyConstructs } from './utils/markdownFidelity';
 import { findAnnotationRange } from './extensions/AnnotationFocus';
 import type { AnnotationKind } from './extensions/AnnotationFocus';
 import { locateEdit, planEdits, rangeText, resolveScopeRange } from './utils/trackedEdits';
-import {
-  refreshCommentRanges,
-  restoreReviewMarks,
-  suggestionsFromTrackedChanges,
-} from './utils/reviewPersistence';
+import { restoreReviewMarks, suggestionsFromTrackedChanges } from './utils/reviewPersistence';
+import { reconcileCommentsWithDocument } from './utils/commentReconciler';
 import { basename, dirname } from './utils/path';
 import {
   addRecentFile,
@@ -222,17 +219,14 @@ export default function App() {
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
-  // Marks are the runtime truth for review data. Everything persisted (sidecar
-  // and draft) is derived from them at write time: comments' stored from/to are
-  // creation-time snapshots that go stale as the doc is edited, and tracked
-  // changes exist only as marks until captured here.
+  // Marks are the runtime truth for review data. The update listener below
+  // projects comments into React state while editing; write paths reconcile once
+  // more defensively, and tracked changes exist only as marks until captured here.
   const getLiveReviewState = useCallback(() => {
     const ed = editorRef.current?.getEditor();
     if (!ed) return { comments, suggestions };
     return {
-      comments: refreshCommentRanges(comments, (id) =>
-        findAnnotationRange(ed.state.doc, 'comment', id),
-      ),
+      comments: reconcileCommentsWithDocument(comments, ed.state.doc),
       suggestions: suggestionsFromTrackedChanges(getTrackedChanges(ed)),
     };
   }, [comments, suggestions]);
@@ -998,13 +992,16 @@ export default function App() {
 
   useEffect(() => {
     if (!editor) return;
-    const refresh = () => setTrackedChanges(getTrackedChanges(editor));
+    const refresh = () => {
+      setTrackedChanges(getTrackedChanges(editor));
+      setComments((current) => reconcileCommentsWithDocument(current, editor.state.doc));
+    };
     editor.on('update', refresh);
     refresh();
     return () => {
       editor.off('update', refresh);
     };
-  }, [editor]);
+  }, [editor, setComments]);
 
   // A formatting gesture that ran into someone else's pending formatting
   // suggestion silently leaves those spans unchanged (v1 cross-author
