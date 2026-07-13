@@ -79,9 +79,12 @@ describe('buildPrompt effort calibration', () => {
 });
 
 describe('buildPrompt authorship framing', () => {
-  it('frames the doc as one Claude previously authored', () => {
+  it('never claims Claude authored the doc on a resumed session', () => {
     const prompt = buildPrompt(makeComment([]), 'question', 'doc', RANGES, null, null);
-    expect(prompt).toContain('you previously authored');
+    expect(prompt).toContain('the user is editing in Quill');
+    expect(prompt).not.toContain('previously authored');
+    expect(prompt).not.toContain('since you wrote');
+    expect(prompt).toContain('Current document (may have been edited since your last turn):');
   });
 
   it('uses neutral framing and the full document for a Quill-created session', () => {
@@ -149,7 +152,7 @@ describe('buildPrompt document-scale edit protocol', () => {
     );
     expect(prompt).toContain('=== FULL DOCUMENT ===');
     expect(prompt).toContain('doc v2 body');
-    expect(prompt).toContain('Current document (may have been edited since you wrote it):');
+    expect(prompt).toContain('Current document (may have been edited since your last turn):');
     expect(prompt).not.toContain('diff between what you originally wrote');
     expect(prompt).not.toContain('doc v1 body');
   });
@@ -166,7 +169,7 @@ describe('buildPrompt document-scale edit protocol', () => {
       },
       null,
     );
-    expect(prompt).toContain('Your context was compacted since you wrote this');
+    expect(prompt).toContain('Your context was compacted since your last turn');
     expect(prompt).toContain('doc body');
   });
 });

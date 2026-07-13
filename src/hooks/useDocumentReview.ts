@@ -154,13 +154,10 @@ export function buildReviewPrompt(
   options: ReviewOptions,
   docMarkdown: string,
   context: PromptContext | null,
-  freshSession = false,
 ): string {
   const guidance = options.guidance.trim();
   const head = [
-    freshSession
-      ? 'You are reviewing a markdown document the user is editing in Quill.'
-      : 'You are reviewing a markdown document you previously authored, now edited by the user in Quill.',
+    'You are reviewing a markdown document the user is editing in Quill.',
     '',
     'The user asked for a review of the FULL document.',
     // The user's ask is the ONLY substantive direction this prompt carries.
@@ -297,7 +294,7 @@ export function useDocumentReview(opts: UseDocumentReviewOptions): UseDocumentRe
       // A review always sends the full document, so the compaction check that
       // gates the comment-reply diff is irrelevant here.
       const fresh = binding.createdByQuill === true;
-      const prompt = buildReviewPrompt(options, opts.getDocMarkdown(), context, fresh);
+      const prompt = buildReviewPrompt(options, opts.getDocMarkdown(), context);
 
       let rawAccum = '';
       let responseModel: string | undefined;

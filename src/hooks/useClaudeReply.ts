@@ -198,9 +198,7 @@ export function buildPrompt(
   threadLines.push(`- User just said: ${userText}`);
 
   const head = [
-    freshSession
-      ? 'You are responding inline on a markdown document the user is editing in Quill.'
-      : 'You are responding inline on a markdown document you previously authored.',
+    'You are responding inline on a markdown document the user is editing in Quill.',
     '',
     'Comment thread so far:',
     threadLines.join('\n'),
@@ -268,12 +266,12 @@ export function buildPrompt(
       ]
     : [];
 
-  let documentIntroduction = 'Current document (may have been edited since you wrote it):';
+  let documentIntroduction = 'Current document (may have been edited since your last turn):';
   if (freshSession) {
     documentIntroduction = 'Here is the full current document:';
   } else if (compaction?.compacted) {
     documentIntroduction =
-      'Your context was compacted since you wrote this; full current document follows:';
+      'Your context was compacted since your last turn; full current document follows:';
   }
 
   return [
