@@ -17,6 +17,7 @@ import {
   type PromptContext,
 } from './useClaudeReply';
 import { useClaudeResumeStream } from './useClaudeResumeStream';
+import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
 export interface ChatCursorContext {
   selectedText: string | null;
@@ -35,6 +36,8 @@ interface UseDocumentChatOptions {
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
   onChanged: () => void;
+  /** Shared with @claude margin replies for this document. */
+  aiGate: DocumentAIRequestGate;
 }
 
 interface ChatInputs {
@@ -112,118 +115,151 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
 
   const runSpawn = useCallback(
     async (assistantId: string, inputs: ChatInputs) => {
+      const requestId = `chat:${assistantId}`;
+      if (!opts.aiGate.acquire(requestId)) {
+        setMessages((current) =>
+          updateMessage(current, assistantId, (message) => ({
+            ...message,
+            pending: false,
+            error: DOCUMENT_AI_BUSY_MESSAGE,
+          })),
+        );
+        opts.onChanged();
+        return;
+      }
+      const releaseGate = () => opts.aiGate.release(requestId);
       const generation = stream.begin(assistantId);
       activeRef.current.add(assistantId);
-      const contextFolder = opts.getContextFolder();
-      const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
-      let context: PromptContext | null = null;
-      if (contextFolder) {
-        let files: string[] = [];
-        if (mock) {
-          files = mock.contextFiles ?? [];
-        } else {
-          try {
-            files = await invoke<string[]>('list_context_files', { folder: contextFolder });
-          } catch (error) {
-            console.warn('list_context_files failed:', error);
+      try {
+        const contextFolder = opts.getContextFolder();
+        const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
+        let context: PromptContext | null = null;
+        if (contextFolder) {
+          let files: string[] = [];
+          if (mock) {
+            files = mock.contextFiles ?? [];
+          } else {
+            try {
+              files = await invoke<string[]>('list_context_files', { folder: contextFolder });
+            } catch (error) {
+              console.warn('list_context_files failed:', error);
+            }
           }
+          context = { folder: contextFolder, files };
         }
-        context = { folder: contextFolder, files };
-      }
 
-      const prompt = buildChatPrompt(
-        inputs.userText,
-        opts.getDocMarkdown(),
-        opts.getCursorContext(),
-        context,
-        opts.getPendingSuggestions(),
-      );
-      const runOptions = opts.getRunOptions();
-      await stream.run(
-        assistantId,
-        {
-          sessionId: inputs.binding.sessionId,
-          cwd: inputs.binding.cwd,
-          prompt,
-          addDir: contextFolder,
-          allowCreate: inputs.binding.createdByQuill === true,
-          model: runOptions.model,
-          effort: runOptions.effort,
-        },
-        {
-          onModel: (model) => {
-            setMessages((current) =>
-              updateMessage(current, assistantId, (message) => ({ ...message, model })),
-            );
-            opts.onModelObserved?.(model);
+        const prompt = buildChatPrompt(
+          inputs.userText,
+          opts.getDocMarkdown(),
+          opts.getCursorContext(),
+          context,
+          opts.getPendingSuggestions(),
+        );
+        if (!opts.aiGate.owns(requestId)) return;
+        const runOptions = opts.getRunOptions();
+        await stream.run(
+          assistantId,
+          {
+            sessionId: inputs.binding.sessionId,
+            cwd: inputs.binding.cwd,
+            prompt,
+            addDir: contextFolder,
+            allowCreate: inputs.binding.createdByQuill === true,
+            model: runOptions.model,
+            effort: runOptions.effort,
           },
-          onVisibleChunk: (chunk) => {
-            setMessages((current) =>
-              updateMessage(current, assistantId, (message) => ({
-                ...message,
-                text: message.text + chunk,
-              })),
-            );
-          },
-          onDone: (rawText, visibleText) => {
-            const { block } = splitVisible(rawText);
-            let parsed: QuillEditsBlock | null = null;
-            if (block) {
+          {
+            onModel: (model) => {
+              setMessages((current) =>
+                updateMessage(current, assistantId, (message) => ({ ...message, model })),
+              );
+              opts.onModelObserved?.(model);
+            },
+            onVisibleChunk: (chunk) => {
+              setMessages((current) =>
+                updateMessage(current, assistantId, (message) => ({
+                  ...message,
+                  text: message.text + chunk,
+                })),
+              );
+            },
+            onDone: (rawText, visibleText) => {
               try {
-                parsed = JSON.parse(block) as QuillEditsBlock;
-              } catch (error) {
-                console.warn('Failed to parse chat quill-edits block:', error);
-              }
-            }
+                const { block } = splitVisible(rawText);
+                let parsed: QuillEditsBlock | null = null;
+                if (block) {
+                  try {
+                    parsed = JSON.parse(block) as QuillEditsBlock;
+                  } catch (error) {
+                    console.warn('Failed to parse chat quill-edits block:', error);
+                  }
+                }
 
-            let appended = '';
-            let suggestionIds: string[] = [];
-            if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-              if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
-              const result = opts.applyTrackedEdits(parsed.edits, assistantId);
-              suggestionIds = result.suggestionIds ?? [];
-              if (result.skipped > 0) {
-                const noun = result.skipped === 1 ? 'change was' : 'changes were';
-                appended += `${appended ? '\n\n' : ''}(${result.skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`;
+                let appended = '';
+                let suggestionIds: string[] = [];
+                if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
+                  if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
+                  const result = opts.applyTrackedEdits(parsed.edits, assistantId);
+                  suggestionIds = result.suggestionIds ?? [];
+                  if (result.skipped > 0) {
+                    const noun = result.skipped === 1 ? 'change was' : 'changes were';
+                    appended += `${appended ? '\n\n' : ''}(${result.skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`;
+                  }
+                }
+                setMessages((current) =>
+                  updateMessage(current, assistantId, (message) => ({
+                    ...message,
+                    text: message.text + appended,
+                    pending: false,
+                    ...(suggestionIds.length > 0 ? { suggestionIds } : {}),
+                  })),
+                );
+                activeRef.current.delete(assistantId);
+                inputsRef.current.delete(assistantId);
+                opts.onChanged();
+              } finally {
+                releaseGate();
               }
-            }
-            setMessages((current) =>
-              updateMessage(current, assistantId, (message) => ({
-                ...message,
-                text: message.text + appended,
-                pending: false,
-                ...(suggestionIds.length > 0 ? { suggestionIds } : {}),
-              })),
-            );
-            activeRef.current.delete(assistantId);
-            inputsRef.current.delete(assistantId);
-            opts.onChanged();
+            },
+            onCancelled: () => {
+              setMessages((current) =>
+                updateMessage(current, assistantId, (message) => ({
+                  ...message,
+                  pending: false,
+                  cancelled: true,
+                })),
+              );
+              activeRef.current.delete(assistantId);
+              opts.onChanged();
+              releaseGate();
+            },
+            onError: (error) => {
+              setMessages((current) =>
+                updateMessage(current, assistantId, (message) => ({
+                  ...message,
+                  pending: false,
+                  error,
+                })),
+              );
+              activeRef.current.delete(assistantId);
+              opts.onChanged();
+              releaseGate();
+            },
           },
-          onCancelled: () => {
-            setMessages((current) =>
-              updateMessage(current, assistantId, (message) => ({
-                ...message,
-                pending: false,
-                cancelled: true,
-              })),
-            );
-            activeRef.current.delete(assistantId);
-            opts.onChanged();
-          },
-          onError: (error) => {
-            setMessages((current) =>
-              updateMessage(current, assistantId, (message) => ({
-                ...message,
-                pending: false,
-                error,
-              })),
-            );
-            activeRef.current.delete(assistantId);
-            opts.onChanged();
-          },
-        },
-        generation,
-      );
+          generation,
+        );
+      } catch (error) {
+        activeRef.current.delete(assistantId);
+        releaseGate();
+        setMessages((current) =>
+          updateMessage(current, assistantId, (message) => ({
+            ...message,
+            pending: false,
+            error: String(error),
+          })),
+        );
+        opts.onChanged();
+      }
     },
     [opts, stream],
   );
@@ -253,6 +289,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
         })),
       );
       activeRef.current.delete(assistantMessageId);
+      opts.aiGate.release(`chat:${assistantMessageId}`);
       opts.onChanged();
       try {
         await stream.cancel(assistantMessageId);
@@ -300,12 +337,13 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
 
   const reset = useCallback(() => {
     for (const assistantId of activeRef.current) {
+      opts.aiGate.release(`chat:${assistantId}`);
       void stream.cancel(assistantId).catch(() => {});
     }
     activeRef.current.clear();
     inputsRef.current.clear();
     setMessages([]);
-  }, [stream]);
+  }, [opts.aiGate, stream]);
 
   const restore = useCallback(
     (thread: DocumentChatThread | undefined, binding: AISessionBinding | null) => {

@@ -13,6 +13,11 @@ interface MemoryTauriOptions {
   workspace?: string;
   /** Hold the first document write until the test calls __quillReleaseWriteFile. */
   deferFirstWriteFile?: boolean;
+  /** Session returned by the backend's markdown auto-bind scan. */
+  foundSession?: unknown;
+  /** Session-picker rows and previews for binding-policy tests. */
+  claudeSessions?: unknown[];
+  sessionPreviews?: Record<string, unknown>;
 }
 
 /**
@@ -31,6 +36,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       newSessionId,
       workspace,
       deferFirstWriteFile,
+      foundSession,
+      claudeSessions,
+      sessionPreviews,
     }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
@@ -116,6 +124,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           if (cmd === 'has_native_menu') return false;
           if (cmd === 'show_open_dialog') return openPath ?? null;
           if (cmd === 'show_save_dialog') return savePath ?? null;
+          if (cmd === 'list_claude_sessions') return claudeSessions ?? [];
+          if (cmd === 'read_claude_session_preview') {
+            return sessionPreviews?.[args.jsonlPath as string] ?? null;
+          }
           if (cmd === 'read_file') {
             const path = args.path as string;
             if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) return memoryFiles[path];
@@ -138,7 +150,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             delete memoryFiles[args.path as string];
             return null;
           }
-          if (cmd === 'find_session_for_markdown') return null;
+          if (cmd === 'find_session_for_markdown') return foundSession ?? null;
           return null;
         },
       };
@@ -175,6 +187,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       newSessionId: options.newSessionId ?? null,
       workspace: options.workspace ?? null,
       deferFirstWriteFile: options.deferFirstWriteFile ?? false,
+      foundSession: options.foundSession ?? null,
+      claudeSessions: options.claudeSessions ?? [],
+      sessionPreviews: options.sessionPreviews ?? {},
     },
   );
 

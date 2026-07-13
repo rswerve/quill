@@ -109,6 +109,12 @@ function makeOpts(mock: MockClaude) {
       applyTrackedEdits,
       getContextFolder,
       getPendingSuggestions,
+      aiGate: {
+        busy: false,
+        acquire: () => true,
+        owns: () => true,
+        release: () => undefined,
+      },
     },
     spies: {
       startAIReply,

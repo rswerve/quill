@@ -14,6 +14,7 @@ import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
 import { useClaudeReply } from '../hooks/useClaudeReply';
 import { useDocumentChat, type ChatCursorContext } from '../hooks/useDocumentChat';
+import { useDocumentAIGate } from '../hooks/useDocumentAIGate';
 import { FORMAT_BLOCKED_META, getTrackedChanges } from '../extensions/TrackChanges';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
@@ -109,7 +110,7 @@ export interface DocumentTabHandle {
   rejectAll: () => void;
   openSessionPicker: () => void;
   closeSessionPicker: () => void;
-  pickSession: (binding: AISessionBinding) => void;
+  pickSession: (binding: AISessionBinding) => boolean;
   focusFind: () => void;
   openChat: () => void;
   clearActiveAnnotation: () => void;
@@ -142,6 +143,11 @@ interface DocumentTabProps {
   onNotice: (notice: { title: string; message: string }) => void;
   onRecentFile: (path: string) => void;
   onRequestSavePath: (tabId: string, path: string) => boolean;
+  onClaimSession: (
+    tabId: string,
+    binding: AISessionBinding,
+  ) => { allowed: boolean; ownerTitle?: string };
+  onReleaseSession: (tabId: string) => void;
 }
 
 function countWords(text: string): number {
@@ -186,6 +192,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     onNotice,
     onRecentFile,
     onRequestSavePath,
+    onClaimSession,
+    onReleaseSession,
   },
   ref,
 ) {
@@ -225,6 +233,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [chatFocusRevision, setChatFocusRevision] = useState(0);
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
+  const aiGate = useDocumentAIGate();
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
   // Folder of reference documents linked to this doc (persisted in the
   // sidecar). Claude gets read access to it plus a file manifest per ask.
@@ -246,6 +255,40 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const showError = useCallback(
     (title: string, message: string) => onNotice({ title, message }),
     [onNotice],
+  );
+
+  const adoptLoadedSession = useCallback(
+    (binding: AISessionBinding | null): AISessionBinding | null => {
+      onReleaseSession(tabId);
+      if (!binding) {
+        setAISession(null);
+        return null;
+      }
+      const claim = onClaimSession(tabId, binding);
+      if (!claim.allowed) {
+        setAISession(null);
+        return null;
+      }
+      setAISession(binding);
+      return binding;
+    },
+    [onClaimSession, onReleaseSession, tabId],
+  );
+
+  const claimInteractiveSession = useCallback(
+    (binding: AISessionBinding): boolean => {
+      const claim = onClaimSession(tabId, binding);
+      if (!claim.allowed) {
+        onNotice({
+          title: 'Claude session already linked',
+          message: `This session is already linked to ${claim.ownerTitle ?? 'another open document'}. Choose a different session or unlink it there first.`,
+        });
+        return false;
+      }
+      setAISession(binding);
+      return true;
+    },
+    [onClaimSession, onNotice, tabId],
   );
 
   const {
@@ -444,6 +487,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       [editor],
     ),
     getRunOptions: getClaudeRunOptions,
+    aiGate,
   });
 
   const getCursorContext = useCallback((): ChatCursorContext => {
@@ -476,6 +520,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
     onChanged: markDirty,
+    aiGate,
   });
   chatThreadRef.current = aiSession ? documentChat.getThread(aiSession.sessionId) : undefined;
 
@@ -545,6 +590,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         content: string;
         sidecar: SidecarFile;
         filePath: string;
+        autoBound?: boolean;
         sidecarError?: string | null;
       },
       promptForSession = true,
@@ -570,7 +616,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         restoreReviewMarks(ed, loadedComments, loadedSuggestions);
         setTrackedChanges(getTrackedChanges(ed));
       }
-      const session = result.sidecar.aiSession ?? null;
+      const session = adoptLoadedSession(result.sidecar.aiSession ?? null);
       documentChat.restore(result.sidecar.chat, session);
       // A sidecar that exists but failed to parse means real comments/suggestions
       // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
@@ -596,9 +642,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           });
         }
       }
-      setAISession(session);
       setLastKnownModel(lastChatModel(result.sidecar.chat) ?? lastReplyModel(loadedComments));
       setContextFolder(result.sidecar.contextFolder ?? null);
+      if (result.autoBound && session) markDirty();
       // Force the session choice up front: if we opened a non-empty doc with no
       // linked Claude session, surface the picker so the user binds one (and can
       // then call @claude from within the doc). Auto-bind is intentionally not
@@ -607,14 +653,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         openSessionPicker();
       }
     },
-    [documentChat, setComments, setSuggestions, onNotice, openSessionPicker, onRecentFile],
+    [
+      adoptLoadedSession,
+      documentChat,
+      setComments,
+      setSuggestions,
+      onNotice,
+      openSessionPicker,
+      onRecentFile,
+      markDirty,
+    ],
   );
 
   // Test escape hatch: bind an AI session without going through SessionPicker.
   useEffect(() => {
     const seed = typeof window !== 'undefined' ? window.__quillTestSession : undefined;
-    if (seed) setAISession(seed);
-  }, []);
+    if (seed && onClaimSession(tabId, seed).allowed) setAISession(seed);
+  }, [onClaimSession, tabId]);
 
   function getMarkdown(): string {
     return editorRef.current?.getMarkdown() ?? '';
@@ -725,13 +780,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     editorRef.current?.setContent('');
     setComments([]);
     setSuggestions([]);
+    onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
     setLastKnownModel(null);
     setContextFolder(null);
     setLastSavedAt(null);
     setPanelMode('comments');
-  }, [documentChat, newFile, setComments, setSuggestions]);
+  }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
@@ -759,12 +815,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         restoreReviewMarks(ed, draftComments, draftSuggestions);
         setTrackedChanges(getTrackedChanges(ed));
       }
-      const session = draft.aiSession ?? null;
-      setAISession(session);
+      const session = adoptLoadedSession(draft.aiSession ?? null);
       documentChat.restore(draft.chat, session);
       setContextFolder(draft.contextFolder ?? null);
     },
-    [documentChat, restoreDraft, setComments, setSuggestions],
+    [adoptLoadedSession, documentChat, restoreDraft, setComments, setSuggestions],
   );
 
   useEffect(() => {
@@ -1235,7 +1290,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   const handlePickSession = useCallback(
     (binding: AISessionBinding) => {
-      setAISession(binding);
+      if (!claimInteractiveSession(binding)) return false;
       if (binding.sessionId !== aiSession?.sessionId) documentChat.restore(undefined, binding);
       markDirty();
       // If the picker was opened because of a @claude request with no session,
@@ -1252,8 +1307,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         setPanelMode('chat');
         void documentChat.send(pendingChatTurn, binding);
       }
+      return true;
     },
-    [aiSession?.sessionId, markDirty, comments, claudeReply, documentChat],
+    [aiSession?.sessionId, claimInteractiveSession, markDirty, comments, claudeReply, documentChat],
   );
 
   const handleChatSend = useCallback(
@@ -1283,10 +1339,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [filePath, handlePickSession, handleSaveAs]);
 
   const handleUnlinkSession = useCallback(() => {
+    onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
     markDirty();
-  }, [documentChat, markDirty]);
+  }, [documentChat, markDirty, onReleaseSession, tabId]);
 
   const handleLinkContextFolder = useCallback(() => {
     void (async () => {
@@ -1539,6 +1596,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onRetry={(messageId) => void documentChat.retry(messageId)}
             onDismiss={documentChat.dismiss}
             onViewSuggestions={handleViewChatSuggestions}
+            busy={aiGate.busy}
           />
         </aside>
       </div>

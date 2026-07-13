@@ -51,6 +51,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof ChatPanel>> 
     onRetry: vi.fn(),
     onDismiss: vi.fn(),
     onViewSuggestions: vi.fn(),
+    busy: false,
     ...overrides,
   };
   render(<ChatPanel {...props} />);

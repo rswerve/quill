@@ -13,6 +13,7 @@ import type {
 import { clip } from '../utils/format';
 import { stripTrailingNewlines } from '../utils/trackedEdits';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
+import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
 export type { ChunkEvent } from './useClaudeResumeStream';
 
@@ -50,6 +51,8 @@ interface UseClaudeReplyOptions {
   getPendingSuggestions: () => TrackedChangeInfo[];
   /** Global model/effort choices, read immediately before each spawn. */
   getRunOptions?: () => ClaudeRunOptions;
+  /** Shared with document chat so this document resumes only one request. */
+  aiGate: DocumentAIRequestGate;
 }
 
 /** The linked context folder and its file manifest, for the prompt. */
@@ -320,121 +323,145 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
   // already reset to a pending state by the caller (startAIReply / retryAIReply).
   const runSpawn = useCallback(
     async (replyId: string, comment: Comment, userText: string, binding: AISessionBinding) => {
+      const requestId = `comment:${replyId}`;
+      if (!opts.aiGate.acquire(requestId)) {
+        opts.failAIReply(comment.id, replyId, DOCUMENT_AI_BUSY_MESSAGE);
+        return;
+      }
+      const releaseGate = () => opts.aiGate.release(requestId);
       // Claim this reply generation before any asynchronous preflight. A user
       // can cancel while compaction/context probes are still pending, before
       // the transport has enough information to spawn the child.
       const streamGeneration = stream.begin(replyId);
-      const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
+      try {
+        const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
 
-      const fresh = binding.createdByQuill === true;
-      let compaction: CompactionInfo | null = fresh ? null : (mock?.compaction ?? null);
-      if (!mock && !fresh) {
-        try {
-          compaction = await invoke<CompactionInfo>('check_session_compacted', {
-            sessionId: binding.sessionId,
-          });
-        } catch (e) {
-          console.warn('check_session_compacted failed:', e);
-        }
-      }
-      // Manifest for the linked context folder. A scan failure (folder moved,
-      // permissions) must not block the reply — degrade to no context section.
-      const contextFolder = opts.getContextFolder();
-      let context: PromptContext | null = null;
-      if (contextFolder) {
-        let files: string[] = [];
-        if (mock) {
-          files = mock.contextFiles ?? [];
-        } else {
+        const fresh = binding.createdByQuill === true;
+        let compaction: CompactionInfo | null = fresh ? null : (mock?.compaction ?? null);
+        if (!mock && !fresh) {
           try {
-            files = await invoke<string[]>('list_context_files', { folder: contextFolder });
+            compaction = await invoke<CompactionInfo>('check_session_compacted', {
+              sessionId: binding.sessionId,
+            });
           } catch (e) {
-            console.warn('list_context_files failed:', e);
+            console.warn('check_session_compacted failed:', e);
           }
         }
-        context = { folder: contextFolder, files };
-      }
-
-      const ranges = opts.getRangeTexts(comment);
-      const prompt = buildPrompt(
-        comment,
-        userText,
-        opts.getDocMarkdown(),
-        ranges,
-        compaction,
-        context,
-        opts.getPendingSuggestions(),
-        fresh,
-      );
-
-      const finalize = (rawText: string, visibleText: string) => {
-        const { block } = splitVisible(rawText);
-        let parsed: QuillEditsBlock | null = null;
-        if (block) {
-          try {
-            parsed = JSON.parse(block) as QuillEditsBlock;
-          } catch (e) {
-            console.warn('Failed to parse quill-edits block:', e);
+        // Manifest for the linked context folder. A scan failure (folder moved,
+        // permissions) must not block the reply — degrade to no context section.
+        const contextFolder = opts.getContextFolder();
+        let context: PromptContext | null = null;
+        if (contextFolder) {
+          let files: string[] = [];
+          if (mock) {
+            files = mock.contextFiles ?? [];
+          } else {
+            try {
+              files = await invoke<string[]>('list_context_files', { folder: contextFolder });
+            } catch (e) {
+              console.warn('list_context_files failed:', e);
+            }
           }
+          context = { folder: contextFolder, files };
         }
 
-        if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-          // The prose we already streamed; if it was empty, surface the summary.
-          if (visibleText.trim() === '' && parsed.summary) {
-            opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
+        const ranges = opts.getRangeTexts(comment);
+        const prompt = buildPrompt(
+          comment,
+          userText,
+          opts.getDocMarkdown(),
+          ranges,
+          compaction,
+          context,
+          opts.getPendingSuggestions(),
+          fresh,
+        );
+
+        const finalize = (rawText: string, visibleText: string) => {
+          const { block } = splitVisible(rawText);
+          let parsed: QuillEditsBlock | null = null;
+          if (block) {
+            try {
+              parsed = JSON.parse(block) as QuillEditsBlock;
+            } catch (e) {
+              console.warn('Failed to parse quill-edits block:', e);
+            }
           }
-          // Edits are document-scale: the highlight frames the request but
-          // does not fence where changes may land.
-          const { skipped, suggestionIds = [] } = opts.applyTrackedEdits(
-            comment,
-            parsed.edits,
-            'doc',
-            { commentId: comment.id },
-          );
-          if (suggestionIds.length > 0) {
-            opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
-          }
-          if (skipped > 0) {
-            const noun = skipped === 1 ? 'change was' : 'changes were';
-            opts.appendAIReplyChunk(
-              comment.id,
-              replyId,
-              `\n\n(${skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`,
+
+          if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
+            // The prose we already streamed; if it was empty, surface the summary.
+            if (visibleText.trim() === '' && parsed.summary) {
+              opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
+            }
+            // Edits are document-scale: the highlight frames the request but
+            // does not fence where changes may land.
+            const { skipped, suggestionIds = [] } = opts.applyTrackedEdits(
+              comment,
+              parsed.edits,
+              'doc',
+              { commentId: comment.id },
             );
+            if (suggestionIds.length > 0) {
+              opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
+            }
+            if (skipped > 0) {
+              const noun = skipped === 1 ? 'change was' : 'changes were';
+              opts.appendAIReplyChunk(
+                comment.id,
+                replyId,
+                `\n\n(${skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`,
+              );
+            }
           }
-        }
-      };
+        };
 
-      // Read after asynchronous preflight work so a just-changed footer choice
-      // governs the child we are about to spawn.
-      const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
-      await stream.run(
-        replyId,
-        {
-          sessionId: binding.sessionId,
-          cwd: binding.cwd,
-          prompt,
-          addDir: contextFolder,
-          allowCreate: fresh,
-          model: runOptions.model,
-          effort: runOptions.effort,
-        },
-        {
-          onModel: (model) => {
-            opts.setAIReplyModel?.(comment.id, replyId, model);
-            opts.onModelObserved?.(model);
+        // Cancellation during an async preflight releases the lane. Do not
+        // launch a stale child after another surface has acquired it.
+        if (!opts.aiGate.owns(requestId)) return;
+        // Read after asynchronous preflight work so a just-changed footer choice
+        // governs the child we are about to spawn.
+        const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
+        await stream.run(
+          replyId,
+          {
+            sessionId: binding.sessionId,
+            cwd: binding.cwd,
+            prompt,
+            addDir: contextFolder,
+            allowCreate: fresh,
+            model: runOptions.model,
+            effort: runOptions.effort,
           },
-          onVisibleChunk: (chunk) => opts.appendAIReplyChunk(comment.id, replyId, chunk),
-          onDone: (rawText, visibleText) => {
-            finalize(rawText, visibleText);
-            opts.finishAIReply(comment.id, replyId);
-            inputsRef.current.delete(replyId);
+          {
+            onModel: (model) => {
+              opts.setAIReplyModel?.(comment.id, replyId, model);
+              opts.onModelObserved?.(model);
+            },
+            onVisibleChunk: (chunk) => opts.appendAIReplyChunk(comment.id, replyId, chunk),
+            onDone: (rawText, visibleText) => {
+              try {
+                finalize(rawText, visibleText);
+                opts.finishAIReply(comment.id, replyId);
+                inputsRef.current.delete(replyId);
+              } finally {
+                releaseGate();
+              }
+            },
+            onCancelled: () => {
+              opts.cancelAIReply(comment.id, replyId);
+              releaseGate();
+            },
+            onError: (message) => {
+              opts.failAIReply(comment.id, replyId, message);
+              releaseGate();
+            },
           },
-          onCancelled: () => opts.cancelAIReply(comment.id, replyId),
-          onError: (message) => opts.failAIReply(comment.id, replyId, message),
-        },
-        streamGeneration,
-      );
+          streamGeneration,
+        );
+      } catch (error) {
+        releaseGate();
+        opts.failAIReply(comment.id, replyId, String(error));
+      }
     },
     [opts, stream],
   );
@@ -481,6 +508,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
       // its own child instead of streaming to completion.
       const commentId = inputsRef.current.get(replyId)?.comment.id;
       if (commentId) opts.cancelAIReply(commentId, replyId);
+      opts.aiGate.release(`comment:${replyId}`);
       try {
         await stream.cancel(replyId);
       } catch (e) {

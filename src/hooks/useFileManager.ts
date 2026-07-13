@@ -169,7 +169,10 @@ export function useFileManager(
 
         setFilePath(path);
         changeRevisionRef.current += 1;
-        setIsDirty(autoBound);
+        // The document layer marks an accepted auto-binding dirty after the
+        // shell's one-session-per-document claim succeeds. A rejected
+        // collision must leave the just-opened file clean.
+        setIsDirty(false);
         return { content, sidecar, filePath: path, autoBound, sidecarError };
       } catch (e) {
         console.error('Failed to open file:', e);

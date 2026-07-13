@@ -22,6 +22,8 @@ interface SessionPickerProps {
   onPick: (binding: AISessionBinding) => void;
   /** Folder used as cwd for a Quill-minted session; null until the doc is saved. */
   newSessionCwd: string | null;
+  /** Returns the other open document that already owns this session. */
+  getSessionOwner: (sessionId: string) => string | null;
 }
 
 function formatRelativeTime(unixSeconds: number): string {
@@ -37,6 +39,7 @@ export default function SessionPicker({
   onClose,
   onPick,
   newSessionCwd,
+  getSessionOwner,
 }: SessionPickerProps) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -71,9 +74,11 @@ export default function SessionPicker({
   if (!open) return null;
 
   const selectedSummary = sessions?.find((s) => s.jsonlPath === selectedPath) ?? null;
+  const selectedSessionId = preview?.sessionId || selectedSummary?.sessionId || null;
+  const sessionOwner = selectedSessionId ? getSessionOwner(selectedSessionId) : null;
 
   function handleLink() {
-    if (!preview || !selectedSummary) return;
+    if (!preview || !selectedSummary || sessionOwner) return;
     onPick({
       provider: 'claude-code',
       sessionId: preview.sessionId || selectedSummary.sessionId,
@@ -178,13 +183,19 @@ export default function SessionPicker({
               </span>
             )}
           </div>
+          {sessionOwner && (
+            <span className="session-picker-owner-notice" role="status">
+              This session is already linked to {sessionOwner}.
+            </span>
+          )}
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
           <button
             className="btn-primary"
             onClick={handleLink}
-            disabled={!preview || previewLoading}
+            disabled={!preview || previewLoading || sessionOwner !== null}
+            title={sessionOwner ? `This session is already linked to ${sessionOwner}` : undefined}
           >
             Link this session
           </button>

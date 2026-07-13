@@ -13,6 +13,7 @@ interface ChatPanelProps {
   onRetry: (assistantMessageId: string) => void;
   onDismiss: (assistantMessageId: string) => void;
   onViewSuggestions: (suggestionIds: string[]) => void;
+  busy: boolean;
 }
 
 export default function ChatPanel({
@@ -25,6 +26,7 @@ export default function ChatPanel({
   onRetry,
   onDismiss,
   onViewSuggestions,
+  busy,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -51,7 +53,7 @@ export default function ChatPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || busy) return;
     onSend(text);
     setDraft('');
     requestAnimationFrame(resize);
@@ -164,7 +166,8 @@ export default function ChatPanel({
             <button
               className="chat-send-btn"
               aria-label="Send chat message"
-              disabled={!draft.trim() || streaming}
+              disabled={!draft.trim() || streaming || busy}
+              title={busy && !streaming ? 'Claude is already responding in this document' : ''}
               onClick={submit}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>

@@ -163,6 +163,62 @@ test('Open and deep links add or focus by path without replacing other tabs', as
   await expect(page.locator('.document-tab.active')).toContainText('first.md');
 });
 
+test('an auto-bound Claude session stays owned by one document and is blocked in the picker', async ({
+  page,
+}) => {
+  const firstPath = '/docs/first.md';
+  const secondPath = '/docs/second.md';
+  const session = ipcFixtures.autoBindSession;
+  const jsonlPath = '/claude/session.jsonl';
+  await setupMemoryTauri(page, {
+    files: {
+      [firstPath]: 'First document',
+      [secondPath]: 'Second document',
+    },
+    openPath: firstPath,
+    foundSession: session,
+    claudeSessions: [
+      {
+        sessionId: session.sessionId,
+        jsonlPath,
+        cwd: session.cwd,
+        title: 'Shared authoring session',
+        lastUsed: 1_700_000_000,
+      },
+    ],
+    sessionPreviews: {
+      [jsonlPath]: {
+        sessionId: session.sessionId,
+        cwd: session.cwd,
+        recentAssistantMessages: ['Prior work'],
+      },
+    },
+  });
+
+  await openMemoryFile(page);
+  await page.evaluate((path) => {
+    const emit = (window as unknown as { __quillEmit: (event: string, value: string) => void })
+      .__quillEmit;
+    emit('deep-link-open', path);
+  }, secondPath);
+  await expect(activeEditor(page)).toHaveText('Second document');
+
+  const picker = page.locator('.session-picker');
+  await expect(picker).toBeVisible();
+  await picker.locator('.session-row').click();
+  await expect(picker).toContainText('already linked to first.md');
+  await expect(picker.getByRole('button', { name: 'Link this session' })).toBeDisabled();
+  await picker.locator('.session-picker-close').click();
+  await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
+  await expect(page.locator('.document-tab.active .document-tab-dirty')).toHaveCount(0);
+
+  await page.locator('.document-tab', { hasText: 'first.md' }).click();
+  await expect(page.locator('.footer-ai-binding.linked')).toContainText(
+    session.sessionId.slice(0, 8).toUpperCase(),
+  );
+  await expect(page.locator('.document-tab.active .document-tab-dirty')).toBeVisible();
+});
+
 for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
   test(`Save As refuses a path already owned by another tab: ${targetPath}`, async ({ page }) => {
     const ownedPath = '/tmp/owned.md';

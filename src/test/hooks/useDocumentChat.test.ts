@@ -64,6 +64,12 @@ function makeOptions() {
       getRunOptions: () => ({ model: 'sonnet' as const, effort: 'high' as const }),
       onModelObserved: vi.fn(),
       onChanged: vi.fn(),
+      aiGate: {
+        busy: false,
+        acquire: () => true,
+        owns: () => true,
+        release: () => undefined,
+      },
     },
     applyTrackedEdits,
   };

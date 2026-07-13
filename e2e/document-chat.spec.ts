@@ -32,6 +32,7 @@ async function setupChatScripts(page: Page, scripts: MockScriptStep[][]) {
         spawn: (args: unknown, onEvent: (event: Event) => void) => {
           globals.__quillLastSpawnArgs = args;
           const steps = scriptList[Math.min(spawnIndex++, scriptList.length - 1)];
+          globals.__quillSpawnCount = spawnIndex;
           const token = `chat-${++nextToken}`;
           let cancelled = false;
           cancelers.set(token, () => {
@@ -138,6 +139,57 @@ test('Stop cancels a live turn and Retry reuses the same message', async ({ page
   await assistant.getByRole('button', { name: 'Retry' }).click();
   await expect(assistant).toContainText('Recovered response', { timeout: 3000 });
   await expect(page.locator('.chat-message-assistant')).toHaveCount(1);
+});
+
+test('document chat and @claude replies never resume the same session concurrently', async ({
+  page,
+}) => {
+  await setupChatScripts(page, [
+    [{ kind: 'delta', text: 'Still working…' }, { kind: 'pause' }],
+    [{ kind: 'delta', text: 'Comment reply complete.' }, { kind: 'done' }],
+  ]);
+  await activeEditor(page).fill('One document, one session');
+  await openChat(page);
+  await sendChat(page, 'Review the whole draft');
+  await expect(page.locator('.chat-message-assistant').last()).toContainText('Still working…');
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount),
+    )
+    .toBe(1);
+
+  await activeTabHost(page)
+    .getByRole('tab', { name: /Comments/ })
+    .click();
+  await activeEditor(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.locator('.add-comment-btn').click();
+  await page.locator('.add-comment-compose textarea').fill('@claude Please tighten this');
+  await page.locator('.add-comment-compose .btn-primary').click();
+
+  const busyReply = activeTabHost(page).locator('.comment-reply-ai').last();
+  await expect(busyReply).toContainText('already responding in this document');
+  const spawnCountWhileBusy = await page.evaluate(
+    () => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount,
+  );
+  expect(spawnCountWhileBusy).toBe(1);
+
+  await activeTabHost(page).getByRole('tab', { name: 'Chat', exact: true }).click();
+  await page
+    .locator('.chat-message-assistant')
+    .last()
+    .getByRole('button', { name: 'Stop' })
+    .click();
+  await activeTabHost(page)
+    .getByRole('tab', { name: /Comments/ })
+    .click();
+  await busyReply.getByRole('button', { name: 'Retry' }).click();
+  await expect(busyReply).toContainText('Comment reply complete.');
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount),
+    )
+    .toBe(2);
 });
 
 test('the first no-session send queues through the picker and starts after linking', async ({

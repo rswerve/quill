@@ -41,6 +41,7 @@ import {
   type WorkspaceTabSource,
 } from './utils/workspacePersistence';
 import type {
+  AISessionBinding,
   ClaudeEffort,
   ClaudeModelAlias,
   ClaudeRunOptions,
@@ -164,6 +165,7 @@ export default function App() {
   > | null>(null);
   const [persistenceSuspended, setPersistenceSuspended] = useState(false);
   const [tabHandleRevision, setTabHandleRevision] = useState(0);
+  const [sessionClaimRevision, setSessionClaimRevision] = useState(0);
   const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
     () => readClaudeRunOptions(window.localStorage).model,
   );
@@ -190,6 +192,7 @@ export default function App() {
   const tabHandleReadyIdsRef = useRef(new Set<string>());
   const tabRefCallbacksRef = useRef(new Map<string, (handle: DocumentTabHandle | null) => void>());
   const chromeByTabRef = useRef(new Map<string, DocumentTabChromeSnapshot>());
+  const sessionClaimsRef = useRef(new Map<string, string>());
   const runOptionsRef = useRef<ClaudeRunOptions>({
     model: claudeModel,
     effort: claudeEffort,
@@ -273,6 +276,8 @@ export default function App() {
     tabHandleReadyIdsRef.current.clear();
     tabRefCallbacksRef.current.clear();
     chromeByTabRef.current.clear();
+    sessionClaimsRef.current.clear();
+    setSessionClaimRevision((revision) => revision + 1);
     setTabs(restored.tabs);
     setActiveTabId(restored.activeTabId);
     setChrome(
@@ -292,6 +297,37 @@ export default function App() {
     },
     [chromeForTab],
   );
+
+  const releaseSessionClaim = useCallback((tabId: string) => {
+    let changed = false;
+    for (const [sessionId, ownerId] of sessionClaimsRef.current) {
+      if (ownerId !== tabId) continue;
+      sessionClaimsRef.current.delete(sessionId);
+      changed = true;
+    }
+    if (changed) setSessionClaimRevision((revision) => revision + 1);
+  }, []);
+
+  const claimSession = useCallback((tabId: string, binding: AISessionBinding) => {
+    const ownerId = sessionClaimsRef.current.get(binding.sessionId);
+    if (ownerId && ownerId !== tabId) {
+      const owner = tabsRef.current.find((tab) => tab.id === ownerId);
+      return { allowed: false, ownerTitle: owner?.title ?? 'another open document' };
+    }
+
+    let changed = false;
+    for (const [sessionId, currentOwnerId] of sessionClaimsRef.current) {
+      if (currentOwnerId !== tabId || sessionId === binding.sessionId) continue;
+      sessionClaimsRef.current.delete(sessionId);
+      changed = true;
+    }
+    if (ownerId !== tabId) {
+      sessionClaimsRef.current.set(binding.sessionId, tabId);
+      changed = true;
+    }
+    if (changed) setSessionClaimRevision((revision) => revision + 1);
+    return { allowed: true };
+  }, []);
 
   const addNewTab = useCallback(() => {
     if (!workspaceReadyRef.current) return;
@@ -391,6 +427,7 @@ export default function App() {
       tabHandlesRef.current.delete(tabId);
       tabHandleReadyIdsRef.current.delete(tabId);
       chromeByTabRef.current.delete(tabId);
+      releaseSessionClaim(tabId);
       tabRefCallbacksRef.current.delete(tabId);
       setTabs(nextTabs);
       if (pickerTabId === tabId) {
@@ -399,7 +436,7 @@ export default function App() {
       }
       if (closingActiveTab) activateTab(nextActiveId);
     },
-    [activateTab, pickerTabId],
+    [activateTab, pickerTabId, releaseSessionClaim],
   );
 
   const requestCloseTab = useCallback(
@@ -851,6 +888,8 @@ export default function App() {
                 onNotice={showNotice}
                 onRecentFile={handleRecentFile}
                 onRequestSavePath={handleRequestSavePath}
+                onClaimSession={claimSession}
+                onReleaseSession={releaseSessionClaim}
               />
             </div>
           ))}
@@ -877,15 +916,23 @@ export default function App() {
       <SessionPicker
         open={pickerOpen}
         newSessionCwd={pickerTab?.filePath ? dirname(pickerTab.filePath) : null}
+        getSessionOwner={(sessionId) => {
+          void sessionClaimRevision;
+          const ownerId = sessionClaimsRef.current.get(sessionId);
+          if (!ownerId || ownerId === pickerTargetId) return null;
+          return tabsRef.current.find((tab) => tab.id === ownerId)?.title ?? 'another document';
+        }}
         onClose={() => {
           setPickerOpen(false);
           tabHandlesRef.current.get(pickerTargetId)?.closeSessionPicker();
           setPickerTabId(null);
         }}
         onPick={(binding) => {
-          setPickerOpen(false);
-          tabHandlesRef.current.get(pickerTargetId)?.pickSession(binding);
-          setPickerTabId(null);
+          const linked = tabHandlesRef.current.get(pickerTargetId)?.pickSession(binding) ?? false;
+          if (linked) {
+            setPickerOpen(false);
+            setPickerTabId(null);
+          }
         }}
       />
 
