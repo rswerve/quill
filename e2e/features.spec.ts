@@ -1422,7 +1422,9 @@ test('comment can be added to text that is also tracked-inserted', async ({ page
   await expect(page.locator('.suggestion-card')).toHaveCount(1);
 });
 
-test('typing newline in suggesting mode tracks the paragraph break', async ({ page }) => {
+test('typing newline in suggesting mode blocks the paragraph split but keeps inline typing', async ({
+  page,
+}) => {
   const { editor } = await setup(page);
   await enableSuggesting(page);
   await editor.click();
@@ -1430,10 +1432,10 @@ test('typing newline in suggesting mode tracks the paragraph break', async ({ pa
   await page.keyboard.press('Enter');
   await page.keyboard.type('two');
   await page.waitForTimeout(300);
-  // Both lines + the break should be visible as a tracked insertion
-  await expect(editor).toContainText('one');
-  await expect(editor).toContainText('two');
+  await expect(editor).toContainText('onetwo');
+  await expect(editor.locator('p')).toHaveCount(1);
   expect(await editor.innerHTML()).toContain('<ins');
+  await expect(page.locator('.suggesting-mode-notice')).toContainText('Switch to Editing');
 });
 
 test('replacement (type over selection) shows both <del> and <ins>', async ({ page }) => {
@@ -1491,7 +1493,7 @@ test('typing after toggle-off does not produce <ins> even with prior pending', a
   expect(stripped).toContain('SECOND');
 });
 
-test('Enter in suggesting mode does not insert an empty paragraph between lines', async ({
+test('Enter in suggesting mode leaves the current paragraph structurally unchanged', async ({
   page,
 }) => {
   const { editor } = await setup(page);
@@ -1501,8 +1503,9 @@ test('Enter in suggesting mode does not insert an empty paragraph between lines'
   await page.keyboard.press('Enter');
   await page.keyboard.type('two');
   await page.waitForTimeout(300);
-  // Two lines typed → exactly two paragraphs (no empty middle paragraph).
-  expect(await editor.locator('p').count()).toBe(2);
+  expect(await editor.locator('p').count()).toBe(1);
+  await expect(editor).toContainText('onetwo');
+  await expect(page.locator('.suggesting-mode-notice')).toBeVisible();
 });
 
 test('editor opts into spellcheck explicitly', async ({ page }) => {
