@@ -207,7 +207,6 @@ test.describe('Suggesting mode adversarial interactions', () => {
   test('rapid Backspaces coalesce into the same one-step undo as Editing mode', async ({
     page,
   }) => {
-    test.fail(true, 'tracked deletion rewrites currently break ProseMirror history coalescing');
     const editor = await setup(page, 'bravo');
     await enableSuggesting(page);
     await editor.click();
@@ -221,7 +220,6 @@ test.describe('Suggesting mode adversarial interactions', () => {
   test('typing after deleting a formatted word does not inherit formatting from struck text', async ({
     page,
   }) => {
-    test.fail(true, 'retained tracked-delete text leaks its marks into the next insertion');
     const editor = await setup(page, 'alpha beta');
     await selectText(editor, 0, 5);
     await page.locator('.rail-btn[title^="Bold"]').click();
@@ -232,22 +230,22 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await acceptAll(page);
 
     await expect(acceptedText(editor)).resolves.toBe('YZ beta');
-    await expect(editor.locator('strong')).not.toContainText('YZ');
+    await expect(editor.locator('strong')).toHaveCount(0);
     await expectNoTracking(editor);
   });
 
-  test('Enter in committed text is rejectable as a structural suggestion', async ({ page }) => {
-    test.fail(true, 'paragraph splits currently pass through without a tracked change');
+  test('Enter in committed text is blocked with a structure notice', async ({ page }) => {
     const editor = await setup(page, 'first second');
     await enableSuggesting(page);
     await placeCaret(editor, 5);
     await page.keyboard.press('Enter');
 
-    await expect(editor.locator('p')).toHaveCount(2);
-    await expect(page.locator('[title="Reject all suggestions"]')).toBeVisible();
-    await rejectAll(page);
     await expect(editor.locator('p')).toHaveCount(1);
     await expect(acceptedText(editor)).resolves.toBe('first second');
+    await expect(page.locator('.suggesting-mode-notice')).toContainText(
+      'Switch to Editing to change paragraph structure',
+    );
+    await expect(page.locator('[title="Reject all suggestions"]')).toHaveCount(0);
   });
 
   test('select-all Backspace creates a rejectable whole-document deletion', async ({ page }) => {
@@ -263,10 +261,9 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await expect(acceptedText(editor)).resolves.toBe('keep this text');
   });
 
-  test('multi-block select-all Backspace creates one rejectable whole-document deletion', async ({
+  test('multi-block select-all Backspace is blocked without collapsing the document', async ({
     page,
   }) => {
-    test.fail(true, 'rejecting the tracked text leaves an extra empty paragraph behind');
     const editor = await setup(page, 'first');
     await page.keyboard.press('Enter');
     await page.keyboard.type('second');
@@ -275,42 +272,40 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('Backspace');
 
-    await expect(acceptedText(editor)).resolves.toBe('');
-    expect(await editor.locator('del').allTextContents()).toEqual(['first', 'second']);
-    await rejectAll(page);
     await expect(editor.locator('p')).toHaveCount(2);
     await expect(acceptedText(editor)).resolves.toBe('firstsecond');
+    await expect(page.locator('.suggesting-mode-notice')).toBeVisible();
+    await expectNoTracking(editor);
   });
 
-  test('Backspace at block start is rejectable instead of permanently joining blocks', async ({
+  test('Backspace at block start is blocked instead of permanently joining blocks', async ({
     page,
   }) => {
-    test.fail(true, 'block joins currently pass through without a tracked change');
     const editor = await setup(page, 'first');
     await page.keyboard.press('Enter');
     await page.keyboard.type('second');
     await enableSuggesting(page);
+    await editor.locator('p').nth(1).click();
     await page.keyboard.press('Home');
     await page.keyboard.press('Backspace');
 
-    await expect(editor.locator('p')).toHaveCount(1);
-    await expect(page.locator('[title="Reject all suggestions"]')).toBeVisible();
-    await rejectAll(page);
     await expect(editor.locator('p')).toHaveCount(2);
+    await expect(acceptedText(editor)).resolves.toBe('firstsecond');
+    await expect(page.locator('.suggesting-mode-notice')).toBeVisible();
+    await expectNoTracking(editor);
   });
 
-  test('cross-block deletion preserves Editing-mode structure after accept', async ({ page }) => {
-    test.fail(true, 'cross-block tracking keeps the obsolete paragraph boundary');
+  test('cross-block deletion is blocked without changing either paragraph', async ({ page }) => {
     const editor = await setup(page, 'alpha beta');
     await page.keyboard.press('Enter');
     await page.keyboard.type('gamma delta');
     await enableSuggesting(page);
     await selectText(editor, 6, 15);
     await page.keyboard.press('Backspace');
-    await acceptAll(page);
 
-    await expect(editor.locator('p')).toHaveCount(1);
-    await expect(acceptedText(editor)).resolves.toBe('alpha delta');
+    await expect(editor.locator('p')).toHaveCount(2);
+    await expect(acceptedText(editor)).resolves.toBe('alpha betagamma delta');
+    await expect(page.locator('.suggesting-mode-notice')).toBeVisible();
     await expectNoTracking(editor);
   });
 });

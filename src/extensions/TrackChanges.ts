@@ -12,7 +12,14 @@ import type {
 } from '@tiptap/pm/model';
 import { v4 as uuidv4 } from 'uuid';
 import type { FormatSegment, TrackedChangeInfo } from '../types';
-import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
+import {
+  blockedOperation,
+  blockedSuggestingTransaction,
+  TRACKED_INLINE_FORMAT_MARK_NAMES,
+} from './trackChangesPolicy';
+import type { TrackingBlockedInfo } from './trackChangesPolicy';
+
+export type { TrackingBlockedInfo } from './trackChangesPolicy';
 
 export interface TrackChangesStorage {
   enabled: boolean;
@@ -48,12 +55,18 @@ declare module '@tiptap/core' {
 
 const TRACK_PLUGIN_KEY = new PluginKey<TrackChangesStorage>('trackChanges');
 const SKIP_TRACKING_META = 'skipTracking';
+const TRACKED_DELETE_HISTORY_GROUP_META = 'trackedDeleteHistoryGroup';
+const HISTORY_GROUP_DELAY_MS = 500;
+
+/** Typed transaction meta emitted when Suggesting mode vetoes a gesture. */
+export const TRACKING_BLOCKED_META = 'trackChangesBlocked';
 
 /**
  * Mark names whose add/remove becomes a tracked formatting suggestion in
  * suggesting mode. Deliberately excludes underline (doesn't survive Markdown
  * serialization with html:false, so a tracked toggle couldn't honestly
- * persist), and code/link (untracked passthrough by design).
+ * persist). Code and link changes are blocked by the shared Suggesting-mode
+ * policy instead of being committed outside review.
  */
 export const TRACKED_FORMAT_MARK_NAMES = TRACKED_INLINE_FORMAT_MARK_NAMES;
 
@@ -190,6 +203,24 @@ export const TrackedFormat = Mark.create({
   },
 });
 
+type DeleteHistoryGroup = { id: string; time: number };
+
+function groupTrackedDeleteHistory(
+  transformed: Transaction,
+  source: Transaction,
+  previous: DeleteHistoryGroup | null,
+): DeleteHistoryGroup | null {
+  const id = transformed.getMeta(TRACKED_DELETE_HISTORY_GROUP_META) as string | undefined;
+  if (!id) return null;
+  if (previous?.id === id && source.time - previous.time <= HISTORY_GROUP_DELAY_MS) {
+    // Mark-step maps are empty, so prosemirror-history cannot see that
+    // adjacent tracked deletions belong to one typing burst. Treat only a
+    // continued same-id delete as appended; delayed/interrupted deletes start fresh.
+    transformed.setMeta('appendedTransaction', source);
+  }
+  return { id, time: source.time };
+}
+
 export const TrackChanges = Extension.create<TrackChangesStorage>({
   name: 'trackChanges',
 
@@ -207,6 +238,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
     // current enabled/authorID rather than a snapshot. An arrow keeps `this`
     // bound without aliasing it to a local (which no-this-alias forbids).
     const getStorage = () => this.storage as TrackChangesStorage;
+    let lastDeleteHistoryGroup: DeleteHistoryGroup | null = null;
 
     return [
       new Plugin({
@@ -231,9 +263,15 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
                 originCommentId,
                 originChatMessageId,
               );
+              lastDeleteHistoryGroup = groupTrackedDeleteHistory(
+                transformed,
+                tr,
+                lastDeleteHistoryGroup,
+              );
               transformed.setMeta(SKIP_TRACKING_META, true);
               origDispatch(transformed);
             } else {
+              if (tr.docChanged) lastDeleteHistoryGroup = null;
               // When tracking is disabled, make sure tracked marks aren't
               // inherited from the cursor's stored marks (which would happen
               // when typing immediately after existing <ins>/<del>).
@@ -1137,15 +1175,37 @@ function applyTrackedFormatTransactionStep(
   applyFormatStep(newTr, step, from, to, ctx);
 }
 
-function applyMappedPassthroughStep(newTr: Transaction, step: Step, mapToNew: Mapping): void {
+function applyMappedPassthroughStep(newTr: Transaction, step: Step, mapToNew: Mapping): boolean {
   const mapped = step.map(mapToNew);
-  if (!mapped) return;
+  if (!mapped) return false;
   try {
-    newTr.step(mapped);
+    return !newTr.maybeStep(mapped).failed;
   } catch {
-    // A mapped step can still fail if the structure it targeted was reshaped;
-    // dropping it loses only an untracked structural change.
+    return false;
   }
+}
+
+function blockedTrackingTransaction(state: EditorState, blocked: TrackingBlockedInfo): Transaction {
+  return state.tr.setMeta(TRACKING_BLOCKED_META, blocked).setMeta('addToHistory', false);
+}
+
+function overlapsForeignPendingInsertion(
+  tr: Transaction,
+  insertType: MarkType,
+  authorID: string,
+): boolean {
+  return tr.steps.some((step, index) => {
+    if (!(step instanceof ReplaceStep) || step.from >= step.to) return false;
+    let overlaps = false;
+    tr.docs[index].nodesBetween(step.from, step.to, (node) => {
+      if (!node.isText || overlaps) return;
+      overlaps = node.marks.some((mark) => {
+        const data = mark.attrs.dataTracked as DataTracked | undefined;
+        return mark.type === insertType && data?.status === 'pending' && data.authorID !== authorID;
+      });
+    });
+    return overlaps;
+  });
 }
 
 function classifyDeletedRanges(
@@ -1219,13 +1279,11 @@ function trackedData(
 
 function applyTrackedDeletion(
   newTr: Transaction,
-  step: ReplaceStep,
-  mapToNew: Mapping,
   from: number,
   plan: DeletedRangePlan,
   deleteType: MarkType,
   deleteTracked: DataTracked,
-): number {
+): number | null {
   for (const range of plan.normalRanges) {
     newTr.addMark(
       range.from,
@@ -1240,10 +1298,115 @@ function applyTrackedDeletion(
   for (const range of plan.insertRanges) newTr.delete(range.from, range.to);
 
   if (plan.insertRanges.length === 0 && plan.normalRanges.length === 0 && !plan.anyAlreadyDeleted) {
-    // Pure block-boundary deletion: apply the structural join untracked.
-    applyMappedPassthroughStep(newTr, step, mapToNew);
+    // Text marks cannot represent a pure structural deletion. Classification
+    // should have rejected it before mutation; fail closed if a custom step
+    // reaches this defensive boundary.
+    return null;
   }
   return from;
+}
+
+function withoutTrackingMarks(
+  marks: readonly ProseMirrorMark[],
+  insertType: MarkType,
+  deleteType: MarkType,
+  formatType: MarkType | undefined,
+): ProseMirrorMark[] {
+  return marks.filter(
+    (mark) => mark.type !== insertType && mark.type !== deleteType && mark.type !== formatType,
+  );
+}
+
+function acceptedBoundaryMarks(
+  doc: ProseMirrorNode,
+  pos: number,
+  insertType: MarkType,
+  deleteType: MarkType,
+  formatType: MarkType | undefined,
+): ProseMirrorMark[] {
+  const $pos = doc.resolve(pos);
+  const parentOffset = $pos.parentOffset;
+  let offset = 0;
+  let left: ProseMirrorNode | null = null;
+  let right: ProseMirrorNode | null = null;
+  for (let index = 0; index < $pos.parent.childCount; index += 1) {
+    const child = $pos.parent.child(index);
+    const start = offset;
+    const end = start + child.nodeSize;
+    offset = end;
+    const deleted = child.marks.some((mark) => mark.type === deleteType);
+    if (!child.isInline || deleted) continue;
+    if (end <= parentOffset) left = child;
+    if (start >= parentOffset && !right) right = child;
+    if (start < parentOffset && end > parentOffset) {
+      left = child;
+      right = child;
+    }
+  }
+  const main = left ?? right;
+  if (!main) return [];
+  const other = left ? right : null;
+  const marks = withoutTrackingMarks(main.marks, insertType, deleteType, formatType);
+  if (!other || other === main) return marks;
+  return marks.filter(
+    (mark) =>
+      mark.type.spec.inclusive !== false || other.marks.some((otherMark) => mark.eq(otherMark)),
+  );
+}
+
+function pendingDeletionBoundaryMarks(
+  doc: ProseMirrorNode,
+  pos: number,
+  insertType: MarkType,
+  deleteType: MarkType,
+  formatType: MarkType | undefined,
+): ProseMirrorMark[] {
+  const $pos = doc.resolve(pos);
+  const adjacent = [$pos.nodeBefore, $pos.nodeAfter].filter((node): node is ProseMirrorNode =>
+    Boolean(node?.marks.some((mark) => mark.type === deleteType)),
+  );
+  return adjacent.flatMap((node) =>
+    withoutTrackingMarks(node.marks, insertType, deleteType, formatType),
+  );
+}
+
+function reconcileAcceptedBoundaryMarks(
+  tr: Transaction,
+  docBeforeInsert: ProseMirrorNode,
+  from: number,
+  to: number,
+  slice: Slice,
+  insertType: MarkType,
+  deleteType: MarkType,
+  formatType: MarkType | undefined,
+): void {
+  const insertedNode = slice.content.childCount === 1 ? slice.content.firstChild : null;
+  if (!insertedNode?.isText) return;
+  const deletedMarks = pendingDeletionBoundaryMarks(
+    docBeforeInsert,
+    from,
+    insertType,
+    deleteType,
+    formatType,
+  );
+  const acceptedMarks = acceptedBoundaryMarks(
+    docBeforeInsert,
+    from,
+    insertType,
+    deleteType,
+    formatType,
+  );
+  for (const mark of deletedMarks) {
+    const inherited = insertedNode.marks.some((insertedMark) => mark.eq(insertedMark));
+    const survives = acceptedMarks.some((acceptedMark) => mark.eq(acceptedMark));
+    if (inherited && !survives) tr.removeMark(from, to, mark);
+  }
+  for (const mark of acceptedMarks) {
+    const explicitlySet = insertedNode.marks.some(
+      (insertedMark) => insertedMark.type === mark.type,
+    );
+    if (!explicitlySet) tr.addMark(from, to, mark);
+  }
 }
 
 function applyTrackedInsertion(
@@ -1253,12 +1416,15 @@ function applyTrackedInsertion(
   from: number,
   hasDelete: boolean,
   insertType: MarkType,
+  deleteType: MarkType,
   formatType: MarkType | undefined,
   insertTracked: DataTracked,
+  preserveSliceMarks: boolean,
 ): number {
   const { slice } = replace;
   const insertAt = hasDelete ? from : mapToNew.map(replace.from, -1);
   const isStructural = (slice.openStart ?? 0) > 0 || (slice.openEnd ?? 0) > 0;
+  const docBeforeInsert = newTr.doc;
   const docSizeBefore = newTr.doc.content.size;
   if (isStructural) newTr.replace(insertAt, insertAt, slice);
   else newTr.insert(insertAt, slice.content);
@@ -1266,6 +1432,18 @@ function applyTrackedInsertion(
   const inserted = newTr.doc.content.size - docSizeBefore;
   const insertEnd = insertAt + inserted;
   if (inserted > 0) {
+    if (!hasDelete && !preserveSliceMarks) {
+      reconcileAcceptedBoundaryMarks(
+        newTr,
+        docBeforeInsert,
+        insertAt,
+        insertEnd,
+        slice,
+        insertType,
+        deleteType,
+        formatType,
+      );
+    }
     // Strip inherited tracking at inclusive boundaries before assigning the
     // fresh insertion to its newly resolved identity.
     newTr.removeMark(insertAt, insertEnd, insertType);
@@ -1290,8 +1468,13 @@ function applyTrackedReplaceStep(
     authorID: string;
     originCommentId: string | null;
     originChatMessageId: string | null;
+    preserveSliceMarks: boolean;
   },
-): { deleteLeftmost: number | null; insertEnd: number | null } {
+): {
+  deleteLeftmost: number | null;
+  deleteHistoryGroupId: string | null;
+  insertEnd: number | null;
+} {
   const { insertType, deleteType, formatType, authorID, originCommentId, originChatMessageId } =
     ctx;
   const replace = step as unknown as ReplaceStepData;
@@ -1331,6 +1514,7 @@ function applyTrackedReplaceStep(
   const pairId = resolveReplacementPairId(hasDelete, hasInsert, existingDelete, existingInsert);
 
   let deleteLeftmost: number | null = null;
+  let deleteHistoryGroupId: string | null = null;
   if (hasDelete) {
     const deletion = trackedData(
       existingDelete,
@@ -1340,15 +1524,10 @@ function applyTrackedReplaceStep(
       originCommentId,
       originChatMessageId,
     );
-    deleteLeftmost = applyTrackedDeletion(
-      newTr,
-      step,
-      mapToNew,
-      from,
-      deletedRanges,
-      deleteType,
-      deletion,
-    );
+    deleteLeftmost = applyTrackedDeletion(newTr, from, deletedRanges, deleteType, deletion);
+    if (!hasInsert && deletedRanges.normalRanges.length > 0) {
+      deleteHistoryGroupId = deletion.id;
+    }
   }
 
   let insertEnd: number | null = null;
@@ -1368,11 +1547,13 @@ function applyTrackedReplaceStep(
       from,
       hasDelete,
       insertType,
+      deleteType,
       formatType,
       insertion,
+      ctx.preserveSliceMarks,
     );
   }
-  return { deleteLeftmost, insertEnd };
+  return { deleteLeftmost, deleteHistoryGroupId, insertEnd };
 }
 
 function copyPasteRuleMeta(source: Transaction, target: Transaction): void {
@@ -1403,6 +1584,57 @@ function placeTrackedSelection(
   }
 }
 
+type AppliedTrackingStep = {
+  blocked: TrackingBlockedInfo | null;
+  deleteLeftmost: number | null;
+  deleteHistoryGroupId: string | null;
+  insertEnd: number | null;
+};
+
+function applyTrackingStep(
+  newTr: Transaction,
+  step: Step,
+  mapToNew: Mapping,
+  ctx: {
+    insertType: MarkType;
+    deleteType: MarkType;
+    formatType: MarkType | undefined;
+    authorID: string;
+    originCommentId: string | null;
+    originChatMessageId: string | null;
+    formatGesture: FormatGesture;
+    preserveSliceMarks: boolean;
+  },
+): AppliedTrackingStep {
+  const empty = {
+    blocked: null,
+    deleteLeftmost: null,
+    deleteHistoryGroupId: null,
+    insertEnd: null,
+  };
+  if (isTrackedFormatStep(step, ctx.formatType)) {
+    applyTrackedFormatTransactionStep(newTr, step, mapToNew, {
+      insertType: ctx.insertType,
+      formatType: ctx.formatType!,
+      authorID: ctx.authorID,
+      originCommentId: ctx.originCommentId,
+      originChatMessageId: ctx.originChatMessageId,
+      gesture: ctx.formatGesture,
+    });
+    return empty;
+  }
+  if (!(step instanceof ReplaceStep)) {
+    const applied = applyMappedPassthroughStep(newTr, step, mapToNew);
+    return applied ? empty : { ...empty, blocked: blockedOperation('unsafeMappedStep') };
+  }
+  const result = applyTrackedReplaceStep(newTr, step, mapToNew, ctx);
+  const lostPureDelete =
+    step.from < step.to && result.deleteLeftmost === null && step.slice.size === 0;
+  return lostPureDelete
+    ? { ...result, blocked: blockedOperation('unsafeMappedStep') }
+    : { ...result, blocked: null };
+}
+
 function transformForTracking(
   tr: Transaction,
   state: EditorState,
@@ -1410,12 +1642,18 @@ function transformForTracking(
   originCommentId: string | null = null,
   originChatMessageId: string | null = null,
 ): import('@tiptap/pm/state').Transaction {
+  const blocked = blockedSuggestingTransaction(tr);
+  if (blocked) return blockedTrackingTransaction(state, blocked);
+
   const schema = state.schema;
   const insertType = schema.marks['tracked_insert'];
   const deleteType = schema.marks['tracked_delete'];
   const formatType = schema.marks['tracked_format'];
 
   if (!insertType || !deleteType) return tr;
+  if (overlapsForeignPendingInsertion(tr, insertType, authorID)) {
+    return blockedTrackingTransaction(state, blockedOperation('foreignInsertionOverlap'));
+  }
 
   const newTr = state.tr;
 
@@ -1444,6 +1682,7 @@ function transformForTracking(
   };
 
   let lastDeleteLeftmost: number | null = null;
+  let deleteHistoryGroupId: string | null = null;
   let lastInsertEnd: number | null = null;
   // One toolbar gesture may emit several scoped mark steps (unsetBold over
   // disjoint bold runs); sharing this identity keeps them one suggestion.
@@ -1454,34 +1693,24 @@ function transformForTracking(
 
   for (const step of tr.steps) {
     const newTrStepsBefore = newTr.steps.length;
-
-    if (isTrackedFormatStep(step, formatType)) {
-      applyTrackedFormatTransactionStep(newTr, step, mapToNew, {
-        insertType,
-        formatType: formatType!,
-        authorID,
-        originCommentId,
-        originChatMessageId,
-        gesture: formatGesture,
-      });
-    } else if (!(step instanceof ReplaceStep)) {
-      // Remaining mark steps (link edits, code) and structural wrappers pass
-      // through untracked by design — but their positions still have to be
-      // translated into newTr's frame, or they land on the wrong text once
-      // any deletion has been kept.
-      applyMappedPassthroughStep(newTr, step, mapToNew);
-    } else {
-      const result = applyTrackedReplaceStep(newTr, step, mapToNew, {
-        insertType,
-        deleteType,
-        formatType,
-        authorID,
-        originCommentId,
-        originChatMessageId,
-      });
-      if (result.deleteLeftmost !== null) lastDeleteLeftmost = result.deleteLeftmost;
-      if (result.insertEnd !== null) lastInsertEnd = result.insertEnd;
-    }
+    const result = applyTrackingStep(newTr, step, mapToNew, {
+      insertType,
+      deleteType,
+      formatType,
+      authorID,
+      originCommentId,
+      originChatMessageId,
+      formatGesture,
+      preserveSliceMarks:
+        tr.storedMarks !== null ||
+        state.storedMarks !== null ||
+        tr.getMeta('paste') === true ||
+        tr.getMeta('uiEvent') === 'paste',
+    });
+    if (result.blocked) return blockedTrackingTransaction(state, result.blocked);
+    if (result.deleteLeftmost !== null) lastDeleteLeftmost = result.deleteLeftmost;
+    if (result.deleteHistoryGroupId) deleteHistoryGroupId = result.deleteHistoryGroupId;
+    if (result.insertEnd !== null) lastInsertEnd = result.insertEnd;
 
     // Fragile coordinate-frame boundary: rebuild exactly once after every
     // original step, using that step's inverse and only the mutations the
@@ -1491,6 +1720,9 @@ function transformForTracking(
 
   if (formatGesture.blocked) {
     newTr.setMeta(FORMAT_BLOCKED_META, true);
+  }
+  if (deleteHistoryGroupId) {
+    newTr.setMeta(TRACKED_DELETE_HISTORY_GROUP_META, deleteHistoryGroupId);
   }
 
   // Paste rules run after the dispatched transaction. Replacing that

@@ -2517,6 +2517,25 @@ del.track-delete {
   background: var(--bg-app);
 }
 
+.suggesting-mode-notice {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 55;
+  max-width: min(440px, calc(100% - 40px));
+  transform: translateX(-50%);
+  padding: 7px 11px;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
+
 /* ── Reveal formatting inspector ───────────────────────────────── */
 .formatting-inspector {
   z-index: 60;

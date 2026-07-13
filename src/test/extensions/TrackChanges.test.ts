@@ -306,17 +306,14 @@ describe('TrackChanges extension', () => {
       expect(changes[0]).toMatchObject({ operation: 'insert', text: 'Q', authorID: 'alice' });
     });
 
-    it('tracks every text run in a multi-block paste', () => {
+    it('blocks a multi-block paste rather than committing structure untracked', () => {
       editor = makeEditor('<p>start end</p>');
       editor.commands.setTrackChangesEnabled(true);
+      const before = editor.getJSON();
       editor.chain().setTextSelection(7).insertContent('<p>pasted one</p><p>pasted two</p>').run();
 
-      const inserted = textChanges(editor)
-        .filter((change) => change.operation === 'insert')
-        .map((change) => change.text)
-        .join(' ');
-      expect(inserted).toContain('pasted one');
-      expect(inserted).toContain('pasted two');
+      expect(editor.getJSON()).toEqual(before);
+      expect(textChanges(editor)).toEqual([]);
     });
   });
 

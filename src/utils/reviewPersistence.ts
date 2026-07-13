@@ -9,6 +9,28 @@ import type {
   TrackedChangeInfo,
 } from '../types';
 
+export interface ReviewRestoreMismatch {
+  suggestionId: string;
+  from: number;
+  to: number;
+  expected: string;
+  actual: string | null;
+}
+
+export interface ReviewRestoreResult {
+  quarantinedSuggestions: Suggestion[];
+  mismatches: ReviewRestoreMismatch[];
+}
+
+/** Keep quarantined sidecar records intact while live marks remain canonical. */
+export function mergeQuarantinedSuggestions(
+  live: Suggestion[],
+  quarantined: Suggestion[],
+): Suggestion[] {
+  const liveIds = new Set(live.map((suggestion) => suggestion.id));
+  return [...live, ...quarantined.filter((suggestion) => !liveIds.has(suggestion.id))];
+}
+
 /**
  * Review persistence: tracked-change and comment marks are the runtime truth,
  * but marks don't survive Markdown serialization — the .md keeps only their
@@ -159,6 +181,70 @@ function restoreSuggestionMarks(
   }
 }
 
+function exactRangeText(
+  doc: TiptapEditor['state']['doc'],
+  from: number,
+  to: number,
+): string | null {
+  const size = doc.content.size;
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > size || to <= from) {
+    return null;
+  }
+  return doc.textBetween(from, to, '\n', ' ');
+}
+
+function suggestionMismatches(
+  doc: TiptapEditor['state']['doc'],
+  suggestion: Suggestion,
+): ReviewRestoreMismatch[] {
+  const spans =
+    suggestion.type === 'format'
+      ? suggestion.segments.map(({ from, to, text }) => ({ from, to, expected: text }))
+      : [
+          {
+            from: suggestion.from,
+            to: suggestion.to,
+            expected:
+              suggestion.type === 'insertion' ? suggestion.suggestedText : suggestion.originalText,
+          },
+        ];
+  return spans.flatMap(({ from, to, expected }) => {
+    const actual = exactRangeText(doc, from, to);
+    return actual === expected ? [] : [{ suggestionId: suggestion.id, from, to, expected, actual }];
+  });
+}
+
+function quarantineMismatchedSuggestions(
+  doc: TiptapEditor['state']['doc'],
+  suggestions: Suggestion[],
+): ReviewRestoreResult & { restorableSuggestions: Suggestion[] } {
+  const mismatches = suggestions
+    .filter((suggestion) => suggestion.status === 'pending')
+    .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
+  const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
+  const mismatchedPairIds = new Set(
+    suggestions
+      .filter(
+        (suggestion): suggestion is TextSuggestion =>
+          suggestion.type !== 'format' &&
+          Boolean(suggestion.pairId) &&
+          mismatchedIds.has(suggestion.id),
+      )
+      .map((suggestion) => suggestion.pairId!),
+  );
+  const isQuarantined = (suggestion: Suggestion) =>
+    suggestion.status === 'pending' &&
+    (mismatchedIds.has(suggestion.id) ||
+      (suggestion.type !== 'format' &&
+        Boolean(suggestion.pairId) &&
+        mismatchedPairIds.has(suggestion.pairId!)));
+  return {
+    quarantinedSuggestions: suggestions.filter(isQuarantined),
+    restorableSuggestions: suggestions.filter((suggestion) => !isQuarantined(suggestion)),
+    mismatches,
+  };
+}
+
 /**
  * Stamp comment and tracked-change marks back onto a freshly loaded document,
  * in one transaction that:
@@ -173,18 +259,22 @@ export function restoreReviewMarks(
   editor: TiptapEditor,
   comments: Comment[],
   suggestions: Suggestion[],
-): void {
+): ReviewRestoreResult {
   const { state } = editor;
   const { tr, doc, schema } = state;
   const commentType = schema.marks['comment'];
   const size = doc.content.size;
+  const { quarantinedSuggestions, restorableSuggestions, mismatches } =
+    quarantineMismatchedSuggestions(doc, suggestions);
 
   restoreCommentMarks(tr, commentType, comments, size);
-  restoreSuggestionMarks(tr, schema, suggestions, size);
+  restoreSuggestionMarks(tr, schema, restorableSuggestions, size);
 
-  if (!tr.steps.length) return;
-  tr.setMeta('preventUpdate', true);
-  tr.setMeta('skipTracking', true);
-  tr.setMeta('addToHistory', false);
-  editor.view.dispatch(tr);
+  if (tr.steps.length) {
+    tr.setMeta('preventUpdate', true);
+    tr.setMeta('skipTracking', true);
+    tr.setMeta('addToHistory', false);
+    editor.view.dispatch(tr);
+  }
+  return { quarantinedSuggestions, mismatches };
 }

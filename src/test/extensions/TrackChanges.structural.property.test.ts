@@ -5,6 +5,7 @@ import { AllSelection, TextSelection } from '@tiptap/pm/state';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getTrackedChanges,
+  TRACKING_BLOCKED_META,
   TrackChanges,
   TrackedDelete,
   TrackedFormat,
@@ -123,6 +124,9 @@ function concretize(
     concretePoint(operation.bBlock, operation.bOffset, lengths),
   );
   if (!range) return null;
+  // This campaign is the structural complement to the inline fuzzer; same-
+  // block ranges belong to the supported inline matrix and are covered there.
+  if (range.from.block === range.to.block) return null;
   if (operation.kind === 'deleteAcross') return { kind: 'deleteAcross', ...range };
   return { kind: 'replaceAcross', ...range, text: 'X' };
 }
@@ -202,31 +206,34 @@ function sameDocument(a: JSONContent, b: JSONContent): boolean {
 }
 
 function runTrace(trace: StructuralOperation[]): string | null {
-  const normal = makeEditor(false);
-  const accepted = makeEditor(true);
-  const rejected = makeEditor(true);
-  const original = normal.getJSON();
+  const suggesting = makeEditor(true);
+  const original = suggesting.getJSON();
+  const blockedOperations: string[] = [];
+  suggesting.on('transaction', ({ transaction }) => {
+    const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as
+      | { operation?: string }
+      | undefined;
+    if (blocked?.operation) blockedOperations.push(blocked.operation);
+  });
   try {
     for (const [index, operation] of trace.entries()) {
-      const lengths = blockLengths(normal);
+      const lengths = blockLengths(suggesting);
       const concrete = concretize(operation, lengths);
       if (!concrete) continue;
-      applyOperation(normal, concrete);
-      applyOperation(accepted, concrete);
-      applyOperation(rejected, concrete);
-      if (!sameDocument(normal.getJSON(), acceptedProjection(accepted))) {
-        return `step ${index} accepted projection diverged; operation=${JSON.stringify(concrete)}; expected=${JSON.stringify(normal.getJSON())}; actual=${JSON.stringify(acceptedProjection(accepted))}`;
+      const blockedBefore = blockedOperations.length;
+      applyOperation(suggesting, concrete);
+      if (!sameDocument(suggesting.getJSON(), original)) {
+        return `step ${index} mutated the document; operation=${JSON.stringify(concrete)}`;
       }
-      if (!sameDocument(normal.getJSON(), acceptedProjection(rejected))) {
-        return `step ${index} reject projection diverged; operation=${JSON.stringify(concrete)}`;
+      if (
+        concrete.kind !== 'undo' &&
+        concrete.kind !== 'redo' &&
+        blockedOperations.length === blockedBefore
+      ) {
+        return `step ${index} was dropped without a block notice; operation=${JSON.stringify(concrete)}`;
       }
     }
-    accepted.commands.acceptAllChanges();
-    if (!sameDocument(normal.getJSON(), accepted.getJSON())) return 'INV2 failed after accept-all';
-    if (getTrackedChanges(accepted).length > 0) return 'INV3 failed after accept-all';
-    rejected.commands.rejectAllChanges();
-    if (!sameDocument(original, rejected.getJSON())) return 'INV1 failed after reject-all';
-    if (getTrackedChanges(rejected).length > 0) return 'INV3 failed after reject-all';
+    if (getTrackedChanges(suggesting).length > 0) return 'blocked trace left tracked marks';
     return null;
   } finally {
     destroyEditors();
@@ -285,22 +292,22 @@ function minimize(trace: StructuralOperation[]): StructuralOperation[] {
 describe('TrackChanges structural property invariants', () => {
   afterEach(destroyEditors);
 
-  it.fails('rejects a paragraph split back to the original block structure', () => {
+  it('blocks a paragraph split with no document mutation', () => {
     const failure = runTrace([{ kind: 'split', blockSeed: 0, offsetSeed: 5 }]);
     expect(failure).toBeNull();
   });
 
-  it.fails('tracks a whole-document deletion instead of silently dropping it', () => {
+  it('blocks a whole-document structural deletion with a notice', () => {
     const failure = runTrace([{ kind: 'deleteAll' }]);
     expect(failure).toBeNull();
   });
 
-  it.fails('rejects a block-start Backspace back to the original two blocks', () => {
+  it('blocks a block-start Backspace join with no document mutation', () => {
     const failure = runTrace([{ kind: 'join', blockSeed: 0 }]);
     expect(failure).toBeNull();
   });
 
-  it.fails('tracks a cross-block deletion and can reject it exactly', () => {
+  it('blocks a cross-block deletion with no document mutation', () => {
     const failure = runTrace([
       {
         kind: 'deleteAcross',
@@ -313,7 +320,7 @@ describe('TrackChanges structural property invariants', () => {
     expect(failure).toBeNull();
   });
 
-  it.fails('tracks a cross-block replacement and can accept or reject it exactly', () => {
+  it('blocks a cross-block replacement with no document mutation', () => {
     const failure = runTrace([
       {
         kind: 'replaceAcross',
@@ -339,33 +346,25 @@ describe('TrackChanges structural property invariants', () => {
     expect(suggesting.getJSON()).toEqual(original);
   });
 
-  it.fails('rejects a heading conversion back to the original paragraph', () => {
-    const normal = makeEditor(false);
+  it('blocks a heading conversion with no document mutation', () => {
     const suggesting = makeEditor(true);
     const original = suggesting.getJSON();
-    for (const editor of [normal, suggesting]) {
-      editor.commands.setTextSelection(2);
-      editor.commands.toggleHeading({ level: 1 });
-    }
-    expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
-    suggesting.commands.rejectAllChanges();
+    suggesting.commands.setTextSelection(2);
+    suggesting.commands.toggleHeading({ level: 1 });
     expect(suggesting.getJSON()).toEqual(original);
+    expect(getTrackedChanges(suggesting)).toEqual([]);
   });
 
-  it.fails('rejects a list conversion back to the original paragraphs', () => {
-    const normal = makeEditor(false);
+  it('blocks a list conversion with no document mutation', () => {
     const suggesting = makeEditor(true);
     const original = suggesting.getJSON();
-    for (const editor of [normal, suggesting]) {
-      editor.commands.setTextSelection({ from: 1, to: 23 });
-      editor.commands.toggleBulletList();
-    }
-    expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
-    suggesting.commands.rejectAllChanges();
+    suggesting.commands.setTextSelection({ from: 1, to: 23 });
+    suggesting.commands.toggleBulletList();
     expect(suggesting.getJSON()).toEqual(original);
+    expect(getTrackedChanges(suggesting)).toEqual([]);
   });
 
-  it.fails('preserves the invariants across seeded structural edit sequences', () => {
+  it('blocks every seeded structural edit sequence without silent mutation or loss', () => {
     for (let seed = 1; seed <= 40; seed += 1) {
       const trace = generateTrace(seed);
       const failure = runTrace(trace);

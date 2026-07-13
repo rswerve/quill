@@ -8,7 +8,11 @@ import {
   TrackedFormat,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
-import { suggestionsFromTrackedChanges, restoreReviewMarks } from '../../utils/reviewPersistence';
+import {
+  mergeQuarantinedSuggestions,
+  suggestionsFromTrackedChanges,
+  restoreReviewMarks,
+} from '../../utils/reviewPersistence';
 import type {
   FormatSuggestion,
   TextSuggestion,
@@ -222,6 +226,75 @@ describe('restoreReviewMarks', () => {
       originCommentId: 'c42',
       segments: live.segments,
     });
+  });
+
+  it('quarantines a text suggestion whose stored text no longer matches the document', () => {
+    editor = makeEditor('<p>Other world</p>');
+    const before = editor.getJSON();
+
+    const result = restoreReviewMarks(editor, [], [suggestion()]);
+
+    expect(result.quarantinedSuggestions).toEqual([
+      expect.objectContaining({ id: 's1', suggestedText: 'Hello' }),
+    ]);
+    expect(result.mismatches).toEqual([
+      expect.objectContaining({ suggestionId: 's1', expected: 'Hello', actual: 'Other' }),
+    ]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+    editor.commands.acceptAllChanges();
+    expect(editor.getJSON()).toEqual(before);
+  });
+
+  it('quarantines an entire replacement pair when either half mismatches', () => {
+    editor = makeEditor('<p>Old New</p>');
+    const records: TextSuggestion[] = [
+      suggestion({
+        id: 'delete-half',
+        type: 'deletion',
+        from: 1,
+        to: 4,
+        originalText: 'Old',
+        suggestedText: '',
+        pairId: 'pair-1',
+      }),
+      suggestion({
+        id: 'insert-half',
+        from: 5,
+        to: 8,
+        originalText: '',
+        suggestedText: 'Wrong',
+        pairId: 'pair-1',
+      }),
+    ];
+
+    const result = restoreReviewMarks(editor, [], records);
+
+    expect(result.quarantinedSuggestions.map((record) => record.id)).toEqual([
+      'delete-half',
+      'insert-half',
+    ]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('quarantines every segment of a format suggestion when one segment mismatches', () => {
+    editor = makeEditor('<p><strong>Hello</strong> <em>other</em></p>');
+
+    const result = restoreReviewMarks(editor, [], [formatSuggestion()]);
+
+    expect(result.quarantinedSuggestions).toEqual([
+      expect.objectContaining({ id: 'fmt1', type: 'format' }),
+    ]);
+    expect(result.mismatches).toEqual([
+      expect.objectContaining({ suggestionId: 'fmt1', expected: 'world', actual: 'other' }),
+    ]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('preserves quarantined records beside the live projection without duplicating ids', () => {
+    const quarantined = suggestion({ id: 'quarantined' });
+    const live = suggestion({ id: 'live', suggestedText: 'world' });
+
+    expect(mergeQuarantinedSuggestions([live], [quarantined, live])).toEqual([live, quarantined]);
   });
 
   it.each([true, false])(

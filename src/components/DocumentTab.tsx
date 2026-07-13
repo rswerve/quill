@@ -15,14 +15,23 @@ import { useSuggestions } from '../hooks/useSuggestions';
 import { useClaudeReply } from '../hooks/useClaudeReply';
 import { useDocumentChat, type ChatCursorContext } from '../hooks/useDocumentChat';
 import { useDocumentAIGate } from '../hooks/useDocumentAIGate';
-import { FORMAT_BLOCKED_META, getTrackedChanges } from '../extensions/TrackChanges';
+import {
+  FORMAT_BLOCKED_META,
+  getTrackedChanges,
+  TRACKING_BLOCKED_META,
+} from '../extensions/TrackChanges';
+import type { TrackingBlockedInfo } from '../extensions/TrackChanges';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
 import { buildLinkReplacementContent } from '../utils/linkEditing';
-import { restoreReviewMarks, suggestionsFromTrackedChanges } from '../utils/reviewPersistence';
+import {
+  mergeQuarantinedSuggestions,
+  restoreReviewMarks,
+  suggestionsFromTrackedChanges,
+} from '../utils/reviewPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
@@ -48,6 +57,7 @@ import type {
   EditScope,
   QuillEdit,
   SidecarFile,
+  Suggestion,
   TrackedChangeInfo,
   TrackedEditOrigin,
   DocumentChatThread,
@@ -239,6 +249,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [maxCardBottom, setMaxCardBottom] = useState(0);
   const [bottomSpacer, setBottomSpacer] = useState(0);
   const [findOpen, setFindOpen] = useState(false);
+  const [suggestingModeNotice, setSuggestingModeNotice] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<'comments' | 'chat'>('comments');
   const [showResolvedComments, setShowResolvedComments] = useState(false);
   const [chatFocusRevision, setChatFocusRevision] = useState(0);
@@ -364,6 +375,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     dismissAIReply,
   } = useComments();
   const { suggestions, setSuggestions } = useSuggestions();
+  const quarantinedSuggestionsRef = useRef<Suggestion[]>([]);
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
@@ -373,9 +385,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const getLiveReviewState = useCallback(() => {
     const ed = editorRef.current?.getEditor();
     if (!ed) return { comments, suggestions };
+    const liveSuggestions = suggestionsFromTrackedChanges(getTrackedChanges(ed));
     return {
       comments: reconcileCommentsWithDocument(comments, ed.state.doc),
-      suggestions: suggestionsFromTrackedChanges(getTrackedChanges(ed)),
+      suggestions: mergeQuarantinedSuggestions(liveSuggestions, quarantinedSuggestionsRef.current),
     };
   }, [comments, suggestions]);
 
@@ -622,6 +635,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return () => cancelAnimationFrame(raf);
   }, [zoom]);
 
+  const restorePersistedReviewMarks = useCallback(
+    (ed: TiptapEditor, persistedComments: Comment[], persistedSuggestions: Suggestion[]) => {
+      const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions);
+      quarantinedSuggestionsRef.current = result.quarantinedSuggestions;
+      setTrackedChanges(getTrackedChanges(ed));
+      if (result.quarantinedSuggestions.length > 0) {
+        const count = result.quarantinedSuggestions.length;
+        onNotice({
+          title: 'Saved suggestions need review',
+          message:
+            `${count} saved suggestion${count === 1 ? '' : 's'} no longer matched the document text and ` +
+            `was not restored. The saved record remains preserved, but it cannot affect the document until its anchor is repaired.`,
+        });
+      }
+    },
+    [onNotice],
+  );
+
   // A mounted background tab keeps its editor state, but layout APIs return
   // stale/zero coordinates while its host is display:none. Re-measure after
   // activation so comments and the selection affordance snap back to the
@@ -667,8 +698,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // normally follows update events is refreshed by hand.
       const ed = editorRef.current?.getEditor();
       if (ed) {
-        restoreReviewMarks(ed, loadedComments, loadedSuggestions);
-        setTrackedChanges(getTrackedChanges(ed));
+        restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions);
       }
       const access = authorizeSidecarAccess(
         window.localStorage,
@@ -761,6 +791,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       markDirty,
       chooseContextFolder,
       onOpenSessionPicker,
+      restorePersistedReviewMarks,
       tabId,
     ],
   );
@@ -887,6 +918,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     editorRef.current?.setContent('');
     setComments([]);
     setSuggestions([]);
+    quarantinedSuggestionsRef.current = [];
     onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
@@ -919,8 +951,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // suppresses the update event).
       const ed = editorRef.current?.getEditor();
       if (ed) {
-        restoreReviewMarks(ed, draftComments, draftSuggestions);
-        setTrackedChanges(getTrackedChanges(ed));
+        restorePersistedReviewMarks(ed, draftComments, draftSuggestions);
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);
@@ -933,7 +964,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         rememberContextFolderPermission(window.localStorage, draft.filePath, restoredContextFolder);
       }
     },
-    [adoptLoadedSession, documentChat, restoreDraft, setComments, setSuggestions],
+    [
+      adoptLoadedSession,
+      documentChat,
+      restoreDraft,
+      restorePersistedReviewMarks,
+      setComments,
+      setSuggestions,
+    ],
   );
 
   useEffect(() => {
@@ -1000,6 +1038,32 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       editor.off('transaction', onTransaction);
     };
   }, [editor, onNotice]);
+
+  // Unsupported Suggesting-mode gestures are vetoed atomically by the
+  // tracking engine. Confirm the block without interrupting the user's flow.
+  useEffect(() => {
+    if (!editor) return;
+    let dismissTimer: number | null = null;
+    const onTransaction = ({
+      transaction,
+    }: {
+      transaction: import('@tiptap/pm/state').Transaction;
+    }) => {
+      const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as TrackingBlockedInfo | undefined;
+      if (!blocked || applyingClaudeEditsRef.current) return;
+      setSuggestingModeNotice(blocked.notice);
+      if (dismissTimer !== null) window.clearTimeout(dismissTimer);
+      dismissTimer = window.setTimeout(() => {
+        setSuggestingModeNotice(null);
+        dismissTimer = null;
+      }, 3200);
+    };
+    editor.on('transaction', onTransaction);
+    return () => {
+      editor.off('transaction', onTransaction);
+      if (dismissTimer !== null) window.clearTimeout(dismissTimer);
+    };
+  }, [editor]);
 
   // Mirror the active annotation into the editor as a focus decoration so
   // its text is visibly highlighted alongside the outlined card.
@@ -1575,6 +1639,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     <>
       <div className="studio-body">
         <div className="workspace doc-scroll" ref={scrollAreaRef}>
+          {suggestingModeNotice && (
+            <div className="suggesting-mode-notice" role="status" aria-live="polite">
+              {suggestingModeNotice}
+            </div>
+          )}
           {findOpen && isActive && (
             <FindBar
               editor={editor}

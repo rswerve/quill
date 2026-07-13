@@ -4,6 +4,7 @@ import { closeHistory } from '@tiptap/pm/history';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getTrackedChanges,
+  TRACKING_BLOCKED_META,
   TrackChanges,
   TrackedDelete,
   TrackedFormat,
@@ -431,7 +432,7 @@ describe('TrackChanges property invariants', () => {
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
   });
 
-  it.fails('diagnoses the seeded mark-boundary failure', () => {
+  it('preserves the surviving-side marks in the seeded boundary sequence', () => {
     const trace: ConcreteOperation[] = [
       { kind: 'insert', at: 6, text: ' ' },
       { kind: 'insert', at: 11, text: 'x' },
@@ -452,7 +453,7 @@ describe('TrackChanges property invariants', () => {
     }
   });
 
-  it.fails('diagnoses the seeded text-only boundary failure', () => {
+  it('matches Editing mode when inserting at a retained-deletion boundary', () => {
     const trace: ConcreteOperation[] = [
       { kind: 'delete', from: 0, to: 5 },
       { kind: 'insert', at: 0, text: 'YZ' },
@@ -466,12 +467,9 @@ describe('TrackChanges property invariants', () => {
     }
   });
 
-  it.fails(
-    'accept-all matches Editing mode and reject-all restores the original across seeded edits',
-    () => {
-      expectCampaignToPass(generateTrace, PLAIN_DOCUMENT);
-    },
-  );
+  it('accept-all matches Editing mode and reject-all restores the original across seeded edits', () => {
+    expectCampaignToPass(generateTrace, PLAIN_DOCUMENT);
+  });
 
   it('preserves the invariants across seeded text-only edits', () => {
     expectCampaignToPass((seed) => generateTextTrace(seed, false), PLAIN_DOCUMENT);
@@ -499,7 +497,7 @@ describe('TrackChanges property invariants', () => {
     expect(trackMarks(editor)).toEqual([]);
   });
 
-  it.fails('groups rapid tracked backspaces into the same single undo as Editing mode', () => {
+  it('groups rapid tracked backspaces into the same single undo as Editing mode', () => {
     const normal = makeEditor(false, '<p>bravo</p>');
     const suggesting = makeEditor(true, '<p>bravo</p>');
     for (const editor of [normal, suggesting]) editor.commands.setTextSelection(6);
@@ -515,41 +513,48 @@ describe('TrackChanges property invariants', () => {
 
     expect(normal.state.doc.textContent).toBe('bravo');
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
+
+    normal.commands.redo();
+    suggesting.commands.redo();
+    expect(normal.state.doc.textContent).toBe('');
+    expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
   });
 
-  it.fails("does not annihilate another author's pending insertion", () => {
+  it("blocks deletion of another author's pending insertion", () => {
     const editor = makeEditor(true, '<p></p>');
     editor.commands.setTrackChangesAuthor('alice');
     editor.view.dispatch(editor.state.tr.insertText('X', 1));
     const alice = getTrackedChanges(editor)[0];
 
+    const before = editor.getJSON();
+    let blockedOperation: string | undefined;
+    editor.on('transaction', ({ transaction }) => {
+      blockedOperation = transaction.getMeta(TRACKING_BLOCKED_META)?.operation as
+        | string
+        | undefined;
+    });
     editor.commands.setTrackChangesAuthor('bob');
     editor.commands.deleteRange({ from: 1, to: 2 });
 
-    const changes = getTrackedChanges(editor);
-    expect(changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: alice.id, authorID: 'alice', operation: 'insert' }),
-        expect.objectContaining({ authorID: 'bob', operation: 'delete' }),
-      ]),
-    );
-    const bob = changes.find((change) => change.authorID === 'bob')!;
-    editor.commands.rejectChange(bob.id);
-    expect(getTrackedChanges(editor)).toHaveLength(1);
-    expect(getTrackedChanges(editor)[0]).toMatchObject({ id: alice.id, authorID: 'alice' });
+    expect(editor.getJSON()).toEqual(before);
+    expect(blockedOperation).toBe('foreignInsertionOverlap');
+    expect(getTrackedChanges(editor)).toEqual([
+      expect.objectContaining({ id: alice.id, authorID: 'alice', operation: 'insert' }),
+    ]);
   });
 
-  it.fails('rejects an inline-code toggle back to the original formatting', () => {
-    const normal = makeEditor(false, PLAIN_DOCUMENT);
+  it('blocks an inline-code toggle instead of committing it untracked', () => {
     const suggesting = makeEditor(true, PLAIN_DOCUMENT);
     const original = suggesting.getJSON();
-    for (const editor of [normal, suggesting]) {
-      editor.commands.setTextSelection({ from: 1, to: 6 });
-      editor.commands.toggleCode();
-    }
+    let blockedMark: string | undefined;
+    suggesting.on('transaction', ({ transaction }) => {
+      blockedMark = transaction.getMeta(TRACKING_BLOCKED_META)?.markName as string | undefined;
+    });
+    suggesting.commands.setTextSelection({ from: 1, to: 6 });
+    suggesting.commands.toggleCode();
 
-    expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
-    suggesting.commands.rejectAllChanges();
     expect(suggesting.getJSON()).toEqual(original);
+    expect(blockedMark).toBe('code');
+    expect(getTrackedChanges(suggesting)).toEqual([]);
   });
 });

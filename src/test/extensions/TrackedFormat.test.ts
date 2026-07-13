@@ -328,7 +328,7 @@ describe('tracked formatting (suggesting mode)', () => {
     expect(formatChanges(editor)).toHaveLength(0);
   });
 
-  it('leaves link mark changes untracked in suggesting mode (passthrough)', () => {
+  it('blocks link mark changes instead of committing them untracked', () => {
     editor = makeEditor();
     editor
       .chain()
@@ -336,7 +336,7 @@ describe('tracked formatting (suggesting mode)', () => {
       .setLink({ href: 'https://example.com' })
       .run();
 
-    expect(textHasMark(editor, 'Hello', 'link')).toBe(true);
+    expect(textHasMark(editor, 'Hello', 'link')).toBe(false);
     expect(formatChanges(editor)).toHaveLength(0);
     expect(textChanges(editor)).toHaveLength(0);
   });
