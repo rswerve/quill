@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   SidecarFile,
@@ -106,12 +106,18 @@ export function useFileManager(
 ): UseFileManagerReturn {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  // Monotonic across document, review, and chat mutations. A save may clear
+  // dirty only if nothing changed while its asynchronous writes were pending.
+  const changeRevisionRef = useRef(0);
   // True when the currently open file's sidecar exists on disk but couldn't be
   // parsed. We refuse to overwrite/delete it so the user can recover it; only
   // an explicit Save As (new path) escapes the guard.
   const [sidecarProtected, setSidecarProtected] = useState(false);
 
-  const markDirty = useCallback(() => setIsDirty(true), []);
+  const markDirty = useCallback(() => {
+    changeRevisionRef.current += 1;
+    setIsDirty(true);
+  }, []);
 
   const openFilePath = useCallback(
     async (path: string) => {
@@ -161,6 +167,7 @@ export function useFileManager(
         }
 
         setFilePath(path);
+        changeRevisionRef.current += 1;
         setIsDirty(autoBound);
         return { content, sidecar, filePath: path, autoBound, sidecarError };
       } catch (e) {
@@ -239,6 +246,7 @@ export function useFileManager(
       if (!targetPath) {
         return null;
       }
+      const saveRevision = changeRevisionRef.current;
       // Protect a corrupt sidecar from being clobbered. Saving the markdown to
       // the same path is fine, but skip touching the sidecar so we don't destroy
       // recoverable comment data. A Save As to a different path (forcePath) is
@@ -254,7 +262,7 @@ export function useFileManager(
           setSidecarProtected(false);
         }
         setFilePath(targetPath);
-        setIsDirty(false);
+        if (changeRevisionRef.current === saveRevision) setIsDirty(false);
         return targetPath;
       } catch (e) {
         console.error('Failed to save file:', e);
@@ -298,6 +306,7 @@ export function useFileManager(
   );
 
   const newFile = useCallback(() => {
+    changeRevisionRef.current += 1;
     setFilePath(null);
     setIsDirty(false);
     setSidecarProtected(false);
@@ -307,6 +316,7 @@ export function useFileManager(
   // the draft's content is newer than the file — and mark dirty so the user is
   // prompted to save the recovered work.
   const restoreDraft = useCallback((path: string | null, dirty = true) => {
+    changeRevisionRef.current += 1;
     setFilePath(path);
     setIsDirty(dirty);
     setSidecarProtected(false);

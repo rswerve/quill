@@ -160,6 +160,40 @@ describe('useFileManager', () => {
       expect(result.current.isDirty).toBe(false);
     });
 
+    it('does not clear a newer dirty revision when an older save finishes', async () => {
+      let releaseWrite: (() => void) | undefined;
+      const writeBlocked = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      mockInvoke.mockImplementation(async (command, args) => {
+        const path = (args as { path?: string } | undefined)?.path;
+        if (command === 'read_file' && path === '/docs/test.md') return 'saved content';
+        if (command === 'read_file') throw new Error('sidecar not found');
+        if (command === 'find_session_for_markdown') return null;
+        if (command === 'write_file' && path === '/docs/test.md') await writeBlocked;
+        return null;
+      });
+
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.openFilePath('/docs/test.md');
+        result.current.markDirty();
+      });
+
+      let savePromise: Promise<string | null>;
+      await act(async () => {
+        savePromise = result.current.saveFile('older snapshot', [], [], null, null);
+        await Promise.resolve();
+      });
+      act(() => result.current.markDirty());
+      releaseWrite?.();
+      await act(async () => {
+        await savePromise;
+      });
+
+      expect(result.current.isDirty).toBe(true);
+    });
+
     it('uses forcePath when provided, overriding stored filePath', async () => {
       mockInvoke.mockResolvedValue(undefined);
       const { result } = renderHook(() => useFileManager());

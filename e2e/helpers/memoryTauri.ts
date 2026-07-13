@@ -11,6 +11,8 @@ interface MemoryTauriOptions {
   newSessionId?: string;
   /** Initial workspace payload. The shim persists later writes across reloads. */
   workspace?: string;
+  /** Hold the first document write until the test calls __quillReleaseWriteFile. */
+  deferFirstWriteFile?: boolean;
 }
 
 /**
@@ -20,7 +22,16 @@ interface MemoryTauriOptions {
  */
 export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions = {}) {
   await page.addInitScript(
-    ({ files, openPath, savePath, mockAI, aiReplyText, newSessionId, workspace }) => {
+    ({
+      files,
+      openPath,
+      savePath,
+      mockAI,
+      aiReplyText,
+      newSessionId,
+      workspace,
+      deferFirstWriteFile,
+    }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
       const filesKey = '__quill_test_files';
@@ -62,6 +73,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       globals.__quillFiles = memoryFiles;
       globals.__quillCalls = calls;
       globals.__quillListeners = listeners;
+      globals.__quillWriteFileBlocked = false;
       if (newSessionId) {
         Object.defineProperty(crypto, 'randomUUID', {
           configurable: true,
@@ -110,6 +122,15 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             throw new Error(`File not found: ${path}`);
           }
           if (cmd === 'write_file') {
+            if (deferFirstWriteFile && globals.__quillReleaseWriteFile === undefined) {
+              globals.__quillWriteFileBlocked = true;
+              await new Promise<void>((resolve) => {
+                globals.__quillReleaseWriteFile = () => {
+                  globals.__quillWriteFileBlocked = false;
+                  resolve();
+                };
+              });
+            }
             memoryFiles[args.path as string] = args.content as string;
             return null;
           }
@@ -153,6 +174,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       aiReplyText: options.aiReplyText ?? 'Persist this answer.',
       newSessionId: options.newSessionId ?? null,
       workspace: options.workspace ?? null,
+      deferFirstWriteFile: options.deferFirstWriteFile ?? false,
     },
   );
 
