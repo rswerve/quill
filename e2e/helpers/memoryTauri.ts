@@ -6,6 +6,7 @@ interface MemoryTauriOptions {
   files?: Record<string, string>;
   openPath?: string;
   savePath?: string;
+  folderPath?: string;
   mockAI?: boolean;
   /** Raw text the mockAI spawn streams back (may include a quill-edits fence).
    *  Defaults to a plain prose reply. */
@@ -75,6 +76,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       files,
       openPath,
       savePath,
+      folderPath,
       mockAI,
       aiReplyText,
       newSessionId,
@@ -182,6 +184,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           if (cmd === 'has_native_menu') return false;
           if (cmd === 'show_open_dialog') return openPath ?? null;
           if (cmd === 'show_save_dialog') return savePath ?? null;
+          if (cmd === 'show_folder_dialog') return folderPath ?? null;
           if (cmd === 'list_claude_sessions') return claudeSessions ?? [];
           if (cmd === 'read_claude_session_preview') {
             return sessionPreviews?.[args.jsonlPath as string] ?? null;
@@ -240,6 +243,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       files: options.files ?? {},
       openPath: options.openPath ?? null,
       savePath: options.savePath ?? null,
+      folderPath: options.folderPath ?? null,
       mockAI: options.mockAI ?? false,
       aiReplyText: options.aiReplyText ?? 'Persist this answer.',
       newSessionId: options.newSessionId ?? null,

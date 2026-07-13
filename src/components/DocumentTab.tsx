@@ -281,22 +281,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
 
-  const chooseContextFolder = useCallback(async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const folder = await invoke<string | null>('show_folder_dialog');
-      if (folder) {
-        setContextFolder(folder);
-        if (filePath) {
-          rememberContextFolderPermission(window.localStorage, filePath, folder);
+  const chooseContextFolder = useCallback(
+    async (permissionPath = filePath) => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const folder = await invoke<string | null>('show_folder_dialog');
+        if (folder) {
+          setContextFolder(folder);
+          if (permissionPath) {
+            rememberContextFolderPermission(window.localStorage, permissionPath, folder);
+          }
+          markDirty();
         }
-        markDirty();
+      } catch (error) {
+        console.error('Failed to pick context folder:', error);
+        showError('Could not link folder', String(error));
       }
-    } catch (error) {
-      console.error('Failed to pick context folder:', error);
-      showError('Could not link folder', String(error));
-    }
-  }, [filePath, markDirty, showError]);
+    },
+    [filePath, markDirty, showError],
+  );
 
   const adoptLoadedSession = useCallback(
     (binding: AISessionBinding | null, documentPath: string | null): AISessionBinding | null => {
@@ -724,7 +727,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
               ? [{ label: 'Relink session', onClick: () => onOpenSessionPicker(tabId) }]
               : []),
             ...(blockedFolder
-              ? [{ label: 'Choose folder', onClick: () => chooseContextFolder() }]
+              ? [
+                  {
+                    label: 'Choose folder',
+                    onClick: () => chooseContextFolder(result.filePath),
+                  },
+                ]
               : []),
           ],
         });

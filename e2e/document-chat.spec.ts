@@ -421,6 +421,36 @@ test('a Quill-created sidecar session reopens silently with a constrained cwd', 
   expect(spawn).toMatchObject({ cwd: '/docs', addDir: null, allowCreate: true });
 });
 
+test('an imported context folder is confirmed for the loaded document path', async ({ page }) => {
+  const path = '/docs/context.md';
+  const sidecarPath = '/docs/context.comments.json';
+  const folder = '/refs/imported';
+  await setupMemoryTauri(page, {
+    files: {
+      [path]: 'Context document',
+      [sidecarPath]: JSON.stringify({
+        version: 2,
+        comments: [],
+        suggestions: [],
+        contextFolder: folder,
+      }),
+    },
+    openPath: path,
+    folderPath: folder,
+  });
+
+  await openMemoryFile(page);
+  const notice = page.locator('.app-modal');
+  await expect(notice).toContainText('This document had a reference folder');
+  await notice.getByRole('button', { name: 'Choose folder' }).click();
+  const permissions = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('quill-sidecar-permissions-v1') ?? '{}'),
+  );
+  expect(permissions).toMatchObject({
+    '/docs/context.md': { contextFolder: folder },
+  });
+});
+
 test('chat persists per document/session and a new session starts a fresh thread', async ({
   page,
 }) => {
