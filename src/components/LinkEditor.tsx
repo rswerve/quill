@@ -35,14 +35,14 @@ export default function LinkEditor({
   const cardRef = useRef<HTMLDivElement>(null);
   const urlRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setText(target.text);
     setHref(target.href);
-    const frame = requestAnimationFrame(() => {
-      urlRef.current?.focus();
-      if (!target.existing) urlRef.current?.select();
-    });
-    return () => cancelAnimationFrame(frame);
+    // Focus before paint. A delayed animation-frame focus can steal focus back
+    // from the Text field when someone clicks it immediately after opening,
+    // causing their label edit to be appended to the URL instead.
+    urlRef.current?.focus();
+    if (!target.existing) urlRef.current?.select();
   }, [target]);
 
   useLayoutEffect(() => {
