@@ -1,7 +1,7 @@
 import type { Mark, Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { EditorState } from '@tiptap/pm/state';
 
-export const INSPECTED_MARKS = ['bold', 'italic', 'underline', 'strike', 'code', 'link'] as const;
+export const INSPECTED_MARKS = ['bold', 'italic', 'strike', 'code', 'link'] as const;
 
 export type InspectedMark = (typeof INSPECTED_MARKS)[number];
 export type FormatState = 'on' | 'off' | 'mixed';

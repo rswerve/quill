@@ -85,16 +85,6 @@ export default function Rail({ editor }: RailProps) {
       </ToolbarButton>
       <ToolbarButton
         baseClassName="rail-btn"
-        className="under"
-        onClick={command(() => editor!.chain().focus().toggleUnderline().run())}
-        active={editor?.isActive('underline') ?? false}
-        disabled={!editor}
-        title="Underline (Cmd+U)"
-      >
-        U
-      </ToolbarButton>
-      <ToolbarButton
-        baseClassName="rail-btn"
         className="strike"
         onClick={command(() => editor!.chain().focus().toggleStrike().run())}
         active={strike.active}

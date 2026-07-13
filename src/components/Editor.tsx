@@ -87,9 +87,11 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           // Don't auto-insert an empty paragraph after non-paragraph blocks
           // (e.g. headings). It interferes with toggling H1 back to paragraph.
           trailingNode: false,
-          // StarterKit bundles Link (and Underline) in Tiptap v3 — configure
-          // here rather than registering a duplicate extension.
+          // StarterKit bundles Link and Underline in Tiptap v3. Configure Link
+          // here rather than registering a duplicate, and disable Underline:
+          // Markdown cannot preserve it, so Quill must not create the mark.
           link: { openOnClick: false },
+          underline: false,
         }),
         MarkdownImage,
         Table,

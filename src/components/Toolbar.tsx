@@ -116,13 +116,6 @@ export const ItalicIcon = () => (
   </svg>
 );
 
-export const UnderlineIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M6 3v7a6 6 0 0 0 12 0V3" />
-    <line x1="4" y1="21" x2="20" y2="21" />
-  </svg>
-);
-
 export const StrikeIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <line x1="4" y1="12" x2="20" y2="12" />

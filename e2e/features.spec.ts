@@ -164,13 +164,16 @@ test('italic via toolbar wraps selected text in <em>', async ({ page }) => {
   expect(await editor.innerHTML()).toContain('<em>');
 });
 
-test('underline via toolbar wraps selected text in <u>', async ({ page }) => {
+test('underline is unavailable in Markdown editing', async ({ page }) => {
   const { editor } = await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await page.locator('[title="Underline (Cmd+U)"]').click();
+  await expect(page.locator('[title="Underline (Cmd+U)"]')).toHaveCount(0);
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.press('u');
+  await page.keyboard.up('ControlOrMeta');
   await page.waitForTimeout(150);
-  expect(await editor.innerHTML()).toContain('<u>');
+  expect(await editor.innerHTML()).not.toContain('<u>');
 });
 
 test('strikethrough via toolbar wraps selected text in <s>', async ({ page }) => {

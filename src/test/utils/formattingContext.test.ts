@@ -10,7 +10,7 @@ let editor: Editor | null = null;
 function makeEditor(content: string) {
   editor = new Editor({
     extensions: [
-      StarterKit.configure({ link: { openOnClick: false } }),
+      StarterKit.configure({ link: { openOnClick: false }, underline: false }),
       TaskList,
       TaskItem.configure({ nested: true }),
       Table,
@@ -57,7 +57,6 @@ describe('formatting context', () => {
     expect(context().marks).toMatchObject({
       bold: 'mixed',
       italic: 'mixed',
-      underline: 'off',
       link: 'off',
     });
   });

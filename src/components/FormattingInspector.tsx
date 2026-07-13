@@ -3,15 +3,7 @@ import type { Editor } from '@tiptap/react';
 import { useEditorState } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { TextSelection } from '@tiptap/pm/state';
-import {
-  BoldIcon,
-  CodeIcon,
-  ItalicIcon,
-  LinkIcon,
-  StrikeIcon,
-  ToolbarButton,
-  UnderlineIcon,
-} from './Toolbar';
+import { BoldIcon, CodeIcon, ItalicIcon, LinkIcon, StrikeIcon, ToolbarButton } from './Toolbar';
 import {
   getFormattingContext,
   type FormatState,
@@ -34,16 +26,9 @@ const MARK_BUTTONS: Array<{
   mark: Exclude<InspectedMark, 'link'>;
   label: string;
   icon: React.ReactNode;
-  warning?: string;
 }> = [
   { mark: 'bold', label: 'Bold', icon: <BoldIcon /> },
   { mark: 'italic', label: 'Italic', icon: <ItalicIcon /> },
-  {
-    mark: 'underline',
-    label: 'Underline',
-    icon: <UnderlineIcon />,
-    warning: "Markdown can't preserve underline formatting",
-  },
   { mark: 'strike', label: 'Strikethrough', icon: <StrikeIcon /> },
   { mark: 'code', label: 'Inline code', icon: <CodeIcon /> },
 ];
@@ -52,7 +37,6 @@ function runMarkCommand(editor: Editor, mark: Exclude<InspectedMark, 'link'>) {
   const chain = editor.chain().focus();
   if (mark === 'bold') chain.toggleBold().run();
   if (mark === 'italic') chain.toggleItalic().run();
-  if (mark === 'underline') chain.toggleUnderline().run();
   if (mark === 'strike') chain.toggleStrike().run();
   if (mark === 'code') chain.toggleCode().run();
 }
@@ -61,7 +45,6 @@ function canRunMarkCommand(editor: Editor, mark: Exclude<InspectedMark, 'link'>)
   const chain = editor.can().chain();
   if (mark === 'bold') return chain.toggleBold().run();
   if (mark === 'italic') return chain.toggleItalic().run();
-  if (mark === 'underline') return chain.toggleUnderline().run();
   if (mark === 'strike') return chain.toggleStrike().run();
   return chain.toggleCode().run();
 }
@@ -143,14 +126,10 @@ export default function FormattingInspector({ editor }: FormattingInspectorProps
     setLinkEditor(null);
   };
 
-  const linkLabel =
-    context.link.kind === 'single'
-      ? context.link.href
-      : context.link.kind === 'multiple'
-        ? 'Multiple links'
-        : context.link.kind === 'partial'
-          ? 'Partly linked selection'
-          : '';
+  let linkLabel = '';
+  if (context.link.kind === 'single') linkLabel = context.link.href;
+  if (context.link.kind === 'multiple') linkLabel = 'Multiple links';
+  if (context.link.kind === 'partial') linkLabel = 'Partly linked selection';
   const openable = context.link.kind === 'single' && isOpenableHref(context.link.href);
   const relativeOpenTitle =
     'Relative and in-document links will become openable with document tabs';
@@ -174,17 +153,16 @@ export default function FormattingInspector({ editor }: FormattingInspectorProps
     >
       <div className="formatting-inspector-main">
         <div className="formatting-inspector-marks" aria-label="Inline formatting">
-          {MARK_BUTTONS.map(({ mark, label, icon, warning }) => (
+          {MARK_BUTTONS.map(({ mark, label, icon }) => (
             <ToolbarButton
               key={mark}
               baseClassName="formatting-inspector-btn"
               onClick={() => runMarkCommand(editor, mark)}
               disabled={!canRunMarkCommand(editor, mark)}
-              title={warning ? `${label} — ${warning}` : label}
+              title={label}
               {...stateProps(context.marks[mark])}
             >
               {icon}
-              {warning && <span className="formatting-warning-dot" aria-hidden />}
             </ToolbarButton>
           ))}
           <ToolbarButton

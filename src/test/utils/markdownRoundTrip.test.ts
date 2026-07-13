@@ -14,6 +14,7 @@ function roundTrip(md: string): string {
       StarterKit.configure({
         trailingNode: false,
         link: { openOnClick: false },
+        underline: false,
       }),
       MarkdownImage,
       Table,
