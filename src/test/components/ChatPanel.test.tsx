@@ -87,6 +87,55 @@ describe('ChatPanel', () => {
     expect(screen.getAllByRole('button', { name: 'Send chat message' }).at(-1)).toBeDisabled();
   });
 
+  it('shows a thinking indicator before text and a caret after streaming begins', () => {
+    const { container, rerender } = render(
+      <ChatPanel
+        hidden={false}
+        messages={[
+          { id: 'a-thinking', role: 'assistant', text: '', createdAt: 'now', pending: true },
+        ]}
+        trackedChanges={[]}
+        focusRevision={0}
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+        onViewSuggestions={vi.fn()}
+        busy={false}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Claude is thinking…');
+    expect(container.querySelector('.chat-thinking-dot')).toBeInTheDocument();
+    expect(container.querySelector('.chat-stream-caret')).not.toBeInTheDocument();
+
+    rerender(
+      <ChatPanel
+        hidden={false}
+        messages={[
+          {
+            id: 'a-thinking',
+            role: 'assistant',
+            text: 'Streaming now',
+            createdAt: 'now',
+            pending: true,
+          },
+        ]}
+        trackedChanges={[]}
+        focusRevision={0}
+        onSend={vi.fn()}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+        onViewSuggestions={vi.fn()}
+        busy={false}
+      />,
+    );
+
+    expect(screen.queryByText('Claude is thinking…')).not.toBeInTheDocument();
+    expect(container.querySelector('.chat-stream-caret')).toBeInTheDocument();
+  });
+
   it('exposes Stop and Retry/Dismiss terminal actions', () => {
     const onCancel = vi.fn();
     const onRetry = vi.fn();
@@ -113,5 +162,12 @@ describe('ChatPanel', () => {
     expect(onCancel).toHaveBeenCalledWith('a-stream');
     expect(onRetry).toHaveBeenCalledWith('a-error');
     expect(onDismiss).toHaveBeenCalledWith('a-error');
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass(
+      'chat-action-btn',
+      'chat-stop-btn',
+    );
+    expect(screen.getByRole('button', { name: 'Retry' })).toHaveClass('chat-action-btn');
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toHaveClass('chat-action-btn');
+    expect(screen.getByRole('button', { name: 'Stop' }).querySelector('svg')).toBeInTheDocument();
   });
 });

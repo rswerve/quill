@@ -95,11 +95,30 @@ export default function ChatPanel({
                 <span className="chat-assistant-name">Claude</span>
                 {message.model && <span className="chat-assistant-model">{message.model}</span>}
               </div>
-              {message.text && <div className="chat-assistant-text">{message.text}</div>}
+              {message.text && (
+                <div className="chat-assistant-text">
+                  {message.text}
+                  {message.pending && <span className="chat-stream-caret" aria-hidden />}
+                </div>
+              )}
               {message.pending && (
                 <div className="chat-streaming-state">
-                  <span className="chat-stream-caret" aria-hidden />
-                  <button onClick={() => onCancel(message.id)}>Stop</button>
+                  {!message.text && (
+                    <span className="chat-thinking-status" role="status" aria-live="polite">
+                      <span className="chat-thinking-dot" aria-hidden />
+                      Claude is thinking…
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="chat-action-btn chat-stop-btn"
+                    onClick={() => onCancel(message.id)}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+                      <rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" />
+                    </svg>
+                    Stop
+                  </button>
                 </div>
               )}
               {message.error && (
@@ -107,14 +126,39 @@ export default function ChatPanel({
                   <span>{message.error}</span>
                   <div className="chat-terminal-actions">
                     <button
+                      type="button"
+                      className="chat-action-btn"
                       title={
                         errorClass?.kind === 'session' ? 'Retry after changing session' : 'Retry'
                       }
                       onClick={() => onRetry(message.id)}
                     >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                        <path
+                          d="M9.7 4.1A4 4 0 1 0 9.8 8M9.7 1.8v2.5H7.2"
+                          stroke="currentColor"
+                          strokeWidth="1.25"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
                       Retry
                     </button>
-                    <button onClick={() => onDismiss(message.id)}>Dismiss</button>
+                    <button
+                      type="button"
+                      className="chat-action-btn"
+                      onClick={() => onDismiss(message.id)}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
+                        <path
+                          d="M2 2l6 6M8 2L2 8"
+                          stroke="currentColor"
+                          strokeWidth="1.25"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      Dismiss
+                    </button>
                   </div>
                 </div>
               )}
@@ -122,8 +166,37 @@ export default function ChatPanel({
                 <div className="chat-terminal-state">
                   <span>Stopped</span>
                   <div className="chat-terminal-actions">
-                    <button onClick={() => onRetry(message.id)}>Retry</button>
-                    <button onClick={() => onDismiss(message.id)}>Dismiss</button>
+                    <button
+                      type="button"
+                      className="chat-action-btn"
+                      onClick={() => onRetry(message.id)}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                        <path
+                          d="M9.7 4.1A4 4 0 1 0 9.8 8M9.7 1.8v2.5H7.2"
+                          stroke="currentColor"
+                          strokeWidth="1.25"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-action-btn"
+                      onClick={() => onDismiss(message.id)}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
+                        <path
+                          d="M2 2l6 6M8 2L2 8"
+                          stroke="currentColor"
+                          strokeWidth="1.25"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      Dismiss
+                    </button>
                   </div>
                 </div>
               )}

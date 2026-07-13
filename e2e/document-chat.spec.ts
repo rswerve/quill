@@ -192,6 +192,18 @@ test('chat identifies a skipped edit and its precise reason', async ({ page }) =
   await expect(assistant).not.toContainText('was already formatted as proposed');
 });
 
+test('chat shows a thinking indicator before the first streamed delta', async ({ page }) => {
+  await setupChatScripts(page, [[{ kind: 'pause' }]]);
+  await openChat(page);
+  await sendChat(page, 'Think about this draft');
+
+  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
+  await expect(assistant.getByRole('status')).toHaveText('Claude is thinking…');
+  await expect(assistant.locator('.chat-thinking-dot')).toBeVisible();
+  await expect(assistant.locator('.chat-stream-caret')).toHaveCount(0);
+  await expect(assistant.getByRole('button', { name: 'Stop' })).toHaveClass(/chat-stop-btn/);
+});
+
 test('Stop cancels a live turn and Retry reuses the same message', async ({ page }) => {
   await setupChatScripts(page, [
     [{ kind: 'delta', text: 'Partial response' }, { kind: 'pause' }],
@@ -201,9 +213,17 @@ test('Stop cancels a live turn and Retry reuses the same message', async ({ page
   await sendChat(page, 'Explain the draft');
   const assistant = page.locator('.chat-message-assistant').last();
   await expect(assistant).toContainText('Partial response');
-  await assistant.getByRole('button', { name: 'Stop' }).click();
+  await expect(assistant.locator('.chat-stream-caret')).toBeVisible();
+  await expect(assistant.getByRole('status')).toHaveCount(0);
+  const stop = assistant.getByRole('button', { name: 'Stop' });
+  await expect(stop).toHaveClass(/chat-action-btn/);
+  await expect(stop.locator('svg')).toBeVisible();
+  await stop.click();
   await expect(assistant).toContainText('Stopped');
-  await assistant.getByRole('button', { name: 'Retry' }).click();
+  const retry = assistant.getByRole('button', { name: 'Retry' });
+  await expect(retry).toHaveClass(/chat-action-btn/);
+  await expect(assistant.getByRole('button', { name: 'Dismiss' })).toHaveClass(/chat-action-btn/);
+  await retry.click();
   await expect(assistant).toContainText('Recovered response', { timeout: 3000 });
   await expect(page.locator('.chat-message-assistant')).toHaveCount(1);
 });
