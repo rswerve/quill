@@ -1026,6 +1026,7 @@ export default function App() {
             {
               label: 'Cancel',
               kind: 'ghost',
+              isCancel: true,
               onClick: () => setCloseGuardTabId(null),
             },
           ]}
@@ -1088,6 +1089,7 @@ export default function App() {
             {
               label: 'Cancel',
               kind: 'ghost',
+              isCancel: true,
               onClick: () => setDiscardGuard(null),
             },
           ]}
@@ -1109,9 +1111,21 @@ export default function App() {
                       await action.onClick();
                     },
                   })),
-                  { label: 'Dismiss', kind: 'ghost' as const, onClick: () => setNotice(null) },
+                  {
+                    label: 'Dismiss',
+                    kind: 'ghost' as const,
+                    isCancel: true,
+                    onClick: () => setNotice(null),
+                  },
                 ]
-              : [{ label: 'OK', kind: 'primary', onClick: () => setNotice(null) }]
+              : [
+                  {
+                    label: 'OK',
+                    kind: 'primary',
+                    isCancel: true,
+                    onClick: () => setNotice(null),
+                  },
+                ]
           }
         />
       )}

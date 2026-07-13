@@ -119,6 +119,31 @@ test('dirty tab close: Cancel keeps the tab and its document', async ({ page }) 
   await expect(activeEditor(page)).toContainText('disposable draft');
 });
 
+test('dirty tab close: modal traps focus and Escape safely cancels', async ({ page }) => {
+  const handler = () => null;
+  await setupWithIPC(page, { handler });
+
+  await typeIntoEditor(page, 'precious keyboard-only draft');
+  const closeButton = page.locator('.document-tab.active .document-tab-close');
+  await closeButton.click();
+
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
+  const saveButton = modal.getByRole('button', { name: 'Save', exact: true });
+  const cancelButton = modal.getByRole('button', { name: 'Cancel' });
+  await expect(modal).toBeVisible({ timeout: 2000 });
+  await expect(saveButton).toBeFocused();
+
+  await page.keyboard.press('Shift+Tab');
+  await expect(cancelButton).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(saveButton).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+  await expect(activeEditor(page)).toContainText('precious keyboard-only draft');
+  await expect(closeButton).toBeFocused();
+});
+
 test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async ({ page }) => {
   const handler = () => null;
   await setupWithIPC(page, { handler });
