@@ -1,5 +1,5 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import type { Comment } from '../types';
+import type { Comment, TrackedChangeInfo } from '../types';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import { rangeText } from './trackedEdits';
 
@@ -10,6 +10,11 @@ export interface CapturedCommentAnchor {
   from: number;
   to: number;
   anchorText: string;
+}
+
+export interface AcceptedCommentResolution {
+  captured: CapturedCommentAnchor[];
+  provenanceCommentIds: string[];
 }
 
 interface Range {
@@ -75,6 +80,53 @@ export function captureCommentsConsumedByTrackedRemoval(
     captured.push({ ...live, id, anchorText: rangeText(doc, live.from, live.to) });
   }
   return captured;
+}
+
+function matchesAcceptedTarget(change: TrackedChangeInfo, targetId?: string): boolean {
+  if (change.status !== 'pending') return false;
+  if (!targetId || change.id === targetId) return true;
+  return change.operation !== 'format' && change.pairId === targetId;
+}
+
+function acceptedOriginCommentIds(changes: TrackedChangeInfo[], targetId?: string): string[] {
+  const ids = new Set<string>();
+  for (const change of changes) {
+    if (!matchesAcceptedTarget(change, targetId) || !change.originCommentId) continue;
+    ids.add(change.originCommentId);
+  }
+  return [...ids];
+}
+
+function captureLiveCommentAnchors(
+  doc: ProseMirrorNode,
+  commentIds: string[],
+): CapturedCommentAnchor[] {
+  const captured: CapturedCommentAnchor[] = [];
+  for (const id of commentIds) {
+    const live = findAnnotationRange(doc, 'comment', id);
+    if (!live) continue;
+    captured.push({ ...live, id, anchorText: rangeText(doc, live.from, live.to) });
+  }
+  return captured;
+}
+
+/**
+ * Capture the union of comments protected by Accept: comments whose live text
+ * will be deleted, plus origin comments whose own linked suggestion is being
+ * accepted. A replacement pair resolves one origin even though both halves
+ * carry the same pairId and provenance.
+ */
+export function captureCommentsResolvedByAccept(
+  doc: ProseMirrorNode,
+  changes: TrackedChangeInfo[],
+  targetId?: string,
+): AcceptedCommentResolution {
+  const geometry = captureCommentsConsumedByTrackedRemoval(doc, 'tracked_delete', targetId);
+  const provenanceCommentIds = acceptedOriginCommentIds(changes, targetId);
+  const provenance = captureLiveCommentAnchors(doc, provenanceCommentIds);
+  const byId = new Map<string, CapturedCommentAnchor>();
+  for (const anchor of [...geometry, ...provenance]) byId.set(anchor.id, anchor);
+  return { captured: [...byId.values()], provenanceCommentIds };
 }
 
 /** Queue-safe state transform using snapshots captured before the text removal. */

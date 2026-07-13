@@ -363,13 +363,16 @@ test.describe('live comment reconciliation', () => {
 });
 
 test.describe('comment lifecycle when suggestions resolve', () => {
-  async function expectOnlyResolvedComment(page: import('@playwright/test').Page) {
+  async function expectOnlyResolvedComment(
+    page: import('@playwright/test').Page,
+    anchorText = '"hello"',
+  ) {
     await expect(page.locator('.comment-card')).toHaveCount(0);
     await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
     await expect(page.locator('.comments-head .filter')).toBeEnabled();
     await page.locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+    await expect(page.locator('.comment-anchor-text')).toHaveText(anchorText);
   }
 
   async function openWithCommentedInsertion(page: import('@playwright/test').Page) {
@@ -423,7 +426,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await expectOnlyResolvedComment(page);
   });
 
-  test('accepting a partial-overlap replacement keeps the comment live on surviving text', async ({
+  test('accepting a partial-overlap linked replacement resolves its origin comment', async ({
     page,
   }) => {
     await openWithCommentedClaudeReplacement(page, 'ell', 'ipp');
@@ -431,21 +434,65 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
 
     await expect(page.locator('.ProseMirror')).toContainText('hippo world');
-    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hippo');
-    await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hippo"');
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
+    await expectOnlyResolvedComment(page, '"hippello"');
   });
 
-  test('accepting a non-overlap replacement leaves the comment untouched', async ({ page }) => {
+  test('accepting a non-overlap linked replacement resolves its origin by pairId', async ({
+    page,
+  }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');
 
     await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
 
     await expect(page.locator('.ProseMirror')).toContainText('hello planet');
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
+    await expectOnlyResolvedComment(page);
+  });
+
+  test('accepting an unrelated deletion that consumes the anchor still resolves by geometry', async ({
+    page,
+  }) => {
+    await setupMemoryTauri(page, {
+      openPath: DOC_PATH,
+      files: {
+        [DOC_PATH]: 'hello world',
+        [SIDECAR_PATH]: sidecar({
+          comments: [CLAUDE_COMMENT],
+          suggestions: [
+            {
+              id: 'unlinked-delete',
+              type: 'deletion',
+              from: 1,
+              to: 6,
+              originalText: 'hello',
+              suggestedText: '',
+              author: 'Reviewer',
+              createdAt: '2026-07-11T18:00:00Z',
+              status: 'pending',
+            },
+          ],
+        }),
+      },
+    });
+    await openMemoryFile(page);
+
+    await page.locator('.suggestion-accept-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expectOnlyResolvedComment(page);
+  });
+
+  test('rejecting a non-overlap linked replacement leaves its origin comment open', async ({
+    page,
+  }) => {
+    await openWithCommentedClaudeReplacement(page, 'world', 'planet');
+
+    await page.locator('.suggestion-card-replace .suggestion-reject-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('hello world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
     await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
     await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
   });
 
@@ -469,6 +516,61 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await expect(page.locator('.ProseMirror')).toContainText('world');
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
+  });
+
+  test('Accept All resolves every comment whose linked suggestion was accepted', async ({
+    page,
+  }) => {
+    const secondComment = {
+      ...CLAUDE_COMMENT,
+      id: 'second-comment',
+      anchorText: 'world',
+      from: 7,
+      to: 12,
+    };
+    await setupMemoryTauri(page, {
+      openPath: DOC_PATH,
+      files: {
+        [DOC_PATH]: 'hello world',
+        [SIDECAR_PATH]: sidecar({
+          comments: [CLAUDE_COMMENT, secondComment],
+          suggestions: [
+            {
+              id: 'first-linked-insert',
+              type: 'insertion',
+              from: 1,
+              to: 6,
+              originalText: '',
+              suggestedText: 'hello',
+              author: 'claude',
+              createdAt: '2026-07-11T18:00:00Z',
+              status: 'pending',
+              originCommentId: 'live-comment',
+            },
+            {
+              id: 'second-linked-insert',
+              type: 'insertion',
+              from: 7,
+              to: 12,
+              originalText: '',
+              suggestedText: 'world',
+              author: 'claude',
+              createdAt: '2026-07-11T18:00:00Z',
+              status: 'pending',
+              originCommentId: 'second-comment',
+            },
+          ],
+        }),
+      },
+    });
+    await openMemoryFile(page);
+
+    await page.locator('[title="Accept all suggestions"]').click();
+
+    await expect(page.locator('mark[data-comment-id]')).toHaveCount(0);
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
+    await page.locator('.comments-head .filter').click();
+    await expect(page.locator('.comment-card-resolved')).toHaveCount(2);
   });
 });
 

@@ -32,6 +32,7 @@ import { reconcileCommentsWithDocument } from './utils/commentReconciler';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
+  captureCommentsResolvedByAccept,
 } from './utils/trackedCommentResolution';
 import { basename, dirname } from './utils/path';
 import {
@@ -1106,9 +1107,34 @@ export default function App() {
     [editor, setComments],
   );
 
+  const prepareCommentsForAccept = useCallback(
+    (targetId?: string) => {
+      if (!editor) return;
+      // Capture both protective geometry and accepted-suggestion provenance
+      // before either the comment marks or tracked marks are removed.
+      const { captured, provenanceCommentIds } = captureCommentsResolvedByAccept(
+        editor.state.doc,
+        getTrackedChanges(editor),
+        targetId,
+      );
+      if (captured.length > 0) {
+        // Queue resolved state first so each mark-removal update reconciles
+        // against resolved records rather than dropping them mid-accept.
+        setComments((current) => autoResolveCapturedComments(current, captured));
+      }
+      for (const commentId of provenanceCommentIds) {
+        // A provenance-resolved comment may not overlap the accepted edit, so
+        // mirror manual Resolve by stripping its still-live highlight.
+        editor.commands.unsetComment(commentId);
+        clearActiveIf('comment', commentId);
+      }
+    },
+    [editor, setComments, clearActiveIf],
+  );
+
   function handleAcceptAll() {
     if (!editor) return;
-    queueAutoResolveForTrackedRemoval('tracked_delete');
+    prepareCommentsForAccept();
     editor.commands.acceptAllChanges();
   }
 
@@ -1120,11 +1146,11 @@ export default function App() {
 
   const handleAcceptChange = useCallback(
     (id: string) => {
-      queueAutoResolveForTrackedRemoval('tracked_delete', id);
+      prepareCommentsForAccept(id);
       editor?.commands.acceptChange(id);
       clearActiveIf('suggestion', id);
     },
-    [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
+    [editor, clearActiveIf, prepareCommentsForAccept],
   );
 
   const handleRejectChange = useCallback(

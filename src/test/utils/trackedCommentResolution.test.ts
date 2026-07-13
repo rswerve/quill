@@ -13,6 +13,7 @@ import type { Comment } from '../../types';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
+  captureCommentsResolvedByAccept,
 } from '../../utils/trackedCommentResolution';
 
 const COMMENT: Comment = {
@@ -91,6 +92,21 @@ describe('tracked comment resolution', () => {
     expect(
       captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
     ).toEqual([]);
+  });
+
+  it('captures an accepted replacement origin by pairId even without geometric overlap', () => {
+    editor = makeEditor();
+    applyReplacement(editor, 7, 12, 'planet');
+    const changes = getTrackedChanges(editor);
+    const pairId = replacementPairId(editor);
+
+    expect(
+      captureCommentsConsumedByTrackedRemoval(editor.state.doc, 'tracked_delete', pairId),
+    ).toEqual([]);
+    expect(captureCommentsResolvedByAccept(editor.state.doc, changes, pairId)).toEqual({
+      captured: [{ id: COMMENT.id, from: 1, to: 6, anchorText: 'hello' }],
+      provenanceCommentIds: [COMMENT.id],
+    });
   });
 
   it('captures a comment on an insertion that rejection will remove', () => {

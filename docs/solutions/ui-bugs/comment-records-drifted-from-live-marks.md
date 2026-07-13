@@ -61,6 +61,15 @@ preserves review history when a suggestion transforms the anchor while keeping a
 manual full-text deletion's drop behavior distinct. Single and All actions share
 the same rule; provenance ids are not used for geometry.
 
+Accept has an additional provenance rule: every pending accepted change with an
+`originCommentId` resolves that origin comment even when the edit only partially
+overlaps the anchor or lands elsewhere in the document. Replacement halves are
+matched by id or shared `pairId` and deduplicated by comment id. The origin's live
+range and quote are captured before mutation, its state is queued as resolved,
+and its surviving mark is stripped to mirror manual Resolve. Reject deliberately
+does not use provenance—the requested fix was discarded, so its origin stays
+open unless protective removal geometry independently consumes its anchor.
+
 The state update is functional (`setComments(current => ...)`). That preserves
 the ordering of resolve and add flows under React batching: resolve queues
 `resolved: true` before the mark-removal transaction triggers reconciliation,
@@ -76,6 +85,10 @@ while add queues the new record before applying its mark.
   survive mark-less reconciliation.
 - Accept and Accept All auto-resolve comments fully consumed by tracked deletions;
   Reject does the same for comments on tracked insertions.
+- Accept and Accept All resolve every accepted change's origin comment, including
+  non-overlapping replacement pairs, and strip surviving origin highlights.
+- Rejecting an origin-linked edit without destructive anchor overlap leaves the
+  origin open.
 - Partial and non-overlapping suggestion resolutions leave comments live, while
   raw full-anchor deletion still drops them.
 - Unit tests pin projection behavior and identity preservation when nothing
