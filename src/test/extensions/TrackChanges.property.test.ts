@@ -10,6 +10,7 @@ import {
   TrackedFormat,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
+import { projectTrackedDocument } from '../../extensions/trackChangesProjection';
 
 const INITIAL_DOCUMENT = '<p><strong>alpha</strong> beta gamma</p>';
 const PLAIN_DOCUMENT = '<p>alpha beta gamma</p>';
@@ -41,12 +42,22 @@ type RunFailure = { step: number; reason: string };
 
 const mountedEditors: Editor[] = [];
 
-function makeEditor(suggesting: boolean, content = INITIAL_DOCUMENT): Editor {
+function makeEditor(
+  suggesting: boolean,
+  content = INITIAL_DOCUMENT,
+  transformEngine: 'modular' | 'legacy' = 'modular',
+): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
   const editor = new Editor({
     element,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
+    extensions: [
+      StarterKit,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges.configure({ transformEngine }),
+    ],
     content,
   });
   editor.commands.setTrackChangesEnabled(suggesting);
@@ -91,7 +102,12 @@ function projectAcceptedNode(node: JSONContent): JSONContent | null {
 }
 
 function acceptedProjection(editor: Editor): JSONContent {
-  return projectAcceptedNode(editor.getJSON())!;
+  const legacy = projectAcceptedNode(editor.getJSON())!;
+  const projected = projectTrackedDocument(editor.state.doc);
+  const accepted = projected.accepted.toJSON();
+  expect(accepted).toEqual(legacy);
+  expect(projected.review).toBe(editor.state.doc);
+  return accepted;
 }
 
 function trackMarks(editor: Editor): string[] {
@@ -220,6 +236,8 @@ function runTrace(trace: FuzzOperation[], content = INITIAL_DOCUMENT): RunFailur
   const normal = makeEditor(false, content);
   const accepted = makeEditor(true, content);
   const rejected = makeEditor(true, content);
+  const legacyAccepted = makeEditor(true, content, 'legacy');
+  const legacyRejected = makeEditor(true, content, 'legacy');
   const original = normal.getJSON();
   const concreteTrace: ConcreteOperation[] = [];
   try {
@@ -231,6 +249,8 @@ function runTrace(trace: FuzzOperation[], content = INITIAL_DOCUMENT): RunFailur
       applyConcrete(normal, concrete);
       applyConcrete(accepted, concrete);
       applyConcrete(rejected, concrete);
+      applyConcrete(legacyAccepted, concrete);
+      applyConcrete(legacyRejected, concrete);
       const projectionFailure = describeDifference(normal.getJSON(), acceptedProjection(accepted));
       if (projectionFailure) {
         return {
@@ -245,20 +265,43 @@ function runTrace(trace: FuzzOperation[], content = INITIAL_DOCUMENT): RunFailur
       if (rejectProjectionFailure) {
         return { step, reason: `reject clone projection diverged: ${rejectProjectionFailure}` };
       }
+      const legacyProjectionFailure = describeDifference(
+        acceptedProjection(legacyAccepted),
+        acceptedProjection(accepted),
+      );
+      if (legacyProjectionFailure) {
+        return { step, reason: `modular/legacy projection diverged: ${legacyProjectionFailure}` };
+      }
     }
 
     accepted.commands.acceptAllChanges();
+    legacyAccepted.commands.acceptAllChanges();
     const acceptFailure = describeDifference(normal.getJSON(), accepted.getJSON());
     if (acceptFailure) return { step: trace.length, reason: `INV2 failed: ${acceptFailure}` };
     if (trackMarks(accepted).length > 0 || getTrackedChanges(accepted).length > 0) {
       return { step: trace.length, reason: 'INV3 failed after accept-all' };
     }
+    const legacyAcceptFailure = describeDifference(legacyAccepted.getJSON(), accepted.getJSON());
+    if (legacyAcceptFailure) {
+      return {
+        step: trace.length,
+        reason: `modular/legacy accept diverged: ${legacyAcceptFailure}`,
+      };
+    }
 
     rejected.commands.rejectAllChanges();
+    legacyRejected.commands.rejectAllChanges();
     const rejectFailure = describeDifference(original, rejected.getJSON());
     if (rejectFailure) return { step: trace.length, reason: `INV1 failed: ${rejectFailure}` };
     if (trackMarks(rejected).length > 0 || getTrackedChanges(rejected).length > 0) {
       return { step: trace.length, reason: 'INV3 failed after reject-all' };
+    }
+    const legacyRejectFailure = describeDifference(legacyRejected.getJSON(), rejected.getJSON());
+    if (legacyRejectFailure) {
+      return {
+        step: trace.length,
+        reason: `modular/legacy reject diverged: ${legacyRejectFailure}`,
+      };
     }
     return null;
   } finally {
@@ -500,24 +543,29 @@ describe('TrackChanges property invariants', () => {
   it('groups rapid tracked backspaces into the same single undo as Editing mode', () => {
     const normal = makeEditor(false, '<p>bravo</p>');
     const suggesting = makeEditor(true, '<p>bravo</p>');
-    for (const editor of [normal, suggesting]) editor.commands.setTextSelection(6);
+    const legacy = makeEditor(true, '<p>bravo</p>', 'legacy');
+    for (const editor of [normal, suggesting, legacy]) editor.commands.setTextSelection(6);
 
     for (let index = 0; index < 5; index += 1) {
-      for (const editor of [normal, suggesting]) {
+      for (const editor of [normal, suggesting, legacy]) {
         const at = editor.state.selection.from;
         editor.view.dispatch(editor.state.tr.delete(at - 1, at));
       }
     }
     normal.commands.undo();
     suggesting.commands.undo();
+    legacy.commands.undo();
 
     expect(normal.state.doc.textContent).toBe('bravo');
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
+    expect(acceptedProjection(legacy)).toEqual(normal.getJSON());
 
     normal.commands.redo();
     suggesting.commands.redo();
+    legacy.commands.redo();
     expect(normal.state.doc.textContent).toBe('');
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
+    expect(acceptedProjection(legacy)).toEqual(normal.getJSON());
   });
 
   it("blocks deletion of another author's pending insertion", () => {

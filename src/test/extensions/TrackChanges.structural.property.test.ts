@@ -11,6 +11,7 @@ import {
   TrackedFormat,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
+import { projectTrackedDocument } from '../../extensions/trackChangesProjection';
 
 const INITIAL = '<p>alpha beta</p><p>gamma delta</p><p>omega</p>';
 const TRACK_MARKS = new Set(['tracked_insert', 'tracked_delete', 'tracked_format']);
@@ -35,12 +36,21 @@ type ConcreteStructuralOperation =
   | { kind: 'undo' }
   | { kind: 'redo' };
 
-function makeEditor(suggesting: boolean): Editor {
+function makeEditor(
+  suggesting: boolean,
+  transformEngine: 'modular' | 'legacy' = 'modular',
+): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
   const editor = new Editor({
     element,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
+    extensions: [
+      StarterKit,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges.configure({ transformEngine }),
+    ],
     content: INITIAL,
   });
   editor.commands.setTrackChangesEnabled(suggesting);
@@ -75,7 +85,10 @@ function projectAcceptedNode(node: JSONContent): JSONContent | null {
 }
 
 function acceptedProjection(editor: Editor): JSONContent {
-  return projectAcceptedNode(editor.getJSON())!;
+  const legacy = projectAcceptedNode(editor.getJSON())!;
+  const accepted = projectTrackedDocument(editor.state.doc).accepted.toJSON();
+  expect(accepted).toEqual(legacy);
+  return accepted;
 }
 
 function contentTextLength(node: JSONContent): number {
@@ -207,33 +220,47 @@ function sameDocument(a: JSONContent, b: JSONContent): boolean {
 
 function runTrace(trace: StructuralOperation[]): string | null {
   const suggesting = makeEditor(true);
+  const legacy = makeEditor(true, 'legacy');
   const original = suggesting.getJSON();
-  const blockedOperations: string[] = [];
-  suggesting.on('transaction', ({ transaction }) => {
-    const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as
-      | { operation?: string }
-      | undefined;
-    if (blocked?.operation) blockedOperations.push(blocked.operation);
-  });
+  const blockedByEditor = new Map<Editor, string[]>([
+    [suggesting, []],
+    [legacy, []],
+  ]);
+  for (const editor of [suggesting, legacy]) {
+    editor.on('transaction', ({ transaction }) => {
+      const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as
+        | { operation?: string }
+        | undefined;
+      if (blocked?.operation) blockedByEditor.get(editor)?.push(blocked.operation);
+    });
+  }
   try {
     for (const [index, operation] of trace.entries()) {
       const lengths = blockLengths(suggesting);
       const concrete = concretize(operation, lengths);
       if (!concrete) continue;
-      const blockedBefore = blockedOperations.length;
-      applyOperation(suggesting, concrete);
-      if (!sameDocument(suggesting.getJSON(), original)) {
-        return `step ${index} mutated the document; operation=${JSON.stringify(concrete)}`;
-      }
-      if (
-        concrete.kind !== 'undo' &&
-        concrete.kind !== 'redo' &&
-        blockedOperations.length === blockedBefore
-      ) {
-        return `step ${index} was dropped without a block notice; operation=${JSON.stringify(concrete)}`;
+      for (const [engine, editor] of [
+        ['modular', suggesting],
+        ['legacy', legacy],
+      ] as const) {
+        const blockedOperations = blockedByEditor.get(editor)!;
+        const blockedBefore = blockedOperations.length;
+        applyOperation(editor, concrete);
+        if (!sameDocument(editor.getJSON(), original)) {
+          return `${engine} step ${index} mutated the document; operation=${JSON.stringify(concrete)}`;
+        }
+        if (
+          concrete.kind !== 'undo' &&
+          concrete.kind !== 'redo' &&
+          blockedOperations.length === blockedBefore
+        ) {
+          return `${engine} step ${index} was dropped without a block notice; operation=${JSON.stringify(concrete)}`;
+        }
       }
     }
-    if (getTrackedChanges(suggesting).length > 0) return 'blocked trace left tracked marks';
+    if (getTrackedChanges(suggesting).length > 0 || getTrackedChanges(legacy).length > 0) {
+      return 'blocked trace left tracked marks';
+    }
     return null;
   } finally {
     destroyEditors();
@@ -336,14 +363,18 @@ describe('TrackChanges structural property invariants', () => {
   it('rejects a hard break back to the original paragraph', () => {
     const normal = makeEditor(false);
     const suggesting = makeEditor(true);
+    const legacy = makeEditor(true, 'legacy');
     const original = suggesting.getJSON();
-    for (const editor of [normal, suggesting]) {
+    for (const editor of [normal, suggesting, legacy]) {
       editor.commands.setTextSelection(6);
       editor.commands.setHardBreak();
     }
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
+    expect(acceptedProjection(legacy)).toEqual(normal.getJSON());
     suggesting.commands.rejectAllChanges();
+    legacy.commands.rejectAllChanges();
     expect(suggesting.getJSON()).toEqual(original);
+    expect(legacy.getJSON()).toEqual(original);
   });
 
   it('blocks a heading conversion with no document mutation', () => {
