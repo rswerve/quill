@@ -102,6 +102,7 @@ export default function Topbar({
           >
             <span aria-hidden>×</span>
             <span>Reject all</span>
+            <span className="review-count">{pendingSuggestionCount}</span>
           </button>
           <span className="vsep review-vsep" />
         </>

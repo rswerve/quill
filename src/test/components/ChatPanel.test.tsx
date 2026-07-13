@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ChatPanel from '../../components/ChatPanel';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, TrackedChangeInfo } from '../../types';
 
 const messages: ChatMessage[] = [
   { id: 'u1', role: 'user', text: 'Tighten the opening', createdAt: 'now' },
@@ -15,10 +15,36 @@ const messages: ChatMessage[] = [
   },
 ];
 
+const trackedChanges: TrackedChangeInfo[] = [
+  {
+    id: 's1',
+    pairId: 'replacement',
+    operation: 'delete',
+    from: 1,
+    to: 2,
+    text: 'old',
+    authorID: 'claude',
+    status: 'pending',
+    createdAt: 1,
+  },
+  {
+    id: 's2',
+    pairId: 'replacement',
+    operation: 'insert',
+    from: 1,
+    to: 2,
+    text: 'new',
+    authorID: 'claude',
+    status: 'pending',
+    createdAt: 1,
+  },
+];
+
 function renderPanel(overrides: Partial<React.ComponentProps<typeof ChatPanel>> = {}) {
   const props: React.ComponentProps<typeof ChatPanel> = {
     hidden: false,
     messages,
+    trackedChanges,
     focusRevision: 0,
     onSend: vi.fn(),
     onCancel: vi.fn(),
@@ -39,7 +65,7 @@ describe('ChatPanel', () => {
     expect(screen.getByText('AI')).toBeInTheDocument();
     expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /2 suggestions in the doc/ }));
+    fireEvent.click(screen.getByRole('button', { name: /1 suggestion in the doc/ }));
     expect(props.onViewSuggestions).toHaveBeenCalledWith(['s1', 's2']);
   });
 

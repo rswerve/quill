@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, TrackedChangeInfo } from '../types';
 import { classifyReplyError } from '../hooks/useClaudeReply';
+import { countLinkedSuggestionCards } from '../utils/suggestionCards';
 
 interface ChatPanelProps {
   hidden: boolean;
   messages: ChatMessage[];
+  trackedChanges: TrackedChangeInfo[];
   focusRevision: number;
   onSend: (text: string) => void;
   onCancel: (assistantMessageId: string) => void;
@@ -16,6 +18,7 @@ interface ChatPanelProps {
 export default function ChatPanel({
   hidden,
   messages,
+  trackedChanges,
   focusRevision,
   onSend,
   onCancel,
@@ -75,6 +78,9 @@ export default function ChatPanel({
             );
           }
           const errorClass = message.error ? classifyReplyError(message.error) : null;
+          const suggestionCount = message.suggestionIds
+            ? countLinkedSuggestionCards(trackedChanges, message.suggestionIds)
+            : 0;
           return (
             <div
               className="chat-message chat-message-assistant"
@@ -119,13 +125,13 @@ export default function ChatPanel({
                   </div>
                 </div>
               )}
-              {message.suggestionIds && message.suggestionIds.length > 0 && (
+              {message.suggestionIds && suggestionCount > 0 && (
                 <button
                   className="chat-suggestion-chip"
                   onClick={() => onViewSuggestions(message.suggestionIds!)}
                 >
-                  → {message.suggestionIds.length}{' '}
-                  {message.suggestionIds.length === 1 ? 'suggestion' : 'suggestions'} in the doc
+                  → {suggestionCount} {suggestionCount === 1 ? 'suggestion' : 'suggestions'} in the
+                  doc
                 </button>
               )}
             </div>

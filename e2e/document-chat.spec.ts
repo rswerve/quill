@@ -102,6 +102,10 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   await expect(assistant.locator('.chat-assistant-model')).toHaveText('claude-sonnet');
   const jump = assistant.locator('.chat-suggestion-chip');
   await expect(jump).toBeVisible();
+  await expect(jump).toHaveText(/→ 1 suggestion in the doc/);
+  await expect(activeTabHost(page).locator('.panel-tab-count')).toHaveText('1');
+  await expect(page.locator('[title="Accept all suggestions"] .review-count')).toHaveText('1');
+  await expect(page.locator('[title="Reject all suggestions"] .review-count')).toHaveText('1');
   await jump.click();
 
   const suggestion = activeTabHost(page).locator('.suggestion-card-replace');

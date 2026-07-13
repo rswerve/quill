@@ -21,6 +21,7 @@ import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
 import { restoreReviewMarks, suggestionsFromTrackedChanges } from '../utils/reviewPersistence';
+import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
 import {
@@ -1296,9 +1297,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     markDirty();
   }, [markDirty]);
 
-  const pendingSuggestionCount = trackedChanges.filter(
-    (change) => change.status === 'pending',
-  ).length;
+  const pendingSuggestionCount = countLogicalSuggestionCards(
+    trackedChanges.filter((change) => change.status === 'pending'),
+  );
   const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
   const resolvedCommentCount = comments.length - unresolvedCommentCount;
 
@@ -1519,6 +1520,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           <ChatPanel
             hidden={panelMode !== 'chat'}
             messages={documentChat.messages}
+            trackedChanges={trackedChanges}
             focusRevision={chatFocusRevision}
             onSend={handleChatSend}
             onCancel={(messageId) => void documentChat.cancel(messageId)}

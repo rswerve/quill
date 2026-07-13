@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Editor } from '@tiptap/react';
-import type { Comment, TrackedChangeInfo, TrackedFormatChange, TrackedTextChange } from '../types';
+import type { Comment, TrackedChangeInfo } from '../types';
 import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
 import FormattingCard from './FormattingCard';
 import CommentComposerCard from './CommentComposerCard';
 import type { SelectionInfo } from './Editor';
+import { groupSuggestionCards } from '../utils/suggestionCards';
 import {
   layoutAnchoredCards,
   type AnchoredCardInput,
@@ -81,44 +82,6 @@ export function sortCommentsInDocumentOrder(comments: Comment[]): Comment[] {
   return [...comments].sort(
     (a, b) => a.from - b.from || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
-}
-
-// One margin card's worth of pending change(s): a lone insert or delete, or
-// the two halves of a replacement, presented and resolved together. The
-// replacement card is keyed and positioned by the shared pairId.
-type SuggestionGroup =
-  | { kind: 'single'; cardId: string; change: TrackedTextChange }
-  | { kind: 'replacement'; cardId: string; del: TrackedTextChange; ins: TrackedTextChange }
-  | { kind: 'format'; cardId: string; change: TrackedFormatChange };
-
-function groupChanges(changes: TrackedChangeInfo[]): SuggestionGroup[] {
-  const groups: SuggestionGroup[] = [];
-  const byPair = new Map<string, TrackedTextChange[]>();
-  for (const c of changes) {
-    if (c.operation === 'format') {
-      groups.push({ kind: 'format', cardId: c.id, change: c });
-      continue;
-    }
-    if (c.pairId) {
-      const list = byPair.get(c.pairId) ?? [];
-      list.push(c);
-      byPair.set(c.pairId, list);
-    } else {
-      groups.push({ kind: 'single', cardId: c.id, change: c });
-    }
-  }
-  for (const members of byPair.values()) {
-    const del = members.find((c) => c.operation === 'delete');
-    const ins = members.find((c) => c.operation === 'insert');
-    // One card only when both halves are present: a dangling pairId (its other
-    // half never got a mark, or was already resolved) renders alone.
-    if (del && ins && members.length === 2) {
-      groups.push({ kind: 'replacement', cardId: del.pairId!, del, ins });
-    } else {
-      for (const c of members) groups.push({ kind: 'single', cardId: c.id, change: c });
-    }
-  }
-  return groups;
 }
 
 // Top of an annotation's in-text highlight, in scroll-area coordinates. Comments
@@ -204,7 +167,9 @@ export default function CommentLayer({
   const visibleComments = comments.filter((c) => !c.resolved);
   const historyComments = sortCommentsInDocumentOrder(comments);
 
-  const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
+  const suggestionGroups = groupSuggestionCards(
+    trackedChanges.filter((change) => change.status === 'pending'),
+  );
   const pendingSuggestionIds = new Set(
     trackedChanges.filter((change) => change.status === 'pending').map((change) => change.id),
   );
