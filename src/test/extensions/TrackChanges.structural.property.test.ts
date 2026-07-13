@@ -36,21 +36,12 @@ type ConcreteStructuralOperation =
   | { kind: 'undo' }
   | { kind: 'redo' };
 
-function makeEditor(
-  suggesting: boolean,
-  transformEngine: 'modular' | 'legacy' = 'modular',
-): Editor {
+function makeEditor(suggesting: boolean): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
   const editor = new Editor({
     element,
-    extensions: [
-      StarterKit,
-      TrackedInsert,
-      TrackedDelete,
-      TrackedFormat,
-      TrackChanges.configure({ transformEngine }),
-    ],
+    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
     content: INITIAL,
   });
   editor.commands.setTrackChangesEnabled(suggesting);
@@ -220,45 +211,33 @@ function sameDocument(a: JSONContent, b: JSONContent): boolean {
 
 function runTrace(trace: StructuralOperation[]): string | null {
   const suggesting = makeEditor(true);
-  const legacy = makeEditor(true, 'legacy');
   const original = suggesting.getJSON();
-  const blockedByEditor = new Map<Editor, string[]>([
-    [suggesting, []],
-    [legacy, []],
-  ]);
-  for (const editor of [suggesting, legacy]) {
-    editor.on('transaction', ({ transaction }) => {
-      const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as
-        | { operation?: string }
-        | undefined;
-      if (blocked?.operation) blockedByEditor.get(editor)?.push(blocked.operation);
-    });
-  }
+  const blockedOperations: string[] = [];
+  suggesting.on('transaction', ({ transaction }) => {
+    const blocked = transaction.getMeta(TRACKING_BLOCKED_META) as
+      | { operation?: string }
+      | undefined;
+    if (blocked?.operation) blockedOperations.push(blocked.operation);
+  });
   try {
     for (const [index, operation] of trace.entries()) {
       const lengths = blockLengths(suggesting);
       const concrete = concretize(operation, lengths);
       if (!concrete) continue;
-      for (const [engine, editor] of [
-        ['modular', suggesting],
-        ['legacy', legacy],
-      ] as const) {
-        const blockedOperations = blockedByEditor.get(editor)!;
-        const blockedBefore = blockedOperations.length;
-        applyOperation(editor, concrete);
-        if (!sameDocument(editor.getJSON(), original)) {
-          return `${engine} step ${index} mutated the document; operation=${JSON.stringify(concrete)}`;
-        }
-        if (
-          concrete.kind !== 'undo' &&
-          concrete.kind !== 'redo' &&
-          blockedOperations.length === blockedBefore
-        ) {
-          return `${engine} step ${index} was dropped without a block notice; operation=${JSON.stringify(concrete)}`;
-        }
+      const blockedBefore = blockedOperations.length;
+      applyOperation(suggesting, concrete);
+      if (!sameDocument(suggesting.getJSON(), original)) {
+        return `step ${index} mutated the document; operation=${JSON.stringify(concrete)}`;
+      }
+      if (
+        concrete.kind !== 'undo' &&
+        concrete.kind !== 'redo' &&
+        blockedOperations.length === blockedBefore
+      ) {
+        return `step ${index} was dropped without a block notice; operation=${JSON.stringify(concrete)}`;
       }
     }
-    if (getTrackedChanges(suggesting).length > 0 || getTrackedChanges(legacy).length > 0) {
+    if (getTrackedChanges(suggesting).length > 0) {
       return 'blocked trace left tracked marks';
     }
     return null;
@@ -363,18 +342,14 @@ describe('TrackChanges structural property invariants', () => {
   it('rejects a hard break back to the original paragraph', () => {
     const normal = makeEditor(false);
     const suggesting = makeEditor(true);
-    const legacy = makeEditor(true, 'legacy');
     const original = suggesting.getJSON();
-    for (const editor of [normal, suggesting, legacy]) {
+    for (const editor of [normal, suggesting]) {
       editor.commands.setTextSelection(6);
       editor.commands.setHardBreak();
     }
     expect(acceptedProjection(suggesting)).toEqual(normal.getJSON());
-    expect(acceptedProjection(legacy)).toEqual(normal.getJSON());
     suggesting.commands.rejectAllChanges();
-    legacy.commands.rejectAllChanges();
     expect(suggesting.getJSON()).toEqual(original);
-    expect(legacy.getJSON()).toEqual(original);
   });
 
   it('blocks a heading conversion with no document mutation', () => {

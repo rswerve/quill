@@ -8,6 +8,7 @@ import {
   sanitizeContextFolder,
   sanitizeDocumentChat,
 } from '../utils/annotationValidation';
+import { normalizePersistedSuggestions } from '../utils/reviewPersistence';
 
 const AUTOSAVE_INTERVAL_MS = 5000;
 
@@ -55,7 +56,7 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     filePath: d.filePath,
     content: d.content,
     comments: sanitizeComments(d.comments),
-    suggestions: sanitizeSuggestions(d.suggestions),
+    suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
     ...(chat ? { chat } : {}),

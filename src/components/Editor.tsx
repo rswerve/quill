@@ -11,6 +11,7 @@ import { CommentMark } from '../extensions/Comment';
 import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
 import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
+import { ReviewableCode } from '../extensions/ReviewableCode';
 import {
   TrackedInsert,
   TrackedDelete,
@@ -95,8 +96,10 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           // here rather than registering a duplicate, and disable Underline:
           // Markdown cannot preserve it, so Quill must not create the mark.
           link: { openOnClick: false },
+          code: false,
           underline: false,
         }),
+        ReviewableCode,
         MarkdownImage,
         Table,
         TableRow,

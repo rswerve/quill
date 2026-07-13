@@ -6,11 +6,8 @@ import type { Suggestion } from '../../types';
 function makeSuggestion(id: string, status: Suggestion['status'] = 'pending'): Suggestion {
   return {
     id,
-    type: 'insertion',
-    from: 0,
-    to: 5,
-    originalText: '',
-    suggestedText: 'hello',
+    type: 'change',
+    segments: [{ kind: 'insert', from: 0, to: 5, text: 'hello' }],
     author: 'Alice',
     createdAt: new Date().toISOString(),
     status,

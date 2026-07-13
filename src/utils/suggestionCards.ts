@@ -1,11 +1,4 @@
-import type {
-  LegacyTrackedChangeInfo,
-  LegacyTrackedFormatChange,
-  LegacyTrackedTextChange,
-  TrackedChangeInfo,
-  TrackedFormatSegment,
-  TrackedTextSegment,
-} from '../types';
+import type { TrackedChangeInfo, TrackedFormatSegment, TrackedTextSegment } from '../types';
 
 /** One review-panel card. Canonical changes no longer need a grouping pass. */
 export type SuggestionCardGroup =
@@ -79,48 +72,4 @@ export function countLinkedSuggestionCards(
 ): number {
   const linkedIds = new Set(suggestionIds);
   return countLogicalSuggestionCards(changes.filter((change) => linkedIds.has(change.id)));
-}
-
-/** Slice-1 card projection retained as the equivalence oracle. */
-export type LegacySuggestionCardGroup =
-  | { kind: 'single'; cardId: string; change: LegacyTrackedTextChange }
-  | {
-      kind: 'replacement';
-      cardId: string;
-      del: LegacyTrackedTextChange;
-      ins: LegacyTrackedTextChange;
-    }
-  | { kind: 'format'; cardId: string; change: LegacyTrackedFormatChange };
-
-export function groupLegacySuggestionCards(
-  changes: LegacyTrackedChangeInfo[],
-): LegacySuggestionCardGroup[] {
-  const groups: LegacySuggestionCardGroup[] = [];
-  const byPair = new Map<string, LegacyTrackedTextChange[]>();
-  for (const change of changes) {
-    if (change.operation === 'format') {
-      groups.push({ kind: 'format', cardId: change.id, change });
-    } else if (change.pairId) {
-      const members = byPair.get(change.pairId) ?? [];
-      members.push(change);
-      byPair.set(change.pairId, members);
-    } else groups.push({ kind: 'single', cardId: change.id, change });
-  }
-  for (const members of byPair.values()) {
-    const deletion = members.find((change) => change.operation === 'delete');
-    const insertion = members.find((change) => change.operation === 'insert');
-    if (deletion && insertion && members.length === 2) {
-      groups.push({
-        kind: 'replacement',
-        cardId: deletion.pairId!,
-        del: deletion,
-        ins: insertion,
-      });
-    } else {
-      for (const change of members) {
-        groups.push({ kind: 'single', cardId: change.id, change });
-      }
-    }
-  }
-  return groups;
 }

@@ -93,8 +93,8 @@ export interface LogicalSuggestion extends SuggestionBase {
   segments: TrackedChangeSegment[];
 }
 
-/** Version-2 sidecar compatibility; normalized before marks are restored. */
-export interface TextSuggestion extends SuggestionBase {
+/** Version-2 sidecar compatibility; never enters live review state. */
+export interface LegacyTextSuggestion extends SuggestionBase {
   type: 'insertion' | 'deletion';
   from: number;
   to: number;
@@ -103,18 +103,22 @@ export interface TextSuggestion extends SuggestionBase {
   pairId?: string;
 }
 
-/** Version-2 sidecar compatibility; normalized before marks are restored. */
-export interface FormatSuggestion extends SuggestionBase {
+/** Version-2 sidecar compatibility; never enters live review state. */
+export interface LegacyFormatSuggestion extends SuggestionBase {
   type: 'format';
   segments: FormatSegment[];
 }
 
-export type Suggestion = LogicalSuggestion | TextSuggestion | FormatSuggestion;
+/** Accepted only at the sidecar deserialization/migration boundary. */
+export type PersistedSuggestion = LogicalSuggestion | LegacyTextSuggestion | LegacyFormatSuggestion;
+
+/** Canonical in-memory and newly-persisted suggestion model. */
+export type Suggestion = LogicalSuggestion;
 
 export interface SidecarFile {
   version: 2;
   comments: Comment[];
-  suggestions: Suggestion[];
+  suggestions: PersistedSuggestion[];
   aiSession?: AISessionBinding;
   /**
    * Absolute path to a folder of reference documents for this file. Claude
@@ -146,20 +150,6 @@ export interface TrackedChangeBase {
   originChatMessageId?: string;
 }
 
-/** Slice-1 rollback shape emitted by the legacy collector only. */
-export interface LegacyTrackedTextChange extends TrackedChangeBase {
-  operation: 'insert' | 'delete';
-  from: number;
-  to: number;
-  text: string;
-  /**
-   * Set on both halves of a replacement (a delete and an insert made by the
-   * same step). Halves sharing a pairId render as one card and are accepted
-   * or rejected together — pass the pairId to acceptChange / rejectChange.
-   */
-  pairId?: string;
-}
-
 /**
  * One homogeneous span of a formatting suggestion. A flat add/remove delta is
  * only exact per span whose prior format state was uniform, so one logical
@@ -174,18 +164,6 @@ export interface FormatSegment {
   /** Mark names this suggestion turns off over the span (sorted). */
   removes: string[];
 }
-
-/** Slice-1 rollback shape emitted by the legacy collector only. */
-export interface LegacyTrackedFormatChange extends TrackedChangeBase {
-  operation: 'format';
-  /** All spans of the logical change, in document order. */
-  segments: FormatSegment[];
-}
-
-export type LegacyTrackedChangeInfo = LegacyTrackedTextChange | LegacyTrackedFormatChange;
-/** Temporary source-compatible aliases for Slice-1 oracle tests. */
-export type TrackedTextChange = LegacyTrackedTextChange;
-export type TrackedFormatChange = LegacyTrackedFormatChange;
 
 export interface TrackedTextSegment {
   kind: 'insert' | 'delete';

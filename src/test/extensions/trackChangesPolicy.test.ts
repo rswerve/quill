@@ -17,9 +17,9 @@ describe('suggesting-mode supported-operation matrix', () => {
     expect(INLINE_FORMAT_POLICIES.bold.decision).toBe('allow');
     expect(INLINE_FORMAT_POLICIES.italic.decision).toBe('allow');
     expect(INLINE_FORMAT_POLICIES.strike.decision).toBe('allow');
-    expect(INLINE_FORMAT_POLICIES.code.decision).toBe('block');
+    expect(INLINE_FORMAT_POLICIES.code.decision).toBe('allow');
     expect(INLINE_FORMAT_POLICIES.link.decision).toBe('block');
-    expect([...TRACKED_INLINE_FORMAT_MARK_NAMES]).toEqual(['bold', 'italic', 'strike']);
+    expect([...TRACKED_INLINE_FORMAT_MARK_NAMES]).toEqual(['bold', 'italic', 'strike', 'code']);
   });
 
   it('blocks every unsupported structural or ownership operation with guidance', () => {

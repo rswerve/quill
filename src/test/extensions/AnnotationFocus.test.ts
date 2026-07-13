@@ -38,7 +38,6 @@ function addTracked(
   from: number,
   to: number,
   id: string,
-  pairId?: string,
 ) {
   const type = editor.schema.marks[markName];
   const dataTracked = {
@@ -48,7 +47,6 @@ function addTracked(
     status: 'pending',
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    ...(pairId ? { pairId } : {}),
   };
   editor.view.dispatch(
     editor.state.tr.addMark(from, to, type.create({ dataTracked, changeId: id })),
@@ -146,22 +144,13 @@ describe('AnnotationFocus extension', () => {
     expect(focusedText(editor)).toBe('world');
   });
 
-  it('focusing a replacement by pairId decorates both halves', () => {
+  it('focusing a replacement id decorates both logical segments', () => {
     editor = makeEditor('<p>Hello world</p>');
-    addTracked(editor, 'tracked_delete', 1, 6, 'd1', 'p1');
-    addTracked(editor, 'tracked_insert', 7, 12, 'i1', 'p1');
-    editor.commands.setAnnotationFocus('suggestion', 'p1');
+    addTracked(editor, 'tracked_delete', 1, 6, 'replacement');
+    addTracked(editor, 'tracked_insert', 7, 12, 'replacement');
+    editor.commands.setAnnotationFocus('suggestion', 'replacement');
 
     expect(focusedText(editor)).toBe('Helloworld');
-  });
-
-  it('focusing one half by its own id decorates only that half', () => {
-    editor = makeEditor('<p>Hello world</p>');
-    addTracked(editor, 'tracked_delete', 1, 6, 'd1', 'p1');
-    addTracked(editor, 'tracked_insert', 7, 12, 'i1', 'p1');
-    editor.commands.setAnnotationFocus('suggestion', 'd1');
-
-    expect(focusedText(editor)).toBe('Hello');
   });
 
   it('focuses every format segment without highlighting the gaps between them', () => {
@@ -221,12 +210,15 @@ describe('findAnnotationRange', () => {
     expect(findAnnotationRange(editor.state.doc, 'comment', 'nope')).toBeNull();
   });
 
-  it('returns the combined range of both halves when given a pairId', () => {
+  it('returns the combined range of every segment under one replacement id', () => {
     editor = makeEditor('<p>Hello world</p>');
-    addTracked(editor, 'tracked_delete', 1, 6, 'd1', 'p1');
-    addTracked(editor, 'tracked_insert', 7, 12, 'i1', 'p1');
+    addTracked(editor, 'tracked_delete', 1, 6, 'replacement');
+    addTracked(editor, 'tracked_insert', 7, 12, 'replacement');
 
-    expect(findAnnotationRange(editor.state.doc, 'suggestion', 'p1')).toEqual({ from: 1, to: 12 });
+    expect(findAnnotationRange(editor.state.doc, 'suggestion', 'replacement')).toEqual({
+      from: 1,
+      to: 12,
+    });
   });
 
   it('returns the outer range of a multi-span formatting suggestion for scrolling', () => {

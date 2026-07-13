@@ -8,19 +8,27 @@ import {
   TrackedFormat,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
+import { ReviewableCode } from '../../extensions/ReviewableCode';
 import {
   mergeQuarantinedSuggestions,
   suggestionsFromTrackedChanges,
   restoreReviewMarks,
 } from '../../utils/reviewPersistence';
-import type { FormatSuggestion, TrackedChangeInfo, TextSuggestion } from '../../types';
+import type { LegacyFormatSuggestion, LegacyTextSuggestion, TrackedChangeInfo } from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
   document.body.appendChild(el);
   return new Editor({
     element: el,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
+    extensions: [
+      StarterKit.configure({ code: false }),
+      ReviewableCode,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges,
+    ],
     content,
   });
 }
@@ -122,7 +130,7 @@ describe('restoreReviewMarks', () => {
     document.body.innerHTML = '';
   });
 
-  function suggestion(overrides: Partial<TextSuggestion> = {}): TextSuggestion {
+  function suggestion(overrides: Partial<LegacyTextSuggestion> = {}): LegacyTextSuggestion {
     return {
       id: 's1',
       type: 'insertion',
@@ -137,7 +145,9 @@ describe('restoreReviewMarks', () => {
     };
   }
 
-  function formatSuggestion(overrides: Partial<FormatSuggestion> = {}): FormatSuggestion {
+  function formatSuggestion(
+    overrides: Partial<LegacyFormatSuggestion> = {},
+  ): LegacyFormatSuggestion {
     return {
       id: 'fmt1',
       type: 'format',
@@ -254,7 +264,7 @@ describe('restoreReviewMarks', () => {
 
   it('migrates and quarantines an entire legacy replacement when either half mismatches', () => {
     editor = makeEditor('<p>Old New</p>');
-    const records: TextSuggestion[] = [
+    const records: LegacyTextSuggestion[] = [
       suggestion({
         id: 'delete-half',
         type: 'deletion',
@@ -282,7 +292,7 @@ describe('restoreReviewMarks', () => {
 
   it('migrates a valid legacy pair into one resolvable logical replacement', () => {
     editor = makeEditor('<p>Old New</p>');
-    const records: TextSuggestion[] = [
+    const records: LegacyTextSuggestion[] = [
       suggestion({
         id: 'delete-half',
         type: 'deletion',
@@ -330,8 +340,13 @@ describe('restoreReviewMarks', () => {
   });
 
   it('preserves quarantined records beside the live projection without duplicating ids', () => {
-    const quarantined = suggestion({ id: 'quarantined' });
-    const live = suggestion({ id: 'live', suggestedText: 'world' });
+    const [quarantined] = suggestionsFromTrackedChanges([makeChange({ id: 'quarantined' })]);
+    const [live] = suggestionsFromTrackedChanges([
+      makeChange({
+        id: 'live',
+        segments: [{ kind: 'insert', from: 7, to: 12, text: 'world' }],
+      }),
+    ]);
 
     expect(mergeQuarantinedSuggestions([live], [quarantined, live])).toEqual([live, quarantined]);
   });

@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { LegacyTrackedChangeInfo, TrackedChangeInfo } from '../../types';
+import type { TrackedChangeInfo } from '../../types';
 import {
   countLinkedSuggestionCards,
   countLogicalSuggestionCards,
-  groupLegacySuggestionCards,
   groupSuggestionCards,
 } from '../../utils/suggestionCards';
 
@@ -55,22 +54,5 @@ describe('logical suggestion cards', () => {
 
   it('counts the logical replacement id once and ignores unrelated cards', () => {
     expect(countLinkedSuggestionCards(changes, ['replacement'])).toBe(1);
-  });
-
-  it('keeps legacy dangling pair halves visible in the migration oracle', () => {
-    const legacy: LegacyTrackedChangeInfo[] = [
-      {
-        id: 'only-half',
-        pairId: 'pair',
-        operation: 'delete',
-        from: 1,
-        to: 2,
-        text: 'old',
-        authorID: 'reviewer',
-        status: 'pending',
-        createdAt: 1,
-      },
-    ];
-    expect(groupLegacySuggestionCards(legacy)).toHaveLength(1);
   });
 });

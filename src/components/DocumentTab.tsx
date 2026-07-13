@@ -29,6 +29,7 @@ import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
 import { buildLinkReplacementContent } from '../utils/linkEditing';
 import {
   mergeQuarantinedSuggestions,
+  normalizePersistedSuggestions,
   restoreReviewMarks,
   suggestionsFromTrackedChanges,
 } from '../utils/reviewPersistence';
@@ -688,7 +689,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setLastSavedAt(Date.now());
       editorRef.current?.setContent(result.content);
       const loadedComments = result.sidecar.comments ?? [];
-      const loadedSuggestions = result.sidecar.suggestions ?? [];
+      const loadedSuggestions = normalizePersistedSuggestions(result.sidecar.suggestions ?? []);
       setComments(loadedComments);
       setSuggestions(loadedSuggestions);
       // Stamp the marks back onto the parsed document: highlights, click

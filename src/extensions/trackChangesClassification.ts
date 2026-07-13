@@ -166,43 +166,6 @@ function classifyDocumentStep(
   return { blocked: blockedOperation('unsafeMappedStep'), step: null };
 }
 
-/** Legacy Stage-0 preflight retained as an independent rollback oracle. */
-export function blockedSuggestingTransaction(tr: Transaction): TrackingBlockedInfo | null {
-  for (const [index, step] of tr.steps.entries()) {
-    const before = tr.docs[index];
-    const after = tr.docs[index + 1] ?? tr.doc;
-    if (step instanceof AddMarkStep || step instanceof RemoveMarkStep) {
-      const markName = step.mark.type.name;
-      const capability = inlineMarkCapability(markName);
-      if (capability !== 'block') continue;
-      const policy = inlineFormatPolicy(markName);
-      return {
-        operation: 'inlineFormat',
-        markName,
-        notice:
-          policy.decision === 'block'
-            ? policy.notice
-            : 'Switch to Editing to change this formatting.',
-      };
-    }
-    if (step instanceof ReplaceStep) {
-      if (!sameStructure(before, after)) return structuralOperation(step, before, after);
-      continue;
-    }
-    if (step instanceof ReplaceAroundStep) return structuralOperation(step, before, after);
-    if (
-      step instanceof AttrStep ||
-      step instanceof DocAttrStep ||
-      step instanceof AddNodeMarkStep ||
-      step instanceof RemoveNodeMarkStep
-    ) {
-      return blockedOperation('blockTypeOrAttributes');
-    }
-    return blockedOperation('unsafeMappedStep');
-  }
-  return null;
-}
-
 /**
  * Pure preflight over the complete source transaction. Transformation only
  * receives typed, supported steps, so no unsupported gesture can partially

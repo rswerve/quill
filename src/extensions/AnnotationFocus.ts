@@ -12,8 +12,6 @@ export interface AnnotationFocusTarget {
 
 export const ANNOTATION_FOCUS_KEY = new PluginKey<AnnotationFocusTarget | null>('annotationFocus');
 
-// A suggestion target id may be a change id or a replacement's pairId — the
-// latter matches both halves, so the whole replacement highlights as one.
 function nodeMatches(node: ProseMirrorNode, target: AnnotationFocusTarget): boolean {
   return node.marks.some((mark) =>
     target.kind === 'comment'
@@ -21,7 +19,7 @@ function nodeMatches(node: ProseMirrorNode, target: AnnotationFocusTarget): bool
       : (mark.type.name === 'tracked_insert' ||
           mark.type.name === 'tracked_delete' ||
           mark.type.name === 'tracked_format') &&
-        (mark.attrs.dataTracked?.id === target.id || mark.attrs.dataTracked?.pairId === target.id),
+        mark.attrs.dataTracked?.id === target.id,
   );
 }
 

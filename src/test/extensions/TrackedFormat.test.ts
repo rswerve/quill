@@ -9,6 +9,7 @@ import {
   TrackedFormat,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
+import { ReviewableCode } from '../../extensions/ReviewableCode';
 import type { TrackedChangeInfo, TrackedFormatSegment, TrackedTextSegment } from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
@@ -16,7 +17,14 @@ function makeEditor(content = '<p>Hello world</p>') {
   document.body.appendChild(el);
   const editor = new Editor({
     element: el,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
+    extensions: [
+      StarterKit.configure({ code: false }),
+      ReviewableCode,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges,
+    ],
     content,
   });
   editor.commands.setTrackChangesEnabled(true);
@@ -177,6 +185,48 @@ describe('tracked formatting (suggesting mode)', () => {
 
     expect(textHasMark(editor, 'Hello', 'bold')).toBe(false);
     expect(formatChanges(editor)).toHaveLength(0);
+  });
+
+  it('tracks inline code through accept, reject, and net-zero toggles', () => {
+    editor = makeEditor();
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleCode().run();
+    let [change] = formatChanges(editor);
+    expect(segmentShapes(change)).toEqual([{ text: 'Hello', adds: ['code'], removes: [] }]);
+
+    editor.commands.rejectChange(change.id);
+    expect(textHasMark(editor, 'Hello', 'code')).toBe(false);
+    expect(formatChanges(editor)).toHaveLength(0);
+
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleCode().run();
+    [change] = formatChanges(editor);
+    editor.commands.acceptChange(change.id);
+    expect(textHasMark(editor, 'Hello', 'code')).toBe(true);
+    expect(formatChanges(editor)).toHaveLength(0);
+
+    editor.chain().setTextSelection({ from: 7, to: 12 }).toggleCode().run();
+    editor.chain().setTextSelection({ from: 7, to: 12 }).toggleCode().run();
+    expect(textHasMark(editor, 'world', 'code')).toBe(false);
+    expect(formatChanges(editor)).toHaveLength(0);
+  });
+
+  it("blocks inline-code changes over another author's pending format span", () => {
+    editor = makeEditor();
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+    editor.commands.setTrackChangesAuthor('bob');
+    editor.chain().setTextSelection({ from: 1, to: 12 }).toggleCode().run();
+
+    expect(textHasMark(editor, 'Hello', 'code')).toBe(false);
+    expect(textHasMark(editor, ' world', 'code')).toBe(true);
+    expect(formatChanges(editor)).toEqual([
+      expect.objectContaining({
+        authorID: 'alice',
+        segments: [expect.objectContaining({ text: 'Hello', adds: ['bold'] })],
+      }),
+      expect.objectContaining({
+        authorID: 'bob',
+        segments: [expect.objectContaining({ text: ' world', adds: ['code'] })],
+      }),
+    ]);
   });
 
   it('one gesture bridging two prior suggestions unions them into one id', () => {

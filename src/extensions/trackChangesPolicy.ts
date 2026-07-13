@@ -48,7 +48,7 @@ export const INLINE_FORMAT_POLICIES = {
   bold: ALLOW,
   italic: ALLOW,
   strike: ALLOW,
-  code: block('Switch to Editing to change inline code.'),
+  code: ALLOW,
   link: block('Switch to Editing to change links.'),
 } as const satisfies Record<string, SuggestingPolicy>;
 
@@ -63,7 +63,7 @@ export const INLINE_MARK_CAPABILITIES = {
   bold: 'track',
   italic: 'track',
   strike: 'track',
-  code: 'block',
+  code: 'track',
   link: 'block',
   comment: 'passthrough',
   tracked_insert: 'passthrough',

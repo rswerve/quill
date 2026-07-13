@@ -13,7 +13,7 @@ type MarkedTextRange = {
 function matchesTarget(data: Record<string, unknown>, targetId: string | null): boolean {
   if (data.status !== 'pending') return false;
   if (targetId === null) return true;
-  return data.id === targetId || data.pairId === targetId;
+  return data.id === targetId;
 }
 
 function invertFormatDelta(

@@ -3,10 +3,11 @@ import type { MarkType } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
 import type {
   Comment,
-  FormatSuggestion,
+  LegacyFormatSuggestion,
+  LegacyTextSuggestion,
   LogicalSuggestion,
   Suggestion,
-  TextSuggestion,
+  PersistedSuggestion,
   TrackedChangeInfo,
   TrackedChangeSegment,
 } from '../types';
@@ -70,7 +71,7 @@ export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Sug
     );
 }
 
-function legacyTextSegment(suggestion: TextSuggestion): TrackedChangeSegment {
+function legacyTextSegment(suggestion: LegacyTextSuggestion): TrackedChangeSegment {
   return {
     kind: suggestion.type === 'insertion' ? 'insert' : 'delete',
     from: suggestion.from,
@@ -80,7 +81,7 @@ function legacyTextSegment(suggestion: TextSuggestion): TrackedChangeSegment {
 }
 
 function logicalFromLegacy(
-  suggestion: TextSuggestion | FormatSuggestion,
+  suggestion: LegacyTextSuggestion | LegacyFormatSuggestion,
   id = suggestion.id,
   segments?: TrackedChangeSegment[],
 ): LogicalSuggestion {
@@ -103,9 +104,11 @@ function logicalFromLegacy(
 }
 
 /** Normalize version-2 pair records into the one-record runtime contract. */
-export function normalizePersistedSuggestions(suggestions: Suggestion[]): LogicalSuggestion[] {
+export function normalizePersistedSuggestions(
+  suggestions: PersistedSuggestion[],
+): LogicalSuggestion[] {
   const logical: LogicalSuggestion[] = [];
-  const byPair = new Map<string, TextSuggestion[]>();
+  const byPair = new Map<string, LegacyTextSuggestion[]>();
   for (const suggestion of suggestions) {
     if (suggestion.type === 'change') logical.push(suggestion);
     else if (suggestion.type === 'format') logical.push(logicalFromLegacy(suggestion));
@@ -299,7 +302,7 @@ function quarantineMismatchedSuggestions(
 export function restoreReviewMarks(
   editor: TiptapEditor,
   comments: Comment[],
-  suggestions: Suggestion[],
+  suggestions: PersistedSuggestion[],
 ): ReviewRestoreResult {
   const { state } = editor;
   const { tr, doc, schema } = state;

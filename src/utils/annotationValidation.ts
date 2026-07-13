@@ -1,7 +1,7 @@
 import type {
   Comment,
   Reply,
-  Suggestion,
+  PersistedSuggestion,
   SuggestionStatus,
   AISessionBinding,
   FormatSegment,
@@ -88,7 +88,7 @@ function sanitizeComment(raw: unknown): Comment | null {
 }
 
 const SUGGESTION_STATUSES: SuggestionStatus[] = ['pending', 'accepted', 'rejected'];
-const FORMAT_MARKS = ['bold', 'italic', 'strike'] as const;
+const FORMAT_MARKS = ['bold', 'italic', 'strike', 'code'] as const;
 
 function sanitizeFormatNames(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -160,7 +160,7 @@ function suggestionBase(raw: Record<string, unknown>) {
 function sanitizeLogicalSuggestion(
   raw: Record<string, unknown>,
   base: ReturnType<typeof suggestionBase>,
-): Suggestion | null {
+): PersistedSuggestion | null {
   if (!Array.isArray(raw.segments)) return null;
   const segments = raw.segments.map(sanitizeTrackedChangeSegment);
   if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
@@ -176,7 +176,7 @@ function sanitizeLogicalSuggestion(
 function sanitizeLegacyFormatSuggestion(
   raw: Record<string, unknown>,
   base: ReturnType<typeof suggestionBase>,
-): Suggestion | null {
+): PersistedSuggestion | null {
   if (!Array.isArray(raw.segments)) return null;
   const segments = raw.segments.map(sanitizeFormatSegment);
   if (segments.length === 0 || segments.some((segment) => segment === null)) return null;
@@ -190,7 +190,7 @@ function sanitizeLegacyFormatSuggestion(
 function sanitizeLegacyTextSuggestion(
   raw: Record<string, unknown>,
   base: ReturnType<typeof suggestionBase>,
-): Suggestion | null {
+): PersistedSuggestion | null {
   if (raw.type !== 'insertion' && raw.type !== 'deletion') return null;
   const from = toPosition(raw.from);
   const to = toPosition(raw.to);
@@ -206,7 +206,7 @@ function sanitizeLegacyTextSuggestion(
   };
 }
 
-function sanitizeSuggestion(raw: unknown): Suggestion | null {
+function sanitizeSuggestion(raw: unknown): PersistedSuggestion | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id)) return null;
   const base = suggestionBase(raw);
@@ -221,9 +221,9 @@ export function sanitizeComments(raw: unknown): Comment[] {
   return raw.map(sanitizeComment).filter((c): c is Comment => c !== null);
 }
 
-export function sanitizeSuggestions(raw: unknown): Suggestion[] {
+export function sanitizeSuggestions(raw: unknown): PersistedSuggestion[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map(sanitizeSuggestion).filter((s): s is Suggestion => s !== null);
+  return raw.map(sanitizeSuggestion).filter((s): s is PersistedSuggestion => s !== null);
 }
 
 /**

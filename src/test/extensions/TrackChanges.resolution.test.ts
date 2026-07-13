@@ -9,18 +9,13 @@ import {
   TrackedFormat,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
+import { projectTrackedDocument } from '../../extensions/trackChangesProjection';
 
 const mounted: Editor[] = [];
 
-function makeEditor(transformEngine: 'modular' | 'legacy'): Editor {
+function makeEditor(): Editor {
   const editor = new Editor({
-    extensions: [
-      StarterKit,
-      TrackedInsert,
-      TrackedDelete,
-      TrackedFormat,
-      TrackChanges.configure({ transformEngine }),
-    ],
+    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackedFormat, TrackChanges],
     content: '<p>alpha beta gamma</p>',
   });
   editor.commands.setTrackChangesEnabled(true);
@@ -40,18 +35,7 @@ function makeMixedChanges(editor: Editor): void {
   editor.chain().setTextSelection({ from: 8, to: 12 }).toggleBold().run();
 }
 
-function resolveLegacy(editor: Editor, action: 'accept' | 'reject', all: boolean): void {
-  if (all) {
-    if (action === 'accept') editor.commands.acceptAllChanges();
-    else editor.commands.rejectAllChanges();
-    return;
-  }
-  const [change] = getTrackedChanges(editor);
-  if (action === 'accept') editor.commands.acceptChange(change.id);
-  else editor.commands.rejectChange(change.id);
-}
-
-describe('logical change resolution equivalence', () => {
+describe('logical change resolution', () => {
   afterEach(() => {
     for (const editor of mounted.splice(0)) editor.destroy();
   });
@@ -59,43 +43,39 @@ describe('logical change resolution equivalence', () => {
   it.each(['accept', 'reject'] as const)(
     'resolves one replacement with both halves and one-step undo (%s)',
     (action) => {
-      const modular = makeEditor('modular');
-      const legacy = makeEditor('legacy');
-      makeReplacement(modular);
-      makeReplacement(legacy);
-      const beforeResolve = modular.getJSON();
-      const id = getTrackedChanges(modular)[0].id;
+      const editor = makeEditor();
+      const original = editor.getJSON();
+      makeReplacement(editor);
+      const beforeResolve = editor.getJSON();
+      const accepted = projectTrackedDocument(editor.state.doc).accepted.toJSON();
+      const id = getTrackedChanges(editor)[0].id;
 
-      modular.view.dispatch(closeHistory(modular.state.tr));
-      legacy.view.dispatch(closeHistory(legacy.state.tr));
-      modular.commands.resolveChange(id, action);
-      resolveLegacy(legacy, action, false);
+      editor.view.dispatch(closeHistory(editor.state.tr));
+      editor.commands.resolveChange(id, action);
 
-      expect(modular.getJSON()).toEqual(legacy.getJSON());
-      expect(getTrackedChanges(modular)).toEqual([]);
-      modular.commands.undo();
-      expect(modular.getJSON()).toEqual(beforeResolve);
+      expect(editor.getJSON()).toEqual(action === 'accept' ? accepted : original);
+      expect(getTrackedChanges(editor)).toEqual([]);
+      editor.commands.undo();
+      expect(editor.getJSON()).toEqual(beforeResolve);
     },
   );
 
   it.each(['accept', 'reject'] as const)(
-    'resolves every text and format card in the legacy back-to-front order (%s)',
+    'resolves every text and format card in one reverse-position transaction (%s)',
     (action) => {
-      const modular = makeEditor('modular');
-      const legacy = makeEditor('legacy');
-      makeMixedChanges(modular);
-      makeMixedChanges(legacy);
-      const beforeResolve = modular.getJSON();
+      const editor = makeEditor();
+      const original = editor.getJSON();
+      makeMixedChanges(editor);
+      const beforeResolve = editor.getJSON();
+      const accepted = projectTrackedDocument(editor.state.doc).accepted.toJSON();
 
-      modular.view.dispatch(closeHistory(modular.state.tr));
-      legacy.view.dispatch(closeHistory(legacy.state.tr));
-      modular.commands.resolveChange(null, action);
-      resolveLegacy(legacy, action, true);
+      editor.view.dispatch(closeHistory(editor.state.tr));
+      editor.commands.resolveChange(null, action);
 
-      expect(modular.getJSON()).toEqual(legacy.getJSON());
-      expect(getTrackedChanges(modular)).toEqual([]);
-      modular.commands.undo();
-      expect(modular.getJSON()).toEqual(beforeResolve);
+      expect(editor.getJSON()).toEqual(action === 'accept' ? accepted : original);
+      expect(getTrackedChanges(editor)).toEqual([]);
+      editor.commands.undo();
+      expect(editor.getJSON()).toEqual(beforeResolve);
     },
   );
 });

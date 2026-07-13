@@ -446,7 +446,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await expectOnlyResolvedComment(page, '"hippello"');
   });
 
-  test('accepting a non-overlap linked replacement resolves its origin by pairId', async ({
+  test('accepting a non-overlap linked replacement resolves its origin by logical id', async ({
     page,
   }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');

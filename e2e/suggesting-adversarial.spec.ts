@@ -158,6 +158,35 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await expect(editor.locator('strong')).toHaveCount(0);
   });
 
+  test('inline code is tracked and resolves cleanly through reject, accept, and net zero', async ({
+    page,
+  }) => {
+    const editor = await setup(page, 'alpha');
+    const codeButton = page.locator('.rail-btn[title="Inline code"]');
+    await enableSuggesting(page);
+
+    await selectText(editor, 0, 5);
+    await codeButton.click();
+    await expect(editor.locator('code')).toContainText('alpha');
+    await expect(editor.locator('[data-tracked-format]')).toContainText('alpha');
+    await rejectAll(page);
+    await expect(editor.locator('code')).toHaveCount(0);
+    await expectNoTracking(editor);
+
+    await selectText(editor, 0, 5);
+    await codeButton.click();
+    await acceptAll(page);
+    await expect(editor.locator('code')).toContainText('alpha');
+    await expectNoTracking(editor);
+
+    await selectText(editor, 0, 5);
+    await codeButton.click();
+    await selectText(editor, 0, 5);
+    await codeButton.click();
+    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expectNoTracking(editor);
+  });
+
   for (const { shortcut, expected } of [
     { shortcut: 'Alt+Backspace', expected: 'alpha ' },
     { shortcut: 'ControlOrMeta+Backspace', expected: '' },
