@@ -141,6 +141,7 @@ interface DocumentTabProps {
   onOpenSessionPicker: (tabId: string) => void;
   onNotice: (notice: { title: string; message: string }) => void;
   onRecentFile: (path: string) => void;
+  onRequestSavePath: (tabId: string, path: string) => boolean;
 }
 
 function countWords(text: string): number {
@@ -184,6 +185,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     onOpenSessionPicker,
     onNotice,
     onRecentFile,
+    onRequestSavePath,
   },
   ref,
 ) {
@@ -627,6 +629,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+      (path) => onRequestSavePath(tabId, path),
     );
     // The document gained (or moved) a directory — relative image paths now
     // resolve against it for anything drawn from here on.
@@ -637,7 +640,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setLastSavedAt(Date.now());
     }
     return path;
-  }, [saveFileAs, getLiveReviewState, aiSession, contextFolder, documentChat, onRecentFile]);
+  }, [
+    saveFileAs,
+    getLiveReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    onRecentFile,
+    onRequestSavePath,
+    tabId,
+  ]);
 
   const handleSave = useCallback(async () => {
     if (!filePath) {

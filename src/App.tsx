@@ -21,7 +21,7 @@ import {
   writeClaudeEffort,
   writeClaudeModel,
 } from './utils/claudePreferences';
-import { basename, dirname } from './utils/path';
+import { basename, canonicalDocumentPath, dirname } from './utils/path';
 import {
   addRecentFile,
   clearRecentFiles,
@@ -308,9 +308,11 @@ export default function App() {
         if (!pendingOpenPathsRef.current.includes(path)) pendingOpenPathsRef.current.push(path);
         return null;
       }
-      const existing = tabsRef.current.find(
-        (tab) => tab.filePath === path || tab.initialFilePath === path,
-      );
+      const pathIdentity = canonicalDocumentPath(path);
+      const existing = tabsRef.current.find((tab) => {
+        const ownedPath = tab.filePath ?? tab.initialFilePath;
+        return ownedPath !== null && canonicalDocumentPath(ownedPath) === pathIdentity;
+      });
       if (existing) {
         activateTab(existing.id);
         return existing.id;
@@ -322,6 +324,26 @@ export default function App() {
       setTabs(nextTabs);
       activateTab(tab.id);
       return tab.id;
+    },
+    [activateTab],
+  );
+
+  const handleRequestSavePath = useCallback(
+    (tabId: string, path: string) => {
+      const pathIdentity = canonicalDocumentPath(path);
+      const owner = tabsRef.current.find((tab) => {
+        if (tab.id === tabId) return false;
+        const ownedPath = tab.filePath ?? tab.initialFilePath;
+        return ownedPath !== null && canonicalDocumentPath(ownedPath) === pathIdentity;
+      });
+      if (!owner) return true;
+
+      activateTab(owner.id);
+      setNotice({
+        title: 'File already open',
+        message: `“${owner.title}” is already open in another tab. Close that tab before saving a different document to this path.`,
+      });
+      return false;
     },
     [activateTab],
   );
@@ -828,6 +850,7 @@ export default function App() {
                 onOpenSessionPicker={handleOpenSessionPicker}
                 onNotice={showNotice}
                 onRecentFile={handleRecentFile}
+                onRequestSavePath={handleRequestSavePath}
               />
             </div>
           ))}

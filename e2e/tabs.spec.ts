@@ -127,6 +127,24 @@ test('Open and deep links add or focus by path without replacing other tabs', as
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(activeEditor(page)).toHaveText('First saved document');
 
+  const firstAlias = '/TMP/folder/../FIRST.md';
+  await page.evaluate((path) => {
+    const emit = (window as unknown as { __quillEmit: (event: string, value: string) => void })
+      .__quillEmit;
+    emit('menu-open-recent', path);
+  }, firstAlias);
+  await expect(page.locator('.document-tab')).toHaveCount(2);
+  await expect(activeEditor(page)).toHaveText('First saved document');
+  const aliasReadCount = await page.evaluate((path) => {
+    const calls = (
+      window as unknown as {
+        __quillCalls: Array<{ cmd: string; args: Record<string, unknown> }>;
+      }
+    ).__quillCalls;
+    return calls.filter((call) => call.cmd === 'read_file' && call.args.path === path).length;
+  }, firstAlias);
+  expect(aliasReadCount).toBe(0);
+
   await page.evaluate((path) => {
     const emit = (window as unknown as { __quillEmit: (event: string, value: string) => void })
       .__quillEmit;
@@ -144,6 +162,45 @@ test('Open and deep links add or focus by path without replacing other tabs', as
   await expect(page.locator('.document-tab')).toHaveCount(3);
   await expect(page.locator('.document-tab.active')).toContainText('first.md');
 });
+
+for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
+  test(`Save As refuses a path already owned by another tab: ${targetPath}`, async ({ page }) => {
+    const ownedPath = '/tmp/owned.md';
+    await setupMemoryTauri(page, {
+      openPath: ownedPath,
+      savePath: targetPath,
+      files: {
+        [ownedPath]: 'Original owned document',
+        ['/tmp/owned.comments.json']: sidecar(),
+      },
+    });
+
+    await openMemoryFile(page);
+    await page.locator('.document-tab').first().click();
+    await activeEditor(page).fill('Unsaved source document');
+    await page.keyboard.press('ControlOrMeta+Shift+s');
+
+    const modal = page.locator('.app-modal');
+    await expect(modal).toContainText('File already open');
+    await expect(page.locator('.document-tab.active')).toContainText('owned.md');
+    await expect(activeEditor(page)).toHaveText('Original owned document');
+    await expect(page.locator('.document-tab')).toHaveCount(2);
+    await expect(page.locator('.document-tab').first()).toContainText('Untitled');
+    await expect(
+      page.locator('.document-tab').first().locator('.document-tab-dirty'),
+    ).toBeVisible();
+
+    const writesToTarget = await page.evaluate((path) => {
+      const calls = (
+        window as unknown as {
+          __quillCalls: Array<{ cmd: string; args: Record<string, unknown> }>;
+        }
+      ).__quillCalls;
+      return calls.filter((call) => call.cmd === 'write_file' && call.args.path === path).length;
+    }, targetPath);
+    expect(writesToTarget).toBe(0);
+  });
+}
 
 test('overflow expands into rows without ever horizontally scrolling', async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 760 });

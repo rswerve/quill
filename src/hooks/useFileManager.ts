@@ -91,6 +91,7 @@ interface UseFileManagerReturn {
     aiSession: AISessionBinding | null,
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
+    requestPathOwnership?: (path: string) => boolean,
   ) => Promise<string | null>;
   newFile: () => void;
   restoreDraft: (path: string | null, dirty?: boolean) => void;
@@ -281,12 +282,14 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
+      requestPathOwnership?: (path: string) => boolean,
     ): Promise<string | null> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';
         const path = await invoke<string | null>('show_save_dialog', { defaultName });
         if (!path) return null;
         const resolvedPath = path.endsWith('.md') ? path : `${path}.md`;
+        if (requestPathOwnership && !requestPathOwnership(resolvedPath)) return null;
         return saveFile(
           content,
           comments,

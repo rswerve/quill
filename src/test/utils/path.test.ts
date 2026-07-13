@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { basename, dirname } from '../../utils/path';
+import { basename, canonicalDocumentPath, dirname } from '../../utils/path';
 
 describe('basename', () => {
   it('returns the last segment of a POSIX path', () => {
@@ -39,5 +39,19 @@ describe('dirname', () => {
 
   it('returns null for a bare filename', () => {
     expect(dirname('notes.md')).toBeNull();
+  });
+});
+
+describe('canonicalDocumentPath', () => {
+  it('collapses dot segments and case aliases', () => {
+    expect(canonicalDocumentPath('/Users/Maz/folder/../OWNED.md')).toBe('/users/maz/owned.md');
+  });
+
+  it('normalizes Windows separators and drive-letter case', () => {
+    expect(canonicalDocumentPath('C:\\Docs\\drafts\\..\\NOTE.md')).toBe('c:/docs/note.md');
+  });
+
+  it('preserves leading parent segments on relative paths', () => {
+    expect(canonicalDocumentPath('../Docs/Note.md')).toBe('../docs/note.md');
   });
 });
