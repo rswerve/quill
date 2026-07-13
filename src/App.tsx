@@ -154,7 +154,11 @@ export default function App() {
   const [hasNativeMenu, setHasNativeMenu] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTabId, setPickerTabId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
+  const [notice, setNotice] = useState<{
+    title: string;
+    message: string;
+    actions?: Array<{ label: string; onClick: () => void | Promise<void> }>;
+  } | null>(null);
   const [discardGuard, setDiscardGuard] = useState<DiscardGuard | null>(null);
   const [closeGuardTabId, setCloseGuardTabId] = useState<string | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -201,7 +205,11 @@ export default function App() {
 
   const getClaudeRunOptions = useCallback(() => runOptionsRef.current, []);
   const showNotice = useCallback(
-    (nextNotice: { title: string; message: string }) => setNotice(nextNotice),
+    (nextNotice: {
+      title: string;
+      message: string;
+      actions?: Array<{ label: string; onClick: () => void | Promise<void> }>;
+    }) => setNotice(nextNotice),
     [],
   );
   const handleRecentFile = useCallback((path: string) => {
@@ -1090,7 +1098,21 @@ export default function App() {
         <AppModal
           title={notice.title}
           message={notice.message}
-          buttons={[{ label: 'OK', kind: 'primary', onClick: () => setNotice(null) }]}
+          buttons={
+            notice.actions?.length
+              ? [
+                  ...notice.actions.map((action, index) => ({
+                    label: action.label,
+                    kind: index === 0 ? ('primary' as const) : ('ghost' as const),
+                    onClick: async () => {
+                      setNotice(null);
+                      await action.onClick();
+                    },
+                  })),
+                  { label: 'Dismiss', kind: 'ghost' as const, onClick: () => setNotice(null) },
+                ]
+              : [{ label: 'OK', kind: 'primary', onClick: () => setNotice(null) }]
+          }
         />
       )}
     </div>

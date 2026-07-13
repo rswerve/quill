@@ -311,7 +311,7 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
           sessionId: 'imported-session',
           cwd: untrustedRoot,
           linkedAt: '2026-07-13T00:00:00.000Z',
-          createdByQuill: true,
+          createdByQuill: false,
         },
         contextFolder: untrustedRoot,
       }),
@@ -323,15 +323,15 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
 
   await openMemoryFile(page);
   const permissionNotice = page.locator('.app-modal');
-  await expect(permissionNotice).toContainText('Sidecar permissions need confirmation');
+  await expect(permissionNotice).toContainText('Reconnect Claude access');
+  await expect(permissionNotice.getByRole('button', { name: 'Relink session' })).toBeVisible();
+  await expect(permissionNotice.getByRole('button', { name: 'Choose folder' })).toBeVisible();
+  await expect(permissionNotice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
   const spawnedBeforeConsent = await page.evaluate(
     () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
   );
   expect(spawnedBeforeConsent).toBeUndefined();
-  await permissionNotice.getByRole('button', { name: 'OK' }).click();
-
-  await openChat(page);
-  await sendChat(page, 'Review this imported document');
+  await permissionNotice.getByRole('button', { name: 'Relink session' }).click();
   await expect(page.locator('.session-picker')).toBeVisible();
   const stillNotSpawned = await page.evaluate(
     () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
@@ -339,6 +339,8 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   expect(stillNotSpawned).toBeUndefined();
 
   await page.locator('.session-picker-new').click();
+  await openChat(page);
+  await sendChat(page, 'Review this imported document');
   await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
     'Safe local response.',
   );
@@ -352,6 +354,51 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   );
   expect(spawn).toMatchObject({ cwd: '/docs', addDir: null, allowCreate: true });
   expect(spawn.cwd).not.toBe(untrustedRoot);
+});
+
+test('a Quill-created sidecar session reopens silently with a constrained cwd', async ({
+  page,
+}) => {
+  const path = '/docs/local.md';
+  const sidecarPath = '/docs/local.comments.json';
+  await setupMemoryTauri(page, {
+    files: {
+      [path]: 'Local document',
+      [sidecarPath]: JSON.stringify({
+        version: 2,
+        comments: [],
+        suggestions: [],
+        aiSession: {
+          provider: 'claude-code',
+          sessionId: 'local-session',
+          cwd: '/private/untrusted-sidecar-value',
+          linkedAt: '2026-07-13T00:00:00.000Z',
+          createdByQuill: true,
+        },
+      }),
+    },
+    openPath: path,
+    mockAI: true,
+    aiReplyText: 'Reopened safely.',
+  });
+
+  await openMemoryFile(page);
+  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await openChat(page);
+  await sendChat(page, 'Continue');
+  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+    'Reopened safely.',
+  );
+  const spawn = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __quillLastSpawnArgs: { cwd: string; addDir: string | null; allowCreate: boolean };
+        }
+      ).__quillLastSpawnArgs,
+  );
+  expect(spawn).toMatchObject({ cwd: '/docs', addDir: null, allowCreate: true });
 });
 
 test('chat persists per document/session and a new session starts a fresh thread', async ({

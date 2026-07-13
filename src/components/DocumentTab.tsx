@@ -147,7 +147,11 @@ interface DocumentTabProps {
   onInitialFileLoaded: (tabId: string, loaded: boolean) => void;
   onInitialWorkspaceLoaded: (tabId: string) => void;
   onOpenSessionPicker: (tabId: string) => void;
-  onNotice: (notice: { title: string; message: string }) => void;
+  onNotice: (notice: {
+    title: string;
+    message: string;
+    actions?: Array<{ label: string; onClick: () => void | Promise<void> }>;
+  }) => void;
   onRecentFile: (path: string) => void;
   onRequestSavePath: (tabId: string, path: string) => boolean;
   onClaimSession: (
@@ -276,6 +280,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     restoreDraft,
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+  const chooseContextFolder = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const folder = await invoke<string | null>('show_folder_dialog');
+      if (folder) {
+        setContextFolder(folder);
+        if (filePath) {
+          rememberContextFolderPermission(window.localStorage, filePath, folder);
+        }
+        markDirty();
+      }
+    } catch (error) {
+      console.error('Failed to pick context folder:', error);
+      showError('Could not link folder', String(error));
+    }
+  }, [filePath, markDirty, showError]);
 
   const adoptLoadedSession = useCallback(
     (binding: AISessionBinding | null, documentPath: string | null): AISessionBinding | null => {
@@ -686,15 +707,26 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       }
       const hasBlockedSidecarAccess = access.blockedSession || access.blockedContextFolder;
       if (hasBlockedSidecarAccess) {
-        const blocked = [
-          access.blockedSession ? 'Claude session' : null,
-          access.blockedContextFolder ? 'reference folder' : null,
-        ]
-          .filter(Boolean)
-          .join(' and ');
+        const blockedSession = access.blockedSession;
+        const blockedFolder = access.blockedContextFolder;
+        let message = 'This document had linked Claude access. Relink it to use Claude here.';
+        if (blockedSession && !blockedFolder) {
+          message = 'This document had a linked Claude session. Relink it to use Claude here.';
+        } else if (!blockedSession && blockedFolder) {
+          message =
+            'This document had a reference folder. Choose the folder again to let Claude use it here.';
+        }
         onNotice({
-          title: 'Sidecar permissions need confirmation',
-          message: `The imported ${blocked} ${access.blockedSession && access.blockedContextFolder ? 'were' : 'was'} not activated. Session and folder access are local permissions, not portable document data. Relink them in Quill to grant access on this device.`,
+          title: 'Reconnect Claude access',
+          message,
+          actions: [
+            ...(blockedSession
+              ? [{ label: 'Relink session', onClick: () => onOpenSessionPicker(tabId) }]
+              : []),
+            ...(blockedFolder
+              ? [{ label: 'Choose folder', onClick: () => chooseContextFolder() }]
+              : []),
+          ],
         });
       }
       // Force the session choice up front: if we opened a non-empty doc with no
@@ -719,6 +751,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       openSessionPicker,
       onRecentFile,
       markDirty,
+      chooseContextFolder,
+      onOpenSessionPicker,
+      tabId,
     ],
   );
 
@@ -1419,23 +1454,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [documentChat, filePath, markDirty, onReleaseSession, tabId]);
 
   const handleLinkContextFolder = useCallback(() => {
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const folder = await invoke<string | null>('show_folder_dialog');
-        if (folder) {
-          setContextFolder(folder);
-          if (filePath) {
-            rememberContextFolderPermission(window.localStorage, filePath, folder);
-          }
-          markDirty();
-        }
-      } catch (e) {
-        console.error('Failed to pick context folder:', e);
-        showError('Could not link folder', String(e));
-      }
-    })();
-  }, [filePath, markDirty, showError]);
+    void chooseContextFolder();
+  }, [chooseContextFolder]);
 
   const handleUnlinkContextFolder = useCallback(() => {
     setContextFolder(null);

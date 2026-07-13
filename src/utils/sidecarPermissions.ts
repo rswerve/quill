@@ -112,8 +112,13 @@ export function rememberContextFolderPermission(
 
 /**
  * Sidecar bindings are portable metadata, not portable filesystem grants.
- * Activate only values previously approved for this exact local document path.
- * A backend auto-bind is locally discovered rather than imported and is trusted.
+ * Foreign sessions and reference folders require a grant for this exact local
+ * document path. Quill-created sessions are safe to reactivate because their
+ * cwd is always replaced with the document's directory before use.
+ *
+ * Accepted residual risk: portable metadata can claim `createdByQuill` for an
+ * existing session id. That can load its conversational context on screen, but
+ * cannot expand filesystem access beyond this document's directory.
  */
 export function authorizeSidecarAccess(
   storage: Storage,
@@ -123,12 +128,17 @@ export function authorizeSidecarAccess(
 ): AuthorizedSidecarAccess {
   const permission = readRegistry(storage)[canonicalDocumentPath(filePath)];
   const constrainedSession = constrainSessionBinding(sidecar.aiSession, filePath);
+  const locallyConstrained = constrainedSession?.createdByQuill === true;
   const sessionAllowed =
     constrainedSession !== null &&
-    (autoBound || sessionsMatch(permission?.session, constrainedSession));
+    (autoBound || locallyConstrained || sessionsMatch(permission?.session, constrainedSession));
   const contextFolder = sidecar.contextFolder ?? null;
   const contextAllowed =
     contextFolder !== null && permission?.contextFolder === canonicalDocumentPath(contextFolder);
+
+  if (sessionAllowed) {
+    rememberSessionPermission(storage, filePath, constrainedSession);
+  }
 
   return {
     aiSession: sessionAllowed ? constrainedSession : null,
