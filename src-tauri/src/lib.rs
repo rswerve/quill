@@ -415,6 +415,102 @@ mod tests {
             .is_some_and(|name| name.starts_with("workspace.corrupt-") && name.ends_with(".json")));
     }
 
+    // --- Claude session → document index ---
+
+    #[test]
+    fn session_document_index_round_trip_populates_the_session_summary() {
+        let dir = tempdir().unwrap();
+        let index_path = dir.path().join("session-documents.json");
+        let document_path = dir.path().join("Project Notes.md");
+        let session_path = dir.path().join("session-one.jsonl");
+        fs::write(&document_path, "# Project Notes").unwrap();
+        fs::write(
+            &session_path,
+            r#"{"type":"system","sessionId":"session-one","cwd":"/tmp/project"}"#,
+        )
+        .unwrap();
+
+        assert!(upsert_session_document_at(
+            &index_path,
+            "session-one",
+            Some(&document_path),
+            "2026-07-13T20:00:00Z",
+        )
+        .unwrap());
+
+        let index = read_session_document_index_at(&index_path).unwrap();
+        let summary = summarize_session(&session_path, 123, &index);
+        assert_eq!(summary.document_name.as_deref(), Some("Project Notes.md"));
+        assert_eq!(summary.session_id, "session-one");
+        assert!(!index_path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn session_document_index_most_recent_binding_wins() {
+        let dir = tempdir().unwrap();
+        let index_path = dir.path().join("session-documents.json");
+        let first = dir.path().join("First.md");
+        let second = dir.path().join("Second.md");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+
+        upsert_session_document_at(
+            &index_path,
+            "shared-session",
+            Some(&first),
+            "2026-07-13T20:00:00Z",
+        )
+        .unwrap();
+        upsert_session_document_at(
+            &index_path,
+            "shared-session",
+            Some(&second),
+            "2026-07-13T20:01:00Z",
+        )
+        .unwrap();
+
+        let index = read_session_document_index_at(&index_path).unwrap();
+        let record = index.get("shared-session").unwrap();
+        assert_eq!(record.doc_name, "Second.md");
+        assert_eq!(record.doc_path, second.to_string_lossy());
+        assert_eq!(record.updated_at, "2026-07-13T20:01:00Z");
+    }
+
+    #[test]
+    fn session_document_index_tolerates_missing_and_malformed_files() {
+        let dir = tempdir().unwrap();
+        let index_path = dir.path().join("session-documents.json");
+        assert!(read_session_document_index_at(&index_path)
+            .unwrap()
+            .is_empty());
+
+        fs::write(&index_path, "{ malformed JSON").unwrap();
+        assert!(read_session_document_index_at(&index_path)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn session_document_index_skips_unsaved_or_nonexistent_documents() {
+        let dir = tempdir().unwrap();
+        let index_path = dir.path().join("session-documents.json");
+        assert!(!upsert_session_document_at(
+            &index_path,
+            "untitled-session",
+            None,
+            "2026-07-13T20:00:00Z",
+        )
+        .unwrap());
+        assert!(!upsert_session_document_at(
+            &index_path,
+            "missing-session",
+            Some(&dir.path().join("Missing.md")),
+            "2026-07-13T20:00:00Z",
+        )
+        .unwrap());
+        assert!(!index_path.exists());
+    }
+
     // --- read_file ---
 
     #[test]
@@ -1230,6 +1326,12 @@ struct ChildHandle {
 #[derive(Default)]
 struct ChildRegistry(Mutex<HashMap<String, Arc<ChildHandle>>>);
 
+/// Serializes the session-document index's read/modify/write cycle. Atomic
+/// rename prevents torn files; this lock also prevents concurrent tab binds
+/// from overwriting one another's entries inside the same app process.
+#[derive(Default)]
+struct SessionDocumentIndexLock(Mutex<()>);
+
 /// Holds a deep-link path that arrived before the frontend was ready to receive
 /// the `deep-link-open` event. On a cold start macOS launches the app *because*
 /// of the `quill://open?file=…` URL, and `on_open_url` fires during `.setup()`
@@ -1255,6 +1357,104 @@ fn claude_projects_dir() -> Result<PathBuf, String> {
     Ok(home.join(".claude").join("projects"))
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SessionDocumentRecord {
+    #[serde(rename = "docName")]
+    doc_name: String,
+    #[serde(rename = "docPath")]
+    doc_path: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+type SessionDocumentIndex = HashMap<String, SessionDocumentRecord>;
+
+fn session_document_index_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("session-documents.json"))
+        .map_err(|error| error.to_string())
+}
+
+/// Missing and malformed indexes are intentionally empty: this file is only a
+/// display-name convenience and must never prevent the real Claude sessions
+/// from being listed. Other I/O errors remain actionable for an attempted
+/// write so we do not silently clobber an unreadable file.
+fn read_session_document_index_at(path: &Path) -> Result<SessionDocumentIndex, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SessionDocumentIndex::default())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_session_document_index_at(
+    path: &Path,
+    index: &SessionDocumentIndex,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(index).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, content).map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+fn upsert_session_document_at(
+    index_path: &Path,
+    session_id: &str,
+    document_path: Option<&Path>,
+    updated_at: &str,
+) -> Result<bool, String> {
+    let Some(document_path) = document_path else {
+        return Ok(false);
+    };
+    let is_markdown = document_path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        });
+    if session_id.is_empty() || !is_markdown || !document_path.is_file() {
+        return Ok(false);
+    }
+    let Some(doc_name) = document_path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return Ok(false);
+    };
+
+    let mut index = read_session_document_index_at(index_path)?;
+    index.insert(
+        session_id.to_string(),
+        SessionDocumentRecord {
+            doc_name: doc_name.to_string(),
+            doc_path: document_path.to_string_lossy().into_owned(),
+            updated_at: updated_at.to_string(),
+        },
+    );
+    write_session_document_index_at(index_path, &index)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn record_session_document(
+    app: tauri::AppHandle,
+    index_lock: State<'_, SessionDocumentIndexLock>,
+    session_id: String,
+    doc_path: Option<String>,
+) -> Result<bool, String> {
+    let _guard = lock_recover(&index_lock.0);
+    let index_path = session_document_index_path(&app)?;
+    upsert_session_document_at(
+        &index_path,
+        &session_id,
+        doc_path.as_deref().map(Path::new),
+        &iso_now(),
+    )
+}
+
 #[derive(Serialize)]
 struct SessionSummary {
     #[serde(rename = "sessionId")]
@@ -1263,6 +1463,8 @@ struct SessionSummary {
     jsonl_path: String,
     cwd: String,
     title: Option<String>,
+    #[serde(rename = "documentName")]
+    document_name: Option<String>,
     #[serde(rename = "lastUsed")]
     last_used: u64,
 }
@@ -1581,8 +1783,11 @@ fn check_session_compacted(session_id: String) -> Result<CompactionInfo, String>
 }
 
 #[tauri::command]
-fn list_claude_sessions() -> Result<Vec<SessionSummary>, String> {
+fn list_claude_sessions(app: tauri::AppHandle) -> Result<Vec<SessionSummary>, String> {
     let dir = claude_projects_dir()?;
+    let index = session_document_index_path(&app)
+        .and_then(|path| read_session_document_index_at(&path))
+        .unwrap_or_default();
     let mut summaries: Vec<SessionSummary> = Vec::new();
 
     let read = match std::fs::read_dir(&dir) {
@@ -1619,30 +1824,35 @@ fn list_claude_sessions() -> Result<Vec<SessionSummary>, String> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |duration| duration.as_secs());
 
-            let (session_id, cwd, title) = scan_session_head(&path).unwrap_or_else(|| {
-                (
-                    path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    String::new(),
-                    None,
-                )
-            });
-
-            summaries.push(SessionSummary {
-                session_id,
-                jsonl_path: path.to_string_lossy().to_string(),
-                cwd,
-                title,
-                last_used,
-            });
+            summaries.push(summarize_session(&path, last_used, &index));
         }
     }
 
     summaries.sort_by_key(|s| std::cmp::Reverse(s.last_used));
     summaries.truncate(50);
     Ok(summaries)
+}
+
+fn summarize_session(path: &Path, last_used: u64, index: &SessionDocumentIndex) -> SessionSummary {
+    let (session_id, cwd, title) = scan_session_head(path).unwrap_or_else(|| {
+        (
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("")
+                .to_string(),
+            String::new(),
+            None,
+        )
+    });
+    let document_name = index.get(&session_id).map(|record| record.doc_name.clone());
+    SessionSummary {
+        session_id,
+        jsonl_path: path.to_string_lossy().into_owned(),
+        cwd,
+        title,
+        document_name,
+        last_used,
+    }
 }
 
 fn scan_session_head(path: &std::path::Path) -> Option<(String, String, Option<String>)> {
@@ -2337,6 +2547,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             app.manage(ChildRegistry::default());
+            app.manage(SessionDocumentIndexLock::default());
             app.manage(PendingDeepLink::default());
 
             build_menu(app.handle(), &[])?;
@@ -2399,6 +2610,7 @@ pub fn run() {
             read_draft,
             delete_draft,
             quarantine_draft,
+            record_session_document,
             list_claude_sessions,
             read_claude_session_preview,
             spawn_claude_resume,

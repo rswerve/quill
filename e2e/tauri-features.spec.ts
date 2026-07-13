@@ -230,6 +230,107 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
   await expect(page.locator('.footer-ai-binding').first()).toContainText('LINK SESSION');
 });
 
+test('session picker headlines prefer document name, then AI title, then untitled id', async ({
+  page,
+}) => {
+  const handler = (cmd: string) => {
+    if (cmd === 'list_claude_sessions') {
+      return [
+        {
+          sessionId: 'document-session',
+          jsonlPath: '/tmp/document-session.jsonl',
+          cwd: '/tmp/project',
+          title: 'Claude title loses',
+          documentName: 'Design Brief.md',
+          lastUsed: 3,
+        },
+        {
+          sessionId: 'title-session',
+          jsonlPath: '/tmp/title-session.jsonl',
+          cwd: '/tmp/project',
+          title: 'Claude fallback title',
+          documentName: null,
+          lastUsed: 2,
+        },
+        {
+          sessionId: '805faa5a-1234-5678-90ab-cdef12345678',
+          jsonlPath: '/tmp/untitled-session.jsonl',
+          cwd: '/tmp/project',
+          title: null,
+          documentName: null,
+          lastUsed: 1,
+        },
+      ];
+    }
+    return null;
+  };
+
+  await setupWithIPC(page, { handler });
+  await page.locator('.footer-ai-binding-label').click();
+
+  await expect(page.locator('.session-row-title')).toHaveText([
+    'Design Brief.md',
+    'Claude fallback title',
+    'untitled-805faa5a',
+  ]);
+});
+
+test('linking a saved document records its session name for the next picker open', async ({
+  page,
+}) => {
+  const handler = (cmd: string, args: Record<string, unknown>) => {
+    const state = window as unknown as { __indexedDocumentName?: string };
+    if (cmd === 'show_open_dialog') return '/tmp/Meeting Notes.md';
+    if (cmd === 'read_file') {
+      if (args.path === '/tmp/Meeting Notes.md') return '# Saved meeting notes';
+      throw new Error('sidecar not found');
+    }
+    if (cmd === 'find_session_for_markdown') return null;
+    if (cmd === 'list_claude_sessions') {
+      return [
+        {
+          sessionId: 'saved-doc-session',
+          jsonlPath: '/tmp/saved-doc-session.jsonl',
+          cwd: '/tmp',
+          title: null,
+          documentName: state.__indexedDocumentName ?? null,
+          lastUsed: Math.floor(Date.now() / 1000),
+        },
+      ];
+    }
+    if (cmd === 'read_claude_session_preview') {
+      return {
+        sessionId: 'saved-doc-session',
+        cwd: '/tmp',
+        recentAssistantMessages: ['Session preview'],
+      };
+    }
+    if (cmd === 'record_session_document') {
+      state.__indexedDocumentName = String(args.docPath).split('/').at(-1);
+      return true;
+    }
+    return null;
+  };
+
+  await setupWithIPC(page, { handler });
+  await page.keyboard.press('ControlOrMeta+o');
+
+  const picker = page.locator('.session-picker');
+  await expect(picker).toBeVisible({ timeout: 3000 });
+  await expect(picker.locator('.session-row-title')).toHaveText('untitled-saved-do');
+  await picker.locator('.session-row').click();
+  await picker.getByRole('button', { name: 'Link this session' }).click();
+  await expect(picker).toHaveCount(0);
+  await page.waitForFunction(
+    () =>
+      (window as unknown as { __indexedDocumentName?: string }).__indexedDocumentName ===
+      'Meeting Notes.md',
+  );
+
+  await page.locator('.footer-ai-binding-label').click();
+  await expect(page.locator('.session-row-title')).toHaveText('Meeting Notes.md');
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // 2. Compaction detection (prompt branch selection)
 // ────────────────────────────────────────────────────────────────────────────

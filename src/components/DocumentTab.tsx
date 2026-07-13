@@ -803,6 +803,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     if (constrained && onClaimSession(tabId, constrained).allowed) setAISession(constrained);
   }, [filePath, onClaimSession, tabId]);
 
+  // Keep one durable display-name index for every real document/session
+  // binding, regardless of whether it came from link-existing, start-new, or
+  // auto-bind. Watching filePath also records a session linked while Untitled
+  // as soon as Save As gives the document a real path.
+  useEffect(() => {
+    if (!aiSession || !filePath) return;
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) =>
+        invoke('record_session_document', {
+          sessionId: aiSession.sessionId,
+          docPath: filePath,
+        }),
+      )
+      .catch((error) => console.warn('Could not record Claude session document:', error));
+  }, [aiSession, filePath]);
+
   function getMarkdown(): string {
     return editorRef.current?.getMarkdown() ?? '';
   }

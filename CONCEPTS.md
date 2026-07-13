@@ -24,3 +24,7 @@ the code. Grows as learnings surface new domain nouns.
 - **Sidecar** — the companion file saved alongside a document that holds its
   comments, suggestions, and linked-session metadata, keeping the Markdown file
   itself plain.
+
+- **Session-document index** — the app-local mapping from a Claude session id to
+  the most recent saved document that used it, providing human-readable picker
+  labels without changing the portable document sidecar.

@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { AISessionBinding } from '../types';
 
-interface SessionSummary {
+export interface SessionSummary {
   sessionId: string;
   jsonlPath: string;
   cwd: string;
   title: string | null;
+  documentName: string | null;
   lastUsed: number; // unix seconds
 }
 
@@ -32,6 +33,10 @@ function formatRelativeTime(unixSeconds: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}min ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+export function sessionHeadline(session: SessionSummary): string {
+  return session.documentName ?? session.title ?? `untitled-${session.sessionId.slice(0, 8)}`;
 }
 
 export default function SessionPicker({
@@ -124,7 +129,7 @@ export default function SessionPicker({
                 className={`session-row${s.jsonlPath === selectedPath ? ' selected' : ''}`}
                 onClick={() => setSelectedPath(s.jsonlPath)}
               >
-                <div className="session-row-title">{s.title ?? s.sessionId.slice(0, 8)}</div>
+                <div className="session-row-title">{sessionHeadline(s)}</div>
                 <div className="session-row-meta">
                   <span className="session-row-cwd">{s.cwd}</span>
                   <span className="session-row-time">{formatRelativeTime(s.lastUsed)}</span>
