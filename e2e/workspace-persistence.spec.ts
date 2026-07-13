@@ -51,6 +51,7 @@ test('normal relaunch restores clean tab order and active tab, reloading files f
       ['/tmp/workspace-first.comments.json']: linkedSidecar,
       ['/tmp/workspace-second.comments.json']: linkedSidecar,
     },
+    trustedSidecarPaths: [firstPath, secondPath],
   });
 
   await openMemoryFile(page);
@@ -107,6 +108,7 @@ test('an edit made while Save is pending stays dirty and remains in recovery', a
       [path]: 'Last saved content',
       ['/tmp/save-race.comments.json']: linkedSidecar,
     },
+    trustedSidecarPaths: [path],
   });
   await openMemoryFile(page);
   await page.locator('.document-tab').first().click();
@@ -199,6 +201,7 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
       [savedPath]: 'Last saved content on disk',
       ['/tmp/saved-after-discard.comments.json']: linkedSidecar,
     },
+    trustedSidecarPaths: [savedPath],
   });
   await openMemoryFile(page);
   await page.locator('.document-tab').first().click();
@@ -291,6 +294,7 @@ test('a missing clean file is dropped without breaking the rest of the restored 
       [existingPath]: 'The remaining clean file',
       ['/tmp/still-here.comments.json']: linkedSidecar,
     },
+    trustedSidecarPaths: [existingPath],
   });
 
   await expect(page.locator('.app-modal')).toContainText('Could not open file');

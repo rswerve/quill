@@ -1,4 +1,6 @@
 import type { Page } from '@playwright/test';
+import { canonicalDocumentPath, dirname } from '../../src/utils/path';
+import { sidecarPath } from '../../src/utils/sidecarPath';
 
 interface MemoryTauriOptions {
   files?: Record<string, string>;
@@ -18,6 +20,48 @@ interface MemoryTauriOptions {
   /** Session-picker rows and previews for binding-policy tests. */
   claudeSessions?: unknown[];
   sessionPreviews?: Record<string, unknown>;
+  /** Documents whose pre-seeded sidecars represent bindings approved locally. */
+  trustedSidecarPaths?: string[];
+}
+
+interface SeededDocumentPermission {
+  session?: { sessionId: string; cwd: string; createdByQuill: boolean };
+  contextFolder?: string;
+}
+
+function seededSidecarPermissions(options: MemoryTauriOptions) {
+  const permissions: Record<string, SeededDocumentPermission> = {};
+  for (const documentPath of options.trustedSidecarPaths ?? []) {
+    const raw = options.files?.[sidecarPath(documentPath)];
+    if (!raw) continue;
+    try {
+      const sidecar = JSON.parse(raw) as {
+        aiSession?: { sessionId?: string; cwd?: string; createdByQuill?: boolean };
+        contextFolder?: string;
+      };
+      const permission: SeededDocumentPermission = {};
+      if (sidecar.aiSession?.sessionId && sidecar.aiSession.cwd) {
+        const createdByQuill = sidecar.aiSession.createdByQuill === true;
+        const cwd = createdByQuill ? dirname(documentPath) : sidecar.aiSession.cwd;
+        if (cwd) {
+          permission.session = {
+            sessionId: sidecar.aiSession.sessionId,
+            cwd: canonicalDocumentPath(cwd),
+            createdByQuill,
+          };
+        }
+      }
+      if (sidecar.contextFolder) {
+        permission.contextFolder = canonicalDocumentPath(sidecar.contextFolder);
+      }
+      if (permission.session || permission.contextFolder) {
+        permissions[canonicalDocumentPath(documentPath)] = permission;
+      }
+    } catch {
+      // Invalid sidecars intentionally remain untrusted in tests too.
+    }
+  }
+  return permissions;
 }
 
 /**
@@ -39,6 +83,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       foundSession,
       claudeSessions,
       sessionPreviews,
+      sidecarPermissions,
     }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
@@ -82,6 +127,19 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       globals.__quillCalls = calls;
       globals.__quillListeners = listeners;
       globals.__quillWriteFileBlocked = false;
+      if (Object.keys(sidecarPermissions).length > 0) {
+        const key = 'quill-sidecar-permissions-v1';
+        let existing: Record<string, SeededDocumentPermission> = {};
+        try {
+          existing = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<
+            string,
+            SeededDocumentPermission
+          >;
+        } catch {
+          // The application also treats an invalid local registry as empty.
+        }
+        localStorage.setItem(key, JSON.stringify({ ...existing, ...sidecarPermissions }));
+      }
       if (newSessionId) {
         Object.defineProperty(crypto, 'randomUUID', {
           configurable: true,
@@ -190,6 +248,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       foundSession: options.foundSession ?? null,
       claudeSessions: options.claudeSessions ?? [],
       sessionPreviews: options.sessionPreviews ?? {},
+      sidecarPermissions: seededSidecarPermissions(options),
     },
   );
 

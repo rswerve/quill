@@ -33,6 +33,12 @@ import {
 import { basename, dirname } from '../utils/path';
 import { sidecarPath } from '../utils/sidecarPath';
 import { clampZoom } from '../utils/zoomPreference';
+import {
+  authorizeSidecarAccess,
+  constrainSessionBinding,
+  rememberContextFolderPermission,
+  rememberSessionPermission,
+} from '../utils/sidecarPermissions';
 import type {
   AISessionBinding,
   ClaudeRunOptions,
@@ -257,40 +263,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [onNotice],
   );
 
-  const adoptLoadedSession = useCallback(
-    (binding: AISessionBinding | null): AISessionBinding | null => {
-      onReleaseSession(tabId);
-      if (!binding) {
-        setAISession(null);
-        return null;
-      }
-      const claim = onClaimSession(tabId, binding);
-      if (!claim.allowed) {
-        setAISession(null);
-        return null;
-      }
-      setAISession(binding);
-      return binding;
-    },
-    [onClaimSession, onReleaseSession, tabId],
-  );
-
-  const claimInteractiveSession = useCallback(
-    (binding: AISessionBinding): boolean => {
-      const claim = onClaimSession(tabId, binding);
-      if (!claim.allowed) {
-        onNotice({
-          title: 'Claude session already linked',
-          message: `This session is already linked to ${claim.ownerTitle ?? 'another open document'}. Choose a different session or unlink it there first.`,
-        });
-        return false;
-      }
-      setAISession(binding);
-      return true;
-    },
-    [onClaimSession, onNotice, tabId],
-  );
-
   const {
     filePath,
     isDirty,
@@ -303,6 +275,50 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     restoreDraft,
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+  const adoptLoadedSession = useCallback(
+    (binding: AISessionBinding | null, documentPath: string | null): AISessionBinding | null => {
+      onReleaseSession(tabId);
+      const constrained = constrainSessionBinding(binding, documentPath);
+      if (!constrained) {
+        setAISession(null);
+        return null;
+      }
+      const claim = onClaimSession(tabId, constrained);
+      if (!claim.allowed) {
+        setAISession(null);
+        return null;
+      }
+      setAISession(constrained);
+      return constrained;
+    },
+    [onClaimSession, onReleaseSession, tabId],
+  );
+
+  const claimInteractiveSession = useCallback(
+    (binding: AISessionBinding): AISessionBinding | null => {
+      const constrained = constrainSessionBinding(binding, filePath);
+      if (!constrained) {
+        onNotice({
+          title: 'Save before starting a session',
+          message: 'A Quill-created Claude session must run in the saved document’s folder.',
+        });
+        return null;
+      }
+      const claim = onClaimSession(tabId, constrained);
+      if (!claim.allowed) {
+        onNotice({
+          title: 'Claude session already linked',
+          message: `This session is already linked to ${claim.ownerTitle ?? 'another open document'}. Choose a different session or unlink it there first.`,
+        });
+        return null;
+      }
+      setAISession(constrained);
+      if (filePath) rememberSessionPermission(window.localStorage, filePath, constrained);
+      return constrained;
+    },
+    [filePath, onClaimSession, onNotice, tabId],
+  );
 
   const {
     comments,
@@ -616,7 +632,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         restoreReviewMarks(ed, loadedComments, loadedSuggestions);
         setTrackedChanges(getTrackedChanges(ed));
       }
-      const session = adoptLoadedSession(result.sidecar.aiSession ?? null);
+      const access = authorizeSidecarAccess(
+        window.localStorage,
+        result.filePath,
+        result.sidecar,
+        result.autoBound === true,
+      );
+      const session = adoptLoadedSession(access.aiSession, result.filePath);
       documentChat.restore(result.sidecar.chat, session);
       // A sidecar that exists but failed to parse means real comments/suggestions
       // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
@@ -643,13 +665,34 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         }
       }
       setLastKnownModel(lastChatModel(result.sidecar.chat) ?? lastReplyModel(loadedComments));
-      setContextFolder(result.sidecar.contextFolder ?? null);
-      if (result.autoBound && session) markDirty();
+      setContextFolder(access.contextFolder);
+      if (result.autoBound && session) {
+        rememberSessionPermission(window.localStorage, result.filePath, session);
+        markDirty();
+      }
+      const hasBlockedSidecarAccess = access.blockedSession || access.blockedContextFolder;
+      if (hasBlockedSidecarAccess) {
+        const blocked = [
+          access.blockedSession ? 'Claude session' : null,
+          access.blockedContextFolder ? 'reference folder' : null,
+        ]
+          .filter(Boolean)
+          .join(' and ');
+        onNotice({
+          title: 'Sidecar permissions need confirmation',
+          message: `The imported ${blocked} ${access.blockedSession && access.blockedContextFolder ? 'were' : 'was'} not activated. Session and folder access are local permissions, not portable document data. Relink them in Quill to grant access on this device.`,
+        });
+      }
       // Force the session choice up front: if we opened a non-empty doc with no
       // linked Claude session, surface the picker so the user binds one (and can
       // then call @claude from within the doc). Auto-bind is intentionally not
       // attempted — the user picks.
-      if (promptForSession && !session && result.content.trim().length > 0) {
+      if (
+        promptForSession &&
+        !session &&
+        !hasBlockedSidecarAccess &&
+        result.content.trim().length > 0
+      ) {
         openSessionPicker();
       }
     },
@@ -668,8 +711,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // Test escape hatch: bind an AI session without going through SessionPicker.
   useEffect(() => {
     const seed = typeof window !== 'undefined' ? window.__quillTestSession : undefined;
-    if (seed && onClaimSession(tabId, seed).allowed) setAISession(seed);
-  }, [onClaimSession, tabId]);
+    const constrained = constrainSessionBinding(seed, filePath);
+    if (constrained && onClaimSession(tabId, constrained).allowed) setAISession(constrained);
+  }, [filePath, onClaimSession, tabId]);
 
   function getMarkdown(): string {
     return editorRef.current?.getMarkdown() ?? '';
@@ -691,6 +735,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     if (path) {
       const liveEditor = editorRef.current?.getEditor();
       if (liveEditor) setImageBaseDir(liveEditor, dirname(path));
+      rememberSessionPermission(window.localStorage, path, aiSession);
+      rememberContextFolderPermission(window.localStorage, path, contextFolder);
       onRecentFile(path);
       setLastSavedAt(Date.now());
     }
@@ -720,7 +766,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       undefined,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
     );
-    if (path) setLastSavedAt(Date.now());
+    if (path) {
+      rememberSessionPermission(window.localStorage, path, aiSession);
+      rememberContextFolderPermission(window.localStorage, path, contextFolder);
+      setLastSavedAt(Date.now());
+    }
     return path;
   }, [
     filePath,
@@ -815,9 +865,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         restoreReviewMarks(ed, draftComments, draftSuggestions);
         setTrackedChanges(getTrackedChanges(ed));
       }
-      const session = adoptLoadedSession(draft.aiSession ?? null);
+      const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);
-      setContextFolder(draft.contextFolder ?? null);
+      const restoredContextFolder = draft.contextFolder ?? null;
+      setContextFolder(restoredContextFolder);
+      // Workspace recovery is local application state, unlike a portable
+      // sidecar. Preserve its bindings as locally approved permissions.
+      if (draft.filePath) {
+        rememberSessionPermission(window.localStorage, draft.filePath, session);
+        rememberContextFolderPermission(window.localStorage, draft.filePath, restoredContextFolder);
+      }
     },
     [adoptLoadedSession, documentChat, restoreDraft, setComments, setSuggestions],
   );
@@ -1290,8 +1347,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   const handlePickSession = useCallback(
     (binding: AISessionBinding) => {
-      if (!claimInteractiveSession(binding)) return false;
-      if (binding.sessionId !== aiSession?.sessionId) documentChat.restore(undefined, binding);
+      const claimed = claimInteractiveSession(binding);
+      if (!claimed) return false;
+      if (claimed.sessionId !== aiSession?.sessionId) documentChat.restore(undefined, claimed);
       markDirty();
       // If the picker was opened because of a @claude request with no session,
       // fire that request now against the freshly-linked session.
@@ -1299,13 +1357,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       pendingAIRequestRef.current = null;
       if (pending) {
         const comment = comments.find((c) => c.id === pending.commentId);
-        if (comment) void claudeReply.ask(comment, pending.userText, binding);
+        if (comment) void claudeReply.ask(comment, pending.userText, claimed);
       }
       const pendingChatTurn = pendingChatTurnRef.current;
       pendingChatTurnRef.current = null;
       if (pendingChatTurn) {
         setPanelMode('chat');
-        void documentChat.send(pendingChatTurn, binding);
+        void documentChat.send(pendingChatTurn, claimed);
       }
       return true;
     },
@@ -1341,9 +1399,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const handleUnlinkSession = useCallback(() => {
     onReleaseSession(tabId);
     setAISession(null);
+    if (filePath) rememberSessionPermission(window.localStorage, filePath, null);
     documentChat.reset();
     markDirty();
-  }, [documentChat, markDirty, onReleaseSession, tabId]);
+  }, [documentChat, filePath, markDirty, onReleaseSession, tabId]);
 
   const handleLinkContextFolder = useCallback(() => {
     void (async () => {
@@ -1352,6 +1411,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         const folder = await invoke<string | null>('show_folder_dialog');
         if (folder) {
           setContextFolder(folder);
+          if (filePath) {
+            rememberContextFolderPermission(window.localStorage, filePath, folder);
+          }
           markDirty();
         }
       } catch (e) {
@@ -1359,12 +1421,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         showError('Could not link folder', String(e));
       }
     })();
-  }, [markDirty, showError]);
+  }, [filePath, markDirty, showError]);
 
   const handleUnlinkContextFolder = useCallback(() => {
     setContextFolder(null);
+    if (filePath) rememberContextFolderPermission(window.localStorage, filePath, null);
     markDirty();
-  }, [markDirty]);
+  }, [filePath, markDirty]);
 
   const pendingSuggestionCount = countLogicalSuggestionCards(
     trackedChanges.filter((change) => change.status === 'pending'),

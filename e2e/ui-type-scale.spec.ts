@@ -105,6 +105,7 @@ async function openAuditDocument(page: Page) {
   await setupMemoryTauri(page, {
     openPath: DOC_PATH,
     files: { [DOC_PATH]: DOC, [SIDECAR_PATH]: sidecar },
+    trustedSidecarPaths: [DOC_PATH],
   });
   await openMemoryFile(page);
 }

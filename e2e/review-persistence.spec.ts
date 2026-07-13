@@ -47,6 +47,7 @@ async function openLiveComment(
     openPath: DOC_PATH,
     savePath: DOC_PATH,
     mockAI: options.mockAI,
+    trustedSidecarPaths: options.mockAI ? [DOC_PATH] : [],
     files: {
       [DOC_PATH]: 'prefix hello world',
       [SIDECAR_PATH]: sidecar({
@@ -105,6 +106,7 @@ async function openWithCommentedClaudeReplacement(
     savePath: DOC_PATH,
     mockAI: true,
     aiReplyText: reply,
+    trustedSidecarPaths: [DOC_PATH],
     files: {
       [DOC_PATH]: 'hello world',
       [SIDECAR_PATH]: sidecar({
@@ -602,6 +604,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
       savePath: DOC_PATH,
       mockAI: true,
       aiReplyText: EDIT_REPLY,
+      trustedSidecarPaths: [DOC_PATH],
       files: {
         [DOC_PATH]: 'hello world',
         [SIDECAR_PATH]: sidecar({
@@ -726,6 +729,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await setupMemoryTauri(page, {
       openPath: DOC_PATH,
       mockAI,
+      trustedSidecarPaths: mockAI ? [DOC_PATH] : [],
       files: {
         [DOC_PATH]: 'hello world',
         [SIDECAR_PATH]: sidecar({

@@ -228,6 +228,65 @@ test('the first no-session send queues through the picker and starts after linki
   expect(spawn.prompt).toContain('USER MESSAGE:\nPlease summarize this');
 });
 
+test('an imported sidecar cannot silently grant Claude filesystem scope', async ({ page }) => {
+  const path = '/docs/imported.md';
+  const sidecarPath = '/docs/imported.comments.json';
+  const untrustedRoot = '/private/imported-secret';
+  await setupMemoryTauri(page, {
+    files: {
+      [path]: 'Imported document',
+      [sidecarPath]: JSON.stringify({
+        version: 2,
+        comments: [],
+        suggestions: [],
+        aiSession: {
+          provider: 'claude-code',
+          sessionId: 'imported-session',
+          cwd: untrustedRoot,
+          linkedAt: '2026-07-13T00:00:00.000Z',
+          createdByQuill: true,
+        },
+        contextFolder: untrustedRoot,
+      }),
+    },
+    openPath: path,
+    mockAI: true,
+    aiReplyText: 'Safe local response.',
+  });
+
+  await openMemoryFile(page);
+  const permissionNotice = page.locator('.app-modal');
+  await expect(permissionNotice).toContainText('Sidecar permissions need confirmation');
+  const spawnedBeforeConsent = await page.evaluate(
+    () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
+  );
+  expect(spawnedBeforeConsent).toBeUndefined();
+  await permissionNotice.getByRole('button', { name: 'OK' }).click();
+
+  await openChat(page);
+  await sendChat(page, 'Review this imported document');
+  await expect(page.locator('.session-picker')).toBeVisible();
+  const stillNotSpawned = await page.evaluate(
+    () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
+  );
+  expect(stillNotSpawned).toBeUndefined();
+
+  await page.locator('.session-picker-new').click();
+  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+    'Safe local response.',
+  );
+  const spawn = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __quillLastSpawnArgs: { cwd: string; addDir: string | null; allowCreate: boolean };
+        }
+      ).__quillLastSpawnArgs,
+  );
+  expect(spawn).toMatchObject({ cwd: '/docs', addDir: null, allowCreate: true });
+  expect(spawn.cwd).not.toBe(untrustedRoot);
+});
+
 test('chat persists per document/session and a new session starts a fresh thread', async ({
   page,
 }) => {
@@ -246,6 +305,7 @@ test('chat persists per document/session and a new session starts a fresh thread
     openPath: path,
     mockAI: true,
     aiReplyText: 'This answer should persist.',
+    trustedSidecarPaths: [path],
   });
   await openMemoryFile(page);
   await openChat(page);

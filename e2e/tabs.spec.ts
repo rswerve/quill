@@ -229,6 +229,7 @@ for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
         [ownedPath]: 'Original owned document',
         ['/tmp/owned.comments.json']: sidecar(),
       },
+      trustedSidecarPaths: [ownedPath],
     });
 
     await openMemoryFile(page);
