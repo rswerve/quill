@@ -55,24 +55,6 @@ export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Sug
     });
 }
 
-/**
- * Refresh comments' stored anchor ranges from their live marks so the sidecar
- * captures where each comment actually sits after edits (the stored from/to
- * are creation-time snapshots; the marks are the truth). Comments without a
- * live mark (resolved ones) keep their stored range.
- */
-export function refreshCommentRanges(
-  comments: Comment[],
-  findLiveRange: (id: string) => { from: number; to: number } | null,
-): Comment[] {
-  return comments.map((c) => {
-    const live = findLiveRange(c.id);
-    return live && (live.from !== c.from || live.to !== c.to)
-      ? { ...c, from: live.from, to: live.to }
-      : c;
-  });
-}
-
 function clampRange(from: number, to: number, size: number): { from: number; to: number } | null {
   const clampedFrom = Math.max(0, Math.min(from, size));
   const clampedTo = Math.max(0, Math.min(to, size));
