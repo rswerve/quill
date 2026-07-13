@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react';
-import { Channel, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import type {
   AISessionBinding,
   Comment,
@@ -11,13 +11,9 @@ import type {
 } from '../types';
 import { clip } from '../utils/format';
 import { stripTrailingNewlines } from '../utils/trackedEdits';
+import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 
-export type ChunkEvent =
-  | { kind: 'model'; model: string }
-  | { kind: 'delta'; text: string }
-  | { kind: 'done' }
-  | { kind: 'error'; message: string }
-  | { kind: 'cancelled' };
+export type { ChunkEvent } from './useClaudeResumeStream';
 
 /** Live text for a comment's anchored range and its enclosing paragraph. */
 export interface RangeTexts {
@@ -61,7 +57,7 @@ export interface PromptContext {
   files: string[];
 }
 
-const FENCE = '```quill-edits';
+const FENCE = QUILL_EDITS_FENCE;
 
 /** How a failed @claude reply should be recovered from, derived from its message. */
 export type ReplyErrorKind = 'transient' | 'session' | 'auth' | 'unknown';
@@ -287,80 +283,26 @@ export function buildPrompt(
   ].join('\n');
 }
 
-interface QuillMock {
-  spawn: (
-    args: {
-      sessionId: string;
-      cwd: string;
-      prompt: string;
-      addDir: string | null;
-      allowCreate: boolean;
-      model: ClaudeRunOptions['model'];
-      effort: ClaudeRunOptions['effort'];
-    },
-    onEvent: (event: ChunkEvent) => void,
-  ) => string; // returns cancel token
-  cancel?: (token: string) => void;
-  compaction?: CompactionInfo;
-  /** Manifest returned in place of the list_context_files invoke. */
-  contextFiles?: string[];
-}
-
-declare global {
-  interface Window {
-    __quillMock?: QuillMock;
-    __quillTestSession?: AISessionBinding;
-  }
-}
-
-// Low-level dispatch to cancel a spawned reply by its token: routes to the e2e
-// mock when present, otherwise the Tauri command. Rejects (rather than throwing
-// synchronously) so every caller can settle it with its own error posture —
-// swallow for orphan cleanup, log for a user-initiated cancel.
-async function sendCancel(token: string): Promise<void> {
-  const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
-  if (mock) {
-    mock.cancel?.(token);
-    return;
-  }
-  await invoke('cancel_claude_resume', { cancelToken: token });
-}
-
 export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyReturn {
-  const tokensRef = useRef<Map<string, string>>(new Map());
+  const stream = useClaudeResumeStream();
   // Transient, in-memory only — NEVER persisted to the sidecar. Keyed by
   // replyId so a retry can re-issue the exact same request.
   const inputsRef = useRef<Map<string, ReplyInputs>>(new Map());
   // Per-replyId generation counter. A retry reuses the same replyId, so a late
   // event from the superseded original must not clobber the retried reply; each
   // spawn captures its generation and drops events once it's no longer current.
-  const genRef = useRef<Map<string, number>>(new Map());
   // Guards against a double-fire retry (e.g. an impatient double-click) while a
   // retry for the same replyId is already being launched.
   const retryingRef = useRef<Set<string>>(new Set());
-
-  // Best-effort cancel of a still-tracked spawn, e.g. when a stale generation
-  // terminates or a retry supersedes a slow original. Never throws into a
-  // stream handler.
-  const orphanCancel = useCallback((replyId: string) => {
-    const token = tokensRef.current.get(replyId);
-    if (!token) return;
-    tokensRef.current.delete(replyId);
-    void sendCancel(token).catch(() => {
-      // ignore — the child may already be gone
-    });
-  }, []);
 
   // Shared spawn/stream core for both the first ask and a retry. `replyId` is
   // already reset to a pending state by the caller (startAIReply / retryAIReply).
   const runSpawn = useCallback(
     async (replyId: string, comment: Comment, userText: string, binding: AISessionBinding) => {
-      // Claim the next generation for this replyId. Any spawn still streaming
-      // under an earlier generation is now stale and its events are dropped.
-      const generation = (genRef.current.get(replyId) ?? 0) + 1;
-      genRef.current.set(replyId, generation);
-      const isCurrent = () => genRef.current.get(replyId) === generation;
-
+      // Claim this reply generation before any asynchronous preflight. A user
+      // can cancel while compaction/context probes are still pending, before
+      // the transport has enough information to spawn the child.
+      const streamGeneration = stream.begin(replyId);
       const mock = typeof window !== 'undefined' ? window.__quillMock : undefined;
 
       const fresh = binding.createdByQuill === true;
@@ -404,40 +346,8 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         fresh,
       );
 
-      // Per-ask streaming state. We accumulate the raw text and only surface the
-      // prose before the ```quill-edits fence to the thread. To avoid leaking a
-      // partial fence when it straddles deltas, we hold back the last
-      // (FENCE.length - 1) chars until we know they can't begin a fence.
-      let rawAccum = '';
-      let visibleEmitted = 0;
-
-      const emitVisible = (flush: boolean) => {
-        const fenceStart = rawAccum.indexOf(FENCE);
-        // Once the fence is found, everything visible lives before it and is
-        // final — nothing after it should ever reach the thread.
-        const visibleCap = fenceStart === -1 ? rawAccum.length : fenceStart;
-        // While no fence is seen yet, hold back only the trailing run that could
-        // still grow into one — i.e. the longest suffix of what we've received
-        // that is a prefix of FENCE. Ordinary prose (which can't begin a fence)
-        // streams through immediately. At end-of-stream we flush everything.
-        let holdback = 0;
-        if (fenceStart === -1 && !flush) {
-          for (let n = Math.min(FENCE.length - 1, rawAccum.length); n > 0; n--) {
-            if (FENCE.startsWith(rawAccum.slice(rawAccum.length - n))) {
-              holdback = n;
-              break;
-            }
-          }
-        }
-        const safeEnd = Math.max(visibleEmitted, visibleCap - holdback);
-        if (safeEnd > visibleEmitted) {
-          opts.appendAIReplyChunk(comment.id, replyId, rawAccum.slice(visibleEmitted, safeEnd));
-          visibleEmitted = safeEnd;
-        }
-      };
-
-      const finalize = () => {
-        const { visible, block } = splitVisible(rawAccum);
+      const finalize = (rawText: string, visibleText: string) => {
+        const { block } = splitVisible(rawText);
         let parsed: QuillEditsBlock | null = null;
         if (block) {
           try {
@@ -449,9 +359,8 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
 
         if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
           // The prose we already streamed; if it was empty, surface the summary.
-          if (rawAccum.slice(0, visibleEmitted).trim() === '' && parsed.summary) {
+          if (visibleText.trim() === '' && parsed.summary) {
             opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
-            visibleEmitted = rawAccum.indexOf(FENCE);
           }
           // Edits are document-scale: the highlight frames the request but
           // does not fence where changes may land.
@@ -472,83 +381,15 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
               `\n\n(${skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`,
             );
           }
-        } else {
-          // No edits — make sure whatever prose we held back gets flushed. If a
-          // fence was present but unparseable, `visible` excludes the bad block.
-          if (visibleEmitted < visible.length) {
-            opts.appendAIReplyChunk(comment.id, replyId, visible.slice(visibleEmitted));
-            visibleEmitted = visible.length;
-          }
-        }
-      };
-
-      // This spawn's own cancel token, captured as soon as the spawn returns it.
-      // The dispatch closure cancels/untracks by THIS token, never by replyId —
-      // after a retry the replyId points at the newer spawn, so a stale event
-      // resolving orphanCancel(replyId) would tear down the live retry instead.
-      let spawnToken: string | undefined;
-
-      const dispatch = (msg: ChunkEvent) => {
-        // A superseded spawn (a slower original that a retry replaced) must not
-        // mutate the reply the newer generation now owns. Drop its events; on a
-        // terminal event, tear down THIS orphaned child by its own token.
-        if (!isCurrent()) {
-          if (msg.kind === 'done' || msg.kind === 'cancelled' || msg.kind === 'error') {
-            if (spawnToken !== undefined) void sendCancel(spawnToken).catch(() => {});
-          }
-          return;
-        }
-        if (msg.kind === 'model') {
-          opts.setAIReplyModel?.(comment.id, replyId, msg.model);
-          opts.onModelObserved?.(msg.model);
-        } else if (msg.kind === 'delta') {
-          rawAccum += msg.text;
-          emitVisible(false);
-        } else if (msg.kind === 'done') {
-          emitVisible(true);
-          finalize();
-          opts.finishAIReply(comment.id, replyId);
-          if (tokensRef.current.get(replyId) === spawnToken) tokensRef.current.delete(replyId);
-          inputsRef.current.delete(replyId);
-        } else if (msg.kind === 'cancelled') {
-          // User stopped this reply. Do NOT finalize — a half-streamed reply
-          // must not apply partial tracked edits or masquerade as a finished
-          // answer. Mark it cancelled (a neutral, retryable state) and keep the
-          // stashed inputs so the Re-run button can re-issue the request.
-          opts.cancelAIReply(comment.id, replyId);
-          if (tokensRef.current.get(replyId) === spawnToken) tokensRef.current.delete(replyId);
-        } else if (msg.kind === 'error') {
-          opts.failAIReply(comment.id, replyId, msg.message);
-          if (tokensRef.current.get(replyId) === spawnToken) tokensRef.current.delete(replyId);
-          // Keep the stashed inputs — a retry needs them.
         }
       };
 
       // Read after asynchronous preflight work so a just-changed footer choice
       // governs the child we are about to spawn.
       const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
-      if (mock) {
-        spawnToken = mock.spawn(
-          {
-            sessionId: binding.sessionId,
-            cwd: binding.cwd,
-            prompt,
-            addDir: contextFolder,
-            allowCreate: fresh,
-            model: runOptions.model,
-            effort: runOptions.effort,
-          },
-          dispatch,
-        );
-        tokensRef.current.set(replyId, spawnToken);
-        return;
-      }
-
-      const channel = new Channel<ChunkEvent>();
-      channel.onmessage = dispatch;
-
-      try {
-        const cancelToken = await invoke<string>('spawn_claude_resume', {
+      await stream.run(
+        replyId,
+        {
           sessionId: binding.sessionId,
           cwd: binding.cwd,
           prompt,
@@ -556,23 +397,25 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           allowCreate: fresh,
           model: runOptions.model,
           effort: runOptions.effort,
-          onEvent: channel,
-        });
-        spawnToken = cancelToken;
-        if (!isCurrent()) {
-          // A retry superseded this spawn while we awaited — cancel the orphan
-          // rather than tracking it against a replyId the newer generation owns.
-          // Route through sendCancel so the e2e mock's cancel fires too (a raw
-          // invoke would skip it and leak the orphan in mock-driven tests).
-          void sendCancel(cancelToken).catch(() => {});
-          return;
-        }
-        tokensRef.current.set(replyId, cancelToken);
-      } catch (e) {
-        if (isCurrent()) opts.failAIReply(comment.id, replyId, String(e));
-      }
+        },
+        {
+          onModel: (model) => {
+            opts.setAIReplyModel?.(comment.id, replyId, model);
+            opts.onModelObserved?.(model);
+          },
+          onVisibleChunk: (chunk) => opts.appendAIReplyChunk(comment.id, replyId, chunk),
+          onDone: (rawText, visibleText) => {
+            finalize(rawText, visibleText);
+            opts.finishAIReply(comment.id, replyId);
+            inputsRef.current.delete(replyId);
+          },
+          onCancelled: () => opts.cancelAIReply(comment.id, replyId),
+          onError: (message) => opts.failAIReply(comment.id, replyId, message),
+        },
+        streamGeneration,
+      );
     },
-    [opts],
+    [opts, stream],
   );
 
   const ask = useCallback(
@@ -593,7 +436,9 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
       try {
         // Tear down any orphan the failed original may have left tracked, then
         // reset the reply in place (reuses the same entry, clears the error).
-        orphanCancel(replyId);
+        void stream.cancel(replyId).catch(() => {
+          // ignore — the child may already be gone
+        });
         opts.retryAIReply(inputs.comment.id, replyId);
         // Re-issue the identical request against the same comment. Ranges are
         // re-read live inside runSpawn via opts.getRangeTexts.
@@ -602,7 +447,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         retryingRef.current.delete(replyId);
       }
     },
-    [opts, runSpawn, orphanCancel],
+    [opts, runSpawn, stream],
   );
 
   const cancel = useCallback(
@@ -613,22 +458,15 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
       // `cancelled` event it may never send. Bumping the generation makes the
       // pending runSpawn's post-await isCurrent() false, so it orphan-cancels
       // its own child instead of streaming to completion.
-      genRef.current.set(replyId, (genRef.current.get(replyId) ?? 0) + 1);
       const commentId = inputsRef.current.get(replyId)?.comment.id;
       if (commentId) opts.cancelAIReply(commentId, replyId);
-
-      // If a token is already tracked, tear its child down now; the generation
-      // bump alone won't reach an in-flight child that has stopped checking.
-      const token = tokensRef.current.get(replyId);
-      if (!token) return;
-      tokensRef.current.delete(replyId);
       try {
-        await sendCancel(token);
+        await stream.cancel(replyId);
       } catch (e) {
         console.error('Failed to cancel claude reply:', e);
       }
     },
-    [opts],
+    [opts, stream],
   );
 
   return { ask, cancel, retry };
