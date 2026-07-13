@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
+import { activeTabHost, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 const DOC_PATH = '/tmp/comment-history.md';
 const SIDECAR_PATH = '/tmp/comment-history.comments.json';
@@ -81,20 +81,21 @@ test('All is a document-ordered history list with independent scrolling; Open st
     .reverse();
   await openReviewFile(page, paragraphs, comments);
 
-  await page.locator('.comments-head .filter').click();
-  const history = page.locator('.comment-history-list');
+  const activeTab = activeTabHost(page);
+  await activeTab.locator('.comments-head .filter').click();
+  const history = activeTab.locator('.comment-history-list');
   await expect(history).toBeVisible();
   await expect(page.locator('.comment-card')).toHaveCount(comments.length);
   await expect(page.locator('.offscreen-pill')).toHaveCount(0);
-  await expect(page.locator('.comment-layer-scroll')).toHaveCount(0);
-  await expect(page.locator('.editor-bottom-spacer')).toHaveCount(0);
+  await expect(activeTab.locator('.comment-layer-scroll')).toHaveCount(0);
+  await expect(activeTab.locator('.editor-bottom-spacer')).toHaveCount(0);
   expect(
     await page
       .locator('.comment-card')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
   ).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
 
-  const editorScroll = page.locator('.editor-scroll-area');
+  const editorScroll = activeTab.locator('.editor-scroll-area');
   const editorBefore = await editorScroll.evaluate((element) => element.scrollTop);
   await history.hover();
   await page.mouse.wheel(0, 700);
@@ -102,15 +103,15 @@ test('All is a document-ordered history list with independent scrolling; Open st
   expect(await editorScroll.evaluate((element) => element.scrollTop)).toBe(editorBefore);
   await expect(page.locator('.comment-card')).toHaveCount(comments.length);
 
-  await page.locator('.comments-head .filter').click();
+  await activeTab.locator('.comments-head .filter').click();
   await expect(history).toHaveCount(0);
-  await expect(page.locator('.comment-layer-scroll')).toBeVisible();
+  await expect(activeTab.locator('.comment-layer-scroll')).toBeVisible();
   await editorScroll.evaluate((element) => {
     element.scrollTop = 900;
     element.dispatchEvent(new Event('scroll'));
   });
   await expect
-    .poll(() => page.locator('.comment-layer-scroll').getAttribute('style'))
+    .poll(() => activeTab.locator('.comment-layer-scroll').getAttribute('style'))
     .toContain('translateY(-900px)');
 });
 
@@ -143,12 +144,13 @@ test('View suggestion from All switches to Open before focusing the existing sug
   };
   await openReviewFile(page, paragraphs, [origin], [suggestion]);
 
-  await page.locator('.comments-head .filter').click();
-  await expect(page.locator('.comment-history-list')).toBeVisible();
+  const activeTab = activeTabHost(page);
+  await activeTab.locator('.comments-head .filter').click();
+  await expect(activeTab.locator('.comment-history-list')).toBeVisible();
   await expect(page.locator('.suggestion-card')).toHaveCount(0);
   await page.getByRole('button', { name: /View suggestion/i }).click();
 
-  await expect(page.locator('.comments-head .filter')).toContainText('Open');
+  await expect(activeTab.locator('.comments-head .filter')).toContainText('Open');
   await expect(page.locator('.comment-history-list')).toHaveCount(0);
   await expect(page.locator('.suggestion-card-active')).toBeVisible();
 });
@@ -165,8 +167,9 @@ test('resolved comments jump only to safely located text and unresolve never sta
   stale.anchorText = 'repeated anchor';
   await openReviewFile(page, paragraphs, [stale]);
 
-  await page.locator('.comments-head .filter').click();
-  const editorScroll = page.locator('.editor-scroll-area');
+  const activeTab = activeTabHost(page);
+  await activeTab.locator('.comments-head .filter').click();
+  const editorScroll = activeTab.locator('.editor-scroll-area');
   await editorScroll.evaluate((element) => {
     element.scrollTop = 300;
   });
@@ -190,8 +193,9 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   stale.anchorText = 'unique moved anchor';
   await openReviewFile(page, paragraphs, [stale]);
 
-  await page.locator('.comments-head .filter').click();
-  const editorScroll = page.locator('.editor-scroll-area');
+  const activeTab = activeTabHost(page);
+  await activeTab.locator('.comments-head .filter').click();
+  const editorScroll = activeTab.locator('.editor-scroll-area');
   await page.locator('.comment-card').click();
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await page.getByTitle('Unresolve').click();
@@ -199,5 +203,5 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   await expect(page.locator('.comment-card-resolved')).toHaveCount(0);
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveText('unique moved anchor');
   await expect(page.locator('.comment-inline-notice')).toHaveCount(0);
-  await expect(page.locator('.comments-head .filter')).toBeEnabled();
+  await expect(activeTab.locator('.comments-head .filter')).toBeEnabled();
 });

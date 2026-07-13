@@ -91,7 +91,7 @@ export interface DocumentTabHandle {
   save: () => Promise<string | null>;
   saveAs: () => Promise<string | null>;
   open: () => Promise<void>;
-  openPath: (path: string) => Promise<void>;
+  openPath: (path: string) => Promise<boolean>;
   newDocument: () => void;
   exportPdf: () => void;
   setMode: (suggesting: boolean) => void;
@@ -111,15 +111,26 @@ export interface DocumentTabHandle {
   deleteDraft: () => Promise<void>;
 }
 
+export interface DocumentTabMetaSnapshot {
+  filePath: string | null;
+  title: string;
+  isDirty: boolean;
+}
+
 interface DocumentTabProps {
+  tabId: string;
   isActive: boolean;
+  initialFilePath?: string | null;
   defaultZoom: number;
   getClaudeRunOptions: () => ClaudeRunOptions;
-  onChromeChange: (snapshot: DocumentTabChromeSnapshot) => void;
-  onOpenSessionPicker: () => void;
+  onChromeChange: (tabId: string, snapshot: DocumentTabChromeSnapshot) => void;
+  onMetaChange: (tabId: string, snapshot: DocumentTabMetaSnapshot) => void;
+  onInitialFileLoaded: (tabId: string, loaded: boolean) => void;
+  onOpenSessionPicker: (tabId: string) => void;
   onNotice: (notice: { title: string; message: string }) => void;
   onRecentFile: (path: string) => void;
   shellModalOpen: boolean;
+  allowDraftRecovery?: boolean;
 }
 
 function countWords(text: string): number {
@@ -148,19 +159,25 @@ function readDocumentStats(editor: TiptapEditor | null): DocumentStats {
 
 const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function DocumentTab(
   {
+    tabId,
     isActive,
+    initialFilePath = null,
     defaultZoom,
     getClaudeRunOptions,
     onChromeChange,
+    onMetaChange,
+    onInitialFileLoaded,
     onOpenSessionPicker,
     onNotice,
     onRecentFile,
     shellModalOpen,
+    allowDraftRecovery = true,
   },
   ref,
 ) {
   const [editor, setEditor] = useState<TiptapEditor | null>(null);
   const [chromeRevision, setChromeRevision] = useState(0);
+  const initialOpenStartedRef = useRef(false);
   const editorRef = useRef<EditorRef>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   // The one annotation (comment or suggestion) currently in focus: its card
@@ -205,6 +222,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // session was linked (resumed once the user picks one, like AI replies).
   const [reviewOpen, setReviewOpen] = useState(false);
   const pendingReviewRef = useRef(false);
+  const openSessionPicker = useCallback(
+    () => onOpenSessionPicker(tabId),
+    [onOpenSessionPicker, tabId],
+  );
 
   const showError = useCallback(
     (title: string, message: string) => onNotice({ title, message }),
@@ -285,11 +306,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [recoveryDraft, setRecoveryDraft] = useState<DraftFile | null>(null);
 
   useEffect(() => {
+    if (!allowDraftRecovery) return;
     void (async () => {
       const draft = await readDraft();
       if (draft) setRecoveryDraft(draft);
     })();
-  }, [readDraft]);
+  }, [allowDraftRecovery, readDraft]);
 
   // Read the live document text for a comment's anchored range and its
   // enclosing paragraph, as plaintext (matching how Claude's `find` strings are
@@ -510,6 +532,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return () => cancelAnimationFrame(raf);
   }, [zoom]);
 
+  // A mounted background tab keeps its editor state, but layout APIs return
+  // stale/zero coordinates while its host is display:none. Re-measure after
+  // activation so comments and the selection affordance snap back to the
+  // preserved scroll position in the newly visible geometry.
+  useEffect(() => {
+    if (!isActive || !editor) return;
+    const raf = requestAnimationFrame(() => {
+      const scrollArea = scrollAreaRef.current?.querySelector(
+        '.editor-scroll-area',
+      ) as HTMLElement | null;
+      if (scrollArea) setScrollTop(scrollArea.scrollTop);
+      setScrollTick((tick) => tick + 1);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [editor, isActive]);
+
   const loadFileResult = useCallback(
     (result: {
       content: string;
@@ -519,7 +557,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     }) => {
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
-      setImageBaseDir(dirname(result.filePath));
+      const liveEditor = editorRef.current?.getEditor();
+      if (liveEditor) setImageBaseDir(liveEditor, dirname(result.filePath));
       onRecentFile(result.filePath);
       setLastSavedAt(Date.now());
       editorRef.current?.setContent(result.content);
@@ -570,10 +609,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // then call @claude from within the doc). Auto-bind is intentionally not
       // attempted — the user picks.
       if (!session && result.content.trim().length > 0) {
-        onOpenSessionPicker();
+        openSessionPicker();
       }
     },
-    [setComments, setSuggestions, onNotice, onOpenSessionPicker, onRecentFile],
+    [setComments, setSuggestions, onNotice, openSessionPicker, onRecentFile],
   );
 
   // Test escape hatch: bind an AI session without going through SessionPicker.
@@ -598,7 +637,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     // The document gained (or moved) a directory — relative image paths now
     // resolve against it for anything drawn from here on.
     if (path) {
-      setImageBaseDir(dirname(path));
+      const liveEditor = editorRef.current?.getEditor();
+      if (liveEditor) setImageBaseDir(liveEditor, dirname(path));
       onRecentFile(path);
       setLastSavedAt(Date.now());
     }
@@ -647,14 +687,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const performOpenPath = useCallback(
     async (path: string) => {
       const result = await openFilePath(path);
-      if (result) loadFileResult(result);
+      if (!result) return false;
+      loadFileResult(result);
+      return true;
     },
     [openFilePath, loadFileResult],
   );
 
+  useEffect(() => {
+    if (!editor || !initialFilePath || initialOpenStartedRef.current) return;
+    initialOpenStartedRef.current = true;
+    void performOpenPath(initialFilePath).then((loaded) => onInitialFileLoaded(tabId, loaded));
+  }, [editor, initialFilePath, onInitialFileLoaded, performOpenPath, tabId]);
+
   const performNew = useCallback(() => {
     newFile();
-    setImageBaseDir(null);
+    const liveEditor = editorRef.current?.getEditor();
+    if (liveEditor) setImageBaseDir(liveEditor, null);
     editorRef.current?.setContent('');
     setComments([]);
     setSuggestions([]);
@@ -673,7 +722,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setRecoveryDraft(null);
     restoreDraft(draft.filePath);
     setLastSavedAt(null);
-    setImageBaseDir(draft.filePath ? dirname(draft.filePath) : null);
+    const liveEditor = editorRef.current?.getEditor();
+    if (liveEditor) {
+      setImageBaseDir(liveEditor, draft.filePath ? dirname(draft.filePath) : null);
+    }
     editorRef.current?.setContent(draft.content);
     const draftComments = draft.comments ?? [];
     const draftSuggestions = draft.suggestions ?? [];
@@ -896,7 +948,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             void claudeReply.ask(comment, text, aiSession);
           } else {
             pendingAIRequestRef.current = { commentId: comment.id, userText: text };
-            onOpenSessionPicker();
+            openSessionPicker();
           }
         }
       }
@@ -914,7 +966,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       addReply,
       aiSession,
       claudeReply,
-      onOpenSessionPicker,
+      openSessionPicker,
     ],
   );
 
@@ -1109,13 +1161,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // No session linked yet — stash the request and prompt the user to
         // link one. handlePickSession fires the stashed request afterwards.
         pendingAIRequestRef.current = { commentId, userText };
-        onOpenSessionPicker();
+        openSessionPicker();
         return;
       }
       // Fire-and-forget; useClaudeReply handles errors via failAIReply.
       void claudeReply.ask(comment, userText, aiSession);
     },
-    [aiSession, comments, claudeReply, onOpenSessionPicker],
+    [aiSession, comments, claudeReply, openSessionPicker],
   );
 
   const handlePickSession = useCallback(
@@ -1143,11 +1195,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const handleReviewDocument = useCallback(() => {
     if (!aiSession) {
       pendingReviewRef.current = true;
-      onOpenSessionPicker();
+      openSessionPicker();
       return;
     }
     setReviewOpen(true);
-  }, [aiSession, onOpenSessionPicker]);
+  }, [aiSession, openSessionPicker]);
 
   const handleReviewSubmit = useCallback(
     (options: ReviewOptions) => {
@@ -1212,7 +1264,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setZoom: (nextZoom) => setZoom(clampZoom(nextZoom)),
       acceptAll: handleAcceptAll,
       rejectAll: handleRejectAll,
-      openSessionPicker: onOpenSessionPicker,
+      openSessionPicker,
       closeSessionPicker: handleCloseSessionPicker,
       pickSession: handlePickSession,
       focusFind: () => setFindOpen(true),
@@ -1238,7 +1290,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       handleSaveAs,
       handleUnlinkContextFolder,
       handleUnlinkSession,
-      onOpenSessionPicker,
+      openSessionPicker,
       performNew,
       performOpen,
       performOpenPath,
@@ -1246,8 +1298,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   );
 
   useEffect(() => {
+    onMetaChange(tabId, {
+      filePath,
+      title: filePath ? basename(filePath) : 'Untitled',
+      isDirty,
+    });
+  }, [filePath, isDirty, onMetaChange, tabId]);
+
+  useEffect(() => {
     if (!isActive) return;
-    onChromeChange({
+    onChromeChange(tabId, {
       editor,
       filePath,
       isDirty,
@@ -1273,6 +1333,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     lastSavedAt,
     onChromeChange,
     pendingSuggestionCount,
+    tabId,
     zoom,
   ]);
 
@@ -1280,7 +1341,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     <>
       <div className="studio-body">
         <div className="workspace doc-scroll" ref={scrollAreaRef}>
-          {findOpen && (
+          {findOpen && isActive && (
             <FindBar
               editor={editor}
               onClose={() => {
@@ -1299,6 +1360,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 key={editorKey}
                 ref={editorRef}
                 initialContent=""
+                isActive={isActive}
                 isSuggesting={isSuggesting}
                 authorID={AUTHOR}
                 onUpdate={markDirty}
@@ -1348,6 +1410,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           commentComposer={commentComposerOpen ? pendingCommentSelection : null}
           scrollTop={scrollTop}
           zoom={zoom}
+          layoutRevision={scrollTick}
           onReply={(id, text) => {
             addReply(id, text, AUTHOR);
             markDirty();
@@ -1360,7 +1423,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             markDirty();
           }}
           onViewReplySuggestion={handleViewReplySuggestion}
-          onOpenSessionPicker={onOpenSessionPicker}
+          onOpenSessionPicker={openSessionPicker}
           onResolve={handleResolveComment}
           onUnresolve={handleUnresolveComment}
           onDelete={handleDeleteComment}

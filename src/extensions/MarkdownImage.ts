@@ -1,16 +1,18 @@
 import Image from '@tiptap/extension-image';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import type { Editor } from '@tiptap/react';
 
-/**
- * Directory of the currently open document. Relative image paths in the
- * Markdown (`./pic.png`, `images/a.jpg`) are resolved against it for
- * display. Null when the document has never been saved (nothing to resolve
- * against) — relative images then simply fail to load until first save.
- */
-let imageBaseDir: string | null = null;
+interface MarkdownImageStorage {
+  baseDir: string | null;
+}
 
-export function setImageBaseDir(dir: string | null) {
-  imageBaseDir = dir;
+function imageStorage(editor: Editor): MarkdownImageStorage {
+  return (editor.storage as unknown as Record<string, MarkdownImageStorage>).image;
+}
+
+/** Set the document directory on one editor instance only. */
+export function setImageBaseDir(editor: Editor, dir: string | null) {
+  imageStorage(editor).baseDir = dir;
 }
 
 function isTauri(): boolean {
@@ -22,7 +24,7 @@ function isTauri(): boolean {
  * keeps whatever the Markdown said (so serialization is untouched); only the
  * rendered DOM gets the rewritten URL.
  */
-export function resolveImageSrc(src: string): string {
+export function resolveImageSrc(src: string, imageBaseDir: string | null): string {
   // Scheme-prefixed (https:, data:, asset:, file:, …) — display as-is.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;
   // Relative path: resolve against the open document's directory. Outside
@@ -41,10 +43,17 @@ export function resolveImageSrc(src: string): string {
  * through Tauri's asset protocol.
  */
 export const MarkdownImage = Image.extend({
+  addStorage(): MarkdownImageStorage {
+    return { baseDir: null };
+  },
+
   renderHTML({ HTMLAttributes }) {
     const attrs = { ...HTMLAttributes };
     if (typeof attrs.src === 'string') {
-      attrs.src = resolveImageSrc(attrs.src);
+      attrs.src = resolveImageSrc(
+        attrs.src,
+        this.editor ? imageStorage(this.editor).baseDir : null,
+      );
     }
     return ['img', attrs];
   },

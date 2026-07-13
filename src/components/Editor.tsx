@@ -32,6 +32,7 @@ export interface EditorRef {
 
 interface EditorProps {
   initialContent?: string;
+  isActive: boolean;
   isSuggesting: boolean;
   authorID: string;
   onUpdate: () => void;
@@ -58,6 +59,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
   (
     {
       initialContent = '',
+      isActive,
       isSuggesting,
       authorID,
       onUpdate,
@@ -186,7 +188,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
     // listener is removed and re-bound when useEditor recreates the editor
     // (StrictMode's dev double-mount) instead of leaking one per instance.
     useEffect(() => {
-      if (!editor) return;
+      if (!editor || !isActive) return;
       toolbarSelectionStore.liveEditor = editor;
       const onMouseDown = (e: MouseEvent) => {
         const target = e.target as HTMLElement | null;
@@ -198,8 +200,16 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         }
       };
       document.addEventListener('mousedown', onMouseDown, true);
-      return () => document.removeEventListener('mousedown', onMouseDown, true);
-    }, [editor]);
+      return () => {
+        document.removeEventListener('mousedown', onMouseDown, true);
+        if (toolbarSelectionStore.liveEditor === editor) {
+          toolbarSelectionStore.liveEditor = null;
+        }
+        if (toolbarSelectionStore.value?.editor === editor) {
+          toolbarSelectionStore.value = null;
+        }
+      };
+    }, [editor, isActive]);
 
     // Hand the live editor instance to the parent. Driven by an effect (not
     // onCreate) so that if useEditor recreates the editor — e.g. StrictMode's

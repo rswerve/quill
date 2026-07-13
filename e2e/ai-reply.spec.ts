@@ -9,7 +9,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
-import { openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
+import { activeEditor, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 type MockScriptStep =
   | { kind: 'model'; model: string }
@@ -95,7 +95,7 @@ async function setupWithMockScripts(
   );
 
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await page.waitForTimeout(100);
@@ -132,7 +132,7 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
 // Used to verify the prompt-to-link behavior.
 async function setupWithoutSession(page: Page): Promise<void> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await page.waitForTimeout(100);
@@ -202,11 +202,11 @@ test('Claude model and effort choices persist and reach an @claude spawn', async
   await model.selectOption('opus');
   await effort.selectOption('max');
   await page.reload();
-  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await activeEditor(page).waitFor({ timeout: 5000 });
   await expect(page.getByLabel('Claude model')).toHaveValue('opus');
   await expect(page.getByLabel('Claude effort')).toHaveValue('max');
 
-  await page.locator('.ProseMirror').click();
+  await activeEditor(page).click();
   await addCommentWithAIReply(page, 'hello world', '@claude revise this');
   await expect(page.locator('.comment-reply-ai .ai-spinner')).toHaveCount(0, { timeout: 3000 });
   const args = await page.evaluate(
@@ -284,7 +284,7 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
     newSessionId: sessionId,
   });
   await openMemoryFile(page);
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.click();
   await page.keyboard.press('ControlOrMeta+a');
   await page.locator('.add-comment-btn').click();
@@ -440,7 +440,7 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   await expect(page.locator('.suggestion-card .comment-author').first()).toHaveText('Claude');
   await expect(page.locator('.suggestion-card .suggestion-ai-badge').first()).toHaveText('AI');
   // The new text "cats are" shows up as a tracked insertion in the document.
-  await expect(page.locator('.ProseMirror')).toContainText('cats are');
+  await expect(activeEditor(page)).toContainText('cats are');
 
   // Q7's linkage is bidirectional: the reply jumps to the already-applied
   // tracked suggestion (there is no second Apply-edit path), and that card
@@ -488,7 +488,7 @@ test('AI edits: an edit outside the highlight applies (edits are document-scale)
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0, { timeout: 3000 });
   // The edit landed even though it was outside the highlight.
   await expect(page.locator('.suggestion-card').first()).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.ProseMirror')).toContainText('GAMMA');
+  await expect(activeEditor(page)).toContainText('GAMMA');
 });
 
 test('AI edits: an edit whose find is nowhere in the document is skipped and surfaced', async ({
@@ -510,7 +510,7 @@ test('AI edits: an edit whose find is nowhere in the document is skipped and sur
   // The unlocatable edit is reported as skipped, and the document is unchanged.
   await expect(aiReply.locator('.comment-reply-text')).toContainText('skipped', { timeout: 3000 });
   await expect(page.locator('.suggestion-card')).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).not.toContainText('DELTA');
+  await expect(activeEditor(page)).not.toContainText('DELTA');
 });
 
 test('AI reply: cancel resolves to a neutral Re-run, and Re-run succeeds in place', async ({

@@ -2451,6 +2451,140 @@ del.track-delete {
   box-shadow: none;
 }
 
+/* Document tabs — a fixed first row that can deliberately expand downward.
+   Tabs shrink to an eight-character floor; overflow is disclosed as rows,
+   never as a horizontal scrollbar. */
+.tabstrip {
+  min-height: 37px;
+  height: 37px;
+  flex: none;
+  background: var(--bg-rail);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  padding: 0 8px;
+  gap: 2px;
+  overflow: hidden;
+  user-select: none;
+  z-index: 14;
+}
+.tabstrip.expanded {
+  height: auto;
+  min-height: 37px;
+  align-content: center;
+  flex-wrap: wrap;
+  padding-block: 5px;
+  overflow: visible;
+}
+.document-tab {
+  min-width: min(104px, calc(100% - 82px));
+  max-width: 210px;
+  height: 27px;
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-dim);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 400;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.document-tab:hover,
+.document-tab:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+.document-tab.active {
+  background: var(--bg-app);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+.document-tab-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.document-tab-dirty {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.document-tab-close {
+  width: 16px;
+  height: 20px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  opacity: 0;
+  cursor: pointer;
+}
+.document-tab:hover .document-tab-close,
+.document-tab:focus-within .document-tab-close,
+.document-tab.active .document-tab-close {
+  opacity: 1;
+}
+.document-tab-close:hover {
+  color: var(--text-muted);
+  background: var(--bg-hover-rail);
+}
+.tab-add,
+.tab-overflow {
+  height: 27px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.tab-add {
+  width: 24px;
+  font-size: 16px;
+}
+.tab-overflow {
+  min-width: 46px;
+  padding: 0 8px;
+  background: var(--bg-hover-rail);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.tab-add:hover,
+.tab-overflow:hover {
+  color: var(--text);
+  background: var(--bg-hover-rail);
+}
+
+.document-tab-host {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+.document-tab-host[hidden] {
+  display: none;
+}
+
 .studio-body {
   min-height: 0;
   flex: 1;

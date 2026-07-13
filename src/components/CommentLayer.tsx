@@ -23,6 +23,8 @@ interface CommentLayerProps {
   commentComposer: SelectionInfo | null;
   scrollTop: number;
   zoom: number;
+  /** Explicit layout invalidation for a mounted editor becoming visible again. */
+  layoutRevision: number;
   onReply: (commentId: string, text: string) => void;
   onAIReplyRequest: (commentId: string, userText: string) => void;
   onCancelAIReply: (replyId: string) => void;
@@ -165,6 +167,7 @@ export default function CommentLayer({
   commentComposer,
   scrollTop,
   zoom,
+  layoutRevision,
   onReply,
   onAIReplyRequest,
   onCancelAIReply,
@@ -433,6 +436,7 @@ export default function CommentLayer({
     commentComposer,
     showResolved,
     zoom,
+    layoutRevision,
     scrollTop,
     activeCommentId,
     activeSuggestionId,

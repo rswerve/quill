@@ -114,7 +114,15 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
   );
 
   await page.goto('/');
-  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await activeEditor(page).waitFor({ timeout: 5000 });
+}
+
+export function activeTabHost(page: Page) {
+  return page.locator('.document-tab-host:not([hidden])');
+}
+
+export function activeEditor(page: Page) {
+  return activeTabHost(page).locator('.ProseMirror');
 }
 
 export async function closeSessionPickerIfOpen(page: Page) {
@@ -134,7 +142,7 @@ export async function selectLastCharacters(page: Page, count: number) {
   // width before the editor state catches up. Build the browser range directly
   // instead, then give ProseMirror two animation frames to observe it before
   // the caller types or presses Backspace.
-  await page.locator('.ProseMirror').evaluate((root, requested) => {
+  await activeEditor(page).evaluate((root, requested) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
     let current: Node | null;

@@ -1,6 +1,12 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
-import { openMemoryFile, selectLastCharacters, setupMemoryTauri } from './helpers/memoryTauri';
+import {
+  activeEditor,
+  activeTabHost,
+  openMemoryFile,
+  selectLastCharacters,
+  setupMemoryTauri,
+} from './helpers/memoryTauri';
 
 const DOC_PATH = '/tmp/type-scale.md';
 const SIDECAR_PATH = '/tmp/type-scale.comments.json';
@@ -190,8 +196,8 @@ test('document typography stays pinned while both themes keep chrome vertically 
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.editor-scroll-area'), '18px');
-  await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
+  await expectType(activeTabHost(page).locator('.editor-scroll-area'), '18px');
+  await expectType(activeEditor(page), '18px', { checkUiFamily: false });
   await expectType(page.locator('.rail-btn').first(), '13px');
   await expectType(page.locator('.mode-switch .seg').first(), '12px');
   await expect(
@@ -206,7 +212,7 @@ test('document typography stays pinned while both themes keep chrome vertically 
     if (theme !== 'paper') {
       await page.locator('.rail .theme-toggle').click();
     }
-    await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
+    await expectType(activeEditor(page), '18px', { checkUiFamily: false });
     await expectVerticallyContained(page.locator('.rail button:visible'));
     await expectVerticallyContained(page.locator('.topbar button:visible'));
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
@@ -214,7 +220,7 @@ test('document typography stays pinned while both themes keep chrome vertically 
   }
 
   await page.emulateMedia({ media: 'print' });
-  await expectType(page.locator('.ProseMirror'), '18px', { checkUiFamily: false });
+  await expectType(activeEditor(page), '18px', { checkUiFamily: false });
   await expect(page.locator('.footer')).toHaveCSS('display', 'none');
   await page.emulateMedia({ media: 'screen' });
 });
@@ -266,7 +272,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await expectType(page.locator('.find-bar-btn-text').first(), '12px');
   await page.locator('.find-bar-btn[title="Close (Esc)"]').click();
 
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.click();
   await selectLastCharacters(page, 4);
   await page.keyboard.press('ControlOrMeta+k');
@@ -333,8 +339,8 @@ test('session picker body text and controls inherit the app font', async ({ page
 
 test('app modal and update banner chrome use the intended scale', async ({ page }) => {
   await setupMemoryTauri(page);
-  await page.locator('.ProseMirror').fill('dirty');
-  await page.keyboard.press('ControlOrMeta+n');
+  await activeEditor(page).fill('dirty');
+  await page.locator('.document-tab.active .document-tab-close').click();
   await expectType(page.locator('.app-modal-title'), '15px');
   await expectType(page.locator('.app-modal-message'), '12.5px');
   await expectType(page.locator('.app-modal .btn-primary'), '12.5px');

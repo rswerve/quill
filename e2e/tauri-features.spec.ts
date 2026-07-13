@@ -12,6 +12,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
+import { activeEditor } from './helpers/memoryTauri';
 
 type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
 
@@ -107,7 +108,7 @@ async function setupWithIPC(
   );
 
   await page.goto('/');
-  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await activeEditor(page).waitFor({ timeout: 5000 });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -183,7 +184,7 @@ async function fireAIReplyAndCaptureCompactionCall(
   page: Page,
 ): Promise<{ cmd: string; args: Record<string, unknown> }[]> {
   // Add a comment with @claude so useClaudeReply.ask fires.
-  await page.locator('.ProseMirror').click();
+  await activeEditor(page).click();
   await page.keyboard.type('content to comment on');
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
@@ -311,7 +312,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
   });
 
   // Editor should now contain the linked content.
-  await expect(page.locator('.ProseMirror')).toContainText('Linked document content', {
+  await expect(activeEditor(page)).toContainText('Linked document content', {
     timeout: 3000,
   });
   // Footer filename should reflect the opened file.
@@ -356,7 +357,7 @@ test('deep-link: opening a doc with no linked session forces the session picker'
   });
 
   // Doc loads…
-  await expect(page.locator('.ProseMirror')).toContainText('no linked session', { timeout: 3000 });
+  await expect(activeEditor(page)).toContainText('no linked session', { timeout: 3000 });
   // …and the picker is surfaced so the user must choose a session.
   await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
 

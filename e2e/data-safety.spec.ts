@@ -1,7 +1,7 @@
 /**
  * Playwright coverage for the data-safety guards:
- *   1. Unsaved-changes confirmation (Save / Don't Save / Cancel) on File → New
- *      and File → Open while the document is dirty.
+ *   1. New/Open preserve dirty documents in tabs, while closing a dirty tab
+ *      requires Save / Don't Save / Cancel.
  *   2. File errors surfaced to the user as an in-app notice instead of being
  *      swallowed (failed save, corrupt sidecar).
  *
@@ -10,6 +10,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { activeEditor, closeSessionPickerIfOpen } from './helpers/memoryTauri';
 
 type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
 
@@ -62,7 +63,7 @@ async function setupWithIPC(
 }
 
 async function typeIntoEditor(page: Page, text: string) {
-  await page.locator('.ProseMirror').click();
+  await activeEditor(page).click();
   await page.keyboard.type(text);
 }
 
@@ -76,7 +77,7 @@ async function pressShortcut(page: Page, key: string) {
 // 1. Unsaved-changes guard
 // ────────────────────────────────────────────────────────────────────────────
 
-test('clean document: Cmd+N proceeds without a confirmation dialog', async ({ page }) => {
+test('clean document: Cmd+N adds and focuses a new tab', async ({ page }) => {
   const handler = () => null;
   await setupWithIPC(page, { handler });
 
@@ -84,41 +85,55 @@ test('clean document: Cmd+N proceeds without a confirmation dialog', async ({ pa
   await page.waitForTimeout(200);
 
   await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.locator('.document-tab')).toHaveCount(2);
+  await expect(page.locator('.document-tab.active')).toContainText('Untitled');
   await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
 });
 
-test('dirty document: Cmd+N shows the guard; Cancel keeps the document', async ({ page }) => {
+test('dirty document: Cmd+N preserves it in a background tab without a guard', async ({ page }) => {
   const handler = () => null;
   await setupWithIPC(page, { handler });
 
   await typeIntoEditor(page, 'precious unsaved words');
   await pressShortcut(page, 'n');
 
-  const modal = page.locator('.app-modal');
-  await expect(modal).toBeVisible({ timeout: 2000 });
-  await expect(modal).toContainText('Unsaved changes');
-
-  await modal.locator('button:has-text("Cancel")').click();
-  await expect(modal).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).toContainText('precious unsaved words');
+  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.locator('.document-tab')).toHaveCount(2);
+  await page.locator('.document-tab').first().click();
+  await expect(activeEditor(page)).toContainText('precious unsaved words');
 });
 
-test("dirty document: Don't Save discards and clears the editor", async ({ page }) => {
+test('dirty tab close: Cancel keeps the tab and its document', async ({ page }) => {
   const handler = () => null;
   await setupWithIPC(page, { handler });
 
   await typeIntoEditor(page, 'disposable draft');
-  await pressShortcut(page, 'n');
+  await page.locator('.document-tab.active .document-tab-close').click();
 
   const modal = page.locator('.app-modal');
   await expect(modal).toBeVisible({ timeout: 2000 });
-  await modal.locator('button:has-text("Don\'t Save")').click();
+  await modal.getByRole('button', { name: 'Cancel' }).click();
 
   await expect(modal).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).not.toContainText('disposable draft');
+  await expect(page.locator('.document-tab')).toHaveCount(1);
+  await expect(activeEditor(page)).toContainText('disposable draft');
 });
 
-test('dirty document: Save writes the file, then proceeds with New', async ({ page }) => {
+test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async ({ page }) => {
+  const handler = () => null;
+  await setupWithIPC(page, { handler });
+
+  await typeIntoEditor(page, 'disposable draft');
+  await page.locator('.document-tab.active .document-tab-close').click();
+  await page.locator('.app-modal').getByRole('button', { name: "Don't Save" }).click();
+
+  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.locator('.document-tab')).toHaveCount(1);
+  await expect(activeEditor(page)).not.toContainText('disposable draft');
+  await expect(page.locator('.document-tab.active')).toContainText('Untitled');
+});
+
+test('dirty tab close: Save writes the file, then closes the tab', async ({ page }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/guarded.md';
     return null; // write_file / delete_file succeed silently
@@ -126,7 +141,7 @@ test('dirty document: Save writes the file, then proceeds with New', async ({ pa
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
   await typeIntoEditor(page, 'words worth keeping');
-  await pressShortcut(page, 'n');
+  await page.locator('.document-tab.active .document-tab-close').click();
 
   const modal = page.locator('.app-modal');
   await expect(modal).toBeVisible({ timeout: 2000 });
@@ -142,11 +157,12 @@ test('dirty document: Save writes the file, then proceeds with New', async ({ pa
     return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/guarded.md');
   });
   expect(write?.args.content).toContain('words worth keeping');
-  // …and New then cleared the editor.
-  await expect(page.locator('.ProseMirror')).not.toContainText('words worth keeping');
+  // …and closing the last tab leaves a fresh Untitled editor.
+  await expect(activeEditor(page)).not.toContainText('words worth keeping');
+  await expect(page.locator('.document-tab')).toHaveCount(1);
 });
 
-test('dirty document: Cmd+O is guarded — no open dialog until confirmed', async ({ page }) => {
+test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_open_dialog') return '/tmp/next.md';
     if (cmd === 'read_file') {
@@ -161,20 +177,18 @@ test('dirty document: Cmd+O is guarded — no open dialog until confirmed', asyn
   await typeIntoEditor(page, 'unsaved before open');
   await pressShortcut(page, 'o');
 
-  const modal = page.locator('.app-modal');
-  await expect(modal).toBeVisible({ timeout: 2000 });
-
-  // The guard fires before the native dialog: show_open_dialog not yet called.
-  const calledEarly = await page.evaluate(() => {
+  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(activeEditor(page)).toContainText('The next document', { timeout: 3000 });
+  const opened = await page.evaluate(() => {
     const calls = (window as unknown as Record<string, unknown>).__capturedCalls as {
       cmd: string;
     }[];
     return calls.some((c) => c.cmd === 'show_open_dialog');
   });
-  expect(calledEarly).toBe(false);
-
-  await modal.locator('button:has-text("Don\'t Save")').click();
-  await expect(page.locator('.ProseMirror')).toContainText('The next document', { timeout: 3000 });
+  expect(opened).toBe(true);
+  await closeSessionPickerIfOpen(page);
+  await page.locator('.document-tab').first().click();
+  await expect(activeEditor(page)).toContainText('unsaved before open');
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -227,5 +241,5 @@ test('corrupt sidecar on open shows a notice and the doc still loads', async ({ 
 
   await modal.locator('button:has-text("OK")').click();
   await expect(modal).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).toContainText('Document with broken sidecar');
+  await expect(activeEditor(page)).toContainText('Document with broken sidecar');
 });

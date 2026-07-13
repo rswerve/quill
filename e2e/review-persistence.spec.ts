@@ -1,6 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
-import { openMemoryFile, selectLastCharacters, setupMemoryTauri } from './helpers/memoryTauri';
+import {
+  activeEditor,
+  activeTabHost,
+  openMemoryFile,
+  selectLastCharacters,
+  setupMemoryTauri,
+} from './helpers/memoryTauri';
 
 const DOC_PATH = '/tmp/review-persistence.md';
 const SIDECAR_PATH = '/tmp/review-persistence.comments.json';
@@ -53,7 +59,7 @@ async function openLiveComment(
 }
 
 async function placeCaretAtDocumentStart(page: import('@playwright/test').Page) {
-  await page.locator('.ProseMirror').click();
+  await activeEditor(page).click();
   await page.keyboard.press('ControlOrMeta+Home');
 }
 
@@ -117,7 +123,7 @@ async function openWithCommentedClaudeReplacement(
 test.describe('review metadata survives save and reopen', () => {
   test('saving a pending replacement writes sidecar metadata for reload', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
     await page.locator('.mode-switch').click();
@@ -134,7 +140,7 @@ test.describe('review metadata survives save and reopen', () => {
 
   test('pending insertion remains pending after save and reopen', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('base');
     await page.locator('.mode-switch').click();
@@ -142,7 +148,7 @@ test.describe('review metadata survives save and reopen', () => {
     await page.keyboard.type(' added');
 
     const reopened = await saveNewAndReopen(page);
-    const reopenedEditor = reopened.locator('.ProseMirror');
+    const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText(' added');
     await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
@@ -150,7 +156,7 @@ test.describe('review metadata survives save and reopen', () => {
 
   test('pending deletion remains pending after save and reopen', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('keep remove');
     await page.locator('.mode-switch').click();
@@ -159,7 +165,7 @@ test.describe('review metadata survives save and reopen', () => {
     await page.keyboard.press('Backspace');
 
     const reopened = await saveNewAndReopen(page);
-    const reopenedEditor = reopened.locator('.ProseMirror');
+    const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('remove');
     await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
@@ -167,7 +173,7 @@ test.describe('review metadata survives save and reopen', () => {
 
   test('pending replacement remains paired after save and reopen', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
     await page.locator('.mode-switch').click();
@@ -176,7 +182,7 @@ test.describe('review metadata survives save and reopen', () => {
     await page.keyboard.type('new');
 
     const reopened = await saveNewAndReopen(page);
-    const reopenedEditor = reopened.locator('.ProseMirror');
+    const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('old');
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText('new');
@@ -213,7 +219,7 @@ test.describe('review metadata survives save and reopen', () => {
 
   test('pending formatting remains reviewable after save and reopen', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('plain text');
     await page.locator('.mode-switch').click();
@@ -225,7 +231,7 @@ test.describe('review metadata survives save and reopen', () => {
     await expect(page.locator('.suggestion-card-format')).toContainText('bold added');
 
     const reopened = await saveNewAndReopen(page);
-    const reopenedEditor = reopened.locator('.ProseMirror');
+    const reopenedEditor = activeEditor(reopened);
     await expect(reopenedEditor.locator('span.track-format')).toHaveText('text');
     await expect(reopenedEditor.locator('strong')).toHaveText('text');
     await expect(reopened.locator('.suggestion-card-format')).toContainText('bold added');
@@ -269,7 +275,7 @@ test.describe('review metadata survives save and reopen', () => {
     expect(await page.locator('.annotation-focus').allTextContents()).toEqual(['one', 'two']);
 
     await card.locator('.suggestion-reject-btn').click();
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await expect(editor.locator('strong')).toHaveCount(0);
     await expect(editor.locator('em')).toHaveText('two');
     await expect(card).toHaveCount(0);
@@ -304,7 +310,7 @@ test.describe('live comment reconciliation', () => {
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
   });
 
   test('deleting part of an anchor keeps the comment on the surviving text', async ({ page }) => {
@@ -315,7 +321,7 @@ test.describe('live comment reconciliation', () => {
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hel');
     await expect(page.locator('.comment-card')).toHaveCount(1);
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hel"');
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('1');
   });
 
   test('a fully deleted anchor is not persisted or restored on reopen', async ({ page }) => {
@@ -341,8 +347,8 @@ test.describe('live comment reconciliation', () => {
     await page.keyboard.type('X');
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
-    await expect(page.locator('.comments-head .filter')).toBeEnabled();
-    await page.locator('.comments-head .filter').click();
+    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
   });
@@ -355,8 +361,8 @@ test.describe('live comment reconciliation', () => {
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(page.locator('.comments-head .filter')).toBeEnabled();
-    await page.locator('.comments-head .filter').click();
+    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
   });
@@ -368,9 +374,9 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     anchorText = '"hello"',
   ) {
     await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
-    await expect(page.locator('.comments-head .filter')).toBeEnabled();
-    await page.locator('.comments-head .filter').click();
+    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText(anchorText);
   }
@@ -409,7 +415,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('goodbye world');
+    await expect(activeEditor(page)).toContainText('goodbye world');
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
@@ -421,7 +427,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('[title="Accept all suggestions"]').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('goodbye world');
+    await expect(activeEditor(page)).toContainText('goodbye world');
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
@@ -433,7 +439,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('hippo world');
+    await expect(activeEditor(page)).toContainText('hippo world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expectOnlyResolvedComment(page, '"hippello"');
   });
@@ -445,7 +451,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('hello planet');
+    await expect(activeEditor(page)).toContainText('hello planet');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
@@ -479,7 +485,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-accept-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expect(activeEditor(page)).toContainText('world');
     await expectOnlyResolvedComment(page);
   });
 
@@ -490,10 +496,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-card-replace .suggestion-reject-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('hello world');
+    await expect(activeEditor(page)).toContainText('hello world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
     await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('1');
   });
 
   test('rejecting an insertion that contains the whole anchor auto-resolves the comment', async ({
@@ -503,7 +509,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('.suggestion-reject-btn').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expect(activeEditor(page)).toContainText('world');
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
@@ -513,7 +519,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await page.locator('[title="Reject all suggestions"]').click();
 
-    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expect(activeEditor(page)).toContainText('world');
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
@@ -568,8 +574,8 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Accept all suggestions"]').click();
 
     await expect(page.locator('mark[data-comment-id]')).toHaveCount(0);
-    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
-    await page.locator('.comments-head .filter').click();
+    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toHaveCount(2);
   });
 });
@@ -695,7 +701,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
       page.locator('.comment-card.comment-card-resolved.comment-card-active'),
     ).toBeVisible();
     await expect(card).toHaveCount(0);
-    await page.locator('.comments-head .filter').click();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(card).toHaveClass(/card-origin-active/);
   });
 });
@@ -769,14 +775,14 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
 
   test('unresolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await page.locator('.comments-head .filter').click();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await page.locator('.comment-resolve-btn').click();
     await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('deleting a resolved comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await page.locator('.comments-head .filter').click();
+    await activeTabHost(page).locator('.comments-head .filter').click();
     await page.locator('.comment-delete-btn').click();
     await expect(page.locator('.dirty-dot')).toBeVisible();
   });
@@ -790,7 +796,7 @@ test.describe('desktop fallback regressions', () => {
     });
     await page.goto('/');
     await openMemoryFile(page);
-    await page.locator('.ProseMirror').press('End');
+    await activeEditor(page).press('End');
     await page.keyboard.type(' after');
 
     await page.evaluate(() => {
@@ -812,7 +818,7 @@ test.describe('desktop fallback regressions', () => {
 
   test('Cmd+Shift+S with an uppercase shifted key invokes Save As', async ({ page }) => {
     await setupMemoryTauri(page, { savePath: '/tmp/save-as.md' });
-    await page.locator('.ProseMirror').click();
+    await activeEditor(page).click();
     await page.keyboard.type('dirty');
     await page.evaluate(() => {
       (window as unknown as { __quillCalls: unknown[] }).__quillCalls.length = 0;
@@ -829,7 +835,7 @@ test.describe('desktop fallback regressions', () => {
 
   test('footer line number follows the cursor paragraph, not schema depth', async ({ page }) => {
     await setupMemoryTauri(page);
-    const editor = page.locator('.ProseMirror');
+    const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('one');
     await page.keyboard.press('Enter');
