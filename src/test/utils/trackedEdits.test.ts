@@ -10,12 +10,14 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import {
+  formatEditResultNotice,
   locateEdit,
   mapRangeTextOffsetToPos,
   planEdits,
   rangeText,
   resolveScopeRange,
 } from '../../utils/trackedEdits';
+import { buildLinkReplacementContent } from '../../utils/linkEditing';
 
 function makeEditor(content: string) {
   const el = document.createElement('div');
@@ -135,16 +137,113 @@ describe('trackedEdits helpers', () => {
     it('places located edits back-to-front and counts skips', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'alpha', replace: 'A' },
         { find: 'gamma', replace: 'G' },
         { find: 'missing', replace: 'X' },
       ]);
-      expect(skipped).toBe(1);
+      expect(results.map((candidate) => candidate.status)).toEqual([
+        'applied',
+        'applied',
+        'not-found',
+      ]);
       expect(placed).toHaveLength(2);
       // Back-to-front: gamma (later) comes first.
       expect(placed[0].from).toBeGreaterThan(placed[1].from);
       expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G' });
+    });
+
+    it('accepts a model edit that spells an existing link with Markdown syntax', () => {
+      editor = makeEditor(
+        '<h1>Header</h1><p><a href="https://www.cnn.com">some text</a></p>' +
+          '<p><strong>bold</strong> word</p><p>Body paragraph.</p>',
+      );
+      const doc = editor.state.doc;
+
+      // Claude sees Markdown in the prompt, but the planner searches the
+      // ProseMirror document's visible text. The link mark itself is locatable;
+      // only the Markdown spelling is absent from that plaintext projection.
+      expect(locateEdit(doc, 0, doc.content.size, 'some text')).not.toBeNull();
+      expect(locateEdit(doc, 0, doc.content.size, '[some text](https://www.cnn.com)')).toBeNull();
+
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
+        { find: 'Header', replace: 'Test Notes' },
+        {
+          find: '[some text](https://www.cnn.com)',
+          replace: '[CNN](https://www.cnn.com)',
+        },
+      ]);
+
+      expect(results.map((result) => result.status)).toEqual(['applied', 'applied']);
+      expect(placed).toHaveLength(2);
+      expect(placed).toContainEqual({
+        kind: 'text',
+        from: 9,
+        to: 18,
+        replace: 'CNN',
+        linkHref: 'https://www.cnn.com',
+      });
+    });
+
+    it('fails closed for ambiguous, mismatched, plain, and malformed Markdown-link finds', () => {
+      editor = makeEditor(
+        '<p><a href="https://one.example">same</a> and ' +
+          '<a href="https://two.example">same</a> and plain</p>',
+      );
+      const doc = editor.state.doc;
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
+        { find: '[same](https://one.example)', replace: 'new' },
+        { find: '[plain](https://plain.example)', replace: 'new' },
+        { find: '[same](https://wrong.example)', replace: 'new' },
+        { find: '[same](https://one.example', replace: 'new' },
+      ]);
+
+      expect(placed).toHaveLength(0);
+      expect(results.map(({ status, reason }) => ({ status, reason }))).toEqual([
+        { status: 'conflict', reason: 'ambiguous-link' },
+        { status: 'not-found', reason: 'link-not-found' },
+        { status: 'conflict', reason: 'ambiguous-link' },
+        { status: 'not-found', reason: 'text-not-found' },
+      ]);
+    });
+
+    it('keeps the href for a plain replacement and updates it for a Markdown-link replacement', () => {
+      editor = makeEditor('<p><a href="https://old.example">old label</a></p>');
+      const doc = editor.state.doc;
+      const plain = planEdits(doc, 0, doc.content.size, [
+        { find: '[old label](https://old.example)', replace: 'new label' },
+      ]);
+      const changed = planEdits(doc, 0, doc.content.size, [
+        {
+          find: '[old label](https://old.example)',
+          replace: '[new label](https://new.example)',
+        },
+      ]);
+
+      expect(plain.placed[0]).toMatchObject({
+        kind: 'text',
+        replace: 'new label',
+        linkHref: 'https://old.example',
+      });
+      expect(changed.placed[0]).toMatchObject({
+        kind: 'text',
+        replace: 'new label',
+        linkHref: 'https://new.example',
+      });
+    });
+
+    it('rejects a unique label when its live link destination differs', () => {
+      editor = makeEditor('<p><a href="https://actual.example">same</a></p>');
+      const doc = editor.state.doc;
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
+        { find: '[same](https://wrong.example)', replace: 'new' },
+      ]);
+
+      expect(placed).toHaveLength(0);
+      expect(results[0]).toMatchObject({
+        status: 'not-found',
+        reason: 'link-target-mismatch',
+      });
     });
 
     it('skips a text-identical edit (formatting-only ask) instead of placing it', () => {
@@ -153,23 +252,50 @@ describe('trackedEdits helpers', () => {
       // accept no-ops or strips formatting. It must count as skipped.
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'beta', replace: 'beta' },
       ]);
-      expect(skipped).toBe(1);
+      expect(results[0]).toMatchObject({ status: 'no-op', reason: 'already-applied' });
       expect(placed).toHaveLength(0);
     });
 
     it('still places a real edit alongside a skipped text-identical one', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'alpha', replace: 'alpha' },
         { find: 'gamma', replace: 'G' },
       ]);
-      expect(skipped).toBe(1);
+      expect(results.map((candidate) => candidate.status)).toEqual(['no-op', 'applied']);
       expect(placed).toHaveLength(1);
       expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G' });
+    });
+  });
+
+  describe('formatEditResultNotice', () => {
+    it('names each skipped edit and its precise reason without dumping a long find', () => {
+      const notice = formatEditResultNotice([
+        {
+          edit: { find: 'missing phrase', replace: 'replacement' },
+          status: 'not-found',
+          reason: 'text-not-found',
+        },
+        {
+          edit: { find: `[${'x'.repeat(120)}](https://example.com)`, replace: 'short' },
+          status: 'conflict',
+          reason: 'ambiguous-link',
+        },
+        {
+          edit: { find: 'already right', replace: 'already right' },
+          status: 'no-op',
+          reason: 'already-applied',
+        },
+      ]);
+
+      expect(notice).toContain('“missing phrase” — text wasn’t found.');
+      expect(notice).toContain('more than one link has that label.');
+      expect(notice).toContain('“already right” — it already matches the proposal.');
+      expect(notice).not.toContain('x'.repeat(80));
     });
   });
 
@@ -177,10 +303,10 @@ describe('trackedEdits helpers', () => {
     it('places a format edit with mapped mark names (strikethrough → strike)', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'beta', format: { bold: true, strikethrough: false } },
       ]);
-      expect(skipped).toBe(0);
+      expect(results[0].status).toBe('applied');
       expect(placed).toEqual([
         {
           kind: 'format',
@@ -197,27 +323,27 @@ describe('trackedEdits helpers', () => {
     it('skips malformed entries: both replace and format, neither, empty find, no known styles', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'beta', replace: 'B', format: { bold: true } } as never,
         { find: 'beta' } as never,
         { find: '', format: { bold: true } },
         { find: 'beta', format: { underline: true } as never },
       ]);
-      expect(skipped).toBe(4);
+      expect(results.every((candidate) => candidate.status === 'malformed')).toBe(true);
       expect(placed).toHaveLength(0);
     });
 
     it('skips structurally invalid entries from untrusted model JSON without throwing', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         null as never,
         'not an edit' as never,
         { find: 42, replace: 'X' } as never,
         { find: 'beta', format: ['bold'] as never },
         { find: 'gamma', replace: 'G' },
       ]);
-      expect(skipped).toBe(4);
+      expect(results.filter((candidate) => candidate.status === 'malformed')).toHaveLength(4);
       expect(placed).toEqual([{ kind: 'text', from: 12, to: 17, replace: 'G' }]);
     });
 
@@ -226,12 +352,12 @@ describe('trackedEdits helpers', () => {
       // as applied would report suggestions that produce no cards.
       editor = makeEditor('<p><strong>alpha</strong> beta</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'alpha', format: { bold: true } },
         { find: 'beta', format: { italic: false } },
         { find: 'beta', format: { bold: true, italic: false } },
       ]);
-      expect(skipped).toBe(2);
+      expect(results.filter((candidate) => candidate.status === 'no-op')).toHaveLength(2);
       expect(placed).toEqual([
         {
           kind: 'format',
@@ -248,11 +374,11 @@ describe('trackedEdits helpers', () => {
     it('skips a format op that overlaps a text replacement from the same block', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed, skipped } = planEdits(doc, 0, doc.content.size, [
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'alpha beta', replace: 'rewritten' },
         { find: 'beta', format: { italic: true } },
       ]);
-      expect(skipped).toBe(1);
+      expect(results[1]).toMatchObject({ status: 'conflict', reason: 'overlapping-edit' });
       expect(placed).toEqual([{ kind: 'text', from: 1, to: 11, replace: 'rewritten' }]);
     });
 
@@ -265,7 +391,7 @@ describe('trackedEdits helpers', () => {
 
       const doc = editor.state.doc;
       // …then a Claude reply proposes italicizing overlapping text.
-      const { placed, skipped } = planEdits(
+      const { placed, results } = planEdits(
         doc,
         0,
         doc.content.size,
@@ -275,7 +401,7 @@ describe('trackedEdits helpers', () => {
         ],
         'claude',
       );
-      expect(skipped).toBe(1);
+      expect(results[0]).toMatchObject({ status: 'conflict', reason: 'pending-suggestion' });
       expect(placed).toEqual([
         {
           kind: 'format',
@@ -317,6 +443,52 @@ describe('trackedEdits helpers', () => {
   });
 
   describe('applying planned edits as tracked changes', () => {
+    function applyPlannedLinkReplacement(replace: string, href: string) {
+      const doc = editor.state.doc;
+      const { placed } = planEdits(doc, 0, doc.content.size, [
+        {
+          find: '[old label](https://old.example)',
+          replace: `[${replace}](${href})`,
+        },
+      ]);
+      const edit = placed[0];
+      expect(edit).toMatchObject({ kind: 'text', replace, linkHref: href });
+      if (edit.kind !== 'text' || !edit.linkHref) throw new Error('expected planned link edit');
+      const content = buildLinkReplacementContent(editor, edit, edit.linkHref, edit.replace);
+      expect(content).not.toBeNull();
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('claude');
+      editor
+        .chain()
+        .setTextSelection({ from: edit.from, to: edit.to })
+        .insertContent(content!)
+        .run();
+      const change = getTrackedChanges(editor).find(
+        (candidate) => candidate.operation !== 'format',
+      );
+      if (!change) throw new Error('expected tracked text change');
+      return change.pairId ?? change.id;
+    }
+
+    it('accepts or rejects a Markdown-link replacement with the correct href', () => {
+      editor = makeEditor('<p><a href="https://old.example">old label</a></p>');
+      const acceptedId = applyPlannedLinkReplacement('new label', 'https://new.example');
+      editor.commands.acceptChange(acceptedId);
+      expect(editor.view.dom.querySelector('a')).toMatchObject({
+        href: 'https://new.example/',
+        textContent: 'new label',
+      });
+
+      editor.destroy();
+      editor = makeEditor('<p><a href="https://old.example">old label</a></p>');
+      const rejectedId = applyPlannedLinkReplacement('new label', 'https://new.example');
+      editor.commands.rejectChange(rejectedId);
+      expect(editor.view.dom.querySelector('a')).toMatchObject({
+        href: 'https://old.example/',
+        textContent: 'old label',
+      });
+    });
+
     it('produces tracked delete+insert with the claude author and restores mode', () => {
       editor = makeEditor('<p>the cat are happy</p>');
       const doc = editor.state.doc;

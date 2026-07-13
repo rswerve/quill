@@ -22,6 +22,7 @@ import type {
   QuillEdit,
   TrackedChangeInfo,
 } from '../../types';
+import type { EditResult } from '../../utils/trackedEdits';
 
 const invokeMock = vi.mocked(invoke);
 
@@ -88,8 +89,7 @@ function makeOpts(mock: MockClaude) {
     (_c: Comment): RangeTexts => ({ highlightText: 'anchor', paragraphText: 'anchor para' }),
   );
   const applyTrackedEdits = vi.fn((_c: Comment, _e: QuillEdit[], _s: EditScope) => ({
-    applied: 0,
-    skipped: 0,
+    results: _e.map((edit) => ({ edit, status: 'applied' as const })) as EditResult[],
     suggestionIds: [] as string[],
   }));
   const getContextFolder = vi.fn(() => null);
@@ -220,8 +220,7 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
   it('holds a fragmented edits fence, reports the model, and finalizes suggestions once', async () => {
     const { opts, spies } = makeOpts(mock);
     opts.applyTrackedEdits.mockReturnValue({
-      applied: 1,
-      skipped: 0,
+      results: [{ edit: { find: 'old', replace: 'new' }, status: 'applied' }],
       suggestionIds: ['change-1'],
     });
     const { result } = renderHook(() => useClaudeReply(opts));
@@ -249,6 +248,36 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
     expect(spies.finishAIReply).toHaveBeenCalledTimes(1);
     expect(spies.appendAIReplyChunk.mock.calls.flatMap((call) => call).join(' ')).not.toContain(
       'quill-edits',
+    );
+  });
+
+  it('reports the exact skipped @claude edit and reason', async () => {
+    const { opts, spies } = makeOpts(mock);
+    opts.applyTrackedEdits.mockReturnValue({
+      results: [
+        {
+          edit: { find: 'missing phrase', replace: 'new phrase' },
+          status: 'not-found',
+          reason: 'text-not-found',
+        },
+      ],
+      suggestionIds: [],
+    });
+    const { result } = renderHook(() => useClaudeReply(opts));
+
+    await act(async () => result.current.ask(makeComment(), 'fix this', BINDING));
+    act(() => {
+      mock.emit('tok-1', {
+        kind: 'delta',
+        text: 'I tried.\n```quill-edits\n{"summary":"Tried","edits":[{"find":"missing phrase","replace":"new phrase"}]}\n```',
+      });
+      mock.emit('tok-1', { kind: 'done' });
+    });
+
+    expect(spies.appendAIReplyChunk).toHaveBeenCalledWith(
+      'c1',
+      'r0',
+      expect.stringContaining('“missing phrase” — text wasn’t found.'),
     );
   });
 });

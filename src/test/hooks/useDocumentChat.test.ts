@@ -11,6 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { buildChatPrompt, useDocumentChat } from '../../hooks/useDocumentChat';
 import type { ChunkEvent } from '../../hooks/useClaudeResumeStream';
 import type { AISessionBinding, QuillEdit } from '../../types';
+import type { EditResult } from '../../utils/trackedEdits';
 
 const BINDING: AISessionBinding = {
   provider: 'claude-code',
@@ -50,8 +51,7 @@ class MockClaude {
 
 function makeOptions() {
   const applyTrackedEdits = vi.fn((_edits: QuillEdit[], _messageId: string) => ({
-    applied: 1,
-    skipped: 0,
+    results: _edits.map((edit) => ({ edit, status: 'applied' as const })) as EditResult[],
     suggestionIds: ['suggestion-1'],
   }));
   return {
@@ -134,6 +134,34 @@ describe('useDocumentChat', () => {
       [{ find: 'Current', replace: 'Better' }],
       assistantId,
     );
+  });
+
+  it('reports the exact skipped chat edit and reason', async () => {
+    const { options, applyTrackedEdits } = makeOptions();
+    applyTrackedEdits.mockReturnValue({
+      results: [
+        {
+          edit: { find: '[same](https://one.example)', replace: 'new' },
+          status: 'conflict',
+          reason: 'ambiguous-link',
+        },
+      ],
+      suggestionIds: [],
+    });
+    const { result } = renderHook(() => useDocumentChat(options));
+    await act(async () => result.current.send('Fix it', BINDING));
+    act(() => {
+      mock.emit('chat-1', {
+        kind: 'delta',
+        text: 'I tried.\n```quill-edits\n{"summary":"Tried","edits":[{"find":"[same](https://one.example)","replace":"new"}]}\n```',
+      });
+      mock.emit('chat-1', { kind: 'done' });
+    });
+
+    expect(result.current.messages[1].text).toContain(
+      '“[same](https://one.example)” — more than one link has that label.',
+    );
+    expect(result.current.messages[1].text).not.toContain("text wasn't found, was already");
   });
 
   it('stops without applying partial edits and retries the same assistant message', async () => {

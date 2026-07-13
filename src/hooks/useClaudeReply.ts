@@ -11,7 +11,11 @@ import type {
   TrackedEditOrigin,
 } from '../types';
 import { clip } from '../utils/format';
-import { stripTrailingNewlines } from '../utils/trackedEdits';
+import {
+  formatEditResultNotice,
+  stripTrailingNewlines,
+  type EditResult,
+} from '../utils/trackedEdits';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
@@ -43,7 +47,7 @@ interface UseClaudeReplyOptions {
     edits: QuillEdit[],
     scope: EditScope,
     origin?: TrackedEditOrigin,
-  ) => { applied: number; skipped: number; suggestionIds?: string[] };
+  ) => { results: EditResult[]; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
@@ -396,7 +400,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             }
             // Edits are document-scale: the highlight frames the request but
             // does not fence where changes may land.
-            const { skipped, suggestionIds = [] } = opts.applyTrackedEdits(
+            const { results, suggestionIds = [] } = opts.applyTrackedEdits(
               comment,
               parsed.edits,
               'doc',
@@ -405,13 +409,9 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             if (suggestionIds.length > 0) {
               opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
             }
-            if (skipped > 0) {
-              const noun = skipped === 1 ? 'change was' : 'changes were';
-              opts.appendAIReplyChunk(
-                comment.id,
-                replyId,
-                `\n\n(${skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`,
-              );
+            const skippedNotice = formatEditResultNotice(results);
+            if (skippedNotice) {
+              opts.appendAIReplyChunk(comment.id, replyId, `\n\n${skippedNotice}`);
             }
           }
         };

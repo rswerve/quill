@@ -1,4 +1,4 @@
-import { getMarkRange } from '@tiptap/core';
+import { getMarkRange, type JSONContent } from '@tiptap/core';
 import type { Mark as ProseMirrorMark } from '@tiptap/pm/model';
 import type { Editor } from '@tiptap/react';
 
@@ -100,6 +100,35 @@ function replacementMarks(editor: Editor, target: LinkTarget, href: string) {
   ];
 }
 
+/**
+ * Build a replacement text node carrying one normalized link mark while
+ * retaining the range's common non-review marks. Shared by the interactive
+ * link editor and Claude's tracked Markdown-link fallback.
+ */
+export function buildLinkReplacementContent(
+  editor: Editor,
+  target: Pick<LinkTarget, 'from' | 'to'>,
+  rawHref: string,
+  text: string,
+): JSONContent | null {
+  const href = normalizeHref(rawHref);
+  if (!href || !text) return null;
+  return {
+    type: 'text',
+    text,
+    marks: replacementMarks(
+      editor,
+      {
+        ...target,
+        href,
+        text: editor.state.doc.textBetween(target.from, target.to),
+        existing: true,
+      },
+      href,
+    ),
+  };
+}
+
 /** Add or update a captured link and its editable display text. */
 export function applyLinkTarget(
   editor: Editor,
@@ -117,9 +146,8 @@ export function applyLinkTarget(
     // Put the new mark in the replacement slice itself. TrackChanges rebuilds
     // text replacements before later mark steps, so attaching the href here
     // keeps a suggesting-mode replacement on the new URL in one transaction.
-    return chain
-      .insertContent({ type: 'text', text, marks: replacementMarks(editor, target, href) })
-      .run();
+    const content = buildLinkReplacementContent(editor, target, href, text);
+    return content ? chain.insertContent(content).run() : false;
   }
 
   return chain.setLink({ href }).run();

@@ -18,6 +18,7 @@ import {
 } from './useClaudeReply';
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
+import { formatEditResultNotice, type EditResult } from '../utils/trackedEdits';
 
 export interface ChatCursorContext {
   selectedText: string | null;
@@ -30,7 +31,7 @@ interface UseDocumentChatOptions {
   applyTrackedEdits: (
     edits: QuillEdit[],
     originChatMessageId: string,
-  ) => { applied: number; skipped: number; suggestionIds?: string[] };
+  ) => { results: EditResult[]; suggestionIds?: string[] };
   getContextFolder: () => string | null;
   getPendingSuggestions: () => TrackedChangeInfo[];
   getRunOptions: () => ClaudeRunOptions;
@@ -201,9 +202,9 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                   if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
                   const result = opts.applyTrackedEdits(parsed.edits, assistantId);
                   suggestionIds = result.suggestionIds ?? [];
-                  if (result.skipped > 0) {
-                    const noun = result.skipped === 1 ? 'change was' : 'changes were';
-                    appended += `${appended ? '\n\n' : ''}(${result.skipped} ${noun} skipped — the text wasn't found, was already formatted as proposed, or conflicts with a pending suggestion.)`;
+                  const skippedNotice = formatEditResultNotice(result.results);
+                  if (skippedNotice) {
+                    appended += `${appended ? '\n\n' : ''}${skippedNotice}`;
                   }
                 }
                 setMessages((current) =>

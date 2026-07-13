@@ -21,6 +21,7 @@ import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
+import { buildLinkReplacementContent } from '../utils/linkEditing';
 import { restoreReviewMarks, suggestionsFromTrackedChanges } from '../utils/reviewPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
@@ -407,14 +408,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       origin?: TrackedEditOrigin,
     ) => {
       const ed = editor;
-      if (!ed) return { applied: 0, skipped: edits.length, suggestionIds: [] };
+      if (!ed) {
+        return {
+          results: edits.map((edit) => ({
+            edit,
+            status: 'not-found' as const,
+            reason: 'document-unavailable' as const,
+          })),
+          suggestionIds: [],
+        };
+      }
 
       const suggestionIdsBefore = new Set(getTrackedChanges(ed).map((change) => change.id));
 
       const range = resolveScopeRange(ed.state.doc, comment, scope);
       // Claude's author id doubles as the cross-author filter: format ops
       // touching another author's pending format suggestion are skipped whole.
-      const { placed, skipped } = planEdits(
+      const { placed, results } = planEdits(
         ed.state.doc,
         range.from,
         range.to,
@@ -428,7 +438,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const priorEnabled = trackStorage?.enabled ?? false;
       const priorAuthor = trackStorage?.authorID ?? AUTHOR;
 
-      let applied = 0;
       try {
         // Suppress the blocked-formatting notice for automated applies:
         // planEdits already pre-blocks Claude's conflicting format ops and
@@ -448,9 +457,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             }
             chain.run();
           } else {
-            ed.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
+            const replacement = e.linkHref
+              ? buildLinkReplacementContent(ed, e, e.linkHref, e.replace)
+              : null;
+            ed.chain()
+              .setTextSelection({ from: e.from, to: e.to })
+              .insertContent(replacement ?? e.replace)
+              .run();
           }
-          applied++;
         }
       } finally {
         ed.commands.setTrackChangesEnabled(priorEnabled);
@@ -466,7 +480,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             change.originChatMessageId === origin?.chatMessageId,
         )
         .map((change) => change.id);
-      return { applied, skipped, suggestionIds };
+      return { results, suggestionIds };
     },
     [editor],
   );

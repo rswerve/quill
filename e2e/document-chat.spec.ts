@@ -125,6 +125,73 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   expect(spawn.prompt).not.toContain('quill-comments');
 });
 
+test('chat applies a Markdown-spelled link edit as one tracked link replacement', async ({
+  page,
+}) => {
+  const reply =
+    "I'll clean up the placeholder header and link text.\n```quill-edits\n" +
+    JSON.stringify({
+      summary: 'Cleaned up the first two test lines.',
+      edits: [
+        { find: 'Header', replace: 'Test Notes' },
+        {
+          find: '[some text](https://www.cnn.com)',
+          replace: '[CNN](https://www.cnn.com)',
+        },
+      ],
+    }) +
+    '\n```';
+  await setupChatScripts(page, [
+    [{ kind: 'model', model: 'claude-sonnet' }, { kind: 'delta', text: reply }, { kind: 'done' }],
+  ]);
+
+  const editor = activeEditor(page);
+  await editor.click();
+  await page.keyboard.type('# Header');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('[some text](https://www.cnn.com)');
+  await expect(editor.locator('a')).toHaveText('some text');
+
+  await page.keyboard.press('ControlOrMeta+/');
+  await sendChat(page, 'Can you clean up the first two test lines here?');
+  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
+  await expect(assistant.locator('.chat-suggestion-chip')).toHaveText(/→ 2 suggestions in the doc/);
+  await expect(assistant).not.toContainText('change was skipped');
+  await assistant.locator('.chat-suggestion-chip').click();
+
+  const replacements = activeTabHost(page).locator('.suggestion-card-replace');
+  await expect(replacements).toHaveCount(2);
+  const linkReplacement = replacements.filter({ hasText: 'CNN' });
+  await linkReplacement.getByRole('button', { name: 'Accept' }).click();
+  await expect(editor.locator('a')).toHaveText('CNN');
+  await expect(editor.locator('a')).toHaveAttribute('href', 'https://www.cnn.com');
+
+  const spawn = await page.evaluate(
+    () => (window as unknown as { __quillLastSpawnArgs: { prompt: string } }).__quillLastSpawnArgs,
+  );
+  expect(spawn.prompt).toContain('{"find":"some text","replace":"better text"}');
+  expect(spawn.prompt).toContain('visible text only');
+});
+
+test('chat identifies a skipped edit and its precise reason', async ({ page }) => {
+  const reply =
+    'I could not apply one requested change.\n```quill-edits\n' +
+    JSON.stringify({
+      summary: 'Tried the requested change.',
+      edits: [{ find: 'missing phrase', replace: 'new phrase' }],
+    }) +
+    '\n```';
+  await setupChatScripts(page, [[{ kind: 'delta', text: reply }, { kind: 'done' }]]);
+  await activeEditor(page).fill('The document has other text.');
+  await openChat(page);
+  await sendChat(page, 'Fix the missing phrase');
+
+  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
+  await expect(assistant).toContainText('1 change was skipped:');
+  await expect(assistant).toContainText('“missing phrase” — text wasn’t found.');
+  await expect(assistant).not.toContainText('was already formatted as proposed');
+});
+
 test('Stop cancels a live turn and Retry reuses the same message', async ({ page }) => {
   await setupChatScripts(page, [
     [{ kind: 'delta', text: 'Partial response' }, { kind: 'pause' }],
