@@ -77,6 +77,7 @@ class MockClaude {
 function makeOpts(mock: MockClaude) {
   const startAIReply = vi.fn((_commentId: string) => 'r0');
   const appendAIReplyChunk = vi.fn();
+  const setAIReplyModel = vi.fn();
   const finishAIReply = vi.fn();
   const failAIReply = vi.fn();
   const cancelAIReply = vi.fn();
@@ -89,6 +90,7 @@ function makeOpts(mock: MockClaude) {
   const applyTrackedEdits = vi.fn((_c: Comment, _e: QuillEdit[], _s: EditScope) => ({
     applied: 0,
     skipped: 0,
+    suggestionIds: [] as string[],
   }));
   const getContextFolder = vi.fn(() => null);
   const getPendingSuggestions = vi.fn((): TrackedChangeInfo[] => []);
@@ -96,6 +98,7 @@ function makeOpts(mock: MockClaude) {
     opts: {
       startAIReply,
       appendAIReplyChunk,
+      setAIReplyModel,
       finishAIReply,
       failAIReply,
       cancelAIReply,
@@ -110,6 +113,7 @@ function makeOpts(mock: MockClaude) {
     spies: {
       startAIReply,
       appendAIReplyChunk,
+      setAIReplyModel,
       finishAIReply,
       failAIReply,
       cancelAIReply,
@@ -205,6 +209,41 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
     });
     expect(spies.retryAIReply).not.toHaveBeenCalled();
     expect(mock.dispatchers.size).toBe(0);
+  });
+
+  it('holds a fragmented edits fence, reports the model, and finalizes suggestions once', async () => {
+    const { opts, spies } = makeOpts(mock);
+    opts.applyTrackedEdits.mockReturnValue({
+      applied: 1,
+      skipped: 0,
+      suggestionIds: ['change-1'],
+    });
+    const { result } = renderHook(() => useClaudeReply(opts));
+
+    await act(async () => {
+      await result.current.ask(makeComment(), 'fix this', BINDING);
+    });
+    act(() => {
+      mock.emit('tok-1', { kind: 'model', model: 'claude-sonnet' });
+      mock.emit('tok-1', { kind: 'delta', text: 'Made the change.\n``' });
+    });
+    expect(spies.setAIReplyModel).toHaveBeenCalledWith('c1', 'r0', 'claude-sonnet');
+    expect(spies.appendAIReplyChunk).toHaveBeenCalledWith('c1', 'r0', 'Made the change.\n');
+
+    act(() => {
+      mock.emit('tok-1', {
+        kind: 'delta',
+        text: '`quill-edits\n{"summary":"Changed it","edits":[{"find":"anchor","replace":"fixed"}]}\n```',
+      });
+      mock.emit('tok-1', { kind: 'done' });
+    });
+
+    expect(opts.applyTrackedEdits).toHaveBeenCalledTimes(1);
+    expect(spies.linkAIReplySuggestions).toHaveBeenCalledWith('c1', 'r0', ['change-1']);
+    expect(spies.finishAIReply).toHaveBeenCalledTimes(1);
+    expect(spies.appendAIReplyChunk.mock.calls.flatMap((call) => call).join(' ')).not.toContain(
+      'quill-edits',
+    );
   });
 });
 
