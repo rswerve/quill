@@ -244,7 +244,7 @@ test('compaction: non-compacted session still sends the full document (no diff f
   const prompt = await page.evaluate(
     () => (window as unknown as Record<string, unknown>).__capturedPrompt as string,
   );
-  expect(prompt).toContain('Current document (may have been edited since you wrote it):');
+  expect(prompt).toContain('Current document (may have been edited since your last turn):');
   expect(prompt).toContain('content to comment on');
   expect(prompt).not.toContain('diff between what you originally wrote');
   expect(prompt).not.toContain('Your context was compacted');
