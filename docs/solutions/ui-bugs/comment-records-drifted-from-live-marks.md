@@ -52,6 +52,15 @@ editor `update` and is also used defensively by the save/draft snapshot path:
 - unresolved + no mark: drop the record because its complete anchor was deleted;
 - resolved: preserve the stored record without consulting mark absence.
 
+Review actions are the deliberate exception to the unresolved/no-mark rule. Before
+Accept removes a tracked deletion—or Reject removes a tracked insertion—
+`trackedCommentResolution` finds unresolved comments whose every live marked span
+is covered by the text being removed. It snapshots their current range and quote
+and queues them as resolved before dispatching the document transaction. This
+preserves review history when a suggestion transforms the anchor while keeping a
+manual full-text deletion's drop behavior distinct. Single and All actions share
+the same rule; provenance ids are not used for geometry.
+
 The state update is functional (`setComments(current => ...)`). That preserves
 the ordering of resolve and add flows under React batching: resolve queues
 `resolved: true` before the mark-removal transaction triggers reconciliation,
@@ -65,6 +74,10 @@ while add queues the new record before applying its mark.
 - Save/reopen cannot restore a fully deleted comment.
 - Both statically resolved comments and comments resolved through the real UI
   survive mark-less reconciliation.
+- Accept and Accept All auto-resolve comments fully consumed by tracked deletions;
+  Reject does the same for comments on tracked insertions.
+- Partial and non-overlapping suggestion resolutions leave comments live, while
+  raw full-anchor deletion still drops them.
 - Unit tests pin projection behavior and identity preservation when nothing
   changes.
 

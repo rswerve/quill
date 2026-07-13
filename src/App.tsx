@@ -29,6 +29,10 @@ import type { AnnotationKind } from './extensions/AnnotationFocus';
 import { locateEdit, planEdits, rangeText, resolveScopeRange } from './utils/trackedEdits';
 import { restoreReviewMarks, suggestionsFromTrackedChanges } from './utils/reviewPersistence';
 import { reconcileCommentsWithDocument } from './utils/commentReconciler';
+import {
+  autoResolveCapturedComments,
+  captureCommentsConsumedByTrackedRemoval,
+} from './utils/trackedCommentResolution';
 import { basename, dirname } from './utils/path';
 import {
   addRecentFile,
@@ -1085,28 +1089,51 @@ export default function App() {
     setIsSuggesting((v) => !v);
   }
 
+  const queueAutoResolveForTrackedRemoval = useCallback(
+    (markName: 'tracked_delete' | 'tracked_insert', targetId?: string) => {
+      if (!editor) return;
+      // Capture before accept/reject mutates the document. Queue this functional
+      // update first so the editor-update reconciler sees resolved records after
+      // the tracked text and its comment marks disappear.
+      const captured = captureCommentsConsumedByTrackedRemoval(
+        editor.state.doc,
+        markName,
+        targetId,
+      );
+      if (captured.length === 0) return;
+      setComments((current) => autoResolveCapturedComments(current, captured));
+    },
+    [editor, setComments],
+  );
+
   function handleAcceptAll() {
-    editor?.commands.acceptAllChanges();
+    if (!editor) return;
+    queueAutoResolveForTrackedRemoval('tracked_delete');
+    editor.commands.acceptAllChanges();
   }
 
   function handleRejectAll() {
-    editor?.commands.rejectAllChanges();
+    if (!editor) return;
+    queueAutoResolveForTrackedRemoval('tracked_insert');
+    editor.commands.rejectAllChanges();
   }
 
   const handleAcceptChange = useCallback(
     (id: string) => {
+      queueAutoResolveForTrackedRemoval('tracked_delete', id);
       editor?.commands.acceptChange(id);
       clearActiveIf('suggestion', id);
     },
-    [editor, clearActiveIf],
+    [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
   );
 
   const handleRejectChange = useCallback(
     (id: string) => {
+      queueAutoResolveForTrackedRemoval('tracked_insert', id);
       editor?.commands.rejectChange(id);
       clearActiveIf('suggestion', id);
     },
-    [editor, clearActiveIf],
+    [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
   );
 
   const handleAddComment = useCallback(

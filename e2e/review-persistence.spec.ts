@@ -79,6 +79,41 @@ async function selectCommentSlice(page: import('@playwright/test').Page, from: n
   );
 }
 
+const CLAUDE_COMMENT = {
+  ...LIVE_COMMENT,
+  from: 1,
+  to: 6,
+};
+
+async function openWithCommentedClaudeReplacement(
+  page: import('@playwright/test').Page,
+  find: string,
+  replace: string,
+) {
+  const reply =
+    `Proposed an edit.\n\n\`\`\`quill-edits\n` +
+    `${JSON.stringify({ summary: 'Proposed an edit.', edits: [{ find, replace }] })}\n` +
+    '```';
+  await setupMemoryTauri(page, {
+    openPath: DOC_PATH,
+    savePath: DOC_PATH,
+    mockAI: true,
+    aiReplyText: reply,
+    files: {
+      [DOC_PATH]: 'hello world',
+      [SIDECAR_PATH]: sidecar({
+        comments: [CLAUDE_COMMENT],
+        aiSession: ipcFixtures.autoBindSession,
+      }),
+    },
+  });
+  await openMemoryFile(page);
+  await page.locator('.comment-reply-trigger').click();
+  await page.locator('.comment-reply-input').fill('@claude make the edit');
+  await page.locator('.comment-card .btn-primary').click();
+  await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+}
+
 test.describe('review metadata survives save and reopen', () => {
   test('saving a pending replacement writes sidecar metadata for reload', async ({ page }) => {
     await setupMemoryTauri(page, { openPath: DOC_PATH, savePath: DOC_PATH });
@@ -324,6 +359,116 @@ test.describe('live comment reconciliation', () => {
     await page.locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+  });
+});
+
+test.describe('comment lifecycle when suggestions resolve', () => {
+  async function expectOnlyResolvedComment(page: import('@playwright/test').Page) {
+    await expect(page.locator('.comment-card')).toHaveCount(0);
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(page.locator('.comments-head .filter')).toBeEnabled();
+    await page.locator('.comments-head .filter').click();
+    await expect(page.locator('.comment-card-resolved')).toBeVisible();
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+  }
+
+  async function openWithCommentedInsertion(page: import('@playwright/test').Page) {
+    await setupMemoryTauri(page, {
+      openPath: DOC_PATH,
+      files: {
+        [DOC_PATH]: 'hello world',
+        [SIDECAR_PATH]: sidecar({
+          comments: [CLAUDE_COMMENT],
+          suggestions: [
+            {
+              id: 'insert-on-comment',
+              type: 'insertion',
+              from: 1,
+              to: 6,
+              originalText: '',
+              suggestedText: 'hello',
+              author: 'claude',
+              createdAt: '2026-07-11T18:00:00Z',
+              status: 'pending',
+              originCommentId: 'live-comment',
+            },
+          ],
+        }),
+      },
+    });
+    await openMemoryFile(page);
+  }
+
+  test('accepting a full-anchor replacement auto-resolves its comment before reconciliation', async ({
+    page,
+  }) => {
+    await openWithCommentedClaudeReplacement(page, 'hello', 'goodbye');
+
+    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('goodbye world');
+    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expectOnlyResolvedComment(page);
+  });
+
+  test('Accept All auto-resolves a comment fully consumed by an accepted replacement', async ({
+    page,
+  }) => {
+    await openWithCommentedClaudeReplacement(page, 'hello', 'goodbye');
+
+    await page.locator('[title="Accept all suggestions"]').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('goodbye world');
+    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expectOnlyResolvedComment(page);
+  });
+
+  test('accepting a partial-overlap replacement keeps the comment live on surviving text', async ({
+    page,
+  }) => {
+    await openWithCommentedClaudeReplacement(page, 'ell', 'ipp');
+
+    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('hippo world');
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hippo');
+    await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hippo"');
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+  });
+
+  test('accepting a non-overlap replacement leaves the comment untouched', async ({ page }) => {
+    await openWithCommentedClaudeReplacement(page, 'world', 'planet');
+
+    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('hello planet');
+    await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
+    await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
+    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+    await expect(page.locator('.comments-head .count-pill')).toHaveText('1');
+  });
+
+  test('rejecting an insertion that contains the whole anchor auto-resolves the comment', async ({
+    page,
+  }) => {
+    await openWithCommentedInsertion(page);
+
+    await page.locator('.suggestion-reject-btn').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expectOnlyResolvedComment(page);
+  });
+
+  test('Reject All auto-resolves a comment fully consumed with its insertion', async ({ page }) => {
+    await openWithCommentedInsertion(page);
+
+    await page.locator('[title="Reject all suggestions"]').click();
+
+    await expect(page.locator('.ProseMirror')).toContainText('world');
+    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expectOnlyResolvedComment(page);
   });
 });
 
