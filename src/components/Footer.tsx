@@ -6,6 +6,7 @@ import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPrefer
 
 interface FooterProps {
   editor: Editor | null;
+  stats?: { words: number; chars: number; line: number; column: number };
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
@@ -30,6 +31,7 @@ function countWords(text: string): number {
 
 export default function Footer({
   editor,
+  stats,
   zoom = DEFAULT_ZOOM,
   onZoomChange,
   aiSession,
@@ -47,27 +49,30 @@ export default function Footer({
   if (!editor) return <footer className="footer status" />;
 
   const text = editor.state.doc.textContent;
-  const words = countWords(text);
-  const chars = text.length;
-
   const { head } = editor.state.selection;
   const resolved = editor.state.doc.resolve(head);
-  let line = 0;
+  let derivedLine = 0;
   editor.state.doc.nodesBetween(0, head, (node) => {
-    if (node.isTextblock) line += 1;
+    if (node.isTextblock) derivedLine += 1;
   });
-  line = Math.max(1, line);
-  const col = resolved.parentOffset + 1;
+  const documentStats =
+    stats ??
+    ({
+      words: countWords(text),
+      chars: text.length,
+      line: Math.max(1, derivedLine),
+      column: resolved.parentOffset + 1,
+    } satisfies NonNullable<FooterProps['stats']>);
 
   const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
 
   return (
     <footer className="footer status">
       <div className="status-group status-left">
-        <span className="status-item">{words.toLocaleString()} WORDS</span>
-        <span className="status-item">{chars.toLocaleString()} CHARS</span>
+        <span className="status-item">{documentStats.words.toLocaleString()} WORDS</span>
+        <span className="status-item">{documentStats.chars.toLocaleString()} CHARS</span>
         <span className="status-item">
-          LN {line}:{col}
+          LN {documentStats.line}:{documentStats.column}
         </span>
       </div>
 

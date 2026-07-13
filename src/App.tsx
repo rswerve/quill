@@ -1,41 +1,18 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Editor as TiptapEditor } from '@tiptap/react';
-import QuillEditor from './components/Editor';
-import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './components/Editor';
-import Rail from './components/Rail';
-import Topbar from './components/Topbar';
-import Footer from './components/Footer';
-import CommentLayer, { computeBottomSpacer } from './components/CommentLayer';
-import AddCommentButton from './components/AddCommentButton';
-import SessionPicker from './components/SessionPicker';
-import FindBar from './components/FindBar';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AppModal from './components/AppModal';
-import ReviewModal from './components/ReviewModal';
+import DocumentTab from './components/DocumentTab';
+import type { DocumentTabChromeSnapshot, DocumentTabHandle } from './components/DocumentTab';
+import Footer from './components/Footer';
+import Rail from './components/Rail';
+import SessionPicker from './components/SessionPicker';
+import Topbar from './components/Topbar';
 import UpdateBanner from './components/UpdateBanner';
-import FormattingInspector from './components/FormattingInspector';
-import { useFileManager, stripTransientReplyState } from './hooks/useFileManager';
-import { useDraftAutosave } from './hooks/useDraftAutosave';
-import type { DraftSnapshot } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
-import { useComments } from './hooks/useComments';
-import { useSuggestions } from './hooks/useSuggestions';
-import { useClaudeReply } from './hooks/useClaudeReply';
-import { useDocumentReview } from './hooks/useDocumentReview';
-import type { ReviewOptions } from './hooks/useDocumentReview';
-import { FORMAT_BLOCKED_META, getTrackedChanges } from './extensions/TrackChanges';
-import { setImageBaseDir } from './extensions/MarkdownImage';
-import { detectLossyConstructs } from './utils/markdownFidelity';
-import { findAnnotationRange } from './extensions/AnnotationFocus';
-import type { AnnotationKind } from './extensions/AnnotationFocus';
-import { locateEdit, planEdits, rangeText, resolveScopeRange } from './utils/trackedEdits';
-import { restoreReviewMarks, suggestionsFromTrackedChanges } from './utils/reviewPersistence';
-import { reconcileCommentsWithDocument } from './utils/commentReconciler';
-import { locateDetachedCommentAnchor } from './utils/commentAnchors';
 import {
-  autoResolveCapturedComments,
-  captureCommentsConsumedByTrackedRemoval,
-  captureCommentsResolvedByAccept,
-} from './utils/trackedCommentResolution';
+  readClaudeRunOptions,
+  writeClaudeEffort,
+  writeClaudeModel,
+} from './utils/claudePreferences';
 import { basename, dirname } from './utils/path';
 import {
   addRecentFile,
@@ -43,690 +20,97 @@ import {
   getRecentFiles,
   syncRecentMenu,
 } from './utils/recentFiles';
-import { sidecarPath } from './utils/sidecarPath';
-import {
-  readClaudeRunOptions,
-  writeClaudeEffort,
-  writeClaudeModel,
-} from './utils/claudePreferences';
 import {
   clampZoom,
   DEFAULT_ZOOM,
   loadZoomPreference,
   saveZoomPreference,
 } from './utils/zoomPreference';
-import type {
-  AISessionBinding,
-  ClaudeEffort,
-  ClaudeModelAlias,
-  ClaudeRunOptions,
-  Comment,
-  DraftFile,
-  EditScope,
-  QuillEdit,
-  SidecarFile,
-  TrackedChangeInfo,
-} from './types';
+import type { ClaudeEffort, ClaudeModelAlias, ClaudeRunOptions } from './types';
 import './App.css';
 
-const CLAUDE_AUTHOR_ID = 'claude';
-
-const AUTHOR = 'Anonymous';
-
-// Breathing room (px) left above/below a card when it's scrolled into view, and
-// the extra scroll range the bottom spacer adds past the lowest card's bottom.
-const CARD_SCROLL_MARGIN = 24;
-
-function lastReplyModel(comments: Comment[]): string | null {
-  for (let commentIndex = comments.length - 1; commentIndex >= 0; commentIndex--) {
-    const replies = comments[commentIndex].replies;
-    for (let replyIndex = replies.length - 1; replyIndex >= 0; replyIndex--) {
-      if (replies[replyIndex].authorKind === 'ai' && replies[replyIndex].model) {
-        return replies[replyIndex].model ?? null;
-      }
-    }
-  }
-  return null;
-}
+const EMPTY_CHROME: DocumentTabChromeSnapshot = {
+  editor: null,
+  filePath: null,
+  isDirty: false,
+  lastSavedAt: null,
+  isSuggesting: false,
+  pendingSuggestionCount: 0,
+  zoom: loadZoomPreference(),
+  aiSession: null,
+  contextFolder: null,
+  lastKnownModel: null,
+  stats: { words: 0, chars: 0, line: 1, column: 1 },
+};
 
 export default function App() {
-  const [editor, setEditor] = useState<TiptapEditor | null>(null);
-  const editorRef = useRef<EditorRef>(null);
-  const [isSuggesting, setIsSuggesting] = useState(false);
-  // The one annotation (comment or suggestion) currently in focus: its card
-  // is outlined and its text highlighted. Set by clicking either side.
-  const [activeAnnotation, setActiveAnnotation] = useState<{
-    kind: AnnotationKind;
-    id: string;
-  } | null>(null);
-  const activeCommentId = activeAnnotation?.kind === 'comment' ? activeAnnotation.id : null;
-  const activeSuggestionId = activeAnnotation?.kind === 'suggestion' ? activeAnnotation.id : null;
-  const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
-  const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
-    null,
-  );
-  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const commentLayerRef = useRef<HTMLDivElement>(null);
-  const [editorKey] = useState(0);
-  const [zoom, setZoom] = useState(loadZoomPreference);
-  const [scrollTick, setScrollTick] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
-  // Lowest comment/suggestion card bottom (document space), reported by
-  // CommentLayer. Drives `bottomSpacer` so a below-fold card can be scrolled
-  // fully into view (see the effect below).
-  const [maxCardBottom, setMaxCardBottom] = useState(0);
-  const [bottomSpacer, setBottomSpacer] = useState(0);
-  const [findOpen, setFindOpen] = useState(false);
-  // Whether a real native menu owns the file-operation accelerators. Defaults
-  // to false so JS handles the shortcuts (dev server / e2e); flipped to true
-  // once the backend confirms a native menu exists (see effect below).
+  const documentTabRef = useRef<DocumentTabHandle>(null);
+  const [chrome, setChrome] = useState<DocumentTabChromeSnapshot>(EMPTY_CHROME);
+  const [defaultZoom, setDefaultZoom] = useState(loadZoomPreference);
   const [hasNativeMenu, setHasNativeMenu] = useState(false);
-
-  // Newer published release, if any (production builds check GitHub once on
-  // launch). The banner links out; the user installs when they choose.
-  const updateCheck = useUpdateCheck({ currentVersion: __APP_VERSION__ });
-
-  const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
-  const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
-  const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
+  const [discardGuard, setDiscardGuard] = useState<{ run: () => void } | null>(null);
   const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
     () => readClaudeRunOptions(window.localStorage).model,
   );
   const [claudeEffort, setClaudeEffort] = useState<ClaudeEffort | null>(
     () => readClaudeRunOptions(window.localStorage).effort,
   );
-  const claudeRunOptionsRef = useRef<ClaudeRunOptions>({
+  const updateCheck = useUpdateCheck({ currentVersion: __APP_VERSION__ });
+
+  const chromeRef = useRef(chrome);
+  chromeRef.current = chrome;
+  const runOptionsRef = useRef<ClaudeRunOptions>({
     model: claudeModel,
     effort: claudeEffort,
   });
-  claudeRunOptionsRef.current = { model: claudeModel, effort: claudeEffort };
-  const getClaudeRunOptions = useCallback(() => claudeRunOptionsRef.current, []);
-  const handleClaudeModelChange = useCallback((model: ClaudeModelAlias | null) => {
-    setClaudeModel(model);
-    writeClaudeModel(window.localStorage, model);
-  }, []);
-  const handleClaudeEffortChange = useCallback((effort: ClaudeEffort | null) => {
-    setClaudeEffort(effort);
-    writeClaudeEffort(window.localStorage, effort);
-  }, []);
-  // Folder of reference documents linked to this doc (persisted in the
-  // sidecar). Claude gets read access to it plus a file manifest per ask.
-  const [contextFolder, setContextFolder] = useState<string | null>(null);
-  // Ref mirror so useClaudeReply reads the live value at ask time without the
-  // hook's options identity churning on every link/unlink.
-  const contextFolderRef = useRef(contextFolder);
-  contextFolderRef.current = contextFolder;
-  const [pickerOpen, setPickerOpen] = useState(false);
-  // A @claude request made before a session was linked; fired once the user
-  // picks a session via the picker we open for them.
-  const pendingAIRequestRef = useRef<{ commentId: string; userText: string } | null>(null);
-  // The "Review full document" modal, plus a review request made before a
-  // session was linked (resumed once the user picks one, like AI replies).
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const pendingReviewRef = useRef(false);
+  runOptionsRef.current = { model: claudeModel, effort: claudeEffort };
 
-  // In-app dialogs (window.alert/confirm are unreliable in Tauri webviews):
-  // a notice with a single OK, and the unsaved-changes guard holding the
-  // destructive action to run once the user decides what to do with the doc.
-  const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
-  const [discardGuard, setDiscardGuard] = useState<{ run: () => void } | null>(null);
-
-  const showError = useCallback(
-    (title: string, message: string) => setNotice({ title, message }),
+  const getClaudeRunOptions = useCallback(() => runOptionsRef.current, []);
+  const handleChromeChange = useCallback((snapshot: DocumentTabChromeSnapshot) => {
+    setChrome(snapshot);
+  }, []);
+  const showNotice = useCallback(
+    (nextNotice: { title: string; message: string }) => setNotice(nextNotice),
     [],
   );
+  const handleRecentFile = useCallback((path: string) => {
+    void syncRecentMenu(addRecentFile(path));
+  }, []);
+  const handleOpenSessionPicker = useCallback(() => setPickerOpen(true), []);
 
-  const {
-    filePath,
-    isDirty,
-    markDirty,
-    openFile,
-    openFilePath,
-    saveFile,
-    saveFileAs,
-    newFile,
-    restoreDraft,
-  } = useFileManager(showError);
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  useEffect(() => {
+    saveZoomPreference(defaultZoom);
+  }, [defaultZoom]);
 
-  // Live dirty flag for listeners registered once (close-requested, deep-link)
-  // so they don't need to re-register on every edit.
-  const isDirtyRef = useRef(isDirty);
-  isDirtyRef.current = isDirty;
+  useEffect(() => {
+    const name = chrome.filePath ? basename(chrome.filePath) : 'Untitled';
+    document.title = chrome.isDirty ? `${name} •` : name;
+  }, [chrome.filePath, chrome.isDirty]);
 
-  // Run `action` immediately if there are no unsaved changes; otherwise ask
-  // the user (Save / Don't Save / Cancel) and run it once the doc is safe.
   const guardDirty = useCallback((action: () => void) => {
-    if (!isDirtyRef.current) {
+    if (!chromeRef.current.isDirty) {
       action();
     } else {
       setDiscardGuard({ run: action });
     }
   }, []);
-  const {
-    comments,
-    setComments,
-    addComment,
-    addReply,
-    resolveComment,
-    unresolveComment,
-    deleteComment,
-    startAIReply,
-    appendAIReplyChunk,
-    setAIReplyModel,
-    finishAIReply,
-    failAIReply,
-    cancelAIReply,
-    retryAIReply,
-    linkAIReplySuggestions,
-    dismissAIReply,
-  } = useComments();
-  const { suggestions, setSuggestions } = useSuggestions();
 
-  const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
-
-  // Marks are the runtime truth for review data. The update listener below
-  // projects comments into React state while editing; write paths reconcile once
-  // more defensively, and tracked changes exist only as marks until captured here.
-  const getLiveReviewState = useCallback(() => {
-    const ed = editorRef.current?.getEditor();
-    if (!ed) return { comments, suggestions };
-    return {
-      comments: reconcileCommentsWithDocument(comments, ed.state.doc),
-      suggestions: suggestionsFromTrackedChanges(getTrackedChanges(ed)),
-    };
-  }, [comments, suggestions]);
-
-  // Crash-recovery autosave: while dirty, the document (plus annotations and
-  // links) is snapshotted to draft.json every few seconds; a clean state
-  // deletes it. On launch we offer any leftover draft for recovery below.
-  const getDraftSnapshot = useCallback((): DraftSnapshot => {
-    const live = getLiveReviewState();
-    return {
-      filePath,
-      content: getDocMarkdown(),
-      // draft.json is a second on-disk persistence path, so it needs the same
-      // transient-reply strip the sidecar gets — otherwise a crash mid-stream
-      // recovers a stuck spinner / dead-Retry card the fresh hook can't drive.
-      comments: stripTransientReplyState(live.comments),
-      suggestions: live.suggestions,
-      aiSession,
-      contextFolder,
-    };
-  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
-  const { readDraft, deleteDraft } = useDraftAutosave({
-    isDirty,
-    getSnapshot: getDraftSnapshot,
-  });
-
-  // A draft left behind by a crashed/killed run, awaiting the user's
-  // Recover / Discard decision.
-  const [recoveryDraft, setRecoveryDraft] = useState<DraftFile | null>(null);
-
-  useEffect(() => {
-    saveZoomPreference(zoom);
-  }, [zoom]);
-
-  useEffect(() => {
-    void (async () => {
-      const draft = await readDraft();
-      if (draft) setRecoveryDraft(draft);
-    })();
-  }, [readDraft]);
-
-  // Read the live document text for a comment's anchored range and its
-  // enclosing paragraph, as plaintext (matching how Claude's `find` strings are
-  // expected to match). Uses the current doc, not the stale anchorText snapshot.
-  const getRangeTexts = useCallback(
-    (comment: Comment) => {
-      const doc = editor?.state.doc;
-      if (!doc) return { highlightText: comment.anchorText, paragraphText: comment.anchorText };
-      const size = doc.content.size;
-      const cFrom = Math.min(comment.from, size);
-      const cTo = Math.min(comment.to, size);
-      const $from = doc.resolve(cFrom);
-      const pFrom = $from.start($from.depth);
-      const pTo = $from.end($from.depth);
-      return {
-        highlightText: rangeText(doc, cFrom, cTo),
-        paragraphText: rangeText(doc, pFrom, pTo),
-      };
-    },
-    [editor],
+  const handleSave = useCallback(() => documentTabRef.current?.save() ?? Promise.resolve(null), []);
+  const handleSaveAs = useCallback(
+    () => documentTabRef.current?.saveAs() ?? Promise.resolve(null),
+    [],
   );
-
-  // True while applyTrackedEdits is dispatching Claude's edits, so the
-  // blocked-formatting notice only ever fires for the user's own gestures.
-  const applyingClaudeEditsRef = useRef(false);
-
-  // Apply Claude's quote-based edits as tracked-change suggestions. Forces
-  // suggesting mode on (under Claude's author id, stamped with the originating
-  // comment when one is given) for the duration, applies each located edit
-  // back-to-front, then restores the user's prior mode/author.
-  const applyTrackedEdits = useCallback(
-    (
-      comment: { from: number; to: number },
-      edits: QuillEdit[],
-      scope: EditScope,
-      originCommentId?: string,
-    ) => {
-      const ed = editor;
-      if (!ed) return { applied: 0, skipped: edits.length, suggestionIds: [] };
-
-      const suggestionIdsBefore = new Set(getTrackedChanges(ed).map((change) => change.id));
-
-      const range = resolveScopeRange(ed.state.doc, comment, scope);
-      // Claude's author id doubles as the cross-author filter: format ops
-      // touching another author's pending format suggestion are skipped whole.
-      const { placed, skipped } = planEdits(
-        ed.state.doc,
-        range.from,
-        range.to,
-        edits,
-        CLAUDE_AUTHOR_ID,
-      );
-
-      const trackStorage = (
-        ed.storage as unknown as Record<string, { enabled: boolean; authorID: string }>
-      )['trackChanges'] as { enabled: boolean; authorID: string } | undefined;
-      const priorEnabled = trackStorage?.enabled ?? false;
-      const priorAuthor = trackStorage?.authorID ?? AUTHOR;
-
-      let applied = 0;
-      try {
-        // Suppress the blocked-formatting notice for automated applies:
-        // planEdits already pre-blocks Claude's conflicting format ops and
-        // reports them as skipped; a modal mid-apply would be noise.
-        applyingClaudeEditsRef.current = true;
-        ed.commands.setTrackChangesEnabled(true);
-        ed.commands.setTrackChangesAuthor(CLAUDE_AUTHOR_ID);
-        ed.commands.setTrackChangesOrigin(originCommentId ?? null);
-        for (const e of placed) {
-          // Back-to-front: applying a later edit doesn't shift earlier offsets.
-          if (e.kind === 'format') {
-            // One chain = one transaction = one gesture, so the engine mints
-            // a single format suggestion per edit (with origin stamped).
-            let chain = ed.chain().setTextSelection({ from: e.from, to: e.to });
-            for (const op of e.marks) {
-              chain = op.set ? chain.setMark(op.mark) : chain.unsetMark(op.mark);
-            }
-            chain.run();
-          } else {
-            ed.chain().setTextSelection({ from: e.from, to: e.to }).insertContent(e.replace).run();
-          }
-          applied++;
-        }
-      } finally {
-        ed.commands.setTrackChangesEnabled(priorEnabled);
-        ed.commands.setTrackChangesAuthor(priorAuthor);
-        ed.commands.setTrackChangesOrigin(null);
-        applyingClaudeEditsRef.current = false;
-      }
-      const suggestionIds = getTrackedChanges(ed)
-        .filter(
-          (change) =>
-            !suggestionIdsBefore.has(change.id) && change.originCommentId === originCommentId,
-        )
-        .map((change) => change.id);
-      return { applied, skipped, suggestionIds };
-    },
-    [editor],
-  );
-
-  // Review-only mutations (replies, AI completions, resolve state) change no
-  // document text, so no editor transaction fires onUpdate for them — they
-  // must mark the document dirty themselves or quitting silently drops them.
-  const finishAIReplyAndDirty = useCallback(
-    (commentId: string, replyId: string) => {
-      finishAIReply(commentId, replyId);
-      markDirty();
-    },
-    [finishAIReply, markDirty],
-  );
-
-  const claudeReply = useClaudeReply({
-    startAIReply,
-    appendAIReplyChunk,
-    setAIReplyModel,
-    onModelObserved: setLastKnownModel,
-    finishAIReply: finishAIReplyAndDirty,
-    failAIReply,
-    cancelAIReply,
-    retryAIReply,
-    linkAIReplySuggestions,
-    getDocMarkdown,
-    getRangeTexts,
-    applyTrackedEdits,
-    getContextFolder: useCallback(() => contextFolderRef.current, []),
-    // Read live at ask time (not from the trackedChanges state mirror) so the
-    // prompt's pending-suggestions section can't lag a just-applied edit.
-    getPendingSuggestions: useCallback(
-      () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
-      [editor],
-    ),
-    getRunOptions: getClaudeRunOptions,
-  });
-
-  // Doc-scoped wrapper for the full-document review: the same tracked-edit
-  // pipeline, always over the whole document (the anchor range is unused).
-  const applyDocTrackedEdits = useCallback(
-    (edits: QuillEdit[]) => applyTrackedEdits({ from: 0, to: 0 }, edits, 'doc'),
-    [applyTrackedEdits],
-  );
-
-  // Anchor one Claude review comment: locate `find` in the whole document,
-  // mark the range, and attach the remark as a finished AI reply so it renders
-  // with the Claude styling. False when the quote isn't found verbatim.
-  const addClaudeComment = useCallback(
-    (find: string, body: string, model?: string): boolean => {
-      const ed = editor;
-      if (!ed || find.trim().length === 0 || body.trim().length === 0) return false;
-      const doc = ed.state.doc;
-      const range = locateEdit(doc, 0, doc.content.size, find);
-      if (!range || range.from === range.to) return false;
-      const comment = addComment(
-        rangeText(doc, range.from, range.to),
-        range.from,
-        range.to,
-        'Claude',
-      );
-      ed.chain().setTextSelection({ from: range.from, to: range.to }).setComment(comment.id).run();
-      const replyId = startAIReply(comment.id);
-      if (model) setAIReplyModel(comment.id, replyId, model);
-      appendAIReplyChunk(comment.id, replyId, body);
-      finishAIReplyAndDirty(comment.id, replyId);
-      return true;
-    },
-    [editor, addComment, startAIReply, setAIReplyModel, appendAIReplyChunk, finishAIReplyAndDirty],
-  );
-
-  const docReview = useDocumentReview({
-    getDocMarkdown,
-    getContextFolder: useCallback(() => contextFolderRef.current, []),
-    applyTrackedEdits: applyDocTrackedEdits,
-    addClaudeComment,
-    onModelObserved: setLastKnownModel,
-    getRunOptions: getClaudeRunOptions,
-  });
-
-  // Re-render on scroll so the comment column tracks the document (cards are
-  // translated by scrollTop) and the add-comment button tracks coordsAtPos.
-  // Keyed on `editor` so the listener attaches once the editor subtree has
-  // mounted `.editor-scroll-area` — with an empty dep array the query could
-  // run before the element existed, leaving scrollTop stuck at 0 (cards never
-  // move on scroll).
-  useEffect(() => {
-    const el = scrollAreaRef.current?.querySelector('.editor-scroll-area');
-    if (!el) return;
-    const onScroll = () => {
-      setScrollTick((t) => t + 1);
-      setScrollTop((el as HTMLElement).scrollTop);
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    // Sync once on attach in case the document is already scrolled.
-    setScrollTop((el as HTMLElement).scrollTop);
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [editor]);
-
-  // Size the bottom spacer so the lowest comment/suggestion card can be
-  // scrolled fully into view. The card column is overflow-hidden and its cards
-  // paint at `nudgedTop − scrollTop`, so a card whose bottom sits past the
-  // document's own content is unreachable without extra scroll range. We
-  // measure the scroll area's *natural* content height (scrollHeight minus the
-  // spacer we already added, so the spacer's own height doesn't feed back) and
-  // extend it just enough via `computeBottomSpacer`. A `prev === next` guard
-  // keeps this from looping. Normal docs get spacer 0 (no trailing dead space).
-  useEffect(() => {
-    const el = scrollAreaRef.current?.querySelector('.editor-scroll-area') as HTMLElement | null;
-    if (!el) return;
-    const baseContentHeight = el.scrollHeight - bottomSpacer;
-    const next = computeBottomSpacer(maxCardBottom, baseContentHeight, CARD_SCROLL_MARGIN);
-    setBottomSpacer((prev) => (prev === next ? prev : next));
-  }, [maxCardBottom, bottomSpacer, scrollTick, zoom, editor]);
-
-  // Re-render once after a text-size change so the add-comment button re-reads
-  // coordsAtPos after the editor has reflowed. The style lands in the DOM after
-  // render, so measuring in that same render would leave the button one layout
-  // behind.
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setScrollTick((t) => t + 1));
-    return () => cancelAnimationFrame(raf);
-  }, [zoom]);
-
-  // Update macOS title bar dirty indicator
-  useEffect(() => {
-    const name = filePath ? basename(filePath) : 'Untitled';
-    document.title = isDirty ? `${name} •` : name;
-  }, [filePath, isDirty]);
-
-  const loadFileResult = useCallback(
-    (result: {
-      content: string;
-      sidecar: SidecarFile;
-      filePath: string;
-      sidecarError?: string | null;
-    }) => {
-      // Must precede setContent: ProseMirror draws the document (and thus
-      // resolves image srcs) synchronously when content is set.
-      setImageBaseDir(dirname(result.filePath));
-      void syncRecentMenu(addRecentFile(result.filePath));
-      setLastSavedAt(Date.now());
-      editorRef.current?.setContent(result.content);
-      const loadedComments = result.sidecar.comments ?? [];
-      const loadedSuggestions = result.sidecar.suggestions ?? [];
-      setComments(loadedComments);
-      setLastKnownModel(lastReplyModel(loadedComments));
-      setSuggestions(loadedSuggestions);
-      // Stamp the marks back onto the parsed document: highlights, click
-      // linking, and suggestion cards all read live marks, which Markdown
-      // serialization dropped at save time. The restore suppresses the update
-      // event (a load must not look dirty), so the tracked-changes state that
-      // normally follows update events is refreshed by hand.
-      const ed = editorRef.current?.getEditor();
-      if (ed) {
-        restoreReviewMarks(ed, loadedComments, loadedSuggestions);
-        setTrackedChanges(getTrackedChanges(ed));
-      }
-      const session = result.sidecar.aiSession ?? null;
-      // A sidecar that exists but failed to parse means real comments/suggestions
-      // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
-      if (result.sidecarError) {
-        const name = sidecarPath(result.filePath);
-        setNotice({
-          title: 'Comments file could not be read',
-          message:
-            `${name}\n\n${result.sidecarError}\n\n` +
-            `Your comments and suggestions are NOT loaded, but the file on disk is preserved. ` +
-            `Saving will not overwrite it. Fix or remove the file, then reopen.`,
-        });
-      } else {
-        // Warn before the user edits, not after they've saved over the file.
-        const lossy = detectLossyConstructs(result.content);
-        if (lossy.length > 0) {
-          setNotice({
-            title: 'Some formatting may not survive',
-            message:
-              `This file contains ${lossy.join(' and ')}, which Quill cannot edit yet. ` +
-              `Those parts will be altered if you save this document from Quill. ` +
-              `To keep them intact, edit this file in another tool.`,
-          });
-        }
-      }
-      setAISession(session);
-      setContextFolder(result.sidecar.contextFolder ?? null);
-      // Force the session choice up front: if we opened a non-empty doc with no
-      // linked Claude session, surface the picker so the user binds one (and can
-      // then call @claude from within the doc). Auto-bind is intentionally not
-      // attempted — the user picks.
-      if (!session && result.content.trim().length > 0) {
-        setPickerOpen(true);
-      }
-    },
-    [setComments, setSuggestions],
-  );
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        const { invoke } = await import('@tauri-apps/api/core');
-        const handler = await listen<string>('deep-link-open', (e) => {
-          const path = e.payload;
-          if (!path) return;
-          // A deep link can arrive while the user has unsaved work in another
-          // document — that replacement is as destructive as File → Open.
-          guardDirty(() => {
-            void (async () => {
-              const result = await openFilePath(path);
-              if (result) loadFileResult(result);
-            })();
-          });
-        });
-        unlisten = handler;
-
-        // Cold start: the launch URL was emitted before this listener existed,
-        // so it was dropped. Drain the buffered path the backend stashed.
-        const pending = await invoke<string | null>('take_pending_deep_link');
-        if (pending) {
-          const result = await openFilePath(pending);
-          if (result) loadFileResult(result);
-        }
-      } catch {
-        // Non-Tauri context (e.g. plain dev server) — ignore.
-      }
-    })();
-    return () => {
-      unlisten?.();
-    };
-  }, [openFilePath, loadFileResult, guardDirty]);
-
-  // Test escape hatch: bind an AI session without going through SessionPicker.
-  useEffect(() => {
-    const seed = typeof window !== 'undefined' ? window.__quillTestSession : undefined;
-    if (seed) setAISession(seed);
-  }, []);
-
-  function getMarkdown(): string {
-    return editorRef.current?.getMarkdown() ?? '';
-  }
-
-  const handleSaveAs = useCallback(async () => {
-    const live = getLiveReviewState();
-    const path = await saveFileAs(
-      getMarkdown(),
-      live.comments,
-      live.suggestions,
-      aiSession,
-      contextFolder,
-    );
-    // The document gained (or moved) a directory — relative image paths now
-    // resolve against it for anything drawn from here on.
-    if (path) {
-      setImageBaseDir(dirname(path));
-      void syncRecentMenu(addRecentFile(path));
-      setLastSavedAt(Date.now());
-    }
-    return path;
-  }, [saveFileAs, getLiveReviewState, aiSession, contextFolder]);
-
-  const handleSave = useCallback(async () => {
-    if (!filePath) {
-      return handleSaveAs();
-    }
-    const live = getLiveReviewState();
-    const path = await saveFile(
-      getMarkdown(),
-      live.comments,
-      live.suggestions,
-      aiSession,
-      contextFolder,
-    );
-    if (path) setLastSavedAt(Date.now());
-    return path;
-  }, [filePath, saveFile, getLiveReviewState, aiSession, contextFolder, handleSaveAs]);
-
-  // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
-  // the chrome and the track-changes/comment markup, leaving a clean copy of
-  // the document, and the OS print dialog offers "Save as PDF". We set
-  // document.title first so that dialog defaults the filename to the doc's
-  // name instead of "Quill"; it's restored after the dialog returns
-  // (window.print blocks synchronously until then).
-  const handleExportPdf = useCallback(() => {
-    const docName = filePath ? basename(filePath).replace(/\.md$/i, '') : 'Untitled';
-    const prevTitle = document.title;
-    document.title = docName;
-    try {
-      window.print();
-    } finally {
-      document.title = prevTitle;
-    }
-  }, [filePath]);
-
-  const performOpen = useCallback(async () => {
-    const result = await openFile();
-    if (!result) return;
-    loadFileResult(result);
-  }, [openFile, loadFileResult]);
-
-  const performNew = useCallback(() => {
-    newFile();
-    setImageBaseDir(null);
-    editorRef.current?.setContent('');
-    setComments([]);
-    setSuggestions([]);
-    setAISession(null);
-    setLastKnownModel(null);
-    setContextFolder(null);
-    setLastSavedAt(null);
-  }, [newFile, setComments, setSuggestions]);
-
-  // Adopt the recovered draft as the open (dirty) document. The draft's
-  // content is newer than anything on disk, so nothing is read from the file —
-  // the user decides whether to save over it.
-  const handleRecoverDraft = useCallback(() => {
-    const draft = recoveryDraft;
-    if (!draft) return;
-    setRecoveryDraft(null);
-    restoreDraft(draft.filePath);
-    setLastSavedAt(null);
-    setImageBaseDir(draft.filePath ? dirname(draft.filePath) : null);
-    editorRef.current?.setContent(draft.content);
-    const draftComments = draft.comments ?? [];
-    const draftSuggestions = draft.suggestions ?? [];
-    setComments(draftComments);
-    setLastKnownModel(lastReplyModel(draftComments));
-    setSuggestions(draftSuggestions);
-    // The draft's annotations need their marks stamped back just like a file
-    // load — the snapshot's content is serialized Markdown, which drops them
-    // (and the same manual tracked-changes refresh, since the restore
-    // suppresses the update event).
-    const ed = editorRef.current?.getEditor();
-    if (ed) {
-      restoreReviewMarks(ed, draftComments, draftSuggestions);
-      setTrackedChanges(getTrackedChanges(ed));
-    }
-    setAISession(draft.aiSession ?? null);
-    setContextFolder(draft.contextFolder ?? null);
-  }, [recoveryDraft, restoreDraft, setComments, setSuggestions]);
-
-  const handleDiscardDraft = useCallback(() => {
-    setRecoveryDraft(null);
-    void deleteDraft();
-  }, [deleteDraft]);
-
-  // New / Open replace the document, so both run through the unsaved-changes
-  // guard. Quit goes through the same guard, then asks the backend to exit
-  // (the menu's Quit item is custom — emitting an event instead of quitting —
-  // precisely so this guard gets a chance to run).
   const handleOpen = useCallback(
-    () => guardDirty(() => void performOpen()),
-    [guardDirty, performOpen],
+    () => guardDirty(() => void documentTabRef.current?.open()),
+    [guardDirty],
   );
-
-  const handleNew = useCallback(() => guardDirty(performNew), [guardDirty, performNew]);
-
+  const handleNew = useCallback(
+    () => guardDirty(() => documentTabRef.current?.newDocument()),
+    [guardDirty],
+  );
+  const handleExportPdf = useCallback(() => documentTabRef.current?.exportPdf(), []);
   const handleQuit = useCallback(() => {
     guardDirty(() => {
       void (async () => {
@@ -736,26 +120,92 @@ export default function App() {
     });
   }, [guardDirty]);
 
-  // Guard the native window close (traffic-light button): when dirty, prevent
-  // the close and route through the same Save / Don't Save / Cancel dialog.
-  // Outside Tauri (dev server / e2e) getCurrentWindow() throws and no guard is
-  // installed.
+  const handleCopyDiagnostics = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const diagnostics = await invoke<{
+        version: string;
+        os: string;
+        arch: string;
+        log_dir: string;
+      }>('get_diagnostics');
+      const text = [
+        `Quill ${diagnostics.version}`,
+        `OS: ${diagnostics.os} (${diagnostics.arch})`,
+        `Logs: ${diagnostics.log_dir}`,
+      ].join('\n');
+      await navigator.clipboard.writeText(text);
+      setNotice({
+        title: 'Diagnostics copied',
+        message: `Paste this into your bug report:\n\n${text}\n\nUse Help → Show Logs to attach the log file.`,
+      });
+    } catch {
+      // Non-Tauri context or clipboard denied — nothing actionable to show.
+    }
+  }, []);
+
+  const handleRevealLogs = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('reveal_logs');
+    } catch {
+      // Non-Tauri context.
+    }
+  }, []);
+
+  const menuHandlersRef = useRef({
+    handleNew,
+    handleOpen,
+    handleSave,
+    handleSaveAs,
+    handleExportPdf,
+    handleQuit,
+    handleCopyDiagnostics,
+    handleRevealLogs,
+    guardDirty,
+  });
+  menuHandlersRef.current = {
+    handleNew,
+    handleOpen,
+    handleSave,
+    handleSaveAs,
+    handleExportPdf,
+    handleQuit,
+    handleCopyDiagnostics,
+    handleRevealLogs,
+    guardDirty,
+  };
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    // The effect may be torn down before the async registration resolves
-    // (StrictMode double-mount). Track that so we don't leak a listener that
-    // outlives the effect — a stale second listener would also call
-    // preventDefault and leave the window unclosable with no dialog.
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const { invoke } = await import('@tauri-apps/api/core');
+        unlisten = await listen<string>('deep-link-open', (event) => {
+          const path = event.payload;
+          if (!path) return;
+          menuHandlersRef.current.guardDirty(() => void documentTabRef.current?.openPath(path));
+        });
+
+        const pending = await invoke<string | null>('take_pending_deep_link');
+        if (pending) await documentTabRef.current?.openPath(pending);
+      } catch {
+        // Non-Tauri context (e.g. plain dev server) — ignore.
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const win = getCurrentWindow();
         const off = await win.onCloseRequested((event) => {
-          if (!isDirtyRef.current) return; // Clean: let the close proceed.
-          // Dirty: hold the close and route through the Save dialog. If
-          // anything here throws, the catch below destroys the window rather
-          // than leaving the X dead (prevented close, no dialog shown).
+          if (!chromeRef.current.isDirty) return;
           try {
             event.preventDefault();
             setDiscardGuard({ run: () => void win.destroy() });
@@ -775,84 +225,13 @@ export default function App() {
     };
   }, []);
 
-  // Help → Copy Diagnostics: gather version/OS/log-path from the backend and
-  // put a paste-ready block on the clipboard for bug reports. All local; the
-  // log file itself is revealed separately (it may contain document text).
-  const handleCopyDiagnostics = useCallback(async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const d = await invoke<{
-        version: string;
-        os: string;
-        arch: string;
-        log_dir: string;
-      }>('get_diagnostics');
-      const text = [`Quill ${d.version}`, `OS: ${d.os} (${d.arch})`, `Logs: ${d.log_dir}`].join(
-        '\n',
-      );
-      await navigator.clipboard.writeText(text);
-      setNotice({
-        title: 'Diagnostics copied',
-        message: `Paste this into your bug report:\n\n${text}\n\nUse Help → Show Logs to attach the log file.`,
-      });
-    } catch {
-      // Non-Tauri context or clipboard denied — nothing actionable to show.
-    }
-  }, []);
-
-  // Help → Show Logs: reveal the log directory in the OS file manager.
-  const handleRevealLogs = useCallback(async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('reveal_logs');
-    } catch {
-      // Non-Tauri context.
-    }
-  }, []);
-
-  // Native application menu (File → New/Open/Save/Save As). The Rust side owns
-  // the accelerators and emits an event per item; we map each to the same
-  // handler the in-app shortcuts use. In a non-Tauri context (plain dev server)
-  // the listeners simply never fire.
-  //
-  // The menu handlers re-create on most edits (they close over filePath,
-  // comments, etc.), so we hold the current set in a ref — refreshed every
-  // render — and register the Tauri listeners exactly once. Otherwise every
-  // keystroke would tear down and re-`listen` all of them.
-  const menuHandlersRef = useRef({
-    handleNew,
-    handleOpen,
-    handleSave,
-    handleSaveAs,
-    handleExportPdf,
-    handleQuit,
-    handleCopyDiagnostics,
-    handleRevealLogs,
-    guardDirty,
-    openFilePath,
-    loadFileResult,
-  });
-  menuHandlersRef.current = {
-    handleNew,
-    handleOpen,
-    handleSave,
-    handleSaveAs,
-    handleExportPdf,
-    handleQuit,
-    handleCopyDiagnostics,
-    handleRevealLogs,
-    guardDirty,
-    openFilePath,
-    loadFileResult,
-  };
-
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const wire = async (event: string, fn: () => void) => {
-          unlisteners.push(await listen(event, () => fn()));
+        const wire = async (event: string, action: () => void) => {
+          unlisteners.push(await listen(event, action));
         };
         await wire('menu-new', () => menuHandlersRef.current.handleNew());
         await wire('menu-open', () => menuHandlersRef.current.handleOpen());
@@ -866,40 +245,24 @@ export default function App() {
           () => void menuHandlersRef.current.handleCopyDiagnostics(),
         );
         await wire('menu-reveal-logs', () => void menuHandlersRef.current.handleRevealLogs());
-        // Open Recent replaces the document, so it runs through the same
-        // unsaved-changes guard as File → Open and deep links.
         unlisteners.push(
-          await listen<string>('menu-open-recent', (e) => {
-            const path = e.payload;
+          await listen<string>('menu-open-recent', (event) => {
+            const path = event.payload;
             if (!path) return;
-            const cur = menuHandlersRef.current;
-            cur.guardDirty(() => {
-              void (async () => {
-                const result = await cur.openFilePath(path);
-                if (result) cur.loadFileResult(result);
-              })();
-            });
+            menuHandlersRef.current.guardDirty(() => void documentTabRef.current?.openPath(path));
           }),
         );
       } catch {
         // Non-Tauri context — no native menu.
       }
     })();
-    return () => unlisteners.forEach((u) => u());
-    // Registered once: handlers are read live through menuHandlersRef.
+    return () => unlisteners.forEach((unlisten) => unlisten());
   }, []);
 
-  // Fill File → Open Recent from the persisted list once on launch; after
-  // this, every add/clear re-syncs the menu itself.
   useEffect(() => {
     void syncRecentMenu(getRecentFiles());
   }, []);
 
-  // Detect whether a real native menu is present. We can't infer this from
-  // `__TAURI_INTERNALS__`: the e2e suite mocks that global but has no native
-  // menu, so it must keep handling shortcuts in JS. The `has_native_menu`
-  // command exists only in the real backend (the e2e IPC mock returns null for
-  // it), making it the authoritative signal.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -916,19 +279,12 @@ export default function App() {
     };
   }, []);
 
-  // Keyboard shortcuts. Under Tauri the native menu owns the file-operation
-  // accelerators (New/Open/Save/Save As), so we skip them here to avoid
-  // double-firing (e.g. opening two file dialogs). Outside Tauri (plain dev
-  // server / e2e) there is no native menu, so we keep handling them in JS.
   useEffect(() => {
-    function handleBrowserFileShortcut(e: KeyboardEvent): boolean {
+    function handleBrowserFileShortcut(event: KeyboardEvent): boolean {
       if (hasNativeMenu) return false;
-
-      // With Shift held, KeyboardEvent.key reports the shifted character
-      // ('S', not 's') — compare case-insensitively or the branch is dead.
-      if (e.key.toLowerCase() === 's' && e.shiftKey) {
-        e.preventDefault();
-        handleSaveAs();
+      if (event.key.toLowerCase() === 's' && event.shiftKey) {
+        event.preventDefault();
+        void handleSaveAs();
         return true;
       }
 
@@ -936,548 +292,86 @@ export default function App() {
         s: handleSave,
         o: handleOpen,
         n: handleNew,
-      }[e.key];
+      }[event.key];
       if (action) {
-        e.preventDefault();
-        action();
+        event.preventDefault();
+        void action();
         return true;
       }
 
-      if (e.key === 'p' && !e.shiftKey && !e.altKey) {
-        // Export to PDF (print-to-PDF). In Tauri the native menu owns this
-        // accelerator; here we intercept the browser's default print so the
-        // doc title is set first, matching the native path.
-        e.preventDefault();
+      if (event.key === 'p' && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
         handleExportPdf();
         return true;
       }
-
       return false;
     }
 
-    function handleKeyDown(e: KeyboardEvent) {
-      const meta = e.metaKey || e.ctrlKey;
+    function handleKeyDown(event: KeyboardEvent) {
+      const meta = event.metaKey || event.ctrlKey;
       if (!meta) {
-        if (e.key === 'Escape') setActiveAnnotation(null);
+        if (event.key === 'Escape') documentTabRef.current?.clearActiveAnnotation();
         return;
       }
+      if (handleBrowserFileShortcut(event)) return;
 
-      if (handleBrowserFileShortcut(e)) return;
-
-      // Cmd+F opens find & replace (re-focus when already open is handled by
-      // the bar itself, which also owns Esc-to-close and Enter navigation).
-      if (e.key === 'f' && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        setFindOpen(true);
+      if (event.key === 'f' && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        documentTabRef.current?.focusFind();
         return;
       }
-
-      if (e.key === '/' && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        setReviewOpen(true);
+      if (event.key === '/' && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        documentTabRef.current?.openReviewModal();
         return;
       }
-
-      if (e.key === '=' || e.key === '+') {
-        e.preventDefault();
-        setZoom((z) => clampZoom(Math.round((z + 0.12) * 100) / 100));
+      if (event.key === '=' || event.key === '+') {
+        event.preventDefault();
+        const next = clampZoom(Math.round((chromeRef.current.zoom + 0.12) * 100) / 100);
+        setDefaultZoom(next);
+        documentTabRef.current?.setZoom(next);
         return;
       }
-      if (e.key === '-') {
-        e.preventDefault();
-        setZoom((z) => clampZoom(Math.round((z - 0.12) * 100) / 100));
+      if (event.key === '-') {
+        event.preventDefault();
+        const next = clampZoom(Math.round((chromeRef.current.zoom - 0.12) * 100) / 100);
+        setDefaultZoom(next);
+        documentTabRef.current?.setZoom(next);
         return;
       }
-      if (e.key === '0') {
-        e.preventDefault();
-        setZoom(DEFAULT_ZOOM);
+      if (event.key === '0') {
+        event.preventDefault();
+        const next = DEFAULT_ZOOM;
+        setDefaultZoom(next);
+        documentTabRef.current?.setZoom(next);
       }
     }
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleSave, handleSaveAs, handleOpen, handleNew, handleExportPdf, hasNativeMenu]);
+  }, [handleExportPdf, handleNew, handleOpen, handleSave, handleSaveAs, hasNativeMenu]);
 
-  useEffect(() => {
-    if (!editor) return;
-    const refresh = () => {
-      setTrackedChanges(getTrackedChanges(editor));
-      setComments((current) => reconcileCommentsWithDocument(current, editor.state.doc));
-    };
-    editor.on('update', refresh);
-    refresh();
-    return () => {
-      editor.off('update', refresh);
-    };
-  }, [editor, setComments]);
-
-  // A formatting gesture that ran into someone else's pending formatting
-  // suggestion silently leaves those spans unchanged (v1 cross-author
-  // policy) — surface why, but never for Claude's automated applies, whose
-  // conflicts planEdits already blocks and reports as skipped.
-  useEffect(() => {
-    if (!editor) return;
-    const onTransaction = ({
-      transaction,
-    }: {
-      transaction: import('@tiptap/pm/state').Transaction;
-    }) => {
-      if (!transaction.getMeta(FORMAT_BLOCKED_META) || applyingClaudeEditsRef.current) return;
-      setNotice({
-        title: 'Formatting suggestion in the way',
-        message:
-          'Part of the selection already carries a pending formatting suggestion by another author, so that part was left unchanged. Resolve the existing suggestion first, then reformat it.',
-      });
-    };
-    editor.on('transaction', onTransaction);
-    return () => {
-      editor.off('transaction', onTransaction);
-    };
-  }, [editor]);
-
-  // Mirror the active annotation into the editor as a focus decoration so
-  // its text is visibly highlighted alongside the outlined card.
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    if (activeAnnotation) {
-      editor.commands.setAnnotationFocus(activeAnnotation.kind, activeAnnotation.id);
-    } else {
-      editor.commands.clearAnnotationFocus();
-    }
-  }, [editor, activeAnnotation]);
-
-  // Drop the focus when the annotation it points at goes away (resolved,
-  // accepted, rejected, deleted) — a stale focus would point at nothing.
-  const clearActiveIf = useCallback((kind: AnnotationKind, id: string) => {
-    setActiveAnnotation((prev) => (prev?.kind === kind && prev.id === id ? null : prev));
+  const handleZoomChange = useCallback((nextZoom: number) => {
+    const next = clampZoom(nextZoom);
+    // Keep the controlled range input responsive while the active tab
+    // publishes its authoritative snapshot on the following render.
+    setChrome((current) => ({ ...current, zoom: next }));
+    setDefaultZoom(next);
+    documentTabRef.current?.setZoom(next);
   }, []);
 
-  // A click in the editor reports every annotation layered under it (or none —
-  // clicking plain text dismisses the focus). Focus the innermost one, by
-  // smallest live range, like Google Docs.
-  const handleAnnotationClick = useCallback(
-    ({ commentIds, suggestionIds }: AnnotationClickInfo) => {
-      const doc = editor?.state.doc;
-      if (!doc) return;
-      const candidates: { kind: AnnotationKind; id: string; size: number }[] = [];
-      for (const id of commentIds) {
-        const range = findAnnotationRange(doc, 'comment', id);
-        if (range) candidates.push({ kind: 'comment', id, size: range.to - range.from });
-      }
-      for (const id of suggestionIds) {
-        const range = findAnnotationRange(doc, 'suggestion', id);
-        if (range) candidates.push({ kind: 'suggestion', id, size: range.to - range.from });
-      }
-      if (candidates.length === 0) {
-        setActiveAnnotation(null);
-        return;
-      }
-      candidates.sort((a, b) => a.size - b.size);
-      const winner = candidates[0];
-      // A replacement half promotes to its pairId, so the whole pair — old
-      // and new text — focuses together along with its single card.
-      if (winner.kind === 'suggestion') {
-        const change = trackedChanges.find((c) => c.id === winner.id);
-        const pairId = change && change.operation !== 'format' ? change.pairId : undefined;
-        if (pairId) {
-          setActiveAnnotation({ kind: 'suggestion', id: pairId });
-          return;
-        }
-      }
-      setActiveAnnotation({ kind: winner.kind, id: winner.id });
-    },
-    [editor, trackedChanges],
-  );
-
-  function handleToggleSuggesting() {
-    setIsSuggesting((v) => !v);
-  }
-
-  const queueAutoResolveForTrackedRemoval = useCallback(
-    (markName: 'tracked_delete' | 'tracked_insert', targetId?: string) => {
-      if (!editor) return;
-      // Capture before accept/reject mutates the document. Queue this functional
-      // update first so the editor-update reconciler sees resolved records after
-      // the tracked text and its comment marks disappear.
-      const captured = captureCommentsConsumedByTrackedRemoval(
-        editor.state.doc,
-        markName,
-        targetId,
-      );
-      if (captured.length === 0) return;
-      setComments((current) => autoResolveCapturedComments(current, captured));
-    },
-    [editor, setComments],
-  );
-
-  const prepareCommentsForAccept = useCallback(
-    (targetId?: string) => {
-      if (!editor) return;
-      // Capture both protective geometry and accepted-suggestion provenance
-      // before either the comment marks or tracked marks are removed.
-      const { captured, provenanceCommentIds } = captureCommentsResolvedByAccept(
-        editor.state.doc,
-        getTrackedChanges(editor),
-        targetId,
-      );
-      if (captured.length > 0) {
-        // Queue resolved state first so each mark-removal update reconciles
-        // against resolved records rather than dropping them mid-accept.
-        setComments((current) => autoResolveCapturedComments(current, captured));
-      }
-      for (const commentId of provenanceCommentIds) {
-        // A provenance-resolved comment may not overlap the accepted edit, so
-        // mirror manual Resolve by stripping its still-live highlight.
-        editor.commands.unsetComment(commentId);
-        clearActiveIf('comment', commentId);
-      }
-    },
-    [editor, setComments, clearActiveIf],
-  );
-
-  function handleAcceptAll() {
-    if (!editor) return;
-    prepareCommentsForAccept();
-    editor.commands.acceptAllChanges();
-  }
-
-  function handleRejectAll() {
-    if (!editor) return;
-    queueAutoResolveForTrackedRemoval('tracked_insert');
-    editor.commands.rejectAllChanges();
-  }
-
-  const handleAcceptChange = useCallback(
-    (id: string) => {
-      prepareCommentsForAccept(id);
-      editor?.commands.acceptChange(id);
-      clearActiveIf('suggestion', id);
-    },
-    [editor, clearActiveIf, prepareCommentsForAccept],
-  );
-
-  const handleRejectChange = useCallback(
-    (id: string) => {
-      queueAutoResolveForTrackedRemoval('tracked_insert', id);
-      editor?.commands.rejectChange(id);
-      clearActiveIf('suggestion', id);
-    },
-    [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
-  );
-
-  const handleAddComment = useCallback(
-    (text: string) => {
-      const sel = pendingCommentSelection ?? selectionInfo;
-      if (!sel || !editor) return;
-      const { from, to, text: anchorText } = sel;
-      const comment = addComment(anchorText, from, to, AUTHOR);
-      // Apply comment mark
-      editor.chain().focus().setTextSelection({ from, to }).setComment(comment.id).run();
-      // Add the initial "comment body" as the first reply if user typed text
-      if (text) {
-        // The comment has no body field — treat the text as the first reply.
-        // Must run before claudeReply.ask() queues its pending AI reply, or
-        // Claude's answer renders above the user's question in the thread.
-        addReply(comment.id, text, AUTHOR);
-        // Tagging @claude in the initial comment should ask Claude too — same
-        // as tagging it in a later reply. We pass the just-created comment
-        // directly rather than going through handleAIReplyRequest, which looks
-        // up `comments` (the new comment isn't in that array until next render).
-        if (/@claude\b/i.test(text)) {
-          if (aiSession) {
-            void claudeReply.ask(comment, text, aiSession);
-          } else {
-            pendingAIRequestRef.current = { commentId: comment.id, userText: text };
-            setPickerOpen(true);
-          }
-        }
-      }
-      setActiveAnnotation({ kind: 'comment', id: comment.id });
-      setCommentComposerOpen(false);
-      editor.commands.clearPendingCommentRange();
-      setPendingCommentSelection(null);
-      setSelectionInfo(null);
-    },
-    [pendingCommentSelection, selectionInfo, editor, addComment, addReply, aiSession, claudeReply],
-  );
-
-  const handleSelectionChange = useCallback(
-    (info: SelectionInfo | null) => {
-      setSelectionInfo(info);
-      if (info && !commentComposerOpen) setPendingCommentSelection(info);
-    },
-    [commentComposerOpen],
-  );
-
-  // Keep the target range visibly highlighted while the comment composer is
-  // open (the native selection highlight disappears when the textarea takes
-  // focus). Rendered as a decoration, so it never dirties the document; it
-  // hands off to the real comment mark on submit and vanishes on cancel.
-  const handleOpenCommentComposer = useCallback(() => {
-    const sel = selectionInfo;
-    if (!sel || !editor || editor.isDestroyed) return;
-    setPendingCommentSelection(sel);
-    editor.commands.setPendingCommentRange(sel.from, sel.to);
-    setCommentComposerOpen(true);
-  }, [editor, selectionInfo]);
-
-  const handleCancelCommentComposer = useCallback(() => {
-    if (editor && !editor.isDestroyed) editor.commands.clearPendingCommentRange();
-    setCommentComposerOpen(false);
-  }, [editor]);
-
-  const handleDeleteComment = useCallback(
-    (commentId: string) => {
-      deleteComment(commentId);
-      editor?.commands.unsetComment(commentId);
-      clearActiveIf('comment', commentId);
-      // Deleting a RESOLVED comment dispatches a zero-step transaction (its
-      // mark was already stripped on resolve), so onUpdate never fires — dirty
-      // must be set explicitly or the deletion is lost on quit.
-      markDirty();
-    },
-    [deleteComment, editor, clearActiveIf, markDirty],
-  );
-
-  // Resolving hides the card (unless "Show resolved" is on), so it also drops
-  // the focus rather than leaving an outline on a vanished card. The in-text
-  // mark is removed entirely so the text goes plain — a resolved comment leaves
-  // no highlight behind (the stored from/to lets unresolve put it back).
-  const handleResolveComment = useCallback(
-    (commentId: string) => {
-      resolveComment(commentId);
-      editor?.commands.unsetComment(commentId);
-      clearActiveIf('comment', commentId);
-      markDirty();
-    },
-    [resolveComment, editor, clearActiveIf, markDirty],
-  );
-
-  const handleUnresolveComment = useCallback(
-    (commentId: string) => {
-      const comment = comments.find((c) => c.id === commentId);
-      if (!comment || !editor) return false;
-      const anchor = locateDetachedCommentAnchor(editor.state.doc, comment);
-      if (!anchor) return false;
-      // Queue the validated range and unresolved state before restoring the
-      // mark, so the mark transaction reconciles against the updated record.
-      unresolveComment(commentId, anchor);
-      editor.commands.setCommentRange(commentId, anchor.from, anchor.to);
-      markDirty();
-      return true;
-    },
-    [unresolveComment, editor, comments, markDirty],
-  );
-
-  // Scroll the editor's scroll area so a comment/suggestion card is fully
-  // on-screen. The card lives in an overflow-hidden column translated by
-  // -scrollTop, so its `offsetTop` there equals its document-space top (same
-  // frame as scrollTop). The bottom spacer guarantees enough range exists for a
-  // below-fold card. Deferred by one rAF so the spacer effect has committed
-  // (it runs after this handler returns; scrolling synchronously would clamp
-  // against the pre-spacer range).
-  const scrollCardIntoView = useCallback((cardId: string) => {
-    requestAnimationFrame(() => {
-      const scrollArea = scrollAreaRef.current?.querySelector(
-        '.editor-scroll-area',
-      ) as HTMLElement | null;
-      const card = commentLayerRef.current?.querySelector(
-        `[data-card-id="${CSS.escape(cardId)}"]`,
-      ) as HTMLElement | null;
-      if (!scrollArea || !card) return;
-      const cardTop = card.offsetTop;
-      const cardBottom = cardTop + card.offsetHeight;
-      const viewTop = scrollArea.scrollTop;
-      const viewBottom = viewTop + scrollArea.clientHeight;
-      let nextTop = viewTop;
-      if (cardTop < viewTop + CARD_SCROLL_MARGIN) {
-        nextTop = cardTop - CARD_SCROLL_MARGIN;
-      } else if (cardBottom > viewBottom - CARD_SCROLL_MARGIN) {
-        nextTop = cardBottom + CARD_SCROLL_MARGIN - scrollArea.clientHeight;
-      }
-      if (nextTop !== viewTop) {
-        scrollArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
-      }
-    });
+  const handleClaudeModelChange = useCallback((model: ClaudeModelAlias | null) => {
+    setClaudeModel(model);
+    writeClaudeModel(window.localStorage, model);
   }, []);
-
-  const handleActivateComment = useCallback(
-    (commentId: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'comment' && prev.id === commentId
-          ? null
-          : { kind: 'comment', id: commentId },
-      );
-      // Snap the anchor into range instantly (a smooth anchor scroll would
-      // fight the card's smooth scroll on the same container), then bring the
-      // full card on-screen.
-      if (editor) {
-        const dom = editor.view.dom.querySelector(`[data-comment-id="${commentId}"]`);
-        dom?.scrollIntoView({ behavior: 'instant', block: 'center' });
-      }
-      scrollCardIntoView(commentId);
-    },
-    [editor, scrollCardIntoView],
-  );
-
-  const handleActivateHistoryComment = useCallback(
-    (commentId: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'comment' && prev.id === commentId
-          ? null
-          : { kind: 'comment', id: commentId },
-      );
-      const comment = comments.find((candidate) => candidate.id === commentId);
-      if (!editor || !comment) return;
-      const range = comment.resolved
-        ? locateDetachedCommentAnchor(editor.state.doc, comment)
-        : findAnnotationRange(editor.state.doc, 'comment', commentId);
-      if (!range) return;
-      const { node } = editor.view.domAtPos(range.from);
-      const element = node instanceof HTMLElement ? node : node.parentElement;
-      element?.scrollIntoView({ behavior: 'instant', block: 'center' });
-    },
-    [comments, editor],
-  );
-
-  const handleActivateSuggestion = useCallback(
-    (id: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'suggestion' && prev.id === id ? null : { kind: 'suggestion', id },
-      );
-      if (editor) {
-        // `id` may be a replacement's pairId, which no data-change-id
-        // attribute carries — resolve the live range and scroll to its start.
-        const range = findAnnotationRange(editor.state.doc, 'suggestion', id);
-        if (range) {
-          const { node } = editor.view.domAtPos(range.from);
-          const el = node instanceof HTMLElement ? node : node.parentElement;
-          el?.scrollIntoView({ behavior: 'instant', block: 'center' });
-        }
-      }
-      scrollCardIntoView(id);
-    },
-    [editor, scrollCardIntoView],
-  );
-
-  // Reply → suggestion is a directed provenance jump, so it never toggles an
-  // already-active target off. If one linked change has been resolved, advance
-  // to the first linked suggestion that is still pending.
-  const handleViewReplySuggestion = useCallback(
-    (suggestionIds: string[]) => {
-      const change = trackedChanges.find(
-        (candidate) => suggestionIds.includes(candidate.id) && candidate.status === 'pending',
-      );
-      if (!change) return;
-      const cardId = change.operation !== 'format' && change.pairId ? change.pairId : change.id;
-      setActiveAnnotation({ kind: 'suggestion', id: cardId });
-      if (editor) {
-        const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);
-        if (range) {
-          const { node } = editor.view.domAtPos(range.from);
-          const element = node instanceof HTMLElement ? node : node.parentElement;
-          element?.scrollIntoView({ behavior: 'instant', block: 'center' });
-        }
-      }
-      scrollCardIntoView(cardId);
-    },
-    [editor, scrollCardIntoView, trackedChanges],
-  );
-
-  const handleAIReplyRequest = useCallback(
-    (commentId: string, userText: string) => {
-      const comment = comments.find((c) => c.id === commentId);
-      if (!comment) return;
-      if (!aiSession) {
-        // No session linked yet — stash the request and prompt the user to
-        // link one. handlePickSession fires the stashed request afterwards.
-        pendingAIRequestRef.current = { commentId, userText };
-        setPickerOpen(true);
-        return;
-      }
-      // Fire-and-forget; useClaudeReply handles errors via failAIReply.
-      void claudeReply.ask(comment, userText, aiSession);
-    },
-    [aiSession, comments, claudeReply],
-  );
-
-  const handlePickSession = useCallback(
-    (binding: AISessionBinding) => {
-      setAISession(binding);
-      setPickerOpen(false);
-      markDirty();
-      // If the picker was opened because of a @claude request with no session,
-      // fire that request now against the freshly-linked session.
-      const pending = pendingAIRequestRef.current;
-      pendingAIRequestRef.current = null;
-      if (pending) {
-        const comment = comments.find((c) => c.id === pending.commentId);
-        if (comment) void claudeReply.ask(comment, pending.userText, binding);
-      }
-      // Same for a "Review full document" click with no session: resume by
-      // opening the review modal against the freshly-linked session.
-      if (pendingReviewRef.current) {
-        pendingReviewRef.current = false;
-        setReviewOpen(true);
-      }
-    },
-    [markDirty, comments, claudeReply],
-  );
-
-  const handleReviewDocument = useCallback(() => {
-    if (!aiSession) {
-      pendingReviewRef.current = true;
-      setPickerOpen(true);
-      return;
-    }
-    setReviewOpen(true);
-  }, [aiSession]);
-
-  const handleReviewSubmit = useCallback(
-    (options: ReviewOptions) => {
-      if (!aiSession) return;
-      void docReview.start(options, aiSession);
-    },
-    [aiSession, docReview],
-  );
-
-  const handleReviewClose = useCallback(() => {
-    setReviewOpen(false);
-    docReview.reset();
-  }, [docReview]);
-
-  const handleUnlinkSession = useCallback(() => {
-    setAISession(null);
-    markDirty();
-  }, [markDirty]);
-
-  const handleLinkContextFolder = useCallback(() => {
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const folder = await invoke<string | null>('show_folder_dialog');
-        if (folder) {
-          setContextFolder(folder);
-          markDirty();
-        }
-      } catch (e) {
-        console.error('Failed to pick context folder:', e);
-        showError('Could not link folder', String(e));
-      }
-    })();
-  }, [markDirty, showError]);
-
-  const handleUnlinkContextFolder = useCallback(() => {
-    setContextFolder(null);
-    markDirty();
-  }, [markDirty]);
-
-  const pendingSuggestionCount = trackedChanges.filter(
-    (change) => change.status === 'pending',
-  ).length;
+  const handleClaudeEffortChange = useCallback((effort: ClaudeEffort | null) => {
+    setClaudeEffort(effort);
+    writeClaudeEffort(window.localStorage, effort);
+  }, []);
 
   return (
     <div className="app">
-      <Rail editor={editor} />
+      <Rail editor={chrome.editor} />
 
       <main className="studio-main">
         {updateCheck.update && (
@@ -1489,157 +383,63 @@ export default function App() {
         )}
 
         <Topbar
-          editor={editor}
-          filePath={filePath}
-          isDirty={isDirty}
-          lastSavedAt={lastSavedAt}
-          isSuggesting={isSuggesting}
-          onToggleSuggesting={handleToggleSuggesting}
-          pendingSuggestionCount={pendingSuggestionCount}
-          onAcceptAll={handleAcceptAll}
-          onRejectAll={handleRejectAll}
-          onReviewDocument={handleReviewDocument}
+          editor={chrome.editor}
+          filePath={chrome.filePath}
+          isDirty={chrome.isDirty}
+          lastSavedAt={chrome.lastSavedAt}
+          isSuggesting={chrome.isSuggesting}
+          onToggleSuggesting={() =>
+            documentTabRef.current?.setMode(!chromeRef.current.isSuggesting)
+          }
+          pendingSuggestionCount={chrome.pendingSuggestionCount}
+          onAcceptAll={() => documentTabRef.current?.acceptAll()}
+          onRejectAll={() => documentTabRef.current?.rejectAll()}
+          onReviewDocument={() => documentTabRef.current?.reviewDocument()}
         />
 
-        <div className="studio-body">
-          <div className="workspace doc-scroll" ref={scrollAreaRef}>
-            {findOpen && (
-              <FindBar
-                editor={editor}
-                onClose={() => {
-                  setFindOpen(false);
-                  editor?.commands.focus();
-                }}
-              />
-            )}
-            <div className="editor-scroll-area">
-              <div
-                className="editor-page-zoom-wrapper"
-                style={{ fontSize: `${Math.round(zoom * 100)}%` }}
-                data-editor-zoom={zoom}
-              >
-                <QuillEditor
-                  key={editorKey}
-                  ref={editorRef}
-                  initialContent=""
-                  isSuggesting={isSuggesting}
-                  authorID={AUTHOR}
-                  onUpdate={markDirty}
-                  onSelectionChange={handleSelectionChange}
-                  onEditorReady={setEditor}
-                  onAnnotationClick={handleAnnotationClick}
-                />
-                {editor && <FormattingInspector editor={editor} />}
-              </div>
-              {/* Extends the scroll range only when a low-anchored card would
-              otherwise be unreachable (see the spacer effect). Height 0 for
-              normal docs; hidden in print so it never affects PDF output. */}
-              {bottomSpacer > 0 && (
-                <div
-                  className="editor-bottom-spacer"
-                  style={{ height: bottomSpacer }}
-                  aria-hidden
-                />
-              )}
-            </div>
-
-            {selectionInfo &&
-              !commentComposerOpen &&
-              (() => {
-                const commentLayer = commentLayerRef.current;
-                const commentLayerRect = commentLayer?.getBoundingClientRect();
-                // Fixed positioning: coordsAtPos reports the post-reflow viewport
-                // coordinates directly, so no scale compensation is needed.
-                const top = editor
-                  ? editor.view.coordsAtPos(selectionInfo.from).top
-                  : selectionInfo.top;
-                const left = commentLayerRect ? commentLayerRect.left - 36 : undefined;
-                return (
-                  <AddCommentButton
-                    top={top}
-                    left={left}
-                    visible
-                    onOpen={handleOpenCommentComposer}
-                  />
-                );
-              })()}
-          </div>
-
-          <CommentLayer
-            editor={editor}
-            comments={comments}
-            activeCommentId={activeCommentId}
-            activeSuggestionId={activeSuggestionId}
-            containerRef={commentLayerRef}
-            trackedChanges={trackedChanges}
-            commentComposer={commentComposerOpen ? pendingCommentSelection : null}
-            scrollTop={scrollTop}
-            zoom={zoom}
-            onReply={(id, text) => {
-              addReply(id, text, AUTHOR);
-              markDirty();
-            }}
-            onAIReplyRequest={handleAIReplyRequest}
-            onCancelAIReply={claudeReply.cancel}
-            onRetryAIReply={claudeReply.retry}
-            onDismissAIReply={(commentId, replyId) => {
-              dismissAIReply(commentId, replyId);
-              markDirty();
-            }}
-            onViewReplySuggestion={handleViewReplySuggestion}
-            onOpenSessionPicker={() => setPickerOpen(true)}
-            onResolve={handleResolveComment}
-            onUnresolve={handleUnresolveComment}
-            onDelete={handleDeleteComment}
-            onActivate={handleActivateComment}
-            onActivateHistory={handleActivateHistoryComment}
-            onActivateSuggestion={handleActivateSuggestion}
-            onAcceptChange={handleAcceptChange}
-            onRejectChange={handleRejectChange}
-            onSubmitComment={handleAddComment}
-            onCancelComment={handleCancelCommentComposer}
-            onMaxCardBottomChange={setMaxCardBottom}
-          />
-        </div>
+        <DocumentTab
+          ref={documentTabRef}
+          isActive
+          defaultZoom={defaultZoom}
+          getClaudeRunOptions={getClaudeRunOptions}
+          onChromeChange={handleChromeChange}
+          onOpenSessionPicker={handleOpenSessionPicker}
+          onNotice={showNotice}
+          onRecentFile={handleRecentFile}
+          shellModalOpen={Boolean(discardGuard || notice)}
+        />
 
         <Footer
-          editor={editor}
-          zoom={zoom}
-          onZoomChange={(nextZoom) => setZoom(clampZoom(nextZoom))}
-          aiSession={aiSession}
-          lastKnownModel={lastKnownModel}
+          editor={chrome.editor}
+          stats={chrome.stats}
+          zoom={chrome.zoom}
+          onZoomChange={handleZoomChange}
+          aiSession={chrome.aiSession}
+          lastKnownModel={chrome.lastKnownModel}
           claudeModel={claudeModel}
           claudeEffort={claudeEffort}
           onClaudeModelChange={handleClaudeModelChange}
           onClaudeEffortChange={handleClaudeEffortChange}
-          onOpenSessionPicker={() => setPickerOpen(true)}
-          onUnlinkSession={handleUnlinkSession}
-          contextFolder={contextFolder}
-          onLinkContextFolder={handleLinkContextFolder}
-          onUnlinkContextFolder={handleUnlinkContextFolder}
+          onOpenSessionPicker={() => documentTabRef.current?.openSessionPicker()}
+          onUnlinkSession={() => documentTabRef.current?.unlinkSession()}
+          contextFolder={chrome.contextFolder}
+          onLinkContextFolder={() => documentTabRef.current?.linkContextFolder()}
+          onUnlinkContextFolder={() => documentTabRef.current?.unlinkContextFolder()}
         />
       </main>
 
       <SessionPicker
         open={pickerOpen}
-        newSessionCwd={filePath ? dirname(filePath) : null}
+        newSessionCwd={chrome.filePath ? dirname(chrome.filePath) : null}
         onClose={() => {
           setPickerOpen(false);
-          // Closing without picking abandons a stashed review request — the
-          // user backed out, so a later manual link shouldn't pop the modal.
-          pendingReviewRef.current = false;
+          documentTabRef.current?.closeSessionPicker();
         }}
-        onPick={handlePickSession}
+        onPick={(binding) => {
+          setPickerOpen(false);
+          documentTabRef.current?.pickSession(binding);
+        }}
       />
-
-      {reviewOpen && (
-        <ReviewModal
-          phase={docReview.phase}
-          onSubmit={handleReviewSubmit}
-          onCancelStream={() => void docReview.cancel()}
-          onClose={handleReviewClose}
-        />
-      )}
 
       {discardGuard && (
         <AppModal
@@ -1650,14 +450,9 @@ export default function App() {
               label: 'Save',
               kind: 'primary',
               onClick: async () => {
-                // Stays open if the save dialog is cancelled or the save
-                // fails — the unsaved document is still at stake.
                 const saved = await handleSave();
                 if (saved) {
-                  // The guarded action may exit the app before React effects
-                  // flush, so don't rely on the autosave hook's dirty→clean
-                  // cleanup — remove the draft explicitly first.
-                  await deleteDraft();
+                  await documentTabRef.current?.deleteDraft();
                   setDiscardGuard(null);
                   discardGuard.run();
                 }
@@ -1667,9 +462,7 @@ export default function App() {
               label: "Don't Save",
               kind: 'danger',
               onClick: async () => {
-                // Explicitly discarded — the draft must not come back as a
-                // recovery offer on next launch (and quit skips effects).
-                await deleteDraft();
+                await documentTabRef.current?.deleteDraft();
                 setDiscardGuard(null);
                 discardGuard.run();
               },
@@ -1688,24 +481,6 @@ export default function App() {
           title={notice.title}
           message={notice.message}
           buttons={[{ label: 'OK', kind: 'primary', onClick: () => setNotice(null) }]}
-        />
-      )}
-
-      {recoveryDraft && !discardGuard && !notice && (
-        <AppModal
-          title="Recover unsaved changes?"
-          message={
-            `Quill closed before ${
-              recoveryDraft.filePath
-                ? `"${basename(recoveryDraft.filePath)}"`
-                : 'an untitled document'
-            } was saved. ` +
-            `Restore the unsaved version from ${new Date(recoveryDraft.savedAt).toLocaleString()}?`
-          }
-          buttons={[
-            { label: 'Recover', kind: 'primary', onClick: handleRecoverDraft },
-            { label: 'Discard', kind: 'danger', onClick: handleDiscardDraft },
-          ]}
         />
       )}
     </div>
