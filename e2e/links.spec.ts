@@ -53,7 +53,9 @@ test.describe('Link editor', () => {
     await expect(editor.locator('a[href="https://example.com/docs"]')).toHaveText('visit the docs');
   });
 
-  test('clicking into a link opens the editor with both values prefilled', async ({ page }) => {
+  test('clicking into a link opens exactly one editor with both values prefilled', async ({
+    page,
+  }) => {
     const { editor } = await setup(page);
     await page.keyboard.type('home page');
     await selectAll(page);
@@ -66,6 +68,8 @@ test.describe('Link editor', () => {
     await expect(textInput(page)).toHaveValue('home page');
     await expect(urlInput(page)).toHaveValue('https://old.example.com');
     await expect(link).toHaveClass(/link-editor-anchor-active/);
+    await expect(page.locator('.link-editor-card, .formatting-inspector')).toHaveCount(1);
+    await expect(page.getByLabel('URL')).toHaveCount(1);
     await expect(page.locator('.link-popover')).toHaveCount(0);
   });
 

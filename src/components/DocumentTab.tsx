@@ -5,7 +5,6 @@ import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
 import CommentLayer, { computeBottomSpacer } from './CommentLayer';
 import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
-import FormattingInspector from './FormattingInspector';
 import PanelHeader from './PanelHeader';
 import ChatPanel from './ChatPanel';
 import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
@@ -1661,7 +1660,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 onAnnotationClick={handleAnnotationClick}
                 onOpenChat={openChat}
               />
-              {editor && <FormattingInspector editor={editor} />}
             </div>
             {/* Extends the scroll range only when a low-anchored card would
               otherwise be unreachable (see the spacer effect). Height 0 for
