@@ -24,10 +24,8 @@ describe('UI type scale', () => {
     expect(css).toMatch(/button,\s*input,\s*textarea,\s*select\s*\{[^}]*font:\s*inherit/s);
   });
 
-  it('uses control size for review asks, checkbox labels, and session-preview body text', () => {
+  it('uses control size for session-preview body text', () => {
     for (const selector of [
-      '.review-modal-guidance',
-      '.review-modal-check',
       '.session-picker-hint,\n.session-picker-loading,\n.session-picker-empty',
       '.session-picker-error',
       '.session-preview-msg',
@@ -40,10 +38,12 @@ describe('UI type scale', () => {
     const explicit = [...css.matchAll(/font-size:\s*([\d.]+)px/g)].map((match) => match[1]);
     expect(new Set(explicit)).toEqual(
       new Set([
+        '8',
         '8.5',
         '9',
         '9.5',
         '10',
+        '10.5',
         '11',
         '11.5',
         '12',

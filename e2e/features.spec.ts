@@ -100,12 +100,18 @@ test('blank document and comments panel show restrained Studio empty states', as
   await expect(documentEmpty).toHaveCount(0);
 });
 
-test('Cmd+/ opens the same Ask Claude review flow advertised by the empty state', async ({
-  page,
-}) => {
+test('Cmd+/ opens document chat and focuses its composer', async ({ page }) => {
   await setup(page);
   await page.keyboard.press('ControlOrMeta+/');
-  await expect(page.locator('.review-modal')).toBeVisible();
+  await expect(page.locator('.chat-view')).toBeVisible();
+  await expect(page.getByLabel('Ask Claude about this document')).toBeFocused();
+});
+
+test('the empty-document Claude hint opens document chat', async ({ page }) => {
+  await setup(page);
+  await page.locator('.editor-empty-chat').click();
+  await expect(page.locator('.chat-view')).toBeVisible();
+  await expect(page.getByLabel('Ask Claude about this document')).toBeFocused();
 });
 
 test('editor mounts and is focusable', async ({ page }) => {

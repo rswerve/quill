@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { AISessionBinding, ClaudeRunOptions } from '../types';
 
@@ -73,6 +73,16 @@ interface ClaudeResumeStream {
 export function useClaudeResumeStream(): ClaudeResumeStream {
   const tokensRef = useRef<Map<string, string>>(new Map());
   const generationsRef = useRef<Map<string, number>>(new Map());
+  // Some mock/backends acknowledge a cancel synchronously by emitting a
+  // terminal event. Remember the token while cancellation is in flight so a
+  // stale terminal handler does not recursively cancel the same child again.
+  const cancellingTokensRef = useRef<Set<string>>(new Set());
+
+  const cancelTokenOnce = useCallback(async (token: string) => {
+    if (cancellingTokensRef.current.has(token)) return;
+    cancellingTokensRef.current.add(token);
+    await sendCancel(token);
+  }, []);
 
   const begin = useCallback((streamId: string) => {
     const generation = (generationsRef.current.get(streamId) ?? 0) + 1;
@@ -126,7 +136,11 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
             spawnToken !== undefined &&
             (event.kind === 'done' || event.kind === 'cancelled' || event.kind === 'error')
           ) {
-            void sendCancel(spawnToken).catch(() => {});
+            if (cancellingTokensRef.current.has(spawnToken)) {
+              cancellingTokensRef.current.delete(spawnToken);
+            } else {
+              void cancelTokenOnce(spawnToken).catch(() => {});
+            }
           }
           return;
         }
@@ -164,7 +178,7 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
         });
         spawnToken = cancelToken;
         if (!isCurrent()) {
-          await sendCancel(cancelToken).catch(() => {});
+          await cancelTokenOnce(cancelToken).catch(() => {});
           return;
         }
         tokensRef.current.set(streamId, cancelToken);
@@ -172,16 +186,30 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
         if (isCurrent()) handlers.onError(String(error));
       }
     },
-    [begin],
+    [begin, cancelTokenOnce],
   );
 
-  const cancel = useCallback(async (streamId: string) => {
-    generationsRef.current.set(streamId, (generationsRef.current.get(streamId) ?? 0) + 1);
-    const token = tokensRef.current.get(streamId);
-    if (!token) return;
-    tokensRef.current.delete(streamId);
-    await sendCancel(token);
-  }, []);
+  const cancel = useCallback(
+    async (streamId: string) => {
+      generationsRef.current.set(streamId, (generationsRef.current.get(streamId) ?? 0) + 1);
+      const token = tokensRef.current.get(streamId);
+      if (!token) return;
+      tokensRef.current.delete(streamId);
+      await cancelTokenOnce(token);
+    },
+    [cancelTokenOnce],
+  );
 
-  return { begin, run, cancel };
+  useEffect(
+    () => () => {
+      for (const [streamId, token] of tokensRef.current) {
+        generationsRef.current.set(streamId, (generationsRef.current.get(streamId) ?? 0) + 1);
+        void cancelTokenOnce(token).catch(() => {});
+      }
+      tokensRef.current.clear();
+    },
+    [cancelTokenOnce],
+  );
+
+  return useMemo(() => ({ begin, run, cancel }), [begin, run, cancel]);
 }

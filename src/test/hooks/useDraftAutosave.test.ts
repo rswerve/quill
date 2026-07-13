@@ -19,6 +19,13 @@ const SNAPSHOT: DraftSnapshot = {
   suggestions: [],
   aiSession: null,
   contextFolder: null,
+  chat: {
+    sessionId: 'chat-session',
+    messages: [
+      { id: 'u1', role: 'user', text: 'Please revise this', createdAt: 'now' },
+      { id: 'a1', role: 'assistant', text: 'Done', createdAt: 'later' },
+    ],
+  },
 };
 
 const VALID_DRAFT: DraftFile = {
@@ -182,6 +189,24 @@ describe('useWorkspaceAutosave', () => {
             snapshot: VALID_DRAFT,
           },
         ],
+      });
+    });
+
+    it('sanitizes and preserves per-document chat in a recovered dirty tab', () => {
+      const restored = sanitizeWorkspace({
+        ...VALID_DRAFT,
+        chat: {
+          sessionId: 'chat-session',
+          messages: [
+            { id: 'u1', role: 'user', text: 'Keep me', createdAt: 'now' },
+            { role: 'assistant', text: 'drop me' },
+          ],
+        },
+      });
+
+      expect(restored?.tabs[0].snapshot?.chat).toEqual({
+        sessionId: 'chat-session',
+        messages: [{ id: 'u1', role: 'user', text: 'Keep me', createdAt: 'now' }],
       });
     });
 

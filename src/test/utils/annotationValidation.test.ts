@@ -4,6 +4,7 @@ import {
   sanitizeSuggestions,
   sanitizeAISession,
   sanitizeContextFolder,
+  sanitizeDocumentChat,
 } from '../../utils/annotationValidation';
 import type { AISessionBinding } from '../../types';
 import autoBindSession from '../../../test/fixtures/ipc/auto-bind-session.json';
@@ -175,6 +176,13 @@ describe('sanitizeSuggestions', () => {
     expect(s.originCommentId).toBe('c42');
   });
 
+  it('passes originChatMessageId through when it is a non-empty string', () => {
+    const [suggestion] = sanitizeSuggestions([
+      { ...validSuggestion, originChatMessageId: 'chat-message-42' },
+    ]);
+    expect(suggestion.originChatMessageId).toBe('chat-message-42');
+  });
+
   it('drops a malformed originCommentId (empty or non-string), like pairId', () => {
     const [empty] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: '' }]);
     expect('originCommentId' in empty).toBe(false);
@@ -272,5 +280,46 @@ describe('sanitizeContextFolder', () => {
     expect(sanitizeContextFolder('')).toBeUndefined();
     expect(sanitizeContextFolder(123)).toBeUndefined();
     expect(sanitizeContextFolder(null)).toBeUndefined();
+  });
+});
+
+describe('sanitizeDocumentChat', () => {
+  it('keeps a valid thread while dropping malformed messages and optional fields', () => {
+    expect(
+      sanitizeDocumentChat({
+        sessionId: 'session-1',
+        messages: [
+          { id: 'u1', role: 'user', text: 'Please edit this', createdAt: 'now' },
+          {
+            id: 'a1',
+            role: 'assistant',
+            text: 'Done',
+            createdAt: 'later',
+            model: 'claude-sonnet',
+            suggestionIds: ['s1', '', 42, 's2'],
+          },
+          { role: 'assistant', text: 'missing id' },
+        ],
+      }),
+    ).toEqual({
+      sessionId: 'session-1',
+      messages: [
+        { id: 'u1', role: 'user', text: 'Please edit this', createdAt: 'now' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          text: 'Done',
+          createdAt: 'later',
+          model: 'claude-sonnet',
+          suggestionIds: ['s1', 's2'],
+        },
+      ],
+    });
+  });
+
+  it('rejects a thread without a session id or message array', () => {
+    expect(sanitizeDocumentChat({ sessionId: '', messages: [] })).toBeUndefined();
+    expect(sanitizeDocumentChat({ sessionId: 'session-1' })).toBeUndefined();
+    expect(sanitizeDocumentChat(null)).toBeUndefined();
   });
 });

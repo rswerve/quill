@@ -696,7 +696,7 @@ export default function App() {
       }
       if (event.key === '/' && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        activeHandle()?.openReviewModal();
+        activeHandle()?.openChat();
         return;
       }
       if (event.key === '=' || event.key === '+') {
@@ -779,7 +779,6 @@ export default function App() {
           pendingSuggestionCount={chrome.pendingSuggestionCount}
           onAcceptAll={() => activeHandle()?.acceptAll()}
           onRejectAll={() => activeHandle()?.rejectAll()}
-          onReviewDocument={() => activeHandle()?.reviewDocument()}
         />
 
         {workspaceReady && (

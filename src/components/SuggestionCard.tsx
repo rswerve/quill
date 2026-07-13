@@ -8,6 +8,7 @@ interface SuggestionCardProps {
   /** The still-existing comment this change originated from, or null (either
    *  no provenance, or the comment was deleted — degrade to no chip). */
   originComment: Comment | null;
+  originChatMessageId?: string;
   /** True while the origin comment is the active annotation — the card gets a
    *  subtle outline linking it back to its comment. */
   originActive: boolean;
@@ -16,18 +17,21 @@ interface SuggestionCardProps {
   onReject: (id: string) => void;
   onClick: (id: string) => void;
   onActivateComment: (commentId: string) => void;
+  onActivateChatMessage?: (messageId: string) => void;
 }
 
 export default function SuggestionCard({
   change,
   isActive,
   originComment,
+  originChatMessageId,
   originActive,
   top,
   onAccept,
   onReject,
   onClick,
   onActivateComment,
+  onActivateChatMessage,
 }: SuggestionCardProps) {
   const isInsert = change.operation === 'insert';
   const preview = clip(change.text);
@@ -41,6 +45,7 @@ export default function SuggestionCard({
       createdAt={change.createdAt}
       isActive={isActive}
       originComment={originComment}
+      originChatMessageId={originChatMessageId}
       originActive={originActive}
       top={top}
       acceptTitle="Accept change"
@@ -49,6 +54,7 @@ export default function SuggestionCard({
       onReject={() => onReject(change.id)}
       onClick={() => onClick(change.id)}
       onActivateComment={onActivateComment}
+      onActivateChatMessage={onActivateChatMessage}
     >
       {preview && (
         <div className="suggestion-preview">

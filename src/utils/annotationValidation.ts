@@ -5,6 +5,8 @@ import type {
   SuggestionStatus,
   AISessionBinding,
   FormatSegment,
+  ChatMessage,
+  DocumentChatThread,
 } from '../types';
 
 /**
@@ -134,6 +136,9 @@ function sanitizeSuggestion(raw: unknown): Suggestion | null {
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
     ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
+    ...(isNonEmptyString(raw.originChatMessageId)
+      ? { originChatMessageId: raw.originChatMessageId }
+      : {}),
   };
 
   if (raw.type === 'format') {
@@ -200,4 +205,38 @@ export function sanitizeAISession(raw: unknown): AISessionBinding | undefined {
 /** A context folder is a non-empty string path or nothing. */
 export function sanitizeContextFolder(raw: unknown): string | undefined {
   return isNonEmptyString(raw) ? raw : undefined;
+}
+
+function sanitizeChatMessage(raw: unknown): ChatMessage | null {
+  if (!isObject(raw) || !isNonEmptyString(raw.id)) return null;
+  if (raw.role !== 'user' && raw.role !== 'assistant') return null;
+  return {
+    id: raw.id,
+    role: raw.role,
+    text: typeof raw.text === 'string' ? raw.text : '',
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+    ...(isNonEmptyString(raw.model) ? { model: raw.model } : {}),
+    ...(raw.pending === true ? { pending: true } : {}),
+    ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
+    ...(raw.cancelled === true ? { cancelled: true } : {}),
+    ...(Array.isArray(raw.suggestionIds)
+      ? {
+          suggestionIds: raw.suggestionIds.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
+        }
+      : {}),
+  };
+}
+
+export function sanitizeDocumentChat(raw: unknown): DocumentChatThread | undefined {
+  if (!isObject(raw) || !isNonEmptyString(raw.sessionId) || !Array.isArray(raw.messages)) {
+    return undefined;
+  }
+  return {
+    sessionId: raw.sessionId,
+    messages: raw.messages
+      .map(sanitizeChatMessage)
+      .filter((message): message is ChatMessage => message !== null),
+  };
 }

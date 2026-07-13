@@ -6,6 +6,7 @@ import {
   sanitizeSuggestions,
   sanitizeAISession,
   sanitizeContextFolder,
+  sanitizeDocumentChat,
 } from '../utils/annotationValidation';
 
 const AUTOSAVE_INTERVAL_MS = 5000;
@@ -41,6 +42,7 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   if (d.version !== 1) return null;
   if (typeof d.content !== 'string') return null;
   if (d.filePath !== null && typeof d.filePath !== 'string') return null;
+  const chat = sanitizeDocumentChat(d.chat);
   return {
     version: 1,
     savedAt: typeof d.savedAt === 'string' ? d.savedAt : new Date().toISOString(),
@@ -50,6 +52,7 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     suggestions: sanitizeSuggestions(d.suggestions),
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
+    ...(chat ? { chat } : {}),
   };
 }
 

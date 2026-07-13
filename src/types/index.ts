@@ -32,6 +32,24 @@ export interface AISessionBinding {
   createdByQuill?: boolean;
 }
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+  model?: string;
+  pending?: boolean;
+  error?: string;
+  cancelled?: boolean;
+  suggestionIds?: string[];
+}
+
+/** Quill-owned rendered chat history for one document/session pairing. */
+export interface DocumentChatThread {
+  sessionId: string;
+  messages: ChatMessage[];
+}
+
 /** Curated Claude Code model aliases exposed by Quill's global run settings. */
 export type ClaudeModelAlias = 'fable' | 'opus' | 'sonnet' | 'haiku';
 
@@ -65,6 +83,8 @@ interface SuggestionBase {
   status: SuggestionStatus;
   /** The comment whose Claude request produced this suggestion, if any. */
   originCommentId?: string;
+  /** The document-chat assistant turn that produced this suggestion, if any. */
+  originChatMessageId?: string;
 }
 
 export interface TextSuggestion extends SuggestionBase {
@@ -99,6 +119,8 @@ export interface SidecarFile {
    * gets read access to it (`--add-dir`) plus a file manifest in the prompt.
    */
   contextFolder?: string;
+  /** Rendered document-chat thread, isolated to this document and session. */
+  chat?: DocumentChatThread;
 }
 
 export interface FileState {
@@ -118,6 +140,8 @@ interface TrackedChangeBase {
    * originating comment.
    */
   originCommentId?: string;
+  /** The document-chat assistant turn that produced this change, if any. */
+  originChatMessageId?: string;
 }
 
 export interface TrackedTextChange extends TrackedChangeBase {
@@ -199,18 +223,10 @@ export interface QuillEditsBlock {
 /** How far Claude's edits may reach, derived from the user's wording. */
 export type EditScope = 'highlight' | 'paragraph' | 'doc';
 
-/**
- * One margin comment Claude proposes during a full-document review: anchor a
- * comment to the first occurrence of the plaintext `find` in the document.
- */
-export interface QuillComment {
-  find: string;
-  comment: string;
-}
-
-/** The parsed contents of a ```quill-comments fenced block in a review reply. */
-export interface QuillCommentsBlock {
-  comments: QuillComment[];
+/** Provenance stamped onto tracked edits created by an AI surface. */
+export interface TrackedEditOrigin {
+  commentId?: string;
+  chatMessageId?: string;
 }
 
 /** One document snapshot embedded in the workspace recovery envelope. */
@@ -224,6 +240,7 @@ export interface DraftFile {
   suggestions: Suggestion[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
+  chat?: DocumentChatThread;
 }
 
 /**

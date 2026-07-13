@@ -13,7 +13,6 @@ interface TopbarProps {
   pendingSuggestionCount: number;
   onAcceptAll: () => void;
   onRejectAll: () => void;
-  onReviewDocument: () => void;
 }
 
 function editedLabel(savedAt: number | null): string {
@@ -36,7 +35,6 @@ export default function Topbar({
   pendingSuggestionCount,
   onAcceptAll,
   onRejectAll,
-  onReviewDocument,
 }: TopbarProps) {
   const [, tick] = useState(0);
 
@@ -85,14 +83,6 @@ export default function Topbar({
       >
         <RedoIcon />
       </ToolbarButton>
-
-      <span className="vsep" />
-      <button className="ask-btn review-doc-btn" onClick={onReviewDocument}>
-        <span className="spark" aria-hidden>
-          ✦
-        </span>
-        Ask Claude
-      </button>
 
       {pendingSuggestionCount > 0 && (
         <>

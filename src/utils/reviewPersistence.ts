@@ -31,6 +31,7 @@ export function suggestionsFromTrackedChanges(changes: TrackedChangeInfo[]): Sug
         createdAt: new Date(c.createdAt).toISOString(),
         status: 'pending' as const,
         ...(c.originCommentId ? { originCommentId: c.originCommentId } : {}),
+        ...(c.originChatMessageId ? { originChatMessageId: c.originChatMessageId } : {}),
       };
       if (c.operation === 'format') {
         return {
@@ -99,6 +100,9 @@ function restoreFormatSuggestion(
       createdAt,
       updatedAt: createdAt,
       ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
+      ...(suggestion.originChatMessageId
+        ? { originChatMessageId: suggestion.originChatMessageId }
+        : {}),
       delta: { adds: [...segment.adds], removes: [...segment.removes] },
     };
     tr.addMark(range.from, range.to, formatType.create({ dataTracked, changeId: suggestion.id }));
@@ -126,6 +130,9 @@ function restoreTextSuggestion(
     updatedAt: createdAt,
     ...(suggestion.pairId ? { pairId: suggestion.pairId } : {}),
     ...(suggestion.originCommentId ? { originCommentId: suggestion.originCommentId } : {}),
+    ...(suggestion.originChatMessageId
+      ? { originChatMessageId: suggestion.originChatMessageId }
+      : {}),
   };
   const type = operation === 'insert' ? insertType : deleteType;
   tr.addMark(range.from, range.to, type.create({ dataTracked, changeId: suggestion.id }));

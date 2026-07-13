@@ -225,18 +225,21 @@ test('document typography stays pinned while both themes keep chrome vertically 
   await page.emulateMedia({ media: 'screen' });
 });
 
-test('review modal uses control text for the ask and checkbox labels', async ({ page }) => {
+test('document chat uses the intended control and metadata scale', async ({ page }) => {
   await openAuditDocument(page);
-  await page.locator('.review-doc-btn').click();
+  const tab = activeTabHost(page);
+  await tab.getByRole('tab', { name: 'Chat', exact: true }).click();
 
-  const guidance = page.locator('.review-modal-guidance');
-  await expectType(guidance, '13px');
+  const composer = tab.getByLabel('Ask Claude about this document');
+  await expectType(composer, '12.5px');
   expect(
-    await guidance.evaluate((element) => getComputedStyle(element, '::placeholder').fontSize),
-  ).toBe('13px');
-  await expectType(page.locator('.review-modal-check').first(), '13px');
-  await expectType(page.locator('.app-modal-title'), '15px');
-  await expectType(page.locator('.review-modal .btn-primary'), '12.5px');
+    await composer.evaluate((element) => getComputedStyle(element, '::placeholder').fontSize),
+  ).toBe('12.5px');
+  await expectType(tab.locator('.panel-tab').first(), '12px');
+  await expectType(tab.locator('.panel-session-chip'), '10px', { checkUiFamily: false });
+  await expectType(tab.locator('.chat-box-foot .kbd-hint'), '9px', {
+    checkUiFamily: false,
+  });
   await expectVisibleControlsUseUiFamily(page);
 });
 

@@ -39,6 +39,7 @@ interface EditorProps {
   onSelectionChange: (info: SelectionInfo | null) => void;
   onEditorReady: (editor: TiptapEditor) => void;
   onAnnotationClick: (info: AnnotationClickInfo) => void;
+  onOpenChat: () => void;
 }
 
 /** Every annotation layered under a click, innermost DOM element first. */
@@ -66,6 +67,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       onSelectionChange,
       onEditorReady,
       onAnnotationClick,
+      onOpenChat,
     },
     ref,
   ) => {
@@ -253,10 +255,25 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
     return (
       <div className="editor-page">
         {isEmpty && (
-          <div className="editor-empty-state" aria-hidden="true">
+          <div className="editor-empty-state">
             <div className="editor-empty-title">Untitled</div>
             <p>
-              Start writing… select text to comment, or press <kbd>⌘/</kbd> to ask Claude.
+              Start writing… select text to comment, or{' '}
+              <span
+                role="button"
+                tabIndex={0}
+                className="editor-empty-chat"
+                onClick={onOpenChat}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onOpenChat();
+                  }
+                }}
+              >
+                press <kbd>⌘/</kbd> to ask Claude
+              </span>
+              .
             </p>
           </div>
         )}

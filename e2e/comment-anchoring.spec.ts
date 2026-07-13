@@ -41,7 +41,7 @@ test('off-screen anchors collapse into navigable above and below pills', async (
   await selectCurrentLine(page);
   await addComment(page, 'bottom note');
 
-  await expect(page.locator('.count-pill')).toHaveText('2');
+  await expect(page.locator('.panel-tab-count')).toHaveText('2');
   const above = page.locator('.offscreen-pill-above');
   await expect(above).toHaveText('▲ 1 above');
   await above.click();

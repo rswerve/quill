@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { invoke } from '@tauri-apps/api/core';
 import { useFileManager, stripTransientReplyState } from '../../hooks/useFileManager';
-import type { Comment, Reply } from '../../types';
+import type { Comment, DocumentChatThread, Reply } from '../../types';
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -27,6 +27,20 @@ const SAMPLE_SIDECAR = JSON.stringify({
   comments: [SAMPLE_COMMENT],
   suggestions: [],
 });
+
+const SAMPLE_CHAT: DocumentChatThread = {
+  sessionId: 'session-chat',
+  messages: [
+    { id: 'u1', role: 'user', text: 'Tighten this', createdAt: 'now' },
+    {
+      id: 'a1',
+      role: 'assistant',
+      text: 'Done',
+      createdAt: 'later',
+      suggestionIds: ['s1'],
+    },
+  ],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -324,6 +338,35 @@ describe('useFileManager', () => {
       });
 
       expect(res!.sidecar.contextFolder).toBe('/refs/research');
+    });
+
+    it('writes and restores a document-local chat thread through the sidecar', async () => {
+      mockInvoke.mockResolvedValue(undefined);
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.saveFile('content', [], [], null, null, '/docs/chat.md', SAMPLE_CHAT);
+      });
+      const sidecarCall = mockInvoke.mock.calls.find(
+        (call) =>
+          call[0] === 'write_file' && (call[1] as { path: string }).path.endsWith('.comments.json'),
+      );
+      expect(sidecarCall).toBeDefined();
+      expect(JSON.parse((sidecarCall![1] as { content: string }).content).chat).toEqual(
+        SAMPLE_CHAT,
+      );
+
+      mockInvoke.mockReset();
+      mockInvoke
+        .mockResolvedValueOnce('# Chat')
+        .mockResolvedValueOnce(
+          JSON.stringify({ version: 2, comments: [], suggestions: [], chat: SAMPLE_CHAT }),
+        )
+        .mockResolvedValueOnce(null);
+      let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+      await act(async () => {
+        opened = await result.current.openFilePath('/docs/chat.md');
+      });
+      expect(opened!.sidecar.chat).toEqual(SAMPLE_CHAT);
     });
 
     it('still writes the sidecar on Save As (new path) after a corrupt open', async () => {

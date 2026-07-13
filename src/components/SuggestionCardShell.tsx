@@ -12,6 +12,7 @@ interface SuggestionCardShellProps {
   createdAt: number;
   isActive: boolean;
   originComment: Comment | null;
+  originChatMessageId?: string;
   originActive: boolean;
   top: number;
   acceptTitle: string;
@@ -20,6 +21,7 @@ interface SuggestionCardShellProps {
   onReject: () => void;
   onClick: () => void;
   onActivateComment: (commentId: string) => void;
+  onActivateChatMessage?: (messageId: string) => void;
   children: ReactNode;
 }
 
@@ -31,6 +33,7 @@ export default function SuggestionCardShell({
   createdAt,
   isActive,
   originComment,
+  originChatMessageId,
   originActive,
   top,
   acceptTitle,
@@ -39,6 +42,7 @@ export default function SuggestionCardShell({
   onReject,
   onClick,
   onActivateComment,
+  onActivateChatMessage,
   children,
 }: SuggestionCardShellProps) {
   const isClaude = authorID.toLowerCase() === 'claude';
@@ -68,6 +72,17 @@ export default function SuggestionCardShell({
           }}
         >
           ↳ from comment
+        </button>
+      )}
+      {!originComment && originChatMessageId && (
+        <button
+          className="suggestion-origin-chip"
+          onClick={(event) => {
+            event.stopPropagation();
+            onActivateChatMessage?.(originChatMessageId);
+          }}
+        >
+          ↳ from chat
         </button>
       )}
 

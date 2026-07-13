@@ -61,6 +61,18 @@ describe('suggestionsFromTrackedChanges', () => {
     expect(s.originCommentId).toBe('c42');
   });
 
+  it('round-trips document-chat provenance through sidecar marks', () => {
+    const [record] = suggestionsFromTrackedChanges([
+      makeChange({ originChatMessageId: 'chat-message-7' }),
+    ]);
+    expect(record.originChatMessageId).toBe('chat-message-7');
+
+    const editor = makeEditor();
+    restoreReviewMarks(editor, [], [record]);
+    expect(getTrackedChanges(editor)[0].originChatMessageId).toBe('chat-message-7');
+    editor.destroy();
+  });
+
   it('omits originCommentId when the change has none (like pairId)', () => {
     const [s] = suggestionsFromTrackedChanges([makeChange()]);
     expect('originCommentId' in s).toBe(false);

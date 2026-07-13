@@ -6,12 +6,14 @@ interface FormattingCardProps {
   change: TrackedFormatChange;
   isActive: boolean;
   originComment: Comment | null;
+  originChatMessageId?: string;
   originActive: boolean;
   top: number;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onClick: (id: string) => void;
   onActivateComment: (commentId: string) => void;
+  onActivateChatMessage?: (messageId: string) => void;
 }
 
 const MARK_LABELS: Record<string, string> = {
@@ -44,12 +46,14 @@ export default function FormattingCard({
   change,
   isActive,
   originComment,
+  originChatMessageId,
   originActive,
   top,
   onAccept,
   onReject,
   onClick,
   onActivateComment,
+  onActivateChatMessage,
 }: FormattingCardProps) {
   const description = describeFormatSegments(change.segments);
   const preview = previewText(change.segments);
@@ -63,6 +67,7 @@ export default function FormattingCard({
       createdAt={change.createdAt}
       isActive={isActive}
       originComment={originComment}
+      originChatMessageId={originChatMessageId}
       originActive={originActive}
       top={top}
       acceptTitle="Accept formatting"
@@ -71,6 +76,7 @@ export default function FormattingCard({
       onReject={() => onReject(change.id)}
       onClick={() => onClick(change.id)}
       onActivateComment={onActivateComment}
+      onActivateChatMessage={onActivateChatMessage}
     >
       <div className="suggestion-preview suggestion-format-preview">
         <div className="formatting-change-description">{description}</div>

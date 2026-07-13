@@ -25,6 +25,9 @@ interface CommentLayerProps {
   zoom: number;
   /** Explicit layout invalidation for a mounted editor becoming visible again. */
   layoutRevision: number;
+  hidden: boolean;
+  showResolved: boolean;
+  onShowResolvedChange: (showResolved: boolean) => void;
   onReply: (commentId: string, text: string) => void;
   onAIReplyRequest: (commentId: string, userText: string) => void;
   onCancelAIReply: (replyId: string) => void;
@@ -38,6 +41,7 @@ interface CommentLayerProps {
   onActivate: (commentId: string) => void;
   onActivateHistory: (commentId: string) => void;
   onActivateSuggestion: (id: string) => void;
+  onActivateChatMessage: (messageId: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
   onSubmitComment: (text: string) => void;
@@ -168,6 +172,9 @@ export default function CommentLayer({
   scrollTop,
   zoom,
   layoutRevision,
+  hidden,
+  showResolved,
+  onShowResolvedChange,
   onReply,
   onAIReplyRequest,
   onCancelAIReply,
@@ -181,6 +188,7 @@ export default function CommentLayer({
   onActivate,
   onActivateHistory,
   onActivateSuggestion,
+  onActivateChatMessage,
   onAcceptChange,
   onRejectChange,
   onSubmitComment,
@@ -189,13 +197,11 @@ export default function CommentLayer({
 }: CommentLayerProps) {
   const [panelLayout, setPanelLayout] = useState<AnchoredPanelLayout>(EMPTY_LAYOUT);
   const rafRef = useRef<number>(0);
-  const [showResolved, setShowResolved] = useState(false);
   const heightsRef = useRef<Map<string, number>>(new Map());
   const cardCatalogRef = useRef<Map<string, CardCatalogEntry>>(new Map());
   const viewSuggestionRafRef = useRef<number>(0);
 
   const visibleComments = comments.filter((c) => !c.resolved);
-  const resolvedComments = comments.filter((c) => c.resolved);
   const historyComments = sortCommentsInDocumentOrder(comments);
 
   const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
@@ -210,13 +216,13 @@ export default function CommentLayer({
     (commentId: string) => {
       const origin = comments.find((comment) => comment.id === commentId);
       if (origin?.resolved) {
-        setShowResolved(true);
+        onShowResolvedChange(true);
         if (activeCommentId !== commentId) onActivateHistory(commentId);
       } else if (activeCommentId !== commentId) {
         onActivate(commentId);
       }
     },
-    [activeCommentId, comments, onActivate, onActivateHistory],
+    [activeCommentId, comments, onActivate, onActivateHistory, onShowResolvedChange],
   );
 
   // Stable refs so reflow's identity doesn't change on every render
@@ -230,6 +236,7 @@ export default function CommentLayer({
   const activeSuggestionIdRef = useRef(activeSuggestionId);
   const onMaxCardBottomChangeRef = useRef(onMaxCardBottomChange);
   const showResolvedRef = useRef(showResolved);
+  const hiddenRef = useRef(hidden);
   editorRef.current = editor;
   displayCommentsRef.current = visibleComments;
   suggestionGroupsRef.current = suggestionGroups;
@@ -239,11 +246,12 @@ export default function CommentLayer({
   activeSuggestionIdRef.current = activeSuggestionId;
   onMaxCardBottomChangeRef.current = onMaxCardBottomChange;
   showResolvedRef.current = showResolved;
+  hiddenRef.current = hidden;
 
   const reflow = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
-    if (showResolvedRef.current) {
+    if (hiddenRef.current || showResolvedRef.current) {
       cardCatalogRef.current.clear();
       onMaxCardBottomChangeRef.current(0);
       setPanelLayout(EMPTY_LAYOUT);
@@ -435,6 +443,7 @@ export default function CommentLayer({
     trackedChanges,
     commentComposer,
     showResolved,
+    hidden,
     zoom,
     layoutRevision,
     scrollTop,
@@ -458,7 +467,7 @@ export default function CommentLayer({
         onViewReplySuggestion(suggestionIds);
         return;
       }
-      setShowResolved(false);
+      onShowResolvedChange(false);
       cancelAnimationFrame(viewSuggestionRafRef.current);
       viewSuggestionRafRef.current = requestAnimationFrame(() => {
         viewSuggestionRafRef.current = requestAnimationFrame(() => {
@@ -466,7 +475,7 @@ export default function CommentLayer({
         });
       });
     },
-    [onViewReplySuggestion, showResolved],
+    [onShowResolvedChange, onViewReplySuggestion, showResolved],
   );
 
   useEffect(() => () => cancelAnimationFrame(viewSuggestionRafRef.current), []);
@@ -504,7 +513,6 @@ export default function CommentLayer({
     ? COMMENT_COMPOSER_CARD_ID
     : (activeCommentId ?? activeSuggestionCardId ?? null);
   const activePosition = activePanelCardId ? positionById.get(activePanelCardId) : null;
-  const openCardCount = visibleComments.length + suggestionGroups.length;
   const renderedComments = showResolved ? historyComments : visibleComments;
   const commentCards = renderedComments.map((comment) => {
     const position = showResolved ? null : positionById.get(comment.id);
@@ -532,36 +540,12 @@ export default function CommentLayer({
   });
 
   return (
-    <div
-      className="comment-layer comments"
-      ref={containerRef as React.RefObject<HTMLDivElement>}
+    <section
+      className="comments-view panel-view"
+      hidden={hidden}
       onWheel={showResolved ? undefined : handleWheel}
+      aria-label="Comments and suggestions"
     >
-      <header className="comments-head">
-        <h3>Comments</h3>
-        <span className="count-pill">{openCardCount}</span>
-        <span className="grow" />
-        <button
-          className="filter"
-          onClick={() => setShowResolved((value) => !value)}
-          disabled={!showResolved && resolvedComments.length === 0}
-          title={
-            resolvedComments.length ? 'Show or hide resolved comments' : 'No resolved comments'
-          }
-        >
-          {showResolved ? 'All' : 'Open'}
-          <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden>
-            <path
-              d="M4 6.5 8 10.5 12 6.5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-      </header>
-
       {!showResolved && panelLayout.above.length > 0 && (
         <button
           className="offscreen-pill offscreen-pill-above"
@@ -630,6 +614,10 @@ export default function CommentLayer({
             const originComment = originId
               ? (comments.find((c) => c.id === originId) ?? null)
               : null;
+            const originChatMessageId =
+              group.kind === 'replacement'
+                ? (group.del.originChatMessageId ?? group.ins.originChatMessageId)
+                : group.change.originChatMessageId;
             const originActive = originComment !== null && originComment.id === activeCommentId;
             if (group.kind === 'replacement') {
               const { del, ins } = group;
@@ -644,12 +632,14 @@ export default function CommentLayer({
                     activeSuggestionId === ins.id
                   }
                   originComment={originComment}
+                  originChatMessageId={originChatMessageId}
                   originActive={originActive}
                   top={position.top}
                   onAccept={onAcceptChange}
                   onReject={onRejectChange}
                   onClick={onActivateSuggestion}
                   onActivateComment={activateOriginComment}
+                  onActivateChatMessage={onActivateChatMessage}
                 />
               );
             }
@@ -661,12 +651,14 @@ export default function CommentLayer({
                   change={change}
                   isActive={change.id === activeSuggestionId}
                   originComment={originComment}
+                  originChatMessageId={originChatMessageId}
                   originActive={originActive}
                   top={position.top}
                   onAccept={onAcceptChange}
                   onReject={onRejectChange}
                   onClick={onActivateSuggestion}
                   onActivateComment={activateOriginComment}
+                  onActivateChatMessage={onActivateChatMessage}
                 />
               );
             }
@@ -677,12 +669,14 @@ export default function CommentLayer({
                 change={change}
                 isActive={change.id === activeSuggestionId}
                 originComment={originComment}
+                originChatMessageId={originChatMessageId}
                 originActive={originActive}
                 top={position.top}
                 onAccept={onAcceptChange}
                 onReject={onRejectChange}
                 onClick={onActivateSuggestion}
                 onActivateComment={activateOriginComment}
+                onActivateChatMessage={onActivateChatMessage}
               />
             );
           })}
@@ -691,6 +685,6 @@ export default function CommentLayer({
 
       {/* MAZ OVERRIDE (2026-07-12): Quill supports anchored comments only.
           Design Q4's unwired general-comment field is intentionally omitted. */}
-    </div>
+    </section>
   );
 }

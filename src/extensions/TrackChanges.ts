@@ -22,6 +22,13 @@ export interface TrackChangesStorage {
    * for ordinary edits; set/reset around an applyTrackedEdits pass.
    */
   originCommentId: string | null;
+  /** Document-chat assistant turn that minted the change, when applicable. */
+  originChatMessageId: string | null;
+}
+
+export interface TrackChangesOrigin {
+  commentId?: string;
+  chatMessageId?: string;
 }
 
 declare module '@tiptap/core' {
@@ -29,7 +36,7 @@ declare module '@tiptap/core' {
     trackChanges: {
       setTrackChangesEnabled: (enabled: boolean) => ReturnType;
       setTrackChangesAuthor: (authorID: string) => ReturnType;
-      setTrackChangesOrigin: (originCommentId: string | null) => ReturnType;
+      setTrackChangesOrigin: (origin: string | TrackChangesOrigin | null) => ReturnType;
       acceptChange: (id: string) => ReturnType;
       rejectChange: (id: string) => ReturnType;
       acceptAllChanges: () => ReturnType;
@@ -190,6 +197,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
       enabled: false,
       authorID: 'anonymous',
       originCommentId: null,
+      originChatMessageId: null,
     };
   },
 
@@ -207,7 +215,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
           const origDispatch = editorView.dispatch.bind(editorView);
 
           editorView.dispatch = function (tr) {
-            const { enabled, authorID, originCommentId } = getStorage();
+            const { enabled, authorID, originCommentId, originChatMessageId } = getStorage();
 
             if (
               enabled &&
@@ -220,6 +228,7 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
                 editorView.state,
                 authorID,
                 originCommentId,
+                originChatMessageId,
               );
               transformed.setMeta(SKIP_TRACKING_META, true);
               origDispatch(transformed);
@@ -295,8 +304,11 @@ export const TrackChanges = Extension.create<TrackChangesStorage>({
         return true;
       },
 
-      setTrackChangesOrigin: (originCommentId: string | null) => () => {
-        this.storage.originCommentId = originCommentId;
+      setTrackChangesOrigin: (origin: string | TrackChangesOrigin | null) => () => {
+        this.storage.originCommentId =
+          typeof origin === 'string' ? origin : (origin?.commentId ?? null);
+        this.storage.originChatMessageId =
+          typeof origin === 'string' ? null : (origin?.chatMessageId ?? null);
         return true;
       },
 
@@ -546,7 +558,7 @@ function collectFormatChange(
 ): void {
   const data = mark.attrs.dataTracked;
   if (!data) return;
-  const { id, authorID, status, createdAt, originCommentId, delta } = data;
+  const { id, authorID, status, createdAt, originCommentId, originChatMessageId, delta } = data;
   const segment: FormatSegment = {
     from: pos,
     to: pos + node.nodeSize,
@@ -564,6 +576,7 @@ function collectFormatChange(
       status,
       createdAt,
       ...(originCommentId ? { originCommentId } : {}),
+      ...(originChatMessageId ? { originChatMessageId } : {}),
     });
     return;
   }
@@ -606,7 +619,16 @@ function collectTextChange(
 ): void {
   const data = mark.attrs.dataTracked;
   if (!data) return;
-  const { id, operation, authorID, status, createdAt, pairId, originCommentId } = data;
+  const {
+    id,
+    operation,
+    authorID,
+    status,
+    createdAt,
+    pairId,
+    originCommentId,
+    originChatMessageId,
+  } = data;
   if (seen.has(id)) return;
   seen.add(id);
 
@@ -623,6 +645,7 @@ function collectTextChange(
       createdAt,
       ...(pairId ? { pairId } : {}),
       ...(originCommentId ? { originCommentId } : {}),
+      ...(originChatMessageId ? { originChatMessageId } : {}),
     });
     return;
   }
@@ -686,6 +709,7 @@ type DataTracked = {
    * keep the origin they were minted with.
    */
   originCommentId?: string;
+  originChatMessageId?: string;
 };
 
 function adjacentTracked(
@@ -696,6 +720,7 @@ function adjacentTracked(
   deleteType: import('@tiptap/pm/model').MarkType,
   authorID: string,
   wantOperation: 'insert' | 'delete',
+  originChatMessageId: string | null,
 ): DataTracked | null {
   function pendingTracked(node: import('@tiptap/pm/model').Node): DataTracked | null {
     for (const m of node.marks) {
@@ -703,7 +728,8 @@ function adjacentTracked(
         (m.type === insertType || m.type === deleteType) &&
         m.attrs.dataTracked?.status === 'pending' &&
         m.attrs.dataTracked?.authorID === authorID &&
-        m.attrs.dataTracked?.operation === wantOperation
+        m.attrs.dataTracked?.operation === wantOperation &&
+        (m.attrs.dataTracked?.originChatMessageId ?? null) === originChatMessageId
       ) {
         return m.attrs.dataTracked as DataTracked;
       }
@@ -755,6 +781,7 @@ type FormatDataTracked = {
   createdAt: number;
   updatedAt: number;
   originCommentId?: string;
+  originChatMessageId?: string;
   delta: FormatDelta;
 };
 
@@ -874,10 +901,12 @@ function planFormatSegments(
     insertType: MarkType;
     formatType: MarkType;
     authorID: string;
+    originCommentId: string | null;
+    originChatMessageId: string | null;
     gesture: FormatGesture;
   },
 ): FormatSegmentPlan[] {
-  const { insertType, formatType, authorID, gesture } = ctx;
+  const { insertType, formatType, authorID, originChatMessageId, gesture } = ctx;
   const isAdd = step instanceof AddMarkStep;
   const segments: FormatSegmentPlan[] = [];
 
@@ -894,8 +923,12 @@ function planFormatSegments(
     const marker = node.marks.find((mark) => mark.type === formatType);
     const markerData = (marker?.attrs.dataTracked ?? null) as FormatDataTracked | null;
     const pendingMarker = markerData?.status === 'pending' ? markerData : null;
-    if (pendingMarker && pendingMarker.authorID !== authorID) {
-      // Another author's pending suggestion owns this span. Preserve it and
+    if (
+      pendingMarker &&
+      (pendingMarker.authorID !== authorID ||
+        (pendingMarker.originChatMessageId ?? null) !== originChatMessageId)
+    ) {
+      // Another author or AI turn owns this span. Preserve it and
       // flag the gesture so the UI can explain the partial application.
       gesture.blocked = true;
       return;
@@ -905,7 +938,8 @@ function planFormatSegments(
       (mark) =>
         mark.type === insertType &&
         mark.attrs.dataTracked?.status === 'pending' &&
-        mark.attrs.dataTracked?.authorID === authorID,
+        mark.attrs.dataTracked?.authorID === authorID &&
+        (mark.attrs.dataTracked?.originChatMessageId ?? null) === originChatMessageId,
     );
     segments.push({
       from: segFrom,
@@ -923,6 +957,7 @@ function chooseFormatIdentity(
   gesture: FormatGesture,
   authorID: string,
   originCommentId: string | null,
+  originChatMessageId: string | null,
 ): { identity: FormatIdentity; loserIds: Set<string> } {
   const candidates = new Map<string, FormatIdentity>();
   for (const segment of segments) {
@@ -948,6 +983,7 @@ function chooseFormatIdentity(
       createdAt: now,
       updatedAt: now,
       ...(originCommentId ? { originCommentId } : {}),
+      ...(originChatMessageId ? { originChatMessageId } : {}),
     };
   }
   gesture.identity = identity;
@@ -1017,10 +1053,11 @@ function applyFormatStep(
     formatType: MarkType;
     authorID: string;
     originCommentId: string | null;
+    originChatMessageId: string | null;
     gesture: FormatGesture;
   },
 ): void {
-  const { insertType, formatType, authorID, originCommentId, gesture } = ctx;
+  const { insertType, formatType, authorID, originCommentId, originChatMessageId, gesture } = ctx;
   if (to <= from) return;
 
   // Plan pass (read-only): split the step's range into homogeneous segments.
@@ -1031,6 +1068,8 @@ function applyFormatStep(
     insertType,
     formatType,
     authorID,
+    originCommentId,
+    originChatMessageId,
     gesture,
   });
   if (segments.length === 0) return;
@@ -1039,7 +1078,13 @@ function applyFormatStep(
   // same-author id the gesture touches wins (deterministic union; ties break
   // on id). Candidates are markers overlapped by this step plus the identity
   // already minted/reused by an earlier step of the same gesture.
-  const { identity, loserIds } = chooseFormatIdentity(segments, gesture, authorID, originCommentId);
+  const { identity, loserIds } = chooseFormatIdentity(
+    segments,
+    gesture,
+    authorID,
+    originCommentId,
+    originChatMessageId,
+  );
 
   // Mutation pass. The original step is never replayed wholesale — a blocked
   // segment must not receive the format — so each allowed segment gets the
@@ -1081,6 +1126,7 @@ function applyTrackedFormatTransactionStep(
     formatType: MarkType;
     authorID: string;
     originCommentId: string | null;
+    originChatMessageId: string | null;
     gesture: FormatGesture;
   },
 ): void {
@@ -1153,6 +1199,7 @@ function trackedData(
   authorID: string,
   pairId: string | undefined,
   originCommentId: string | null,
+  originChatMessageId: string | null,
 ): DataTracked {
   return (
     existing ?? {
@@ -1164,6 +1211,7 @@ function trackedData(
       updatedAt: Date.now(),
       ...(pairId ? { pairId } : {}),
       ...(originCommentId ? { originCommentId } : {}),
+      ...(originChatMessageId ? { originChatMessageId } : {}),
     }
   );
 }
@@ -1240,9 +1288,11 @@ function applyTrackedReplaceStep(
     formatType: MarkType | undefined;
     authorID: string;
     originCommentId: string | null;
+    originChatMessageId: string | null;
   },
 ): { deleteLeftmost: number | null; insertEnd: number | null } {
-  const { insertType, deleteType, formatType, authorID, originCommentId } = ctx;
+  const { insertType, deleteType, formatType, authorID, originCommentId, originChatMessageId } =
+    ctx;
   const replace = step as unknown as ReplaceStepData;
   const hasDelete = replace.from < replace.to;
   const hasInsert = replace.slice && replace.slice.size > 0;
@@ -1254,16 +1304,41 @@ function applyTrackedReplaceStep(
     : { insertRanges: [], normalRanges: [], anyAlreadyDeleted: false };
 
   const existingDelete = hasDelete
-    ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'delete')
+    ? adjacentTracked(
+        newTr.doc,
+        from,
+        to,
+        insertType,
+        deleteType,
+        authorID,
+        'delete',
+        originChatMessageId,
+      )
     : null;
   const existingInsert = hasInsert
-    ? adjacentTracked(newTr.doc, from, to, insertType, deleteType, authorID, 'insert')
+    ? adjacentTracked(
+        newTr.doc,
+        from,
+        to,
+        insertType,
+        deleteType,
+        authorID,
+        'insert',
+        originChatMessageId,
+      )
     : null;
   const pairId = resolveReplacementPairId(hasDelete, hasInsert, existingDelete, existingInsert);
 
   let deleteLeftmost: number | null = null;
   if (hasDelete) {
-    const deletion = trackedData(existingDelete, 'delete', authorID, pairId, originCommentId);
+    const deletion = trackedData(
+      existingDelete,
+      'delete',
+      authorID,
+      pairId,
+      originCommentId,
+      originChatMessageId,
+    );
     deleteLeftmost = applyTrackedDeletion(
       newTr,
       step,
@@ -1277,7 +1352,14 @@ function applyTrackedReplaceStep(
 
   let insertEnd: number | null = null;
   if (hasInsert) {
-    const insertion = trackedData(existingInsert, 'insert', authorID, pairId, originCommentId);
+    const insertion = trackedData(
+      existingInsert,
+      'insert',
+      authorID,
+      pairId,
+      originCommentId,
+      originChatMessageId,
+    );
     insertEnd = applyTrackedInsertion(
       newTr,
       mapToNew,
@@ -1325,6 +1407,7 @@ function transformForTracking(
   state: EditorState,
   authorID: string,
   originCommentId: string | null = null,
+  originChatMessageId: string | null = null,
 ): import('@tiptap/pm/state').Transaction {
   const schema = state.schema;
   const insertType = schema.marks['tracked_insert'];
@@ -1377,6 +1460,7 @@ function transformForTracking(
         formatType: formatType!,
         authorID,
         originCommentId,
+        originChatMessageId,
         gesture: formatGesture,
       });
     } else if (!(step instanceof ReplaceStep)) {
@@ -1392,6 +1476,7 @@ function transformForTracking(
         formatType,
         authorID,
         originCommentId,
+        originChatMessageId,
       });
       if (result.deleteLeftmost !== null) lastDeleteLeftmost = result.deleteLeftmost;
       if (result.insertEnd !== null) lastInsertEnd = result.insertEnd;

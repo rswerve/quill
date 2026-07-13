@@ -5,21 +5,21 @@ import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
 import CommentLayer, { computeBottomSpacer } from './CommentLayer';
 import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
-import ReviewModal from './ReviewModal';
 import FormattingInspector from './FormattingInspector';
+import PanelHeader from './PanelHeader';
+import ChatPanel from './ChatPanel';
 import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
 import { useClaudeReply } from '../hooks/useClaudeReply';
-import { useDocumentReview } from '../hooks/useDocumentReview';
-import type { ReviewOptions } from '../hooks/useDocumentReview';
+import { useDocumentChat, type ChatCursorContext } from '../hooks/useDocumentChat';
 import { FORMAT_BLOCKED_META, getTrackedChanges } from '../extensions/TrackChanges';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
-import { locateEdit, planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
+import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
 import { restoreReviewMarks, suggestionsFromTrackedChanges } from '../utils/reviewPersistence';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
@@ -40,6 +40,8 @@ import type {
   QuillEdit,
   SidecarFile,
   TrackedChangeInfo,
+  TrackedEditOrigin,
+  DocumentChatThread,
 } from '../types';
 import '../App.css';
 
@@ -59,6 +61,14 @@ function lastReplyModel(comments: Comment[]): string | null {
         return replies[replyIndex].model ?? null;
       }
     }
+  }
+  return null;
+}
+
+function lastChatModel(thread: DocumentChatThread | undefined): string | null {
+  if (!thread) return null;
+  for (let index = thread.messages.length - 1; index >= 0; index--) {
+    if (thread.messages[index].model) return thread.messages[index].model ?? null;
   }
   return null;
 }
@@ -100,8 +110,7 @@ export interface DocumentTabHandle {
   closeSessionPicker: () => void;
   pickSession: (binding: AISessionBinding) => void;
   focusFind: () => void;
-  reviewDocument: () => void;
-  openReviewModal: () => void;
+  openChat: () => void;
   clearActiveAnnotation: () => void;
   unlinkSession: () => void;
   linkContextFolder: () => void;
@@ -208,6 +217,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [maxCardBottom, setMaxCardBottom] = useState(0);
   const [bottomSpacer, setBottomSpacer] = useState(0);
   const [findOpen, setFindOpen] = useState(false);
+  const [panelMode, setPanelMode] = useState<'comments' | 'chat'>('comments');
+  const [showResolvedComments, setShowResolvedComments] = useState(false);
+  const [chatFocusRevision, setChatFocusRevision] = useState(0);
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
@@ -221,10 +233,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // A @claude request made before a session was linked; fired once the user
   // picks a session via the picker we open for them.
   const pendingAIRequestRef = useRef<{ commentId: string; userText: string } | null>(null);
-  // The "Review full document" modal, plus a review request made before a
-  // session was linked (resumed once the user picks one, like AI replies).
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const pendingReviewRef = useRef(false);
+  const pendingChatTurnRef = useRef<string | null>(null);
+  const chatThreadRef = useRef<DocumentChatThread | undefined>(undefined);
   const openSessionPicker = useCallback(
     () => onOpenSessionPicker(tabId),
     [onOpenSessionPicker, tabId],
@@ -294,6 +304,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       suggestions: live.suggestions,
       aiSession,
       contextFolder,
+      ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
     };
   }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
 
@@ -331,7 +342,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       comment: { from: number; to: number },
       edits: QuillEdit[],
       scope: EditScope,
-      originCommentId?: string,
+      origin?: TrackedEditOrigin,
     ) => {
       const ed = editor;
       if (!ed) return { applied: 0, skipped: edits.length, suggestionIds: [] };
@@ -363,7 +374,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         applyingClaudeEditsRef.current = true;
         ed.commands.setTrackChangesEnabled(true);
         ed.commands.setTrackChangesAuthor(CLAUDE_AUTHOR_ID);
-        ed.commands.setTrackChangesOrigin(originCommentId ?? null);
+        ed.commands.setTrackChangesOrigin(origin ?? null);
         for (const e of placed) {
           // Back-to-front: applying a later edit doesn't shift earlier offsets.
           if (e.kind === 'format') {
@@ -388,7 +399,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const suggestionIds = getTrackedChanges(ed)
         .filter(
           (change) =>
-            !suggestionIdsBefore.has(change.id) && change.originCommentId === originCommentId,
+            !suggestionIdsBefore.has(change.id) &&
+            change.originCommentId === origin?.commentId &&
+            change.originChatMessageId === origin?.chatMessageId,
         )
         .map((change) => change.id);
       return { applied, skipped, suggestionIds };
@@ -430,47 +443,38 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getRunOptions: getClaudeRunOptions,
   });
 
-  // Doc-scoped wrapper for the full-document review: the same tracked-edit
-  // pipeline, always over the whole document (the anchor range is unused).
-  const applyDocTrackedEdits = useCallback(
-    (edits: QuillEdit[]) => applyTrackedEdits({ from: 0, to: 0 }, edits, 'doc'),
-    [applyTrackedEdits],
-  );
+  const getCursorContext = useCallback((): ChatCursorContext => {
+    const ed = editorRef.current?.getEditor();
+    if (!ed) return { selectedText: null, blockText: '' };
+    const { from, to } = ed.state.selection;
+    const $from = ed.state.doc.resolve(from);
+    return {
+      selectedText: from === to ? null : rangeText(ed.state.doc, from, to),
+      blockText: rangeText(ed.state.doc, $from.start($from.depth), $from.end($from.depth)),
+    };
+  }, []);
 
-  // Anchor one Claude review comment: locate `find` in the whole document,
-  // mark the range, and attach the remark as a finished AI reply so it renders
-  // with the Claude styling. False when the quote isn't found verbatim.
-  const addClaudeComment = useCallback(
-    (find: string, body: string, model?: string): boolean => {
-      const ed = editor;
-      if (!ed || find.trim().length === 0 || body.trim().length === 0) return false;
-      const doc = ed.state.doc;
-      const range = locateEdit(doc, 0, doc.content.size, find);
-      if (!range || range.from === range.to) return false;
-      const comment = addComment(
-        rangeText(doc, range.from, range.to),
-        range.from,
-        range.to,
-        'Claude',
-      );
-      ed.chain().setTextSelection({ from: range.from, to: range.to }).setComment(comment.id).run();
-      const replyId = startAIReply(comment.id);
-      if (model) setAIReplyModel(comment.id, replyId, model);
-      appendAIReplyChunk(comment.id, replyId, body);
-      finishAIReplyAndDirty(comment.id, replyId);
-      return true;
-    },
-    [editor, addComment, startAIReply, setAIReplyModel, appendAIReplyChunk, finishAIReplyAndDirty],
-  );
-
-  const docReview = useDocumentReview({
+  const documentChat = useDocumentChat({
     getDocMarkdown,
+    getCursorContext,
+    applyTrackedEdits: useCallback(
+      (edits: QuillEdit[], originChatMessageId: string) =>
+        applyTrackedEdits({ from: 0, to: 0 }, edits, 'doc', {
+          chatMessageId: originChatMessageId,
+        }),
+      [applyTrackedEdits],
+    ),
     getContextFolder: useCallback(() => contextFolderRef.current, []),
-    applyTrackedEdits: applyDocTrackedEdits,
-    addClaudeComment,
-    onModelObserved: setLastKnownModel,
+    getPendingSuggestions: useCallback(
+      () =>
+        editor ? getTrackedChanges(editor).filter((change) => change.status === 'pending') : [],
+      [editor],
+    ),
     getRunOptions: getClaudeRunOptions,
+    onModelObserved: setLastKnownModel,
+    onChanged: markDirty,
   });
+  chatThreadRef.current = aiSession ? documentChat.getThread(aiSession.sessionId) : undefined;
 
   // Re-render on scroll so the comment column tracks the document (cards are
   // translated by scrollTop) and the add-comment button tracks coordsAtPos.
@@ -552,7 +556,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const loadedComments = result.sidecar.comments ?? [];
       const loadedSuggestions = result.sidecar.suggestions ?? [];
       setComments(loadedComments);
-      setLastKnownModel(lastReplyModel(loadedComments));
       setSuggestions(loadedSuggestions);
       // Stamp the marks back onto the parsed document: highlights, click
       // linking, and suggestion cards all read live marks, which Markdown
@@ -565,6 +568,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         setTrackedChanges(getTrackedChanges(ed));
       }
       const session = result.sidecar.aiSession ?? null;
+      documentChat.restore(result.sidecar.chat, session);
       // A sidecar that exists but failed to parse means real comments/suggestions
       // may be at risk. Warn loudly; the save path keeps the on-disk file intact.
       if (result.sidecarError) {
@@ -590,6 +594,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         }
       }
       setAISession(session);
+      setLastKnownModel(lastChatModel(result.sidecar.chat) ?? lastReplyModel(loadedComments));
       setContextFolder(result.sidecar.contextFolder ?? null);
       // Force the session choice up front: if we opened a non-empty doc with no
       // linked Claude session, surface the picker so the user binds one (and can
@@ -599,7 +604,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         openSessionPicker();
       }
     },
-    [setComments, setSuggestions, onNotice, openSessionPicker, onRecentFile],
+    [documentChat, setComments, setSuggestions, onNotice, openSessionPicker, onRecentFile],
   );
 
   // Test escape hatch: bind an AI session without going through SessionPicker.
@@ -620,6 +625,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       live.suggestions,
       aiSession,
       contextFolder,
+      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
     );
     // The document gained (or moved) a directory — relative image paths now
     // resolve against it for anything drawn from here on.
@@ -630,7 +636,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setLastSavedAt(Date.now());
     }
     return path;
-  }, [saveFileAs, getLiveReviewState, aiSession, contextFolder, onRecentFile]);
+  }, [saveFileAs, getLiveReviewState, aiSession, contextFolder, documentChat, onRecentFile]);
 
   const handleSave = useCallback(async () => {
     if (!filePath) {
@@ -643,10 +649,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       live.suggestions,
       aiSession,
       contextFolder,
+      undefined,
+      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
     );
     if (path) setLastSavedAt(Date.now());
     return path;
-  }, [filePath, saveFile, getLiveReviewState, aiSession, contextFolder, handleSaveAs]);
+  }, [
+    filePath,
+    saveFile,
+    getLiveReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    handleSaveAs,
+  ]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
   // the chrome and the track-changes/comment markup, leaving a clean copy of
@@ -697,10 +713,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setComments([]);
     setSuggestions([]);
     setAISession(null);
+    documentChat.reset();
     setLastKnownModel(null);
     setContextFolder(null);
     setLastSavedAt(null);
-  }, [newFile, setComments, setSuggestions]);
+    setPanelMode('comments');
+  }, [documentChat, newFile, setComments, setSuggestions]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
@@ -717,7 +735,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const draftComments = draft.comments ?? [];
       const draftSuggestions = draft.suggestions ?? [];
       setComments(draftComments);
-      setLastKnownModel(lastReplyModel(draftComments));
+      setLastKnownModel(lastChatModel(draft.chat) ?? lastReplyModel(draftComments));
       setSuggestions(draftSuggestions);
       // The draft's annotations need their marks stamped back just like a file
       // load — the snapshot's content is serialized Markdown, which drops them
@@ -728,10 +746,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         restoreReviewMarks(ed, draftComments, draftSuggestions);
         setTrackedChanges(getTrackedChanges(ed));
       }
-      setAISession(draft.aiSession ?? null);
+      const session = draft.aiSession ?? null;
+      setAISession(session);
+      documentChat.restore(draft.chat, session);
       setContextFolder(draft.contextFolder ?? null);
     },
-    [restoreDraft, setComments, setSuggestions],
+    [documentChat, restoreDraft, setComments, setSuggestions],
   );
 
   useEffect(() => {
@@ -986,6 +1006,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     const sel = selectionInfo;
     if (!sel || !editor || editor.isDestroyed) return;
     setPendingCommentSelection(sel);
+    setPanelMode('comments');
     editor.commands.setPendingCommentRange(sel.from, sel.to);
     setCommentComposerOpen(true);
   }, [editor, selectionInfo]);
@@ -1153,6 +1174,35 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [editor, scrollCardIntoView, trackedChanges],
   );
 
+  const openChat = useCallback(() => {
+    setPanelMode('chat');
+    setChatFocusRevision((revision) => revision + 1);
+  }, []);
+
+  const handleViewChatSuggestions = useCallback(
+    (suggestionIds: string[]) => {
+      setPanelMode('comments');
+      setShowResolvedComments(false);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => handleViewReplySuggestion(suggestionIds));
+      });
+    },
+    [handleViewReplySuggestion],
+  );
+
+  const handleActivateChatMessage = useCallback((messageId: string) => {
+    setPanelMode('chat');
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const message = commentLayerRef.current?.querySelector(
+          `[data-chat-message-id="${CSS.escape(messageId)}"]`,
+        ) as HTMLElement | null;
+        message?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        message?.focus({ preventScroll: true });
+      });
+    });
+  }, []);
+
   const handleAIReplyRequest = useCallback(
     (commentId: string, userText: string) => {
       const comment = comments.find((c) => c.id === commentId);
@@ -1173,6 +1223,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const handlePickSession = useCallback(
     (binding: AISessionBinding) => {
       setAISession(binding);
+      if (binding.sessionId !== aiSession?.sessionId) documentChat.restore(undefined, binding);
       markDirty();
       // If the picker was opened because of a @claude request with no session,
       // fire that request now against the freshly-linked session.
@@ -1182,42 +1233,47 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         const comment = comments.find((c) => c.id === pending.commentId);
         if (comment) void claudeReply.ask(comment, pending.userText, binding);
       }
-      // Same for a "Review full document" click with no session: resume by
-      // opening the review modal against the freshly-linked session.
-      if (pendingReviewRef.current) {
-        pendingReviewRef.current = false;
-        setReviewOpen(true);
+      const pendingChatTurn = pendingChatTurnRef.current;
+      pendingChatTurnRef.current = null;
+      if (pendingChatTurn) {
+        setPanelMode('chat');
+        void documentChat.send(pendingChatTurn, binding);
       }
     },
-    [markDirty, comments, claudeReply],
+    [aiSession?.sessionId, markDirty, comments, claudeReply, documentChat],
   );
 
-  const handleReviewDocument = useCallback(() => {
-    if (!aiSession) {
-      pendingReviewRef.current = true;
-      openSessionPicker();
-      return;
-    }
-    setReviewOpen(true);
-  }, [aiSession, openSessionPicker]);
-
-  const handleReviewSubmit = useCallback(
-    (options: ReviewOptions) => {
-      if (!aiSession) return;
-      void docReview.start(options, aiSession);
+  const handleChatSend = useCallback(
+    (text: string) => {
+      if (!aiSession) {
+        pendingChatTurnRef.current = text;
+        openSessionPicker();
+        return;
+      }
+      void documentChat.send(text, aiSession);
     },
-    [aiSession, docReview],
+    [aiSession, documentChat, openSessionPicker],
   );
 
-  const handleReviewClose = useCallback(() => {
-    setReviewOpen(false);
-    docReview.reset();
-  }, [docReview]);
+  const handleStartNewSession = useCallback(() => {
+    void (async () => {
+      const path = filePath ?? (await handleSaveAs());
+      if (!path) return;
+      handlePickSession({
+        provider: 'claude-code',
+        sessionId: crypto.randomUUID(),
+        cwd: dirname(path) ?? '.',
+        linkedAt: new Date().toISOString(),
+        createdByQuill: true,
+      });
+    })();
+  }, [filePath, handlePickSession, handleSaveAs]);
 
   const handleUnlinkSession = useCallback(() => {
     setAISession(null);
+    documentChat.reset();
     markDirty();
-  }, [markDirty]);
+  }, [documentChat, markDirty]);
 
   const handleLinkContextFolder = useCallback(() => {
     void (async () => {
@@ -1243,11 +1299,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const pendingSuggestionCount = trackedChanges.filter(
     (change) => change.status === 'pending',
   ).length;
+  const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
+  const resolvedCommentCount = comments.length - unresolvedCommentCount;
+
+  useEffect(() => {
+    if (panelMode === 'chat') setMaxCardBottom(0);
+  }, [panelMode]);
 
   const handleCloseSessionPicker = useCallback(() => {
-    // Closing without picking abandons a stashed review request — the user
-    // backed out, so a later manual link should not pop the modal.
-    pendingReviewRef.current = false;
+    pendingChatTurnRef.current = null;
   }, []);
 
   useImperativeHandle(
@@ -1268,8 +1328,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       closeSessionPicker: handleCloseSessionPicker,
       pickSession: handlePickSession,
       focusFind: () => setFindOpen(true),
-      reviewDocument: handleReviewDocument,
-      openReviewModal: () => setReviewOpen(true),
+      openChat,
       clearActiveAnnotation: () => setActiveAnnotation(null),
       unlinkSession: handleUnlinkSession,
       linkContextFolder: handleLinkContextFolder,
@@ -1284,13 +1343,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       handleExportPdf,
       handleLinkContextFolder,
       handlePickSession,
-      handleReviewDocument,
       handleRejectAll,
       handleSave,
       handleSaveAs,
       handleUnlinkContextFolder,
       handleUnlinkSession,
       openSessionPicker,
+      openChat,
       performNew,
       performOpen,
       performOpenPath,
@@ -1367,6 +1426,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 onSelectionChange={handleSelectionChange}
                 onEditorReady={setEditor}
                 onAnnotationClick={handleAnnotationClick}
+                onOpenChat={openChat}
               />
               {editor && <FormattingInspector editor={editor} />}
             </div>
@@ -1400,52 +1460,74 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             })()}
         </div>
 
-        <CommentLayer
-          editor={editor}
-          comments={comments}
-          activeCommentId={activeCommentId}
-          activeSuggestionId={activeSuggestionId}
-          containerRef={commentLayerRef}
-          trackedChanges={trackedChanges}
-          commentComposer={commentComposerOpen ? pendingCommentSelection : null}
-          scrollTop={scrollTop}
-          zoom={zoom}
-          layoutRevision={scrollTick}
-          onReply={(id, text) => {
-            addReply(id, text, AUTHOR);
-            markDirty();
-          }}
-          onAIReplyRequest={handleAIReplyRequest}
-          onCancelAIReply={claudeReply.cancel}
-          onRetryAIReply={claudeReply.retry}
-          onDismissAIReply={(commentId, replyId) => {
-            dismissAIReply(commentId, replyId);
-            markDirty();
-          }}
-          onViewReplySuggestion={handleViewReplySuggestion}
-          onOpenSessionPicker={openSessionPicker}
-          onResolve={handleResolveComment}
-          onUnresolve={handleUnresolveComment}
-          onDelete={handleDeleteComment}
-          onActivate={handleActivateComment}
-          onActivateHistory={handleActivateHistoryComment}
-          onActivateSuggestion={handleActivateSuggestion}
-          onAcceptChange={handleAcceptChange}
-          onRejectChange={handleRejectChange}
-          onSubmitComment={handleAddComment}
-          onCancelComment={handleCancelCommentComposer}
-          onMaxCardBottomChange={setMaxCardBottom}
-        />
+        <aside className="comment-layer comments" ref={commentLayerRef} aria-label="Review panel">
+          <PanelHeader
+            mode={panelMode}
+            commentCount={unresolvedCommentCount + pendingSuggestionCount}
+            showResolved={showResolvedComments}
+            resolvedCount={resolvedCommentCount}
+            aiSession={aiSession}
+            onModeChange={(mode) => {
+              setPanelMode(mode);
+              if (mode === 'chat') setChatFocusRevision((revision) => revision + 1);
+            }}
+            onToggleResolved={() => setShowResolvedComments((show) => !show)}
+            onChangeSession={openSessionPicker}
+            onStartNewSession={handleStartNewSession}
+            onUnlinkSession={handleUnlinkSession}
+          />
+          <CommentLayer
+            editor={editor}
+            comments={comments}
+            activeCommentId={activeCommentId}
+            activeSuggestionId={activeSuggestionId}
+            containerRef={commentLayerRef}
+            trackedChanges={trackedChanges}
+            commentComposer={commentComposerOpen ? pendingCommentSelection : null}
+            scrollTop={scrollTop}
+            zoom={zoom}
+            layoutRevision={scrollTick}
+            hidden={panelMode !== 'comments'}
+            showResolved={showResolvedComments}
+            onShowResolvedChange={setShowResolvedComments}
+            onReply={(id, text) => {
+              addReply(id, text, AUTHOR);
+              markDirty();
+            }}
+            onAIReplyRequest={handleAIReplyRequest}
+            onCancelAIReply={claudeReply.cancel}
+            onRetryAIReply={claudeReply.retry}
+            onDismissAIReply={(commentId, replyId) => {
+              dismissAIReply(commentId, replyId);
+              markDirty();
+            }}
+            onViewReplySuggestion={handleViewReplySuggestion}
+            onOpenSessionPicker={openSessionPicker}
+            onResolve={handleResolveComment}
+            onUnresolve={handleUnresolveComment}
+            onDelete={handleDeleteComment}
+            onActivate={handleActivateComment}
+            onActivateHistory={handleActivateHistoryComment}
+            onActivateSuggestion={handleActivateSuggestion}
+            onActivateChatMessage={handleActivateChatMessage}
+            onAcceptChange={handleAcceptChange}
+            onRejectChange={handleRejectChange}
+            onSubmitComment={handleAddComment}
+            onCancelComment={handleCancelCommentComposer}
+            onMaxCardBottomChange={setMaxCardBottom}
+          />
+          <ChatPanel
+            hidden={panelMode !== 'chat'}
+            messages={documentChat.messages}
+            focusRevision={chatFocusRevision}
+            onSend={handleChatSend}
+            onCancel={(messageId) => void documentChat.cancel(messageId)}
+            onRetry={(messageId) => void documentChat.retry(messageId)}
+            onDismiss={documentChat.dismiss}
+            onViewSuggestions={handleViewChatSuggestions}
+          />
+        </aside>
       </div>
-
-      {reviewOpen && (
-        <ReviewModal
-          phase={docReview.phase}
-          onSubmit={handleReviewSubmit}
-          onCancelStream={() => void docReview.cancel()}
-          onClose={handleReviewClose}
-        />
-      )}
     </>
   );
 });

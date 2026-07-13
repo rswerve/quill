@@ -11,6 +11,7 @@ interface ReplacementCardProps {
   /** The still-existing comment this replacement originated from, or null
    *  (no provenance, or the comment was deleted — degrade to no chip). */
   originComment: Comment | null;
+  originChatMessageId?: string;
   /** True while the origin comment is the active annotation — the card gets a
    *  subtle outline linking it back to its comment. */
   originActive: boolean;
@@ -20,6 +21,7 @@ interface ReplacementCardProps {
   onReject: (pairId: string) => void;
   onClick: (pairId: string) => void;
   onActivateComment: (commentId: string) => void;
+  onActivateChatMessage?: (messageId: string) => void;
 }
 
 export default function ReplacementCard({
@@ -27,12 +29,14 @@ export default function ReplacementCard({
   ins,
   isActive,
   originComment,
+  originChatMessageId,
   originActive,
   top,
   onAccept,
   onReject,
   onClick,
   onActivateComment,
+  onActivateChatMessage,
 }: ReplacementCardProps) {
   const pairId = del.pairId ?? ins.pairId ?? del.id;
 
@@ -45,6 +49,7 @@ export default function ReplacementCard({
       createdAt={del.createdAt}
       isActive={isActive}
       originComment={originComment}
+      originChatMessageId={originChatMessageId}
       originActive={originActive}
       top={top}
       acceptTitle="Accept replacement"
@@ -53,6 +58,7 @@ export default function ReplacementCard({
       onReject={() => onReject(pairId)}
       onClick={() => onClick(pairId)}
       onActivateComment={onActivateComment}
+      onActivateChatMessage={onActivateChatMessage}
     >
       <div className="suggestion-preview suggestion-replace-preview">
         <span className="suggestion-replace-old suggestion-removed">“{clip(del.text)}”</span>

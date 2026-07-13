@@ -310,7 +310,7 @@ test.describe('live comment reconciliation', () => {
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
   });
 
   test('deleting part of an anchor keeps the comment on the surviving text', async ({ page }) => {
@@ -321,7 +321,7 @@ test.describe('live comment reconciliation', () => {
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hel');
     await expect(page.locator('.comment-card')).toHaveCount(1);
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hel"');
-    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('1');
+    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('1');
   });
 
   test('a fully deleted anchor is not persisted or restored on reopen', async ({ page }) => {
@@ -374,7 +374,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     anchorText = '"hello"',
   ) {
     await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
     await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
     await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
@@ -499,7 +499,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await expect(activeEditor(page)).toContainText('hello world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
     await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
-    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('1');
+    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('1');
   });
 
   test('rejecting an insertion that contains the whole anchor auto-resolves the comment', async ({
@@ -574,7 +574,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Accept all suggestions"]').click();
 
     await expect(page.locator('mark[data-comment-id]')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .count-pill')).toHaveText('0');
+    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
     await activeTabHost(page).locator('.comments-head .filter').click();
     await expect(page.locator('.comment-card-resolved')).toHaveCount(2);
   });

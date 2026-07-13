@@ -103,4 +103,36 @@ describe('SuggestionCardShell', () => {
     fireEvent.click(container.querySelector('[data-card-id="claude-edit"]')!);
     expect(onClick).toHaveBeenCalledOnce();
   });
+
+  it('links a chat-authored suggestion back to its assistant turn', () => {
+    const onActivateChatMessage = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <SuggestionCardShell
+        cardId="chat-edit"
+        kind="insert"
+        label="Insertion"
+        authorID="claude"
+        createdAt={Date.now()}
+        isActive={false}
+        originComment={null}
+        originChatMessageId="chat-message-1"
+        originActive={false}
+        top={24}
+        acceptTitle="Accept insertion"
+        rejectTitle="Reject insertion"
+        onAccept={vi.fn()}
+        onReject={vi.fn()}
+        onClick={onClick}
+        onActivateComment={vi.fn()}
+        onActivateChatMessage={onActivateChatMessage}
+      >
+        <div>Preview</div>
+      </SuggestionCardShell>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '↳ from chat' }));
+    expect(onActivateChatMessage).toHaveBeenCalledWith('chat-message-1');
+    expect(onClick).not.toHaveBeenCalled();
+  });
 });

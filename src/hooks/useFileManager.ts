@@ -1,6 +1,12 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { SidecarFile, Comment, Suggestion, AISessionBinding } from '../types';
+import type {
+  SidecarFile,
+  Comment,
+  Suggestion,
+  AISessionBinding,
+  DocumentChatThread,
+} from '../types';
 import { sidecarPath } from '../utils/sidecarPath';
 import { basename } from '../utils/path';
 import {
@@ -8,6 +14,7 @@ import {
   sanitizeSuggestions,
   sanitizeAISession,
   sanitizeContextFolder,
+  sanitizeDocumentChat,
 } from '../utils/annotationValidation';
 
 function emptySidecar(): SidecarFile {
@@ -46,6 +53,7 @@ function normalizeSidecar(raw: unknown): SidecarFile {
     suggestions: sanitizeSuggestions(parsed.suggestions),
     aiSession: sanitizeAISession(parsed.aiSession),
     contextFolder: sanitizeContextFolder(parsed.contextFolder),
+    chat: sanitizeDocumentChat(parsed.chat),
   };
 }
 
@@ -74,6 +82,7 @@ interface UseFileManagerReturn {
     aiSession: AISessionBinding | null,
     contextFolder: string | null,
     forcePath?: string,
+    chat?: DocumentChatThread | null,
   ) => Promise<string | null>;
   saveFileAs: (
     content: string,
@@ -81,6 +90,7 @@ interface UseFileManagerReturn {
     suggestions: Suggestion[],
     aiSession: AISessionBinding | null,
     contextFolder: string | null,
+    chat?: DocumentChatThread | null,
   ) => Promise<string | null>;
   newFile: () => void;
   restoreDraft: (path: string | null, dirty?: boolean) => void;
@@ -181,12 +191,19 @@ export function useFileManager(
       suggestions: Suggestion[],
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
+      chat?: DocumentChatThread | null,
     ) => {
       const scPath = sidecarPath(path);
       // Never persist in-flight AI replies (pending/errored) — strip them first
       // so an empty doc with only a failed reply still collapses to no sidecar.
       const cleanComments = stripTransientReplyState(comments);
-      if (cleanComments.length === 0 && suggestions.length === 0 && !aiSession && !contextFolder) {
+      if (
+        cleanComments.length === 0 &&
+        suggestions.length === 0 &&
+        !aiSession &&
+        !contextFolder &&
+        !chat
+      ) {
         // Clean up empty sidecar
         try {
           await invoke('delete_file', { path: scPath });
@@ -201,6 +218,7 @@ export function useFileManager(
         suggestions,
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
+        ...(chat ? { chat } : {}),
       };
       await invoke('write_file', { path: scPath, content: JSON.stringify(sidecar, null, 2) });
     },
@@ -215,6 +233,7 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       forcePath?: string,
+      chat?: DocumentChatThread | null,
     ): Promise<string | null> => {
       const targetPath = forcePath ?? filePath;
       if (!targetPath) {
@@ -228,7 +247,7 @@ export function useFileManager(
       try {
         await invoke('write_file', { path: targetPath, content });
         if (!skipSidecar) {
-          await saveSidecar(targetPath, comments, suggestions, aiSession, contextFolder);
+          await saveSidecar(targetPath, comments, suggestions, aiSession, contextFolder, chat);
           // The sidecar at targetPath is now our own output. In the Save As
           // escape (new path while protected) the protection must not follow
           // the document, or every later save silently skips the sidecar.
@@ -253,13 +272,22 @@ export function useFileManager(
       suggestions: Suggestion[],
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
+      chat?: DocumentChatThread | null,
     ): Promise<string | null> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';
         const path = await invoke<string | null>('show_save_dialog', { defaultName });
         if (!path) return null;
         const resolvedPath = path.endsWith('.md') ? path : `${path}.md`;
-        return saveFile(content, comments, suggestions, aiSession, contextFolder, resolvedPath);
+        return saveFile(
+          content,
+          comments,
+          suggestions,
+          aiSession,
+          contextFolder,
+          resolvedPath,
+          chat,
+        );
       } catch (e) {
         console.error('Failed to save as:', e);
         onError?.('Could not save file', String(e));

@@ -1,0 +1,90 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import ChatPanel from '../../components/ChatPanel';
+import type { ChatMessage } from '../../types';
+
+const messages: ChatMessage[] = [
+  { id: 'u1', role: 'user', text: 'Tighten the opening', createdAt: 'now' },
+  {
+    id: 'a1',
+    role: 'assistant',
+    text: 'I tightened it.',
+    createdAt: 'later',
+    model: 'claude-sonnet',
+    suggestionIds: ['s1', 's2'],
+  },
+];
+
+function renderPanel(overrides: Partial<React.ComponentProps<typeof ChatPanel>> = {}) {
+  const props: React.ComponentProps<typeof ChatPanel> = {
+    hidden: false,
+    messages,
+    focusRevision: 0,
+    onSend: vi.fn(),
+    onCancel: vi.fn(),
+    onRetry: vi.fn(),
+    onDismiss: vi.fn(),
+    onViewSuggestions: vi.fn(),
+    ...overrides,
+  };
+  render(<ChatPanel {...props} />);
+  return props;
+}
+
+describe('ChatPanel', () => {
+  it('renders the two-sided thread and jumps to linked suggestions', () => {
+    const props = renderPanel();
+    expect(screen.getByText('Tighten the opening')).toHaveClass('chat-message-user');
+    expect(screen.getByText('I tightened it.')).toBeInTheDocument();
+    expect(screen.getByText('AI')).toBeInTheDocument();
+    expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /2 suggestions in the doc/ }));
+    expect(props.onViewSuggestions).toHaveBeenCalledWith(['s1', 's2']);
+  });
+
+  it('sends with Command-Enter and disables sending while a response streams', () => {
+    const props = renderPanel({ messages: [] });
+    const composer = screen.getByLabelText('Ask Claude about this document');
+    fireEvent.change(composer, { target: { value: 'Explain this section' } });
+    fireEvent.keyDown(composer, { key: 'Enter', metaKey: true });
+    expect(props.onSend).toHaveBeenCalledWith('Explain this section');
+    expect(composer).toHaveValue('');
+
+    renderPanel({
+      messages: [
+        { id: 'u2', role: 'user', text: 'Continue', createdAt: 'now' },
+        { id: 'a2', role: 'assistant', text: 'Working', createdAt: 'now', pending: true },
+      ],
+    });
+    expect(screen.getAllByRole('button', { name: 'Send chat message' }).at(-1)).toBeDisabled();
+  });
+
+  it('exposes Stop and Retry/Dismiss terminal actions', () => {
+    const onCancel = vi.fn();
+    const onRetry = vi.fn();
+    const onDismiss = vi.fn();
+    renderPanel({
+      messages: [
+        { id: 'a-stream', role: 'assistant', text: 'Working', createdAt: 'now', pending: true },
+        {
+          id: 'a-error',
+          role: 'assistant',
+          text: '',
+          createdAt: 'now',
+          error: 'Session no longer available',
+        },
+      ],
+      onCancel,
+      onRetry,
+      onDismiss,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onCancel).toHaveBeenCalledWith('a-stream');
+    expect(onRetry).toHaveBeenCalledWith('a-error');
+    expect(onDismiss).toHaveBeenCalledWith('a-error');
+  });
+});

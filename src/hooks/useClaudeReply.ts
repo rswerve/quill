@@ -8,6 +8,7 @@ import type {
   QuillEditsBlock,
   ClaudeRunOptions,
   TrackedChangeInfo,
+  TrackedEditOrigin,
 } from '../types';
 import { clip } from '../utils/format';
 import { stripTrailingNewlines } from '../utils/trackedEdits';
@@ -40,7 +41,7 @@ interface UseClaudeReplyOptions {
     comment: Comment,
     edits: QuillEdit[],
     scope: EditScope,
-    originCommentId?: string,
+    origin?: TrackedEditOrigin,
   ) => { applied: number; skipped: number; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
@@ -163,6 +164,78 @@ interface CompactionInfo {
   originalMarkdown: string | null;
 }
 
+/** Shared suggestions-only edit protocol used by comment replies and document chat. */
+export function buildEditProtocolLines(): string[] {
+  return [
+    'HOW TO RESPOND:',
+    'Calibrate your effort to the request: for simple mechanical edits (formatting, typos, italicizing, punctuation), act immediately without extended deliberation; reserve careful thinking for substantive work (restructuring, argument, tone, accuracy).',
+    'If the user is asking a question or for an opinion, reply concisely in prose and do NOT propose edits.',
+    'If the user is asking you to rewrite, fix, revise, restructure, shorten, expand, or otherwise change the text (e.g. "fix the grammar", "make this a list", "turn this into prose"), make the changes as tracked suggestions by appending EXACTLY ONE fenced block at the very end of your reply:',
+    '',
+    '```quill-edits',
+    '{"summary":"<one short sentence describing what you changed>","edits":[{"find":"<exact original substring>","replace":"<new text>"},{"find":"<exact substring to restyle>","format":{"bold":true}}]}',
+    '```',
+    '',
+    'Rules for the edits block:',
+    '- Each "find" must be an EXACT substring of the DOCUMENT text, copied verbatim as PLAIN TEXT. Do NOT include markdown syntax such as leading "- ", "* ", or "#"; match only the visible characters.',
+    '- Your edits may touch any part of the document the request warrants. Keep changes minimal and relevant — no unrequested rewrites elsewhere.',
+    '- Make "find" strings long/unique enough to be unambiguous. To turn a bullet list into prose, set "find" to the run of list-item text and "replace" to the prose.',
+    '- To delete text, use an empty "replace". To insert, you may set "find" to a short unique substring and include it at the start of "replace".',
+    '- For formatting-only changes, use a "format" edit instead of "replace": {"find":"<exact substring>","format":{"bold":true,"italic":false}}. true turns a style on, false turns it off; include only the styles being changed. Supported styles: "bold", "italic", "strikethrough". An edit carries either "replace" or "format", never both, and a format edit needs a non-empty "find".',
+    '- Underline and other styles beyond those three cannot be suggested — if asked, explain that in prose. Never emit an edits block with identical "find" and "replace".',
+    '- Keep any prose before the block to one or two sentences; the "summary" is what the user sees, so write it as a human editor would ("Fixed subject-verb agreement and tightened the opening.").',
+    '- Output the block only when you actually changed something. If nothing needs changing, omit it.',
+    '',
+  ];
+}
+
+export function buildPendingSuggestionsLines(pendingSuggestions: TrackedChangeInfo[]): string[] {
+  return [
+    '=== PENDING SUGGESTIONS (already proposed, awaiting review) ===',
+    'Do not re-propose or conflict with these pending tracked changes.',
+    ...(pendingSuggestions.length > 0
+      ? pendingSuggestions.map((suggestion) => {
+          let origin = '';
+          if (suggestion.originCommentId) {
+            origin = ` (from comment ${suggestion.originCommentId})`;
+          } else if (suggestion.originChatMessageId) {
+            origin = ` (from chat ${suggestion.originChatMessageId})`;
+          }
+          if (suggestion.operation === 'format') {
+            const adds = [
+              ...new Set(suggestion.segments.flatMap((segment) => segment.adds)),
+            ].sort();
+            const removes = [
+              ...new Set(suggestion.segments.flatMap((segment) => segment.removes)),
+            ].sort();
+            const delta = [
+              ...adds.map((name) => `+${name}`),
+              ...removes.map((name) => `-${name}`),
+            ].join(' ');
+            const text = suggestion.segments.map((segment) => segment.text).join(' … ');
+            return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
+          }
+          const kind = suggestion.operation === 'insert' ? 'insertion' : 'deletion';
+          return `- [${kind}] "${clip(suggestion.text, 80)}"${origin}`;
+        })
+      : ['(none)']),
+    '',
+  ];
+}
+
+export function buildReferenceContextLines(context: PromptContext | null): string[] {
+  if (!context) return [];
+  return [
+    '=== REFERENCE FOLDER ===',
+    `The user attached a folder of reference documents at: ${context.folder}`,
+    'You have read access to it. When a file below is relevant to the request, read it before answering.',
+    ...(context.files.length > 0
+      ? context.files.map((file) => `- ${file}`)
+      : ['(no readable documents found in the folder)']),
+    '',
+  ];
+}
+
 /**
  * Exported for tests. The prompt is document-scale: Claude always receives the
  * full current document (compaction only changes the note wording, never the
@@ -201,66 +274,13 @@ export function buildPrompt(
     '',
   ];
 
-  const editProtocol = [
-    'HOW TO RESPOND:',
-    // Effort calibration: without this, models tend to deliberate at length
-    // even over trivial formatting asks; with it, they match depth to the task.
-    'Calibrate your effort to the request: for simple mechanical edits (formatting, typos, italicizing, punctuation), act immediately without extended deliberation; reserve careful thinking for substantive work (restructuring, argument, tone, accuracy).',
-    'If the user is asking a question or for an opinion, reply concisely in prose and do NOT propose edits.',
-    'If the user is asking you to rewrite, fix, revise, restructure, shorten, expand, or otherwise change the text (e.g. "fix the grammar", "make this a list", "turn this into prose"), make the changes as tracked suggestions by appending EXACTLY ONE fenced block at the very end of your reply:',
-    '',
-    '```quill-edits',
-    '{"summary":"<one short sentence describing what you changed>","edits":[{"find":"<exact original substring>","replace":"<new text>"},{"find":"<exact substring to restyle>","format":{"bold":true}}]}',
-    '```',
-    '',
-    'Rules for the edits block:',
-    '- Each "find" must be an EXACT substring of the DOCUMENT text, copied verbatim as PLAIN TEXT. Do NOT include markdown syntax such as leading "- ", "* ", or "#"; match only the visible characters.',
-    '- Your edits may touch any part of the document the request warrants. Keep changes minimal and relevant — no unrequested rewrites elsewhere.',
-    '- Make "find" strings long/unique enough to be unambiguous. To turn a bullet list into prose, set "find" to the run of list-item text and "replace" to the prose.',
-    '- To delete text, use an empty "replace". To insert, you may set "find" to a short unique substring and include it at the start of "replace".',
-    '- For formatting-only changes, use a "format" edit instead of "replace": {"find":"<exact substring>","format":{"bold":true,"italic":false}}. true turns a style on, false turns it off; include only the styles being changed. Supported styles: "bold", "italic", "strikethrough". An edit carries either "replace" or "format", never both, and a format edit needs a non-empty "find".',
-    '- Underline and other styles beyond those three cannot be suggested — if asked, explain that in prose. Never emit an edits block with identical "find" and "replace".',
-    '- Keep any prose before the block to one or two sentences; the "summary" is what the user sees, so write it as a human editor would ("Fixed subject-verb agreement and tightened the opening.").',
-    '- Output the block only when you actually changed something. If nothing needs changing, omit it.',
-    '',
+  const editContext = [
     `=== USER IS COMMENTING ON (highlighted) ===`,
     ranges.highlightText,
     `=== PARAGRAPH (context) ===`,
     ranges.paragraphText,
     '',
   ];
-
-  const pendingSection = [
-    '=== PENDING SUGGESTIONS (already proposed, awaiting review) ===',
-    'Do not re-propose or conflict with these pending tracked changes.',
-    ...(pendingSuggestions.length > 0
-      ? pendingSuggestions.map((s) => {
-          const origin = s.originCommentId ? ` (from comment ${s.originCommentId})` : '';
-          if (s.operation === 'format') {
-            const adds = [...new Set(s.segments.flatMap((seg) => seg.adds))].sort();
-            const removes = [...new Set(s.segments.flatMap((seg) => seg.removes))].sort();
-            const delta = [...adds.map((n) => `+${n}`), ...removes.map((n) => `-${n}`)].join(' ');
-            const text = s.segments.map((seg) => seg.text).join(' … ');
-            return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
-          }
-          const kind = s.operation === 'insert' ? 'insertion' : 'deletion';
-          return `- [${kind}] "${clip(s.text, 80)}"${origin}`;
-        })
-      : ['(none)']),
-    '',
-  ];
-
-  const contextSection = context
-    ? [
-        '=== REFERENCE FOLDER ===',
-        `The user attached a folder of reference documents at: ${context.folder}`,
-        'You have read access to it. When a file below is relevant to the request, read it before answering.',
-        ...(context.files.length > 0
-          ? context.files.map((f) => `- ${f}`)
-          : ['(no readable documents found in the folder)']),
-        '',
-      ]
-    : [];
 
   let documentIntroduction = 'Current document (may have been edited since your last turn):';
   if (freshSession) {
@@ -272,9 +292,10 @@ export function buildPrompt(
 
   return [
     ...head,
-    ...editProtocol,
-    ...pendingSection,
-    ...contextSection,
+    ...buildEditProtocolLines(),
+    ...editContext,
+    ...buildPendingSuggestionsLines(pendingSuggestions),
+    ...buildReferenceContextLines(context),
     '=== FULL DOCUMENT ===',
     documentIntroduction,
     '---',
@@ -368,7 +389,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             comment,
             parsed.edits,
             'doc',
-            comment.id,
+            { commentId: comment.id },
           );
           if (suggestionIds.length > 0) {
             opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
