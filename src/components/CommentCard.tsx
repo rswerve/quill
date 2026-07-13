@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import type { Comment, Reply } from '../types';
 import { timeAgo } from '../utils/format';
 import { classifyReplyError } from '../hooks/useClaudeReply';
@@ -6,7 +6,7 @@ import { classifyReplyError } from '../hooks/useClaudeReply';
 interface CommentCardProps {
   comment: Comment;
   isActive: boolean;
-  top: number;
+  top?: number;
   onReply: (commentId: string, text: string) => void;
   onAIReplyRequest: (commentId: string, userText: string) => void;
   onCancelAIReply: (replyId: string) => void;
@@ -16,7 +16,7 @@ interface CommentCardProps {
   pendingSuggestionIds: Set<string>;
   onOpenSessionPicker: () => void;
   onResolve: (commentId: string) => void;
-  onUnresolve: (commentId: string) => void;
+  onUnresolve: (commentId: string) => boolean;
   onDelete: (commentId: string) => void;
   onClick: (commentId: string) => void;
 }
@@ -215,7 +215,14 @@ export default function CommentCard({
 }: CommentCardProps) {
   const [replyText, setReplyText] = useState('');
   const [showReply, setShowReply] = useState(false);
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!inlineNotice) return;
+    const timeout = window.setTimeout(() => setInlineNotice(null), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [inlineNotice]);
 
   function handleReplySubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -244,7 +251,7 @@ export default function CommentCard({
   return (
     <div
       className={`comment-card${isActive ? ' comment-card-active' : ''}${comment.resolved ? ' comment-card-resolved' : ''}`}
-      style={{ top }}
+      style={top === undefined ? undefined : { top }}
       data-card-id={comment.id}
       onClick={() => onClick(comment.id)}
     >
@@ -262,7 +269,12 @@ export default function CommentCard({
           onClick={(e) => {
             e.stopPropagation();
             if (comment.resolved) {
-              onUnresolve(comment.id);
+              const restored = onUnresolve(comment.id);
+              setInlineNotice(
+                restored
+                  ? null
+                  : 'Original text can’t be located uniquely; comment remains resolved.',
+              );
             } else {
               onResolve(comment.id);
             }
@@ -288,6 +300,12 @@ export default function CommentCard({
         {comment.anchorText.length > 60 ? '…' : ''}
         {'"'}
       </div>
+
+      {inlineNotice && (
+        <p className="comment-inline-notice" role="status">
+          {inlineNotice}
+        </p>
+      )}
 
       {comment.replies
         .filter((reply) => !reply.dismissed)

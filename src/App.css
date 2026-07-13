@@ -2555,6 +2555,37 @@ del.track-delete {
   bottom: 0;
   left: 0;
 }
+.comment-history-list {
+  min-height: 0;
+  flex: 1;
+  padding: 12px 10px 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+.comment-history-list .comment-card {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+.comment-history-list::-webkit-scrollbar {
+  width: 6px;
+}
+.comment-history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.comment-history-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border-strong);
+}
 .offscreen-pill {
   position: absolute;
   right: 0;
@@ -2631,6 +2662,12 @@ del.track-delete {
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 10px;
+}
+.comment-inline-notice {
+  margin: 0 13px 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 /* Selection comments use the hybrid flow from Design Q4: the trigger stays

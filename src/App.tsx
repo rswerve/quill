@@ -29,6 +29,7 @@ import type { AnnotationKind } from './extensions/AnnotationFocus';
 import { locateEdit, planEdits, rangeText, resolveScopeRange } from './utils/trackedEdits';
 import { restoreReviewMarks, suggestionsFromTrackedChanges } from './utils/reviewPersistence';
 import { reconcileCommentsWithDocument } from './utils/commentReconciler';
+import { locateDetachedCommentAnchor } from './utils/commentAnchors';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
@@ -1252,12 +1253,16 @@ export default function App() {
 
   const handleUnresolveComment = useCallback(
     (commentId: string) => {
-      unresolveComment(commentId);
-      // Re-stamp the mark from the comment's stored range — resolve removed it,
-      // so there's no live mark to read the range from anymore.
       const comment = comments.find((c) => c.id === commentId);
-      if (comment) editor?.commands.setCommentRange(commentId, comment.from, comment.to);
+      if (!comment || !editor) return false;
+      const anchor = locateDetachedCommentAnchor(editor.state.doc, comment);
+      if (!anchor) return false;
+      // Queue the validated range and unresolved state before restoring the
+      // mark, so the mark transaction reconciles against the updated record.
+      unresolveComment(commentId, anchor);
+      editor.commands.setCommentRange(commentId, anchor.from, anchor.to);
       markDirty();
+      return true;
     },
     [unresolveComment, editor, comments, markDirty],
   );
@@ -1311,6 +1316,26 @@ export default function App() {
       scrollCardIntoView(commentId);
     },
     [editor, scrollCardIntoView],
+  );
+
+  const handleActivateHistoryComment = useCallback(
+    (commentId: string) => {
+      setActiveAnnotation((prev) =>
+        prev?.kind === 'comment' && prev.id === commentId
+          ? null
+          : { kind: 'comment', id: commentId },
+      );
+      const comment = comments.find((candidate) => candidate.id === commentId);
+      if (!editor || !comment) return;
+      const range = comment.resolved
+        ? locateDetachedCommentAnchor(editor.state.doc, comment)
+        : findAnnotationRange(editor.state.doc, 'comment', commentId);
+      if (!range) return;
+      const { node } = editor.view.domAtPos(range.from);
+      const element = node instanceof HTMLElement ? node : node.parentElement;
+      element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+    },
+    [comments, editor],
   );
 
   const handleActivateSuggestion = useCallback(
@@ -1565,6 +1590,7 @@ export default function App() {
             onUnresolve={handleUnresolveComment}
             onDelete={handleDeleteComment}
             onActivate={handleActivateComment}
+            onActivateHistory={handleActivateHistoryComment}
             onActivateSuggestion={handleActivateSuggestion}
             onAcceptChange={handleAcceptChange}
             onRejectChange={handleRejectChange}

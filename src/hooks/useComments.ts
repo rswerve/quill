@@ -8,7 +8,7 @@ interface UseCommentsReturn {
   addComment: (anchorText: string, from: number, to: number, author: string) => Comment;
   addReply: (commentId: string, text: string, author: string) => void;
   resolveComment: (commentId: string) => void;
-  unresolveComment: (commentId: string) => void;
+  unresolveComment: (commentId: string, anchor?: { from: number; to: number }) => void;
   deleteComment: (commentId: string) => void;
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
@@ -59,9 +59,14 @@ export function useComments(): UseCommentsReturn {
     setComments((prev) => prev.map((c) => (c.id === commentId ? { ...c, resolved: true } : c)));
   }, []);
 
-  const unresolveComment = useCallback((commentId: string) => {
-    setComments((prev) => prev.map((c) => (c.id === commentId ? { ...c, resolved: false } : c)));
-  }, []);
+  const unresolveComment = useCallback(
+    (commentId: string, anchor?: { from: number; to: number }) => {
+      setComments((prev) =>
+        prev.map((c) => (c.id === commentId ? { ...c, ...anchor, resolved: false } : c)),
+      );
+    },
+    [],
+  );
 
   const deleteComment = useCallback((commentId: string) => {
     setComments((prev) => prev.filter((c) => c.id !== commentId));

@@ -690,7 +690,12 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await expect(chip).toBeVisible();
     await chip.click();
 
-    await expect(page.locator('.comment-card.comment-card-resolved')).toBeVisible();
+    await expect(page.locator('.comment-history-list')).toBeVisible();
+    await expect(
+      page.locator('.comment-card.comment-card-resolved.comment-card-active'),
+    ).toBeVisible();
+    await expect(card).toHaveCount(0);
+    await page.locator('.comments-head .filter').click();
     await expect(card).toHaveClass(/card-origin-active/);
   });
 });

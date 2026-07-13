@@ -70,6 +70,14 @@ and its surviving mark is stripped to mirror manual Resolve. Reject deliberately
 does not use provenance—the requested fix was discarded, so its origin stays
 open unless protective removal geometry independently consumes its anchor.
 
+Because resolved records intentionally have no mark, their stored offset is
+never trusted blindly when navigating or unresolving. `commentAnchors` accepts
+the stored range only when it still contains the exact quote, otherwise accepts
+one unique document-wide occurrence, and rejects missing or ambiguous text.
+Both resolved-card clicks and Unresolve call that one helper. Failed Unresolve
+keeps the record resolved and reports the failure inline instead of marking
+unrelated prose.
+
 The state update is functional (`setComments(current => ...)`). That preserves
 the ordering of resolve and add flows under React batching: resolve queues
 `resolved: true` before the mark-removal transaction triggers reconciliation,

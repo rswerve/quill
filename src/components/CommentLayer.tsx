@@ -31,9 +31,10 @@ interface CommentLayerProps {
   onViewReplySuggestion: (suggestionIds: string[]) => void;
   onOpenSessionPicker: () => void;
   onResolve: (commentId: string) => void;
-  onUnresolve: (commentId: string) => void;
+  onUnresolve: (commentId: string) => boolean;
   onDelete: (commentId: string) => void;
   onActivate: (commentId: string) => void;
+  onActivateHistory: (commentId: string) => void;
   onActivateSuggestion: (id: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
@@ -68,6 +69,12 @@ export function computeBottomSpacer(
   margin: number,
 ): number {
   return Math.max(0, Math.round(maxCardBottom + margin - baseContentHeight));
+}
+
+export function sortCommentsInDocumentOrder(comments: Comment[]): Comment[] {
+  return [...comments].sort(
+    (a, b) => a.from - b.from || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+  );
 }
 
 // One margin card's worth of pending change(s): a lone insert or delete, or
@@ -169,6 +176,7 @@ export default function CommentLayer({
   onUnresolve,
   onDelete,
   onActivate,
+  onActivateHistory,
   onActivateSuggestion,
   onAcceptChange,
   onRejectChange,
@@ -181,10 +189,11 @@ export default function CommentLayer({
   const [showResolved, setShowResolved] = useState(false);
   const heightsRef = useRef<Map<string, number>>(new Map());
   const cardCatalogRef = useRef<Map<string, CardCatalogEntry>>(new Map());
+  const viewSuggestionRafRef = useRef<number>(0);
 
   const visibleComments = comments.filter((c) => !c.resolved);
   const resolvedComments = comments.filter((c) => c.resolved);
-  const displayComments = showResolved ? comments : visibleComments;
+  const historyComments = sortCommentsInDocumentOrder(comments);
 
   const suggestionGroups = groupChanges(trackedChanges.filter((c) => c.status === 'pending'));
   const pendingSuggestionIds = new Set(
@@ -197,34 +206,46 @@ export default function CommentLayer({
   const activateOriginComment = useCallback(
     (commentId: string) => {
       const origin = comments.find((comment) => comment.id === commentId);
-      if (origin?.resolved) setShowResolved(true);
-      if (activeCommentId !== commentId) onActivate(commentId);
+      if (origin?.resolved) {
+        setShowResolved(true);
+        if (activeCommentId !== commentId) onActivateHistory(commentId);
+      } else if (activeCommentId !== commentId) {
+        onActivate(commentId);
+      }
     },
-    [activeCommentId, comments, onActivate],
+    [activeCommentId, comments, onActivate, onActivateHistory],
   );
 
   // Stable refs so reflow's identity doesn't change on every render
   // (which would otherwise re-run the editor.on effect → setState → loop).
   const editorRef = useRef(editor);
-  const displayCommentsRef = useRef(displayComments);
+  const displayCommentsRef = useRef(visibleComments);
   const suggestionGroupsRef = useRef(suggestionGroups);
   const commentComposerRef = useRef(commentComposer);
   const scrollTopRef = useRef(scrollTop);
   const activeCommentIdRef = useRef(activeCommentId);
   const activeSuggestionIdRef = useRef(activeSuggestionId);
   const onMaxCardBottomChangeRef = useRef(onMaxCardBottomChange);
+  const showResolvedRef = useRef(showResolved);
   editorRef.current = editor;
-  displayCommentsRef.current = displayComments;
+  displayCommentsRef.current = visibleComments;
   suggestionGroupsRef.current = suggestionGroups;
   commentComposerRef.current = commentComposer;
   scrollTopRef.current = scrollTop;
   activeCommentIdRef.current = activeCommentId;
   activeSuggestionIdRef.current = activeSuggestionId;
   onMaxCardBottomChangeRef.current = onMaxCardBottomChange;
+  showResolvedRef.current = showResolved;
 
   const reflow = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
+    if (showResolvedRef.current) {
+      cardCatalogRef.current.clear();
+      onMaxCardBottomChangeRef.current(0);
+      setPanelLayout(EMPTY_LAYOUT);
+      return;
+    }
 
     // A composer can be replaced by a comment card without changing the
     // number of positioned children. Read every live card before laying out
@@ -427,6 +448,25 @@ export default function CommentLayer({
     if (scrollArea) scrollArea.scrollTop += e.deltaY;
   }, []);
 
+  const handleViewReplySuggestion = useCallback(
+    (suggestionIds: string[]) => {
+      if (!showResolved) {
+        onViewReplySuggestion(suggestionIds);
+        return;
+      }
+      setShowResolved(false);
+      cancelAnimationFrame(viewSuggestionRafRef.current);
+      viewSuggestionRafRef.current = requestAnimationFrame(() => {
+        viewSuggestionRafRef.current = requestAnimationFrame(() => {
+          onViewReplySuggestion(suggestionIds);
+        });
+      });
+    },
+    [onViewReplySuggestion, showResolved],
+  );
+
+  useEffect(() => () => cancelAnimationFrame(viewSuggestionRafRef.current), []);
+
   const revealPinnedCard = useCallback(
     (cardId: string) => {
       const entry = cardCatalogRef.current.get(cardId);
@@ -461,12 +501,37 @@ export default function CommentLayer({
     : (activeCommentId ?? activeSuggestionCardId ?? null);
   const activePosition = activePanelCardId ? positionById.get(activePanelCardId) : null;
   const openCardCount = visibleComments.length + suggestionGroups.length;
+  const renderedComments = showResolved ? historyComments : visibleComments;
+  const commentCards = renderedComments.map((comment) => {
+    const position = showResolved ? null : positionById.get(comment.id);
+    if (!showResolved && !position) return null;
+    return (
+      <CommentCard
+        key={comment.id}
+        comment={comment}
+        isActive={comment.id === activeCommentId}
+        top={position?.top}
+        onReply={onReply}
+        onAIReplyRequest={onAIReplyRequest}
+        onCancelAIReply={onCancelAIReply}
+        onRetryAIReply={onRetryAIReply}
+        onDismissAIReply={onDismissAIReply}
+        onViewReplySuggestion={handleViewReplySuggestion}
+        pendingSuggestionIds={pendingSuggestionIds}
+        onOpenSessionPicker={onOpenSessionPicker}
+        onResolve={onResolve}
+        onUnresolve={onUnresolve}
+        onDelete={onDelete}
+        onClick={showResolved ? onActivateHistory : onActivate}
+      />
+    );
+  });
 
   return (
     <div
       className="comment-layer comments"
       ref={containerRef as React.RefObject<HTMLDivElement>}
-      onWheel={handleWheel}
+      onWheel={showResolved ? undefined : handleWheel}
     >
       <header className="comments-head">
         <h3>Comments</h3>
@@ -475,7 +540,7 @@ export default function CommentLayer({
         <button
           className="filter"
           onClick={() => setShowResolved((value) => !value)}
-          disabled={resolvedComments.length === 0}
+          disabled={!showResolved && resolvedComments.length === 0}
           title={
             resolvedComments.length ? 'Show or hide resolved comments' : 'No resolved comments'
           }
@@ -493,7 +558,7 @@ export default function CommentLayer({
         </button>
       </header>
 
-      {panelLayout.above.length > 0 && (
+      {!showResolved && panelLayout.above.length > 0 && (
         <button
           className="offscreen-pill offscreen-pill-above"
           onClick={() => revealPinnedCard(panelLayout.above.at(-1)!)}
@@ -501,7 +566,7 @@ export default function CommentLayer({
           ▲ {panelLayout.above.length} above
         </button>
       )}
-      {panelLayout.below.length > 0 && (
+      {!showResolved && panelLayout.below.length > 0 && (
         <button
           className="offscreen-pill offscreen-pill-below"
           onClick={() => revealPinnedCard(panelLayout.below[0])}
@@ -510,7 +575,7 @@ export default function CommentLayer({
         </button>
       )}
 
-      {activePosition && (
+      {!showResolved && activePosition && (
         <span
           className="annotation-connector"
           style={{ top: activePosition.top - scrollTop }}
@@ -518,93 +583,92 @@ export default function CommentLayer({
         />
       )}
 
-      {comments.length === 0 && suggestionGroups.length === 0 && !commentComposer && (
-        <div className="comments-empty-state">
-          <span className="comments-empty-quote" aria-hidden>
-            ”
-          </span>
-          <strong>No comments yet</strong>
-          <p>
-            Select text and press <b>+</b>, or type <code>@claude</code>.
-          </p>
-        </div>
-      )}
+      {comments.length === 0 &&
+        (showResolved || (suggestionGroups.length === 0 && !commentComposer)) && (
+          <div className="comments-empty-state">
+            <span className="comments-empty-quote" aria-hidden>
+              ”
+            </span>
+            <strong>No comments yet</strong>
+            <p>
+              Select text and press <b>+</b>, or type <code>@claude</code>.
+            </p>
+          </div>
+        )}
+
+      {showResolved && <div className="comment-history-list">{commentCards}</div>}
 
       {/* Cards are positioned in document space (anchor offset + scrollTop), so
           translating this wrapper by -scrollTop makes the comment column scroll
           in lockstep with the editor — like Google Docs. */}
-      <div className="comment-layer-scroll" style={{ transform: `translateY(${-scrollTop}px)` }}>
-        {commentComposer && positionById.has(COMMENT_COMPOSER_CARD_ID) && (
-          <CommentComposerCard
-            quote={commentComposer.text}
-            top={positionById.get(COMMENT_COMPOSER_CARD_ID)!.top}
-            onSubmit={onSubmitComment}
-            onCancel={onCancelComment}
-          />
-        )}
-
-        {displayComments.map((comment) => {
-          const position = positionById.get(comment.id);
-          if (!position) return null;
-          return (
-            <CommentCard
-              key={comment.id}
-              comment={comment}
-              isActive={comment.id === activeCommentId}
-              top={position.top}
-              onReply={onReply}
-              onAIReplyRequest={onAIReplyRequest}
-              onCancelAIReply={onCancelAIReply}
-              onRetryAIReply={onRetryAIReply}
-              onDismissAIReply={onDismissAIReply}
-              onViewReplySuggestion={onViewReplySuggestion}
-              pendingSuggestionIds={pendingSuggestionIds}
-              onOpenSessionPicker={onOpenSessionPicker}
-              onResolve={onResolve}
-              onUnresolve={onUnresolve}
-              onDelete={onDelete}
-              onClick={onActivate}
+      {!showResolved && (
+        <div className="comment-layer-scroll" style={{ transform: `translateY(${-scrollTop}px)` }}>
+          {commentComposer && positionById.has(COMMENT_COMPOSER_CARD_ID) && (
+            <CommentComposerCard
+              quote={commentComposer.text}
+              top={positionById.get(COMMENT_COMPOSER_CARD_ID)!.top}
+              onSubmit={onSubmitComment}
+              onCancel={onCancelComment}
             />
-          );
-        })}
+          )}
 
-        {suggestionGroups.map((group) => {
-          const position = positionById.get(group.cardId);
-          if (!position) return null;
-          // Provenance link: the change's origin comment, only while it still
-          // exists (a deleted comment degrades to no chip and no outline).
-          const originId =
-            group.kind === 'replacement'
-              ? (group.del.originCommentId ?? group.ins.originCommentId)
-              : group.change.originCommentId;
-          const originComment = originId ? (comments.find((c) => c.id === originId) ?? null) : null;
-          const originActive = originComment !== null && originComment.id === activeCommentId;
-          if (group.kind === 'replacement') {
-            const { del, ins } = group;
-            return (
-              <ReplacementCard
-                key={group.cardId}
-                del={del}
-                ins={ins}
-                isActive={
-                  activeSuggestionId === group.cardId ||
-                  activeSuggestionId === del.id ||
-                  activeSuggestionId === ins.id
-                }
-                originComment={originComment}
-                originActive={originActive}
-                top={position.top}
-                onAccept={onAcceptChange}
-                onReject={onRejectChange}
-                onClick={onActivateSuggestion}
-                onActivateComment={activateOriginComment}
-              />
-            );
-          }
-          if (group.kind === 'format') {
+          {commentCards}
+
+          {suggestionGroups.map((group) => {
+            const position = positionById.get(group.cardId);
+            if (!position) return null;
+            // Provenance link: the change's origin comment, only while it still
+            // exists (a deleted comment degrades to no chip and no outline).
+            const originId =
+              group.kind === 'replacement'
+                ? (group.del.originCommentId ?? group.ins.originCommentId)
+                : group.change.originCommentId;
+            const originComment = originId
+              ? (comments.find((c) => c.id === originId) ?? null)
+              : null;
+            const originActive = originComment !== null && originComment.id === activeCommentId;
+            if (group.kind === 'replacement') {
+              const { del, ins } = group;
+              return (
+                <ReplacementCard
+                  key={group.cardId}
+                  del={del}
+                  ins={ins}
+                  isActive={
+                    activeSuggestionId === group.cardId ||
+                    activeSuggestionId === del.id ||
+                    activeSuggestionId === ins.id
+                  }
+                  originComment={originComment}
+                  originActive={originActive}
+                  top={position.top}
+                  onAccept={onAcceptChange}
+                  onReject={onRejectChange}
+                  onClick={onActivateSuggestion}
+                  onActivateComment={activateOriginComment}
+                />
+              );
+            }
+            if (group.kind === 'format') {
+              const change = group.change;
+              return (
+                <FormattingCard
+                  key={change.id}
+                  change={change}
+                  isActive={change.id === activeSuggestionId}
+                  originComment={originComment}
+                  originActive={originActive}
+                  top={position.top}
+                  onAccept={onAcceptChange}
+                  onReject={onRejectChange}
+                  onClick={onActivateSuggestion}
+                  onActivateComment={activateOriginComment}
+                />
+              );
+            }
             const change = group.change;
             return (
-              <FormattingCard
+              <SuggestionCard
                 key={change.id}
                 change={change}
                 isActive={change.id === activeSuggestionId}
@@ -617,24 +681,9 @@ export default function CommentLayer({
                 onActivateComment={activateOriginComment}
               />
             );
-          }
-          const change = group.change;
-          return (
-            <SuggestionCard
-              key={change.id}
-              change={change}
-              isActive={change.id === activeSuggestionId}
-              originComment={originComment}
-              originActive={originActive}
-              top={position.top}
-              onAccept={onAcceptChange}
-              onReject={onRejectChange}
-              onClick={onActivateSuggestion}
-              onActivateComment={activateOriginComment}
-            />
-          );
-        })}
-      </div>
+          })}
+        </div>
+      )}
 
       {/* MAZ OVERRIDE (2026-07-12): Quill supports anchored comments only.
           Design Q4's unwired general-comment field is intentionally omitted. */}
