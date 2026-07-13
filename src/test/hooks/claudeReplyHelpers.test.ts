@@ -124,6 +124,13 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).not.toContain('Edit ONLY the highlighted text');
   });
 
+  it('gives a concrete visible-text-only link example', () => {
+    const prompt = buildPrompt(makeComment([]), 'rename the link', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('For "[some text](url)"');
+    expect(prompt).toContain('{"find":"some text","replace":"better text"}');
+    expect(prompt).toContain('both fields are visible text only');
+  });
+
   it('documents format edits for formatting-only changes (replacing the old refusal rule)', () => {
     const prompt = buildPrompt(makeComment([]), 'bold this', 'doc body', RANGES, null, null);
     expect(prompt).toContain('use a "format" edit instead of "replace"');

@@ -88,6 +88,7 @@ describe('buildChatPrompt', () => {
       "=== USER'S CURRENT SELECTION / CURSOR ===\nSelected text:\nthe opening",
     );
     expect(prompt).toContain('```quill-edits');
+    expect(prompt).toContain('{"find":"some text","replace":"better text"}');
     expect(prompt).not.toContain('quill-comments');
     expect(prompt).toContain('=== REFERENCE FOLDER ===\nThe user attached a folder');
     expect(prompt).toContain('=== FULL DOCUMENT ===\nCurrent document:\n---\n# Current document');

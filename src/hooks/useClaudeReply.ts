@@ -181,6 +181,7 @@ export function buildEditProtocolLines(): string[] {
     '',
     'Rules for the edits block:',
     '- Each "find" must be an EXACT substring of the DOCUMENT text, copied verbatim as PLAIN TEXT. Do NOT include markdown syntax such as leading "- ", "* ", or "#"; match only the visible characters.',
+    '- For "[some text](url)", use {"find":"some text","replace":"better text"} — both fields are visible text only; never include "[](...)", "**", "#", or other Markdown syntax.',
     '- Your edits may touch any part of the document the request warrants. Keep changes minimal and relevant — no unrequested rewrites elsewhere.',
     '- Make "find" strings long/unique enough to be unambiguous. To turn a bullet list into prose, set "find" to the run of list-item text and "replace" to the prose.',
     '- To delete text, use an empty "replace". To insert, you may set "find" to a short unique substring and include it at the start of "replace".',
