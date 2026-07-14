@@ -119,7 +119,8 @@ describe('buildPrompt document-scale edit protocol', () => {
 
   it('scopes find strings to the document and allows edits anywhere in it', () => {
     const prompt = buildPrompt(makeComment([]), 'fix this', 'doc body', RANGES, null, null);
-    expect(prompt).toContain('EXACT substring of the DOCUMENT text');
+    expect(prompt).toContain('Markdown source for context');
+    expect(prompt).toContain('PLAIN READING TEXT');
     expect(prompt).toContain('may touch any part of the document the request warrants');
     expect(prompt).toContain('no unrequested rewrites elsewhere');
     expect(prompt).not.toContain('Edit ONLY the highlighted text');
@@ -130,6 +131,13 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('For "[some text](url)"');
     expect(prompt).toContain('{"find":"some text","replace":"better text"}');
     expect(prompt).toContain('both fields are visible text only');
+  });
+
+  it('contrasts Markdown source with the plain-text edit fields using a bold example', () => {
+    const prompt = buildPrompt(makeComment([]), 'simplify this', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('for Markdown source "**Q2 contrast needs work**"');
+    expect(prompt).toContain('{"find":"Q2 contrast needs work","replace":"Clearer Q2 contrast"}');
+    expect(prompt).toContain('To change formatting, use a separate format edit');
   });
 
   it('documents format edits for formatting-only changes (replacing the old refusal rule)', () => {
