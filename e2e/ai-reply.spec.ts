@@ -4,7 +4,7 @@
  * The real `spawn_claude_resume` Tauri command isn't available in CI, so each
  * test installs `window.__quillMock` via `page.addInitScript()` before the app
  * mounts. The mock plays scripted ChunkEvents and `window.__quillTestSession`
- * seeds a fake binding so the @claude code path runs without a SessionPicker.
+ * seeds a fake binding so the anchored Ask-Claude path runs without a SessionPicker.
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -18,6 +18,7 @@ type MockScriptStep =
   | { kind: 'done' }
   | { kind: 'error'; message: string }
   | { kind: 'cancelled' }
+  | { kind: 'gate'; name: string }
   | { kind: 'pause' }; // hold open until cancel
 
 // Installs a mock that plays a DIFFERENT script for each successive spawn. The
@@ -49,6 +50,16 @@ async function setupWithMockScripts(
       let nextTokenId = 0;
       let spawnIndex = 0;
       const pending = new Map<string, () => void>(); // token → cancel resolver
+      const releasedGates = new Set<string>();
+      const gateWaiters = new Map<string, () => void>();
+
+      (
+        window as unknown as { __quillReleaseMockGate: (name: string) => void }
+      ).__quillReleaseMockGate = (name) => {
+        releasedGates.add(name);
+        gateWaiters.get(name)?.();
+        gateWaiters.delete(name);
+      };
 
       (window as unknown as { __quillTestSession: unknown }).__quillTestSession = {
         ...session,
@@ -77,6 +88,12 @@ async function setupWithMockScripts(
                 // Park indefinitely; only cancel will resolve.
                 await new Promise(() => undefined);
                 return;
+              }
+              if (step.kind === 'gate') {
+                if (!releasedGates.has(step.name)) {
+                  await new Promise<void>((resolve) => gateWaiters.set(step.name, resolve));
+                }
+                continue;
               }
               onEvent(step as Ev);
               if (step.kind === 'done' || step.kind === 'error') {
@@ -118,17 +135,13 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, anchor);
-  // Open comment composer
+  // Open the anchored composer and ask Claude directly.
   await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('seed comment');
-  await page.locator('.add-comment-compose .btn-primary').click();
-  // Reply containing @claude
-  await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill(replyText);
-  await page.locator('.comment-card .btn-primary').click();
+  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 
-// Mounts the app WITHOUT seeding a session, so @claude has nothing to talk to.
+// Mounts the app WITHOUT seeding a session, so Ask Claude must link first.
 // Used to verify the prompt-to-link behavior.
 async function setupWithoutSession(page: Page): Promise<void> {
   await page.goto('/');
@@ -138,9 +151,8 @@ async function setupWithoutSession(page: Page): Promise<void> {
   await expect(editor).toBeFocused();
 }
 
-// Adds a comment whose initial composer body itself contains @claude (no reply
-// step). Exercises the "tag Claude in the first comment" path.
-async function addCommentTaggingClaude(page: Page, anchor: string, body: string) {
+// Creates a Claude thread directly from the anchored composer.
+async function addClaudeThread(page: Page, anchor: string, body: string) {
   await page.keyboard.type(anchor);
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
@@ -148,11 +160,63 @@ async function addCommentTaggingClaude(page: Page, anchor: string, body: string)
   await expectSelectionText(page, anchor);
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill(body);
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.getByRole('button', { name: /Ask Claude|Link a session to ask/ }).click();
 }
+
+async function addLocalNote(page: Page, anchor: string, body: string) {
+  await page.keyboard.type(anchor);
+  await page.keyboard.press('ControlOrMeta+a');
+  await expectSelectionText(page, anchor);
+  await page.locator('.add-comment-btn').click();
+  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.getByRole('button', { name: 'Add note' }).click();
+}
+
+test('local note stays private and never starts an AI request', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'delta', text: 'Must not appear.' }, { kind: 'done' }]);
+
+  await addLocalNote(page, 'hello world', 'Remember this');
+
+  const note = page.locator('.comment-card-note');
+  await expect(note).toContainText('Remember this');
+  await expect(note.locator('.comment-note-badge')).toHaveText('Note');
+  await expect(page.locator('mark.comment-mark[data-comment-kind="note"]')).toHaveText(
+    'hello world',
+  );
+  await expect(page.locator('.comment-reply-ai')).toHaveCount(0);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  expect(
+    await page.evaluate(() => (window as unknown as { __lastSpawnArgs?: unknown }).__lastSpawnArgs),
+  ).toBeUndefined();
+});
+
+test('promoting a note converts its identity and asks Claude once', async ({ page }) => {
+  await setupWithMock(page, [{ kind: 'delta', text: 'Promoted response.' }, { kind: 'done' }]);
+  await addLocalNote(page, 'hello world', 'Please review this');
+
+  await page.getByRole('button', { name: 'Ask Claude about this' }).click();
+
+  const thread = page.locator('.comment-card-claude');
+  await expect(thread).toContainText('Please review this');
+  await expect(thread.locator('.comment-note-badge')).toHaveCount(0);
+  await expect(page.locator('.comment-card-note')).toHaveCount(0);
+  await expect(page.locator('mark.comment-mark[data-comment-kind="claude"]')).toHaveText(
+    'hello world',
+  );
+  await expect(thread.locator('.comment-reply-ai .comment-reply-text')).toContainText(
+    'Promoted response.',
+  );
+  expect(
+    await page.evaluate(() => (window as unknown as { __lastSpawnArgs?: unknown }).__lastSpawnArgs),
+  ).toBeDefined();
+});
 
 test('AI reply: pending → delta → done streams chunks and clears spinner', async ({ page }) => {
   await setupWithMock(page, [
+    { kind: 'gate', name: 'pending-visible' },
     { kind: 'model', model: 'claude-fable-5' },
     { kind: 'delta', text: 'Sure — ' },
     { kind: 'delta', text: 'the answer ' },
@@ -165,26 +229,32 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
     'Model and effort used for the next Claude request',
   );
 
-  await addCommentWithAIReply(page, 'hello world', '@claude what is the answer?');
+  await addCommentWithAIReply(page, 'hello world', 'What is the answer?');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
   // Spinner present while streaming.
   await expect(aiReply.locator('.ai-spinner')).toBeVisible();
+  await page.evaluate(() =>
+    (
+      window as unknown as { __quillReleaseMockGate: (name: string) => void }
+    ).__quillReleaseMockGate('pending-visible'),
+  );
   // Wait for accumulated text and spinner clearance.
   await expect(aiReply.locator('.comment-reply-text')).toContainText('Sure — the answer is 42.', {
     timeout: 3000,
   });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
-  await expect(aiReply.locator('.comment-reply-model')).toHaveText('claude-fable-5');
   await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
     'title',
     'Last model reported by Claude Code: claude-fable-5',
   );
 });
 
-test('Claude model and effort choices persist and reach an @claude spawn', async ({ page }) => {
+test('Claude model and effort choices persist and reach an anchored Ask-Claude spawn', async ({
+  page,
+}) => {
   await setupWithMock(page, [{ kind: 'delta', text: 'Done.' }, { kind: 'done' }]);
 
   const model = page.getByLabel('Claude model');
@@ -207,7 +277,7 @@ test('Claude model and effort choices persist and reach an @claude spawn', async
   await expect(page.getByLabel('Claude effort')).toHaveValue('max');
 
   await activeEditor(page).click();
-  await addCommentWithAIReply(page, 'hello world', '@claude revise this');
+  await addCommentWithAIReply(page, 'hello world', 'Revise this');
   await expect(page.locator('.comment-reply-ai .ai-spinner')).toHaveCount(0, { timeout: 3000 });
   const args = await page.evaluate(
     () => (window as unknown as { __lastSpawnArgs: unknown }).__lastSpawnArgs,
@@ -215,14 +285,14 @@ test('Claude model and effort choices persist and reach an @claude spawn', async
   expect(args).toMatchObject({ model: 'opus', effort: 'max' });
 });
 
-test('AI reply: @claude in the initial comment triggers a reply', async ({ page }) => {
+test('AI reply: Ask Claude in the anchored composer triggers a reply', async ({ page }) => {
   await setupWithMock(page, [
     { kind: 'delta', text: 'On it — ' },
     { kind: 'delta', text: 'done.' },
     { kind: 'done' },
   ]);
 
-  await addCommentTaggingClaude(page, 'hello world', '@claude please review this');
+  await addClaudeThread(page, 'hello world', 'Please review this');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -233,30 +303,45 @@ test('AI reply: @claude in the initial comment triggers a reply', async ({ page 
 
   // Thread order: the user's question must render above Claude's answer.
   const replies = page.locator('.comment-reply');
-  await expect(replies.first()).toContainText('@claude please review this');
+  await expect(replies.first()).toContainText('Please review this');
   await expect(replies.first()).not.toHaveClass(/comment-reply-ai/);
 });
 
-test('AI reply: @claude with no linked session opens the session picker', async ({ page }) => {
+test('AI reply: Ask Claude with no linked session preserves the request and opens the picker', async ({
+  page,
+}) => {
   await setupWithoutSession(page);
   // Session picker must not be open yet.
   await expect(page.locator('.session-picker')).toHaveCount(0);
 
-  await addCommentTaggingClaude(page, 'hello world', '@claude take a look');
+  await page.keyboard.type('hello world');
+  await page.keyboard.press('ControlOrMeta+a');
+  await expectSelectionText(page, 'hello world');
+  await page.locator('.add-comment-btn').click();
+  const composer = page.locator('.add-comment-compose');
+  await composer.locator('textarea').fill('Take a look');
+  await expect(composer.getByRole('button', { name: 'Link a session to ask' })).toBeVisible();
+  await expect(composer).toContainText('No Claude session linked yet — note works offline.');
+  await composer.getByRole('button', { name: 'Link a session to ask' }).click();
 
-  // Tagging Claude with no session prompts the user to link one.
+  // The request is retained in its new Claude-thread card while linking.
   await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('.comment-card-claude')).toContainText('Take a look');
 });
 
-test('AI reply: @claude in a reply with no linked session opens the session picker', async ({
+test('AI reply: a Claude-thread reply with no linked session opens the session picker', async ({
   page,
 }) => {
   await setupWithoutSession(page);
   await expect(page.locator('.session-picker')).toHaveCount(0);
 
-  // Same as the initial-comment case, but via the reply form on an existing
-  // comment — this path used to silently drop the @claude request.
-  await addCommentWithAIReply(page, 'hello world', '@claude take a look');
+  // Create a thread with an unsent request, dismiss linking, then continue that
+  // same Claude thread. No magic token is involved in the reply.
+  await addClaudeThread(page, 'hello world', 'Take a look');
+  await page.locator('.session-picker-close').click();
+  await page.locator('.comment-reply-trigger').click();
+  await page.getByPlaceholder('Reply to Claude…').fill('A follow-up');
+  await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
 
   await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
 });
@@ -265,7 +350,7 @@ test('Session picker: Start new session is disabled until the document is saved'
   page,
 }) => {
   await setupWithoutSession(page);
-  await addCommentTaggingClaude(page, 'hello world', '@claude take a look');
+  await addClaudeThread(page, 'hello world', 'Take a look');
 
   const startNew = page.locator('.session-picker-new');
   await expect(startNew).toBeVisible();
@@ -288,8 +373,8 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
   await editor.click();
   await page.keyboard.press('ControlOrMeta+a');
   await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('@claude take a look');
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.locator('.add-comment-compose textarea').fill('Take a look');
+  await page.getByRole('button', { name: 'Link a session to ask' }).click();
 
   const startNew = page.locator('.session-picker-new');
   await expect(startNew).toBeEnabled();
@@ -338,7 +423,7 @@ test('AI reply: a session-loss error shows Re-link primary plus a secondary Retr
     { kind: 'error', message: 'session not found' },
   ]);
 
-  await addCommentWithAIReply(page, 'hello world', '@claude help');
+  await addCommentWithAIReply(page, 'hello world', 'Help');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -365,7 +450,7 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
     [{ kind: 'delta', text: 'Second time worked.' }, { kind: 'done' }],
   ]);
 
-  await addCommentWithAIReply(page, 'hello world', '@claude help');
+  await addCommentWithAIReply(page, 'hello world', 'Help');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -392,7 +477,7 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
 });
 
 // Selects the first `count` characters of the current line (from its start),
-// then opens the comment composer and posts an @claude reply. Used to exercise
+// then opens the comment composer and asks Claude. Used to exercise
 // document-scale edits: the highlight frames the request, but edits may land
 // anywhere in the document.
 async function addCommentOnPrefix(page: Page, anchor: string, count: number, replyText: string) {
@@ -403,11 +488,8 @@ async function addCommentOnPrefix(page: Page, anchor: string, count: number, rep
   await page.keyboard.up('Shift');
   await expectSelectionText(page, anchor.slice(0, count));
   await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('seed comment');
-  await page.locator('.add-comment-compose .btn-primary').click();
-  await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill(replyText);
-  await page.locator('.comment-card .btn-primary').click();
+  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 
 test('AI edits: prose + quill-edits block (fence split across deltas) becomes a suggestion', async ({
@@ -425,7 +507,7 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
     { kind: 'done' },
   ]);
 
-  await addCommentWithAIReply(page, 'the cat are happy', '@claude fix the grammar');
+  await addCommentWithAIReply(page, 'the cat are happy', 'Fix the grammar');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -448,7 +530,7 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   // Q7's linkage is bidirectional: the reply jumps to the already-applied
   // tracked suggestion (there is no second Apply-edit path), and that card
   // remains the sole Accept/Reject surface.
-  const viewSuggestion = aiReply.getByRole('button', { name: /View suggestion/i });
+  const viewSuggestion = aiReply.getByRole('button', { name: /suggestions?/i });
   await expect(viewSuggestion).toBeVisible();
   await viewSuggestion.click();
   await expect(card.first()).toHaveClass(/suggestion-card-active/);
@@ -484,7 +566,7 @@ test('AI edits: an edit outside the highlight applies (edits are document-scale)
     { kind: 'done' },
   ]);
 
-  await addCommentOnPrefix(page, 'alpha beta gamma', 5, '@claude tidy this up');
+  await addCommentOnPrefix(page, 'alpha beta gamma', 5, 'Tidy this up');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -506,7 +588,7 @@ test('AI edits: an edit whose find is nowhere in the document is skipped and sur
     { kind: 'done' },
   ]);
 
-  await addCommentOnPrefix(page, 'alpha beta gamma', 5, '@claude tidy this up');
+  await addCommentOnPrefix(page, 'alpha beta gamma', 5, 'Tidy this up');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
@@ -525,7 +607,7 @@ test('AI reply: cancel resolves to a neutral Re-run, and Re-run succeeds in plac
     [{ kind: 'delta', text: 'Second time worked.' }, { kind: 'done' }],
   ]);
 
-  await addCommentWithAIReply(page, 'hello world', '@claude long task');
+  await addCommentWithAIReply(page, 'hello world', 'Handle this long task');
 
   const aiReply = page.locator('.comment-reply-ai').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });

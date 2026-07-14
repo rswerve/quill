@@ -31,7 +31,7 @@ A husky pre-commit hook runs lint-staged and the unit tests automatically.
 
 - Add or update tests for behavior you change — unit tests in `src/test/`, e2e in `e2e/`, Rust tests in `src-tauri/src/lib.rs`.
 - Update `PRD.md` and `CLAUDE.md` when behavior or architecture changes.
-- New Tauri IPC commands must be registered in `generate_handler!` in `src-tauri/src/lib.rs` and invoked only from `src/hooks/useFileManager.ts` or `src/hooks/useClaudeReply.ts`.
+- New Tauri IPC commands must be registered in `generate_handler!` in `src-tauri/src/lib.rs` and invoked from a hook rather than scattered through components — file I/O in `src/hooks/useFileManager.ts`, Claude streaming in `src/hooks/useClaudeReply.ts` / `useDocumentChat.ts` / `useClaudeResumeStream.ts`, and workspace persistence in `src/hooks/useDraftAutosave.ts`.
 - Use the in-app `AppModal` for dialogs — `window.alert`/`confirm` are unreliable in Tauri webviews.
 
 ## Reporting bugs

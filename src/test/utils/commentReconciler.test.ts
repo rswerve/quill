@@ -7,6 +7,7 @@ import { reconcileCommentsWithDocument } from '../../utils/commentReconciler';
 
 const COMMENT: Comment = {
   id: 'c1',
+  kind: 'note',
   anchorText: 'hello',
   from: 8,
   to: 13,

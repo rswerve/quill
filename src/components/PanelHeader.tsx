@@ -67,7 +67,7 @@ export default function PanelHeader({
           disabled={!showResolved && resolvedCount === 0}
           title={resolvedCount ? 'Show or hide resolved comments' : 'No resolved comments'}
         >
-          {showResolved ? 'All' : 'Open'}
+          {showResolved ? 'Resolved' : 'Open'}
           <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden>
             <path
               d="M4 6.5 8 10.5 12 6.5"

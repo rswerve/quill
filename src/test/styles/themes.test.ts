@@ -111,6 +111,9 @@ describe('theme catalog', () => {
         '--sugg-replace': '#B65C38',
         '--sugg-format': '#8B8371',
         '--badge-format-bg': '#EFEBE0',
+        '--note-stripe': '#B7AF9C',
+        '--note-badge-bg': '#EFEBE0',
+        '--note-hl-underline': '#A29A87',
       },
       gruvbox: {
         '--bg-app': '#282828',
@@ -147,6 +150,9 @@ describe('theme catalog', () => {
         '--sugg-replace': '#FE8019',
         '--sugg-format': '#A89984',
         '--badge-format-bg': '#3C3836',
+        '--note-stripe': '#665C54',
+        '--note-badge-bg': '#3C3836',
+        '--note-hl-underline': '#7C6F64',
       },
     } as const;
 

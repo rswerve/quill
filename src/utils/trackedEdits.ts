@@ -22,11 +22,14 @@ export function stripTrailingNewlines(value: string): string {
 }
 
 /**
- * Read the plain text of a document range the same way Claude was shown it.
+ * Read the plain-text projection used by the quote matcher. Claude also sees
+ * the document's Markdown source for context, so model output occasionally
+ * copies Markdown delimiters that are absent from this projection; planner-only
+ * fallbacks below validate and normalize those finds conservatively.
  * We pass '\n' as the block separator and ' ' as the leaf separator so list
  * items and paragraphs become newline-separated plaintext (no markdown syntax)
- * — matching what `getRangeTexts` sends in the prompt and what Claude's `find`
- * strings are expected to match.
+ * — matching `getRangeTexts` and what Claude's `find` strings are expected to
+ * contain.
  */
 export function rangeText(doc: ProseMirrorNode, from: number, to: number): string {
   return doc.textBetween(from, to, '\n', ' ');
@@ -151,6 +154,9 @@ export type EditResultReason =
   | 'link-not-found'
   | 'link-target-mismatch'
   | 'ambiguous-link'
+  | 'ambiguous-markdown'
+  | 'markdown-format-mismatch'
+  | 'markdown-format-change'
   | 'already-applied'
   | 'overlapping-edit'
   | 'pending-suggestion'
@@ -173,6 +179,270 @@ interface PlanDecision {
 interface MarkdownLinkValue {
   label: string;
   href: string;
+}
+
+const MARKDOWN_INLINE_MARKS = ['bold', 'italic', 'strike', 'code'] as const;
+type MarkdownInlineMark = (typeof MARKDOWN_INLINE_MARKS)[number];
+
+type MarkdownBlockShape =
+  | { kind: 'heading'; level: number }
+  | { kind: 'bullet-list' }
+  | { kind: 'ordered-list' }
+  | { kind: 'blockquote' };
+
+interface MarkdownProjection {
+  text: string;
+  marks: MarkdownInlineMark[][];
+  block: MarkdownBlockShape | null;
+}
+
+interface InlineDelimiter {
+  token: string;
+  mark: MarkdownInlineMark;
+}
+
+type MarkdownLocateResult =
+  | { kind: 'not-markdown' }
+  | { kind: 'match'; at: { from: number; to: number }; projection: MarkdownProjection }
+  | { kind: 'missing'; reason: 'text-not-found' | 'markdown-format-mismatch' }
+  | { kind: 'ambiguous' };
+
+const INLINE_DELIMITERS: InlineDelimiter[] = [
+  { token: '**', mark: 'bold' },
+  { token: '__', mark: 'bold' },
+  { token: '~~', mark: 'strike' },
+  { token: '`', mark: 'code' },
+  { token: '*', mark: 'italic' },
+  { token: '_', mark: 'italic' },
+];
+
+function isEscaped(value: string, index: number): boolean {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor--) slashes++;
+  return slashes % 2 === 1;
+}
+
+function hasClosingDelimiter(value: string, from: number, token: string): boolean {
+  let cursor = value.indexOf(token, from);
+  while (cursor !== -1) {
+    if (!isEscaped(value, cursor) && cursor > from) return true;
+    cursor = value.indexOf(token, cursor + token.length);
+  }
+  return false;
+}
+
+function delimiterAt(value: string, index: number): InlineDelimiter | null {
+  for (const delimiter of INLINE_DELIMITERS) {
+    if (!value.startsWith(delimiter.token, index)) continue;
+    const after = index + delimiter.token.length;
+    if (after >= value.length || /\s/.test(value[after])) continue;
+    if (delimiter.token === '_' && index > 0 && /[\p{L}\p{N}]/u.test(value[index - 1])) {
+      continue;
+    }
+    if (hasClosingDelimiter(value, after, delimiter.token)) return delimiter;
+  }
+  return null;
+}
+
+function activeMarkdownMarks(stack: InlineDelimiter[]): MarkdownInlineMark[] {
+  return [...new Set(stack.map(({ mark }) => mark))].sort() as MarkdownInlineMark[];
+}
+
+function parseInlineMarkdown(value: string): {
+  text: string;
+  marks: MarkdownInlineMark[][];
+  usedSyntax: boolean;
+} | null {
+  let text = '';
+  const marks: MarkdownInlineMark[][] = [];
+  const stack: InlineDelimiter[] = [];
+  let usedSyntax = false;
+
+  const emit = (character: string) => {
+    text += character;
+    marks.push(activeMarkdownMarks(stack));
+  };
+
+  for (let index = 0; index < value.length; ) {
+    const top = stack.at(-1);
+    if (top && value.startsWith(top.token, index) && !isEscaped(value, index)) {
+      stack.pop();
+      usedSyntax = true;
+      index += top.token.length;
+      continue;
+    }
+
+    if (top?.mark === 'code') {
+      emit(value[index]);
+      index++;
+      continue;
+    }
+
+    if (value[index] === '\\' && index + 1 < value.length) {
+      emit(value[index + 1]);
+      index += 2;
+      continue;
+    }
+
+    const delimiter = delimiterAt(value, index);
+    if (delimiter) {
+      stack.push(delimiter);
+      usedSyntax = true;
+      index += delimiter.token.length;
+      continue;
+    }
+
+    emit(value[index]);
+    index++;
+  }
+
+  return stack.length === 0 ? { text, marks, usedSyntax } : null;
+}
+
+function stripBlockPrefix(value: string): {
+  text: string;
+  block: MarkdownBlockShape | null;
+  usedSyntax: boolean;
+} {
+  const heading = /^(#{1,6})[ \t]+/.exec(value);
+  if (heading) {
+    return {
+      text: value.slice(heading[0].length),
+      block: { kind: 'heading', level: heading[1].length },
+      usedSyntax: true,
+    };
+  }
+  const bullet = /^[-+*][ \t]+/.exec(value);
+  if (bullet) {
+    return {
+      text: value.slice(bullet[0].length),
+      block: { kind: 'bullet-list' },
+      usedSyntax: true,
+    };
+  }
+  const ordered = /^\d+[.)][ \t]+/.exec(value);
+  if (ordered) {
+    return {
+      text: value.slice(ordered[0].length),
+      block: { kind: 'ordered-list' },
+      usedSyntax: true,
+    };
+  }
+  const quote = /^>[ \t]?/.exec(value);
+  if (quote) {
+    return {
+      text: value.slice(quote[0].length),
+      block: { kind: 'blockquote' },
+      usedSyntax: true,
+    };
+  }
+  return { text: value, block: null, usedSyntax: false };
+}
+
+/** Parse only the bounded Markdown syntax the edit protocol explicitly forbids. */
+function markdownProjection(value: string): MarkdownProjection | null {
+  // Multi-block Markdown needs a source map, not delimiter stripping. Keep the
+  // fallback deliberately single-block and fail closed instead of guessing.
+  if (value.includes('\n')) return null;
+  const block = stripBlockPrefix(value);
+  const inline = parseInlineMarkdown(block.text);
+  if (!inline || (!block.usedSyntax && !inline.usedSyntax) || inline.text.length === 0) return null;
+  return { text: inline.text, marks: inline.marks, block: block.block };
+}
+
+function locateAllEdits(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  find: string,
+): Array<{ from: number; to: number }> {
+  const text = rangeText(doc, rangeFrom, rangeTo);
+  const matches: Array<{ from: number; to: number }> = [];
+  let index = text.indexOf(find);
+  while (index !== -1) {
+    const from = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index);
+    const to = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index + find.length);
+    if (from !== null && to !== null) matches.push({ from, to });
+    index = text.indexOf(find, index + 1);
+  }
+  return matches;
+}
+
+function blockMatchesProjection(
+  doc: ProseMirrorNode,
+  from: number,
+  block: MarkdownBlockShape | null,
+): boolean {
+  if (!block) return true;
+  const $from = doc.resolve(from);
+  const ancestors = Array.from({ length: $from.depth + 1 }, (_, depth) => $from.node(depth));
+  if (block.kind === 'heading') {
+    return ancestors.some(
+      (node) => node.type.name === 'heading' && node.attrs.level === block.level,
+    );
+  }
+  let expected = 'blockquote';
+  if (block.kind === 'bullet-list') expected = 'bulletList';
+  if (block.kind === 'ordered-list') expected = 'orderedList';
+  return ancestors.some((node) => node.type.name === expected);
+}
+
+function textMarksMatchProjection(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+  expected: MarkdownInlineMark[][],
+): boolean {
+  if (to - from !== expected.length) return false;
+  const actual: Array<MarkdownInlineMark[] | undefined> = Array.from({ length: expected.length });
+  doc.nodesBetween(from, to, (node, position) => {
+    if (!node.isText) return;
+    const start = Math.max(from, position);
+    const end = Math.min(to, position + node.nodeSize);
+    const marks = node.marks
+      .map((mark) => mark.type.name)
+      .filter((name): name is MarkdownInlineMark =>
+        (MARKDOWN_INLINE_MARKS as readonly string[]).includes(name),
+      )
+      .sort() as MarkdownInlineMark[];
+    for (let cursor = start; cursor < end; cursor++) actual[cursor - from] = marks;
+  });
+  return expected.every((marks, index) => {
+    const candidate = actual[index];
+    return candidate?.join('|') === marks.join('|');
+  });
+}
+
+function locateMarkdownFind(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  find: string,
+): MarkdownLocateResult {
+  const projection = markdownProjection(find);
+  if (!projection) return { kind: 'not-markdown' };
+  const textual = locateAllEdits(doc, rangeFrom, rangeTo, projection.text);
+  if (textual.length === 0) return { kind: 'missing', reason: 'text-not-found' };
+  const valid = textual.filter(
+    ({ from, to }) =>
+      blockMatchesProjection(doc, from, projection.block) &&
+      textMarksMatchProjection(doc, from, to, projection.marks),
+  );
+  if (valid.length === 0) return { kind: 'missing', reason: 'markdown-format-mismatch' };
+  if (valid.length > 1) return { kind: 'ambiguous' };
+  return { kind: 'match', at: valid[0], projection };
+}
+
+function markdownShape(projection: MarkdownProjection): string {
+  let block = 'inline';
+  if (projection.block?.kind === 'heading') block = `heading:${projection.block.level}`;
+  else if (projection.block) block = projection.block.kind;
+  const runs: string[] = [];
+  for (const marks of projection.marks) {
+    const signature = marks.join('+');
+    if (runs.at(-1) !== signature) runs.push(signature);
+  }
+  return `${block}|${runs.join(',')}`;
 }
 
 const completeMarkdownLink = /^\[([^\]\n]+)\]\(([^()\s]+)\)$/;
@@ -232,7 +502,17 @@ function planFormatEdit(
   if (!find || marks.length === 0) {
     return { result: result(edit, 'malformed', 'invalid-edit') };
   }
-  const at = locateEdit(doc, rangeFrom, rangeTo, find);
+  let at = locateEdit(doc, rangeFrom, rangeTo, find);
+  if (!at) {
+    const fallback = locateMarkdownFind(doc, rangeFrom, rangeTo, find);
+    if (fallback.kind === 'ambiguous') {
+      return { result: result(edit, 'conflict', 'ambiguous-markdown') };
+    }
+    if (fallback.kind === 'missing') {
+      return { result: result(edit, 'not-found', fallback.reason) };
+    }
+    if (fallback.kind === 'match') at = fallback.at;
+  }
   if (!at || at.to <= at.from) {
     return { result: result(edit, 'not-found', 'text-not-found') };
   }
@@ -285,6 +565,40 @@ function planMarkdownLinkFallback(
   };
 }
 
+function planMarkdownFormattingFallback(
+  doc: ProseMirrorNode,
+  rangeFrom: number,
+  rangeTo: number,
+  edit: QuillTextEdit,
+): PlanDecision | null {
+  const located = locateMarkdownFind(doc, rangeFrom, rangeTo, edit.find);
+  if (located.kind === 'not-markdown') return null;
+  if (located.kind === 'ambiguous') {
+    return { result: result(edit, 'conflict', 'ambiguous-markdown') };
+  }
+  if (located.kind === 'missing') {
+    return { result: result(edit, 'not-found', located.reason) };
+  }
+
+  const replacement = markdownProjection(edit.replace);
+  if (replacement && markdownShape(replacement) !== markdownShape(located.projection)) {
+    return { result: result(edit, 'malformed', 'markdown-format-change') };
+  }
+  const replace = replacement?.text ?? edit.replace;
+  if (replace === located.projection.text) {
+    return { result: result(edit, 'no-op', 'already-applied') };
+  }
+  return {
+    result: result(edit, 'applied'),
+    placed: {
+      kind: 'text',
+      from: located.at.from,
+      to: located.at.to,
+      replace,
+    },
+  };
+}
+
 function planTextEdit(
   doc: ProseMirrorNode,
   rangeFrom: number,
@@ -302,8 +616,10 @@ function planTextEdit(
       placed: { kind: 'text', from: at.from, to: at.to, replace },
     };
   }
+  const linkFallback = planMarkdownLinkFallback(doc, rangeFrom, rangeTo, edit);
+  if (linkFallback) return linkFallback;
   return (
-    planMarkdownLinkFallback(doc, rangeFrom, rangeTo, edit) ?? {
+    planMarkdownFormattingFallback(doc, rangeFrom, rangeTo, edit) ?? {
       result: result(edit, 'not-found', 'text-not-found'),
     }
   );
@@ -405,6 +721,12 @@ function editResultReason(result: EditResult): string {
   switch (result.reason) {
     case 'ambiguous-link':
       return 'more than one link has that label.';
+    case 'ambiguous-markdown':
+      return 'more than one formatted span matches it.';
+    case 'markdown-format-mismatch':
+      return 'the text exists, but its formatting does not match.';
+    case 'markdown-format-change':
+      return 'the replacement requests a different format; use a format edit.';
     case 'link-not-found':
       return 'no link has that visible text.';
     case 'link-target-mismatch':

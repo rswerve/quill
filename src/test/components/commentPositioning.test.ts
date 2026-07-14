@@ -1,96 +1,88 @@
 import { describe, expect, it } from 'vitest';
-import { layoutAnchoredCards, type AnchoredCardInput } from '../../components/commentPositioning';
+import {
+  layoutGutterTicks,
+  nearestGutterTick,
+  panelNudgeTarget,
+  type GutterTickInput,
+} from '../../components/commentPositioning';
 
-function card(
+function tick(
   cardId: string,
-  anchorTop: number,
-  height = 80,
-  documentOrder = anchorTop,
-): AnchoredCardInput {
-  return { cardId, anchorTop, height, documentOrder };
+  viewportY: number,
+  anchorTop = viewportY,
+  documentOrder = viewportY,
+): GutterTickInput {
+  return {
+    cardId,
+    targetKind: 'comment',
+    annotationKind: 'note',
+    anchorTop,
+    viewportY,
+    documentOrder,
+  };
 }
 
-const viewport = {
-  viewportTop: 0,
-  viewportBottom: 500,
-  activeCardId: null,
-  gap: 12,
-};
+describe('layoutGutterTicks', () => {
+  it('keeps line-aligned ticks separate at the 14px boundary', () => {
+    const layout = layoutGutterTicks([tick('first', 40), tick('second', 54)], 500);
 
-describe('layoutAnchoredCards', () => {
-  it('aligns the first card and cascades collisions downward with a 12px gap', () => {
-    const layout = layoutAnchoredCards(
-      [card('first', 40), card('second', 70), card('third', 90)],
-      viewport,
-    );
-
-    expect(layout.positions.map(({ cardId, top }) => ({ cardId, top }))).toEqual([
-      { cardId: 'first', top: 40 },
-      { cardId: 'second', top: 132 },
-      { cardId: 'third', top: 224 },
+    expect(layout.visible.map((cluster) => cluster.members.map(({ cardId }) => cardId))).toEqual([
+      ['first'],
+      ['second'],
     ]);
   });
 
-  it('keeps an active card exact and reflows neighbors around it without reordering', () => {
-    const layout = layoutAnchoredCards(
-      [card('first', 100), card('active', 130), card('third', 150)],
-      { ...viewport, activeCardId: 'active' },
+  it('clusters ticks closer than 14px without changing member order', () => {
+    const layout = layoutGutterTicks(
+      [tick('third', 49, 49, 3), tick('first', 40, 40, 1), tick('second', 46, 46, 2)],
+      500,
     );
 
-    expect(layout.positions.map(({ cardId, top }) => ({ cardId, top }))).toEqual([
-      { cardId: 'first', top: 38 },
-      { cardId: 'active', top: 130 },
-      { cardId: 'third', top: 222 },
+    expect(layout.visible).toHaveLength(1);
+    expect(layout.visible[0].members.map(({ cardId }) => cardId)).toEqual([
+      'first',
+      'second',
+      'third',
     ]);
+    expect(layout.visible[0].viewportY).toBe(45);
   });
 
-  it('keeps stable document order when anchors share a line', () => {
-    const layout = layoutAnchoredCards(
-      [card('later', 100, 40, 2), card('earlier', 100, 40, 1)],
-      viewport,
+  it('classifies off-viewport ticks and exposes the nearest edges', () => {
+    const layout = layoutGutterTicks(
+      [tick('far-above', -80), tick('near-above', -4), tick('visible', 20), tick('below', 500)],
+      500,
     );
 
-    expect(layout.positions.map(({ cardId, top }) => ({ cardId, top }))).toEqual([
-      { cardId: 'earlier', top: 100 },
-      { cardId: 'later', top: 152 },
-    ]);
+    expect(layout.above.map(({ cardId }) => cardId)).toEqual(['far-above', 'near-above']);
+    expect(layout.below.map(({ cardId }) => cardId)).toEqual(['below']);
+    expect(layout.visible[0].members[0].cardId).toBe('visible');
+    expect(layout.above.at(-1)?.cardId).toBe('near-above');
+    expect(layout.below[0]?.cardId).toBe('below');
   });
+});
 
-  it('collapses off-screen anchors into ordered above and below lists', () => {
-    const layout = layoutAnchoredCards(
-      [card('far-above', 10), card('near-above', 90), card('visible', 140), card('below', 420)],
-      { ...viewport, viewportTop: 100, viewportBottom: 400 },
+describe('nearestGutterTick', () => {
+  it('selects the document-space anchor nearest the viewport center', () => {
+    const nearest = nearestGutterTick(
+      [tick('above', -20, 80, 1), tick('nearest', 90, 190, 2), tick('below', 220, 320, 3)],
+      200,
     );
-
-    expect(layout.positions.map((entry) => entry.cardId)).toEqual(['visible']);
-    expect(layout.above).toEqual(['far-above', 'near-above']);
-    expect(layout.below).toEqual(['below']);
-    expect(layout.above.at(-1)).toBe('near-above');
-    expect(layout.below[0]).toBe('below');
+    expect(nearest?.cardId).toBe('nearest');
   });
 
-  it('keeps visible anchors while clamping their cards clear of panel chrome', () => {
-    const layout = layoutAnchoredCards([card('near-top', 8), card('near-bottom', 480)], {
-      ...viewport,
-      cardViewportTop: 44,
-      cardViewportBottom: 438,
-    });
+  it('uses document order as the deterministic distance tie breaker', () => {
+    const nearest = nearestGutterTick([tick('later', 0, 90, 2), tick('earlier', 0, 110, 1)], 100);
+    expect(nearest?.cardId).toBe('earlier');
+  });
+});
 
-    expect(layout.above).toEqual([]);
-    expect(layout.below).toEqual([]);
-    expect(layout.positions.map(({ cardId, top }) => ({ cardId, top }))).toEqual([
-      { cardId: 'near-top', top: 44 },
-      { cardId: 'near-bottom', top: 358 },
-    ]);
+describe('panelNudgeTarget', () => {
+  it('leaves a card inside the middle 60% comfort band alone', () => {
+    expect(panelNudgeTarget(100, 500, 220, 120)).toBeNull();
   });
 
-  it('returns only pinned counts when no anchors are in the viewport', () => {
-    expect(
-      layoutAnchoredCards([card('above', 20), card('below', 600)], {
-        ...viewport,
-        viewportTop: 100,
-        viewportBottom: 500,
-      }),
-    ).toEqual({ positions: [], above: ['above'], below: ['below'] });
+  it('centers a card only after it leaves the comfort band', () => {
+    expect(panelNudgeTarget(100, 500, 520, 100)).toBe(320);
+    expect(panelNudgeTarget(300, 500, 320, 80)).toBe(110);
   });
 });

@@ -1,143 +1,158 @@
 # Quill
 
-**The document editor that can hold a conversation.** Quill is a Markdown editor where Claude works in Google-Docs-style suggesting mode: ask a question in an **inline comment** and **the session that wrote the doc answers in the thread**; ask for a rewrite and it lands as **tracked changes** you accept or reject.
+**The document editor that can hold a conversation.** Quill is a Mac Markdown editor with Google-Docs-style tracked changes and inline comments — and Claude works in the margin: ask a question in a comment and a linked Claude Code session answers in the thread; ask for a rewrite and it arrives as tracked changes you accept or reject.
 
-![Claude Code researches Quill, writes a report on using it at work, opens it in Quill, and its rewrite arrives as tracked changes you accept or reject](./docs/assets/hero.gif)
+![A launch brief open in Quill: Claude's rewrite of the opening paragraph shown as a tracked change in the document, with the document-chat thread that produced it on the right](./docs/assets/studio-chat-paper.png)
 
-Chat tools put your document inside a conversation. Quill puts the conversation inside your document.
+Chat tools put your document inside a conversation. Quill puts the conversation inside your document. Files stay plain `.md` on disk; the review data (comments, suggestions, chat) rides alongside in a companion file, so the Markdown itself opens and edits anywhere.
 
-Files are plain `.md` on disk; review metadata rides alongside in a sidecar, so the Markdown stays portable and editable anywhere.
+The one thing to know before you start: the `@claude` features talk to the **[Claude Code](https://claude.com/claude-code) command-line tool on your own machine** and run under your Claude account — editing, tracked changes, and comments all work without it, but the AI parts don't. See [The `@claude` features](#the-claude-features).
 
-> **The defining feature:** a document can be linked to the Claude Code session that authored it. A reviewer can reply to a comment with `@claude` and get an inline, context-aware answer from the same agent — even after that session has been compacted. And for a document no session wrote — one someone sent you — **Start new session** spins up a fresh Claude session just for it.
+## Contents
 
-## Getting started
+- [What you can do with it](#what-you-can-do-with-it)
+- [Installing Quill](#installing-quill)
+- [Build and run from source](#build-and-run-from-source)
+- [The `@claude` features](#the-claude-features)
+- [Where Quill keeps your data](#where-quill-keeps-your-data)
+- [What Quill is not](#what-quill-is-not)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-Quill is a free Mac app — no account, nothing to configure. From zero to writing:
+## What you can do with it
 
-1. **Download** the installer from the [latest release](https://github.com/sam-powers/quill/releases/latest). Under **Assets**, pick the `.dmg` for your Mac:
+- **Edit Markdown as rich text.** A WYSIWYG surface with a formatting rail down the left edge (bold, italic, strikethrough, headings, lists, blockquote, inline code, links). Images, tables, and task lists round-trip through save unchanged, and Quill warns on open when a file contains something it can't preserve (footnotes, raw HTML) rather than mangling it silently.
+- **Work in several documents at once.** Tabs across the top; `Cmd+N` opens another. Your open tabs — and any unsaved changes in them — are restored when you relaunch.
+- **Suggest instead of edit.** Flip the toolbar switch from **Editing** to **Suggesting** and your insertions, deletions, and formatting changes are tracked as proposals, each with an **Accept** / **Reject** card in the margin, plus **Accept all** / **Reject all**.
+- **Comment in threads.** Select text, add a comment anchored to it, reply, resolve, and delete. Comment cards live in the right margin next to their anchor.
+- **Ask Claude in a comment.** Link a document to a Claude Code session, mention `@claude` in a comment, and the answer streams into the thread. Ask for a revision and Claude's edits land as tracked changes attributed to Claude — reviewed with the same Accept / Reject cards as anyone else's.
+- **Chat about the whole document.** A **Chat** panel (`Cmd+/`) talks to Claude about the document as a whole; its edits come back as suggestions you review, each linked to the message that produced it.
+- **Point Claude at your sources.** Link a reference folder and every `@claude` request can read those files, so you can ask "is this consistent with the interview notes?"
+- **The rest of a real editor.** Find and replace (`Cmd+F`), export a clean copy to PDF (`Cmd+P`), document zoom (60–240%), two color themes (Paper and Gruvbox), a live word/character/line count, and the standard file shortcuts.
 
-   | Your Mac                                           | File            |
-   | -------------------------------------------------- | --------------- |
-   | Apple Silicon (M1 or newer — most Macs since 2020) | `…_aarch64.dmg` |
-   | Intel (Apple menu → About This Mac if unsure)      | `…_x64.dmg`     |
+![The Comments panel: an @claude thread confirming a pricing detail against a reference folder, and Claude's replacement suggestion tagged with the chat message that produced it](./docs/assets/studio-comments-paper.png)
 
-2. **Install** — open the downloaded `.dmg` and drag **Quill** into your **Applications** folder.
+The **[User Guide](./docs/USER_GUIDE.md)** walks non-programmers through the core editing, comment, and `@claude` flows.
 
-3. **Open it** — Quill isn't code-signed yet, so the first launch takes a couple of extra clicks (only needed once):
-   1. Double-click **Quill**. macOS blocks it — click **Done** in the "cannot be verified" dialog.
-   2. Open **Apple menu → System Settings → Privacy & Security**, scroll to **Security**, and next to "Quill was blocked…" click **Open Anyway** → authenticate → **Open**.
+## Installing Quill
 
-   (The **Open Anyway** button only appears after you've tried step 1, and stays for about an hour. If macOS instead says Quill is "damaged" — or you'd rather skip the clicks — run `xattr -dr com.apple.quarantine /Applications/Quill.app` in Terminal, then open Quill normally.)
+**Signed macOS installers are on the way** — a notarized `.dmg` is being set up. Until then, run Quill by [building it from source](#build-and-run-from-source); on a Mac with the developer tools below it takes a few minutes.
 
-   > The old right-click → **Open** trick no longer works: Apple removed it in macOS Sequoia (15). The steps above are the current flow on Sequoia through Tahoe (26).
+Quill is macOS-only. The `@claude` integration finds the Claude CLI and its sessions through Unix file paths, so the full experience only exists on macOS (most of it also works on Linux from source; on Windows the editor works but `@claude` does not).
 
-4. **Write** — open any Markdown file with **File → Open…** or just start typing. Editing, suggesting mode, and comments all work out of the box; the `@claude` features need one companion tool — see [Setting up `@claude`](#setting-up-claude).
+## Build and run from source
 
-New to Quill? The **[User Guide](./docs/USER_GUIDE.md)** walks through everything — no programming knowledge required.
+### Prerequisites
 
-**Staying up to date:** Quill checks once per launch and shows a banner in the app when a newer version has been published — installing it is always your call. You can also **Watch → Custom → Releases** on this repo to get an email per release (the only option if you're on v0.1 or v0.2, which predate the banner).
+Install these first — later steps depend on them.
 
-Releases are **macOS-only** for now — the `@claude` integration locates the Claude CLI and its sessions via Unix paths, and we'd rather not ship builds that can't deliver the full experience. Windows and Linux users can still [build from source](#building-from-source) (on Linux everything works, including `@claude`; on Windows the editor works but `@claude` is not yet supported).
+| Prerequisite              | Minimum | Check             | You should see                                    |
+| ------------------------- | ------- | ----------------- | ------------------------------------------------- |
+| Node.js                   | 22      | `node --version`  | `v22.0.0` or newer                                |
+| Rust (stable, via rustup) | 1.77.2  | `rustc --version` | `rustc 1.77.2` or newer                           |
+| Xcode Command Line Tools  | —       | `xcode-select -p` | a path like `/Library/Developer/CommandLineTools` |
 
-## Features
+Get Node.js from [nodejs.org](https://nodejs.org) (npm ships with it), Rust from [rustup.rs](https://rustup.rs), and the Command Line Tools with `xcode-select --install`. Quill is a [Tauri 2](https://v2.tauri.app) app (a Rust-backed native shell around a web frontend); Tauri's [prerequisites page](https://v2.tauri.app/start/prerequisites/) lists the exact toolchain versions and any other system packages.
 
-- **WYSIWYG Markdown editing** built on Tiptap/ProseMirror, with a formatting toolbar (bold, italic, strikethrough, headings, lists, blockquote, inline code) and undo/redo. Images, tables, and task lists render in place and **round-trip through save unchanged** — and Quill warns up front when a file contains something it can't preserve (footnotes, raw HTML) so nothing is mangled silently.
-- **Suggesting mode** — a Google-Docs-style toggle that tracks edits as insertions and deletions instead of applying them directly. Each pending change gets a margin card with per-change **Accept** / **Reject**, plus **Accept All** / **Reject All**.
-- **Inline comments** — anchor a threaded comment to a text range; reply, resolve, and delete. Comment cards live in the right margin with collision-avoidance so they never overlap.
-- **`@claude` replies** — link a document to its authoring Claude Code session — or start a fresh session for a doc no session wrote — and ask questions in a comment thread. Answers stream back inline. Quill sends a line diff of what changed (or the full document, if the session's context was compacted or the session is new).
-- **Claude run controls** — choose a model alias and effort level globally from the footer for future replies and document reviews; Quill separately reports the actual model returned by each Claude Code stream.
-- **AI-authored tracked changes** — ask Claude in a comment to _revise_ the text ("tighten this", "fix the grammar") and it writes the edits straight into the document as **tracked changes attributed to Claude** — reviewed as ordinary Accept / Reject suggestion cards, just like a human's. Scope follows your phrasing: the highlighted text by default, or "this paragraph" / "the whole document".
-- **Reference folder** — link a document to a folder of source material (notes, research, data files). Every `@claude` request grants Claude read access to that folder and includes a manifest of its contents, so it can pull in the relevant sources before answering.
-- **Deep links** — `quill://open?file=…` opens a document directly, e.g. launched from a Claude Code session, restoring its comments, suggestions, and session binding.
-- **Quality-of-life** — document zoom (60–240%), two persisted color themes (Paper and Gruvbox), a live status bar (word/char count, line/column, dirty indicator), and standard file shortcuts (New, Open, Save, Save As).
+### Steps
 
-## Persistence model
+Clone this repository and switch into it (replace the URL with the repository you're reading this in):
 
-Every saved document is two files:
+```bash
+git clone <this-repo-url> quill
+cd quill
+```
 
-| File                   | Contents                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------- |
-| `<name>.md`            | Portable Markdown — the document itself.                                                    |
-| `<name>.comments.json` | Sidecar holding comments, suggestions, the linked Claude session, and the reference folder. |
+Then install the frontend dependencies from the repository root:
 
-The sidecar is deleted automatically on save when it holds nothing, so a document with no review metadata is just a clean `.md` file.
+```bash
+npm install
+```
 
-## Setting up `@claude`
+This prints a dependency-audit summary at the end (a count of advisories in the transitive tree) — that's npm's normal output, not a failure.
 
-Editing, tracked changes, and comments work standalone. The `@claude` features — AI replies and AI-authored tracked changes — need the [Claude Code](https://claude.com/claude-code) CLI on the same machine:
+```bash
+npm run tauri dev
+```
 
-1. **Install Claude Code** (skip if `claude --version` already works):
+The first run compiles the Rust backend, so it takes a minute or two; later runs are fast. You'll see the frontend and backend start up, then a native window open:
+
+```
+  VITE v7.x  ready in NNN ms
+  ➜  Local:   http://localhost:1420/
+   Compiling quill v1.1.2 (…/quill/src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+     Running `target/debug/quill`
+```
+
+(Version numbers and timings vary.) **The check that it worked:** a Quill window opens showing an empty **Untitled** document with the formatting rail down the left and the prompt _"Start writing… select text to comment, or press ⌘/ to ask Claude."_ Type a few words, save with `Cmd+S`, or open an existing `.md` file with `Cmd+O`.
+
+To produce a distributable app bundle instead of running in place:
+
+```bash
+npm run tauri build
+```
+
+This compiles a release build and bundles the app at `src-tauri/target/release/bundle/macos/Quill.app`. (Packaging it into a signed, notarized `.dmg` is the installer work in progress; the unsigned `.app` runs fine for your own use.)
+
+## The `@claude` features
+
+Editing, tracked changes, and comments work on their own. The `@claude` features — inline replies, document chat, and AI-authored tracked changes — additionally need the [Claude Code](https://claude.com/claude-code) CLI signed in on the same Mac. They run under the same Claude account you sign into the CLI with and count against its usage; there are no separate API keys.
+
+1. **Install the Claude Code CLI** with Anthropic's official installer (skip if `claude --version` already prints a version):
 
    ```bash
    curl -fsSL https://claude.ai/install.sh | bash
    ```
 
-2. **Sign in** — run `claude` in a terminal and follow the login prompt. Quill talks to the CLI under your account; there are no API keys to configure.
+2. **Sign in** — run `claude` in a terminal and follow the browser prompt. Quill locates the CLI even when launched from the Dock (it checks your `PATH` and the usual install locations), so no further configuration is needed.
 
-3. **Launch Quill once** so macOS registers the `quill://` deep-link scheme.
+Then, in Quill, click the footer's **✦ Link session** control (tooltip "Link this doc to a Claude Code session") to open the **session picker**. A _session_ is a past Claude Code conversation that the CLI can resume:
 
-4. **Install the Quill plugin for Claude Code** — this adds the slash command that sends a document from a Claude Code session straight into Quill:
+- **If you wrote this document yourself**, or someone sent it to you, choose **Start new session** to give it its own fresh Claude conversation. Save the document first — the session runs in the document's folder.
+- **If Claude Code produced the document's text,** pick that session from the list (Quill auto-suggests it on open when it can match the text to a session), so replies carry the full memory of having written it.
 
-   ```bash
-   claude plugin marketplace add sam-powers/quill
-   claude plugin install quill-integration@quill-official
-   ```
+Either way, add a comment mentioning `@claude` and the answer streams into the thread. Ask for a change — _"@claude tighten this section"_ — and the revision arrives as a tracked change you accept or reject.
 
-The loop this enables: draft a document with Claude Code, run `/quill-integration:open-in-quill draft.md` in the session, and the document opens in Quill already linked to that session — comment `@claude …` anywhere and the agent that wrote the document answers, or revises it as tracked changes for you to accept or reject. See the [plugin README](./plugin/quill-integration/README.md) for details.
+**Starting from Claude Code instead?** A companion plugin adds a slash command that sends the document you're drafting straight into Quill, already opened to it — install and usage are in the [plugin README](./plugin/quill-integration/README.md). (Launch Quill once first, so macOS registers the `quill://` link scheme.)
 
-The document doesn't have to start in Claude Code, either: open any Markdown file — including one someone sent you — and choose **Start new session** in the session picker to give it a Claude conversation of its own.
+## Where Quill keeps your data
 
-## Building from source
+Everything Quill writes stays on your Mac. Two kinds of files:
 
-**Prerequisites:** [Node.js](https://nodejs.org) 22+, a [Rust toolchain](https://rustup.rs), and the [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform. The `@claude` feature additionally requires the [Claude Code](https://claude.com/claude-code) CLI on your `PATH`.
+- **Next to each document:** saving `report.md` also writes `report.comments.json` beside it — a companion file holding that document's comments, suggestions, chat, linked session, and reference folder. Keep the two together if you move the document; the companion file is deleted automatically on save when it holds nothing, so a document with no review data is just a plain `.md`.
+- **In the app-data folder** `~/Library/Application Support/io.github.sam-powers.quill/`: your open-tabs snapshot for crash recovery (`workspace.json`) and window position. Logs go to `~/Library/Logs/io.github.sam-powers.quill/`.
 
-```bash
-# Install JS dependencies
-npm install
+Two things reach the network, both only in a packaged (non-dev) build: `@claude` runs the local `claude` CLI (which talks to Anthropic under your account), and once per launch Quill checks GitHub for a newer release to show an in-app banner — it never downloads or installs anything itself. To remove all of Quill's own state, delete the two folders above; your documents and their companion files are untouched.
 
-# Run the full desktop app with hot reload
-npm run tauri dev
+## What Quill is not
 
-# Produce a distributable bundle for your platform
-npm run tauri build
-```
+- **Not collaborative.** No multi-user editing, no accounts, no cloud sync — one person, local files. If you need real-time co-editing, this isn't it.
+- **Not cross-platform (yet).** macOS is the supported target; see [Installing Quill](#installing-quill).
+- **Not an auto-updater.** The launch check only notifies; you decide when to install a new version.
+- **Not a general chat client.** The AI is scoped to the open document — its job is reviewing and revising that text, not open-ended conversation.
 
-`npm run dev` runs only the Vite frontend in a browser (no native window, no file I/O) — useful for UI work.
+## Troubleshooting
 
-## Development
+**`@claude` replies fail immediately, or the reply shows:** _"Could not find the `claude` CLI. Install it (https://docs.claude.com/claude-code) and make sure it's on your PATH, then restart Quill."_
+Cause: the Claude Code CLI isn't installed or isn't on your `PATH`. Fix: confirm `claude --version` works in a terminal, then restart Quill. See [The `@claude` features](#the-claude-features).
 
-```bash
-npm run typecheck     # tsc --noEmit
-npm run lint          # eslint
-npm run format:check  # prettier --check
-npm test              # vitest (unit + component)
-npx playwright test   # end-to-end (requires browsers: npx playwright install)
+**`npm run tauri dev` exits with:** _"Error: Port 1420 is already in use"_
+Cause: another process (often a second copy of Quill's dev server) holds the port Quill's frontend expects. Fix: stop the other process — `lsof -i :1420` shows which one — then rerun.
 
-cd src-tauri && cargo test && cargo clippy -- -D warnings && cargo fmt --check
-```
+**`npm run tauri dev` fails during the Rust compile, or `cargo` isn't found.**
+Cause: a missing or incomplete Tauri toolchain. Fix: confirm `rustc --version` and `xcode-select -p` per [Prerequisites](#prerequisites), then work through the [Tauri prerequisites page](https://v2.tauri.app/start/prerequisites/).
 
-CI runs the full frontend and Rust suites on every push and pull request to `main`. Pushing a version tag (`v*`) triggers the [release workflow](./.github/workflows/release.yml), which builds macOS installers (Apple Silicon + Intel) and attaches them to a **draft** GitHub Release for a maintainer to review and publish.
+**A document opens with a warning about its comments file.**
+Cause: the companion `.comments.json` couldn't be parsed. Quill opens the Markdown safely with an empty review model and refuses to overwrite the unreadable file, so the original may be recoverable from a backup.
 
-### Project layout
+If none of these fit, open an issue on the repository with your macOS version, what you did, and what happened; for `@claude` problems, say whether `claude` works in your terminal.
 
-```
-src/                  React/TypeScript frontend
-  App.tsx             Top-level orchestration (editor, comments, suggestions, shortcuts)
-  components/         Editor, toolbar, comment/suggestion cards, footer, session picker
-  extensions/         Tiptap extensions: TrackChanges, Comment
-  hooks/              File I/O, comment/suggestion state, Claude replies
-  types/              Shared data contract (Comment, Suggestion, SidecarFile, …)
-  utils/              Pure helpers (sidecar paths, tracked-edit diffing)
-  test/               Vitest unit/component tests
-src-tauri/            Rust/Tauri backend (file I/O, dialogs, Claude session integration)
-e2e/                  Playwright end-to-end specs
-plugin/               Claude Code plugin that opens files in Quill via deep link
-.claude-plugin/       Marketplace manifest so `claude plugin marketplace add` finds the plugin
-docs/                 Design references and supporting docs
-```
+## Contributing
 
-See [`PRD.md`](./PRD.md) for the full as-built product spec and [`CLAUDE.md`](./CLAUDE.md) for architecture notes.
+Bug reports and pull requests are welcome. [`CONTRIBUTING.md`](./CONTRIBUTING.md) has the development setup and the exact check bar CI runs; [`CLAUDE.md`](./CLAUDE.md) is the architecture guide for the codebase, and [`PRD.md`](./PRD.md) is the as-built product spec.
 
 ## License
 
-Released under the [Apache License 2.0](./LICENSE).
+Released under the [Apache License 2.0](./LICENSE). Quill was created by Sam Powers ([sam-powers/quill](https://github.com/sam-powers/quill)); see [`NOTICE`](./NOTICE) for attribution.

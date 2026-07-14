@@ -228,7 +228,7 @@ test('Stop cancels a live turn and Retry reuses the same message', async ({ page
   await expect(page.locator('.chat-message-assistant')).toHaveCount(1);
 });
 
-test('document chat and @claude replies never resume the same session concurrently', async ({
+test('document chat and anchored Claude replies never resume the same session concurrently', async ({
   page,
 }) => {
   await setupChatScripts(page, [
@@ -251,8 +251,8 @@ test('document chat and @claude replies never resume the same session concurrent
   await activeEditor(page).click();
   await page.keyboard.press('ControlOrMeta+a');
   await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('@claude Please tighten this');
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.locator('.add-comment-compose textarea').fill('Please tighten this');
+  await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
 
   const busyReply = activeTabHost(page).locator('.comment-reply-ai').last();
   await expect(busyReply).toContainText('already responding in this document');

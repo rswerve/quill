@@ -24,9 +24,11 @@ function comment(
   range: ParagraphRange,
   resolved: boolean,
   replies: Array<Record<string, unknown>> = [],
+  kind: 'note' | 'claude' = 'note',
 ) {
   return {
     id,
+    kind,
     anchorText: range.text,
     from: range.from,
     to: range.to,
@@ -57,7 +59,7 @@ async function openReviewFile(
   await openMemoryFile(page);
 }
 
-test('All is a document-ordered history list with independent scrolling; Open stays synced', async ({
+test('Open and Resolved are document-ordered lists with isolated scrolling and active sync', async ({
   page,
 }) => {
   const paragraphs = Array.from(
@@ -65,7 +67,7 @@ test('All is a document-ordered history list with independent scrolling; Open st
     (_, index) => `Paragraph ${index} has enough prose to make the document comfortably tall.`,
   );
   const ranges = paragraphRanges(paragraphs);
-  const indexes = [2, 5, 9, 13, 18, 23, 29, 35];
+  const indexes = [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35];
   const comments = indexes
     .map((index, order) =>
       comment(String(order), ranges[index], order % 2 === 0, [
@@ -82,54 +84,68 @@ test('All is a document-ordered history list with independent scrolling; Open st
   await openReviewFile(page, paragraphs, comments);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
-  const history = activeTab.locator('.comment-history-list');
-  await expect(history).toBeVisible();
-  await expect(page.locator('.comment-card')).toHaveCount(comments.length);
-  await expect(page.locator('.offscreen-pill')).toHaveCount(0);
-  await expect(activeTab.locator('.comment-layer-scroll')).toHaveCount(0);
-  await expect(activeTab.locator('.editor-bottom-spacer')).toHaveCount(0);
+  const panelList = activeTab.locator('.comment-panel-list');
+  const editorScroll = activeTab.locator('.editor-scroll-area');
+  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Open');
+  await expect(panelList).toBeVisible();
+  await expect(activeTab.locator('.annotation-gutter')).toBeVisible();
+  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
   expect(
     await page
       .locator('.comment-card')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
-  ).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
+  ).toEqual(['1', '3', '5', '7', '9', '11']);
 
-  const editorScroll = activeTab.locator('.editor-scroll-area');
+  // Scrolling the document selects its nearest annotation and nudges the flat
+  // list only as needed; there is no translated card layer.
+  await editorScroll.hover();
+  await page.mouse.wheel(0, 900);
+  await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(activeTab.locator('.comment-card-active')).toHaveCount(1);
+  await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  await activeTab.locator('.comments-head .filter').click();
+  const history = activeTab.locator('.comment-history-list');
+  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Resolved');
+  await expect(history).toBeVisible();
+  await expect(activeTab.locator('.annotation-gutter')).toBeHidden();
+  await expect(activeTab.locator('.annotation-gutter-tick')).toHaveCount(0);
+  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  expect(
+    await page
+      .locator('.comment-card')
+      .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
+  ).toEqual(['0', '2', '4', '6', '8', '10']);
+
   const editorBefore = await editorScroll.evaluate((element) => element.scrollTop);
   await history.hover();
   await page.mouse.wheel(0, 700);
   await expect.poll(() => history.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   expect(await editorScroll.evaluate((element) => element.scrollTop)).toBe(editorBefore);
-  await expect(page.locator('.comment-card')).toHaveCount(comments.length);
-
-  await activeTab.locator('.comments-head .filter').click();
-  await expect(history).toHaveCount(0);
-  await expect(activeTab.locator('.comment-layer-scroll')).toBeVisible();
-  await editorScroll.evaluate((element) => {
-    element.scrollTop = 900;
-    element.dispatchEvent(new Event('scroll'));
-  });
-  await expect
-    .poll(() => activeTab.locator('.comment-layer-scroll').getAttribute('style'))
-    .toContain('translateY(-900px)');
+  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
 });
 
-test('View suggestion from All switches to Open before focusing the existing suggestion', async ({
+test('View suggestion from Resolved switches to Open before focusing the existing suggestion', async ({
   page,
 }) => {
   const paragraphs = ['hello world'];
   const [range] = paragraphRanges(paragraphs);
-  const origin = comment('1', { ...range, text: 'hello', to: 6 }, true, [
-    {
-      id: 'ai-reply',
-      author: 'Claude',
-      text: 'I proposed the linked edit.',
-      createdAt: '2026-07-12T19:00:00Z',
-      authorKind: 'ai',
-      suggestionIds: ['linked-insert'],
-    },
-  ]);
+  const origin = comment(
+    '1',
+    { ...range, text: 'hello', to: 6 },
+    true,
+    [
+      {
+        id: 'ai-reply',
+        author: 'Claude',
+        text: 'I proposed the linked edit.',
+        createdAt: '2026-07-12T19:00:00Z',
+        authorKind: 'ai',
+        suggestionIds: ['linked-insert'],
+      },
+    ],
+    'claude',
+  );
   const suggestion = {
     id: 'linked-insert',
     type: 'insertion',
@@ -148,7 +164,7 @@ test('View suggestion from All switches to Open before focusing the existing sug
   await activeTab.locator('.comments-head .filter').click();
   await expect(activeTab.locator('.comment-history-list')).toBeVisible();
   await expect(page.locator('.suggestion-card')).toHaveCount(0);
-  await page.getByRole('button', { name: /View suggestion/i }).click();
+  await page.getByRole('button', { name: /suggestions?/i }).click();
 
   await expect(activeTab.locator('.comments-head .filter')).toContainText('Open');
   await expect(page.locator('.comment-history-list')).toHaveCount(0);

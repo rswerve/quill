@@ -19,11 +19,11 @@ async function addComment(page: Page, text: string) {
   await page.locator('.add-comment-btn').click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill(text);
-  await textarea.press('ControlOrMeta+Enter');
+  await textarea.press('ControlOrMeta+Shift+Enter');
   await expect(page.locator('.comment-card-active')).toBeVisible();
 }
 
-test('off-screen anchors collapse into navigable above and below pills', async ({ page }) => {
+test('off-screen anchors collapse into navigable gutter counts', async ({ page }) => {
   const editor = await setup(page);
   await page.keyboard.insertText('Opening anchor.');
   await selectCurrentLine(page);
@@ -42,13 +42,14 @@ test('off-screen anchors collapse into navigable above and below pills', async (
   await addComment(page, 'bottom note');
 
   await expect(page.locator('.panel-tab-count')).toHaveText('2');
-  const above = page.locator('.offscreen-pill-above');
-  await expect(above).toHaveText('▲ 1 above');
+  const above = page.locator('.annotation-gutter-count-above');
+  await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
   await above.click();
   await expect(page.locator('.comment-card-active')).toContainText('top note');
-  await expect(page.locator('.offscreen-pill-below')).toHaveText('▼ 1 below');
+  const below = page.locator('.annotation-gutter-count-below');
+  await expect(below).toHaveAttribute('aria-label', '1 annotations below the viewport');
 
-  await page.locator('.offscreen-pill-below').click();
+  await below.click();
   await expect(page.locator('.comment-card-active')).toContainText('bottom note');
-  await expect(page.locator('.offscreen-pill-above')).toHaveText('▲ 1 above');
+  await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
 });

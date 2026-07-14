@@ -70,6 +70,11 @@ export interface Comment {
   author: string;
   createdAt: string;
   resolved: boolean;
+  /**
+   * Single-player margin model: a private local `note` (never sent to Claude)
+   * or a `claude` thread (the user's request plus Claude's replies).
+   */
+  kind: 'note' | 'claude';
   replies: Reply[];
 }
 

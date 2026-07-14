@@ -11,6 +11,7 @@ import autoBindSession from '../../../test/fixtures/ipc/auto-bind-session.json';
 
 const validComment = {
   id: 'c1',
+  kind: 'note',
   anchorText: 'hello',
   from: 3,
   to: 8,
@@ -59,8 +60,16 @@ const validLogicalSuggestion = {
 };
 
 describe('sanitizeComments', () => {
-  it('keeps a well-formed comment', () => {
+  it('preserves a well-formed private note', () => {
     expect(sanitizeComments([validComment])).toEqual([validComment]);
+  });
+
+  it.each([undefined, 'unexpected'])('defaults a missing or malformed %s kind to note', (kind) => {
+    expect(sanitizeComments([{ ...validComment, kind }])[0].kind).toBe('note');
+  });
+
+  it.each(['note', 'claude'] as const)('preserves an explicit %s identity', (kind) => {
+    expect(sanitizeComments([{ ...validComment, kind }])[0].kind).toBe(kind);
   });
 
   it('returns [] for non-array input', () => {
