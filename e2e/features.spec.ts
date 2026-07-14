@@ -14,6 +14,7 @@ import {
   expectPageTitleToContain,
   expectSelectionText,
 } from './helpers/deterministicWaits';
+import { selectLastCharacters } from './helpers/memoryTauri';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,11 +55,7 @@ async function selectAll(page: Page) {
 }
 
 async function selectLastNChars(page: Page, n: number) {
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < n; i++) await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page);
+  await selectLastCharacters(page, n);
 }
 
 async function addCommentViaPlusButton(page: Page, replyText: string) {
@@ -67,7 +64,7 @@ async function addCommentViaPlusButton(page: Page, replyText: string) {
   await btn.click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill(replyText);
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.getByRole('button', { name: 'Add note' }).click();
   await expect(page.locator('.add-comment-compose')).toHaveCount(0);
 }
 
@@ -97,7 +94,7 @@ test('blank document and comments panel show restrained Studio empty states', as
   const commentsEmpty = page.locator('.comments-empty-state');
   await expect(commentsEmpty).toBeVisible();
   await expect(commentsEmpty).toContainText('No comments yet');
-  await expect(commentsEmpty).toContainText('Select text and press +, or type @claude.');
+  await expect(commentsEmpty).toContainText('Select text and press + to add a note or ask Claude.');
 
   // The empty prompt is chrome, not editor content or saved Markdown.
   await expect(editor).not.toContainText('Untitled');
@@ -722,7 +719,7 @@ test('pending highlight disappears when the composer is cancelled', async ({ pag
   await selectAll(page);
   await page.locator('.add-comment-btn').click();
   await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
-  await page.locator('.add-comment-compose .btn-ghost').click(); // Cancel
+  await page.keyboard.press('Escape');
   await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
   await expectEditorHtml(editor, { excludes: ['comment-mark'] });
 });
@@ -767,26 +764,28 @@ test('comment card shows the anchor text snippet', async ({ page }) => {
   await expect(page.locator('.comment-anchor-text').first()).toContainText('fox');
 });
 
-test('reply button reveals a reply textarea', async ({ page }) => {
+test('a private note offers promotion instead of a reply textarea', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'first');
-  await page.locator('.comment-reply-trigger').click();
-  await expect(page.locator('.comment-reply-input')).toBeVisible();
+  await expect(page.locator('.comment-card-note')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ask Claude about this' })).toBeVisible();
+  await expect(page.locator('.comment-reply-trigger')).toHaveCount(0);
 });
 
-test('submitting a reply appends it to the card', async ({ page }) => {
+test('promoting a note converts it to a Claude thread and opens session linking', async ({
+  page,
+}) => {
   await setup(page);
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'first');
-  await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill('second');
-  await page.locator('.comment-card .btn-primary').click();
-  const card = page.locator('.comment-card').first();
-  await expect(card).toContainText('first');
-  await expect(card).toContainText('second');
+  await page.getByRole('button', { name: 'Ask Claude about this' }).click();
+
+  await expect(page.locator('.comment-card-claude')).toContainText('first');
+  await expect(page.locator('.comment-note-badge')).toHaveCount(0);
+  await expect(page.locator('.session-picker')).toBeVisible();
 });
 
 test('resolving a comment hides it from the default view', async ({ page }) => {
@@ -837,7 +836,7 @@ test('deleting a comment removes the card and the mark', async ({ page }) => {
 });
 
 test('multiple comments stack without overlapping', async ({ page }) => {
-  await setup(page);
+  const { editor } = await setup(page);
   await page.keyboard.type('one two three');
   // Comment on "one"
   await page.keyboard.press('Home');
@@ -846,10 +845,13 @@ test('multiple comments stack without overlapping', async ({ page }) => {
   await page.keyboard.up('Shift');
   await addCommentViaPlusButton(page, 'A');
   // Comment on "three"
+  await editor.click();
+  await expect(editor).toBeFocused();
   await page.keyboard.press('End');
   await page.keyboard.down('Shift');
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
   await page.keyboard.up('Shift');
+  await expectSelectionText(page, 'three');
   await addCommentViaPlusButton(page, 'B');
 
   const cards = page.locator('.comment-card');
@@ -872,7 +874,7 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await addCommentViaPlusButton(page, 'note');
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
-  await expect(page.locator('.annotation-connector')).toBeVisible();
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
 });
 
 test('Escape clears the annotation focus', async ({ page }) => {
@@ -884,7 +886,7 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('.comment-card-active')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
-  await expect(page.locator('.annotation-connector')).toHaveCount(0);
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toHaveCount(0);
 });
 
 test('clicking commented text activates its card', async ({ page }) => {
@@ -898,6 +900,7 @@ test('clicking commented text activates its card', async ({ page }) => {
   await editor.locator('mark.comment-mark').click();
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
 });
 
 test('clicking plain text clears the annotation focus', async ({ page }) => {
@@ -1251,7 +1254,7 @@ test('add-comment button stays aligned with the selection across zoom levels', a
   expect(Math.abs(deltaLarge - deltaSmall)).toBeLessThan(5);
 });
 
-test('comment card realigns with its anchor when zoom changes', async ({ page }) => {
+test('gutter tick realigns with its anchor when zoom changes', async ({ page }) => {
   const { editor } = await setup(page);
   for (let i = 0; i < 3; i++) {
     await editor.type(`Paragraph number ${i} with some filler text.`);
@@ -1262,19 +1265,15 @@ test('comment card realigns with its anchor when zoom changes', async ({ page })
 
   const mark = page.locator('mark.comment-mark');
   const card = page.locator('.comment-card');
+  const tick = page.locator('.annotation-gutter-tick');
   await expect(card).toBeVisible();
+  await expect(tick).toBeVisible();
+  await expect(card).toHaveCSS('position', 'relative');
 
   const alignmentError = async () => {
     const markBox = (await mark.boundingBox())!;
-    const cardBox = (await card.boundingBox())!;
-    const panelBox = (await page.locator('.comments').boundingBox())!;
-    const expectedTop = Math.min(
-      Math.max(markBox.y, panelBox.y + 44),
-      // Maz removed the 62px general-comment chrome; anchored cards now use
-      // the full panel height and clamp directly above its bottom edge.
-      panelBox.y + panelBox.height - cardBox.height,
-    );
-    return Math.abs(cardBox.y - expectedTop);
+    const tickBox = (await tick.boundingBox())!;
+    return Math.abs(tickBox.y + tickBox.height / 2 - markBox.y);
   };
 
   await setZoom(page, 0.6);

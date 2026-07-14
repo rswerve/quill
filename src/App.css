@@ -53,6 +53,20 @@
   --ai-badge-bg:   #E4ECF1;
   --ai-badge-text: #4A6E88;
   --chat-bubble-user: #B65C38;
+  --note-stripe: #B7AF9C;
+  --note-badge-bg: #EFEBE0;
+  --note-hl-underline: #A29A87;
+  --note-quote-bg: #F1EDE2;
+  --note-quote-rule: #C9C2AF;
+  --gutter-note: #8B8371;
+  --gutter-note-rest: #B0A895;
+  --gutter-thread: #B65C38;
+  --gutter-note-halo: rgba(139,131,113,0.22);
+  --gutter-thread-halo: rgba(182,92,56,0.20);
+  --gutter-guide: #EFEBE0;
+  --gutter-count-text: #8B8371;
+  --panel-scrollbar-thumb: #C9C2AF;
+  --annotation-focus-shadow: 0 10px 26px rgba(80,55,30,0.14);
 }
 
 /* prettier-ignore */
@@ -101,6 +115,20 @@
   --ai-badge-bg:   #2B3A4A;
   --ai-badge-text: #83A598;
   --chat-bubble-user: #D65D0E;
+  --note-stripe: #665C54;
+  --note-badge-bg: #3C3836;
+  --note-hl-underline: #7C6F64;
+  --note-quote-bg: #282828;
+  --note-quote-rule: #665C54;
+  --gutter-note: #A89984;
+  --gutter-note-rest: #7C6F64;
+  --gutter-thread: #FE8019;
+  --gutter-note-halo: rgba(168,153,132,0.22);
+  --gutter-thread-halo: rgba(254,128,25,0.20);
+  --gutter-guide: #3C3836;
+  --gutter-count-text: #928374;
+  --panel-scrollbar-thumb: #504945;
+  --annotation-focus-shadow: 0 10px 26px rgba(0,0,0,0.45);
 }
 /* prettier-ignore */
 :root[data-theme="paper"]   { --accent-text: var(--accent); }
@@ -217,6 +245,8 @@
   --toolbar-height: 44px;
   --statusbar-height: 34px;
   --comment-panel-width: 320px;
+  --comment-panel-header-height: 44px;
+  --annotation-gutter-width: 22px;
   --page-max-width: 640px;
   /* Studio fixes the document column at 640px; print flattens this shell so
      exported PDFs retain their independent US-Letter layout. */
@@ -754,15 +784,6 @@ select {
   gap: var(--editor-scroll-gap);
 }
 
-/* Extends the scroll range so a comment/suggestion card anchored near the end
-   of the document can be scrolled fully into view (sized dynamically in App;
-   only present when > 0). flex-shrink: 0 so the flex column honors its height. */
-.editor-bottom-spacer {
-  flex-shrink: 0;
-  width: 100%;
-  pointer-events: none;
-}
-
 /* ── Page surface ───────────────────────────────────────────────── */
 .editor-page-zoom-wrapper {
   /* App sets a percentage here. Unlike CSS zoom/transform, inherited
@@ -1029,6 +1050,10 @@ mark.comment-mark {
   padding: 1px 0;
   cursor: pointer;
 }
+mark.comment-mark[data-comment-kind='note'] {
+  background: var(--bg-hover);
+  border-bottom: 1px dashed var(--note-hl-underline);
+}
 mark.comment-active {
   background: var(--color-highlight-bg);
 }
@@ -1155,22 +1180,7 @@ del.track-delete {
   padding-top: var(--space-md);
 }
 
-/* Inner wrapper translated by the editor's scrollTop so cards scroll in
-   lockstep with the document. Cards inside are absolutely positioned. The
-   wrapper spans the whole layer but must not intercept clicks on chrome that
-   sits above it (e.g. the "Show resolved" button) — only its card children
-   are interactive. */
-.comment-layer-scroll {
-  position: absolute;
-  inset: 0;
-  will-change: transform;
-  pointer-events: none;
-}
-
 .comment-layer > .show-resolved-btn {
-  pointer-events: auto;
-}
-.comment-layer-scroll > * {
   pointer-events: auto;
 }
 
@@ -1190,33 +1200,16 @@ del.track-delete {
 .comment-card:hover {
   border-color: var(--color-accent-mid);
 }
-.comment-card-active {
-  border-color: var(--color-accent-mid) !important;
-}
 .comment-card-resolved {
   opacity: 0.55;
 }
 
 .comment-header {
-  padding: 10px 12px 8px;
-  border-bottom: 0.5px solid var(--color-border-light);
   display: flex;
   align-items: center;
-  gap: 7px;
-}
-
-.comment-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-full);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--text-label);
-  font-weight: 700;
-  flex-shrink: 0;
-  background: var(--color-human-avatar-bg);
-  color: var(--color-human-avatar-text);
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--note-badge-bg);
 }
 
 .comment-author {
@@ -1227,30 +1220,43 @@ del.track-delete {
 }
 
 .comment-time {
-  font-size: var(--text-label);
-  font-weight: 400;
-  color: var(--color-ink-mid);
   margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .comment-anchor-text {
-  font-size: var(--text-ui);
-  font-weight: 400;
-  color: var(--color-ink-mid);
-  font-style: italic;
-  padding: 0 12px;
-  padding-top: 6px;
-  white-space: nowrap;
+  margin: 11px 12px 0;
+  padding: 3px 9px;
   overflow: hidden;
+  border-left: 2.5px solid;
+  border-radius: 0 5px 5px 0;
+  color: var(--text-muted);
+  font-family: var(--font-doc-body);
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.4;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comment-card-note .comment-anchor-text {
+  border-left-color: var(--note-quote-rule);
+  background: var(--note-quote-bg);
+}
+.comment-card-claude .comment-anchor-text {
+  border-left-color: var(--hl-line);
+  background: var(--hl-bg);
 }
 
 .comment-reply-text {
-  font-size: var(--text-ui);
+  margin: 0;
+  padding: 0;
+  color: var(--text-body);
+  font-size: 12.5px;
   font-weight: 400;
-  line-height: var(--leading-ui);
-  color: var(--color-ink);
-  padding: 8px 12px;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1259,17 +1265,69 @@ del.track-delete {
   display: none;
 }
 
-/* ── Comment reply block ────────────────────────────────────────── */
-.comment-reply {
-  padding: 8px 12px 10px;
-  border-top: 0.5px solid var(--color-border-light);
-  background: var(--color-ai-bg);
+.comments .comment-card > .comment-thread-line {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  width: 3px;
+  pointer-events: none;
+}
+.comment-card-note .comment-thread-line {
+  background: var(--note-stripe);
+}
+.comment-card-claude .comment-thread-line {
+  background: var(--accent);
 }
 
-.comment-reply .comment-header {
+.comment-note-badge {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--note-badge-bg);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+.comment-thread-title,
+.comment-reply-claude {
+  flex: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.comment-note-body {
+  padding: 10px 12px 12px;
+  color: var(--text-body);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Comment reply block ────────────────────────────────────────── */
+.comment-reply {
+  margin: 11px 12px 0;
   padding: 0;
-  border-bottom: none;
-  margin-bottom: 4px;
+  border: 0;
+  background: transparent;
+}
+
+.comment-user-band {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--bg-rail);
+}
+
+.comment-reply-claude {
+  display: block;
+  margin-bottom: 5px;
 }
 
 /* ── Comment action buttons ─────────────────────────────────────── */
@@ -1278,13 +1336,13 @@ del.track-delete {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   background: none;
   border: none;
   cursor: pointer;
-  font-size: var(--text-ui);
-  color: var(--color-ink-mid);
+  color: var(--text-faint);
+  font-size: 13px;
   padding: 0;
   line-height: 1;
   border-radius: var(--radius-sm);
@@ -1292,34 +1350,62 @@ del.track-delete {
   font-weight: 400;
 }
 .comment-resolve-btn:hover {
-  color: var(--color-accent);
-  background: var(--color-accent-light);
+  color: var(--text-muted);
+  background: var(--bg-hover);
 }
 .comment-delete-btn:hover {
-  color: var(--color-track-del-text);
-  background: var(--color-track-del-bg);
+  color: var(--text-muted);
+  background: var(--bg-hover);
 }
 
 /* ── Reply form ─────────────────────────────────────────────────── */
 .comment-reply-trigger {
   display: block;
-  margin: 0 12px 8px;
-  font-size: var(--text-ui);
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--note-badge-bg);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: 12px;
   font-weight: 400;
-  color: var(--color-ink-mid);
-  background: none;
-  border: none;
   cursor: pointer;
-  padding: 2px 0;
   text-align: left;
 }
 .comment-reply-trigger:hover {
-  color: var(--color-accent);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.comment-promote-note {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid var(--note-badge-bg);
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.comment-promote-note:hover {
+  background: var(--bg-hover);
+}
+.comment-promote-note > span {
+  color: var(--accent-text);
 }
 
 .comment-reply-form {
-  margin: 0;
-  border-top: 0.5px solid var(--color-border-light);
+  margin: 12px 0 0;
+  border-top: 1px solid var(--note-badge-bg);
 }
 
 .comment-reply-input {
@@ -1342,6 +1428,11 @@ del.track-delete {
   gap: 6px;
   padding: 8px 12px;
   border-top: 0.5px solid var(--color-border-light);
+}
+
+.comment-reply-form .comment-reply-actions {
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* ── Add comment button / compose ───────────────────────────────── */
@@ -1516,9 +1607,6 @@ del.track-delete {
 }
 .suggestion-card:hover {
   border-color: var(--color-accent-mid);
-}
-.suggestion-card-active {
-  border-color: var(--color-accent-mid) !important;
 }
 .suggestion-card-insert .comment-thread-line {
   background: var(--color-track-add-line);
@@ -1728,24 +1816,7 @@ del.track-delete {
   user-select: none;
 }
 
-/* ── AI reply (Claude) ─────────────────────────────────────────── */
-.comment-reply-ai {
-  background: var(--color-ai-bg);
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-top: 6px;
-  border-top: none;
-}
-.comment-reply-ai .comment-header {
-  align-items: center;
-}
-.comment-reply-model {
-  font-family: var(--font-mono);
-  color: var(--color-ink-light);
-  font-size: var(--text-label);
-  font-weight: 500;
-  white-space: nowrap;
-}
+/* Shared AI badge remains in use by chat and suggestion cards. */
 .ai-badge {
   display: inline-block;
   background: var(--color-accent);
@@ -2565,18 +2636,18 @@ del.track-delete {
 .comments.comment-layer {
   position: relative;
   inset: auto;
-  width: 320px;
+  width: calc(var(--comment-panel-width) + var(--annotation-gutter-width));
   height: auto;
   flex: none;
-  padding: 0;
+  padding: 0 0 0 var(--annotation-gutter-width);
   display: flex;
   flex-direction: column;
-  overflow: visible;
+  overflow: hidden;
   background: var(--bg-panel);
-  border-left: 1px solid var(--border);
+  border-left: 0;
 }
 .comments-head {
-  height: 44px;
+  height: var(--comment-panel-header-height);
   flex: none;
   z-index: 8;
   border-bottom: 1px solid var(--border);
@@ -2721,13 +2792,6 @@ del.track-delete {
 .filter:disabled {
   cursor: default;
 }
-.comments .comment-layer-scroll {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-}
-
 /* Document chat — full document/session/reference context is implicit. */
 .chat-view {
   display: flex;
@@ -2986,74 +3050,259 @@ del.track-delete {
   opacity: 0.38;
   cursor: default;
 }
-.comment-history-list {
+.comment-panel-list {
   min-height: 0;
   flex: 1;
-  padding: 12px 10px 24px;
+  padding: 14px;
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scrollbar-color: var(--border-strong) transparent;
+  outline: none;
+  scrollbar-color: transparent transparent;
   scrollbar-width: thin;
 }
-.comment-history-list .comment-card {
+
+.comment-panel-list:hover,
+.comment-panel-list[data-scrolling='true'] {
+  scrollbar-color: var(--panel-scrollbar-thumb) transparent;
+}
+
+.comment-panel-list .comment-card,
+.comment-panel-list .suggestion-card,
+.comment-panel-list .add-comment-compose {
   position: relative;
-  top: auto;
-  right: auto;
-  left: auto;
+  top: auto !important;
+  right: auto !important;
+  left: auto !important;
   width: 100%;
   max-width: none;
   flex: none;
 }
-.comment-history-list::-webkit-scrollbar {
-  width: 6px;
+
+.comment-panel-list::-webkit-scrollbar {
+  width: 4px;
 }
-.comment-history-list::-webkit-scrollbar-track {
+.comment-panel-list::-webkit-scrollbar-track {
   background: transparent;
 }
-.comment-history-list::-webkit-scrollbar-thumb {
+.comment-panel-list::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: var(--border-strong);
+  background: transparent;
+  transition: background 0.16s ease;
 }
-.offscreen-pill {
+
+.comment-panel-list:hover::-webkit-scrollbar-thumb,
+.comment-panel-list[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background: var(--panel-scrollbar-thumb);
+}
+
+.annotation-gutter {
   position: absolute;
-  right: 0;
   left: 0;
-  height: 30px;
-  z-index: 7;
+  /* Absolute positioning resolves against the containing panel, not the
+     comments-view child, so zero shares the editor viewport's origin. */
+  top: 0;
+  bottom: 0;
+  width: var(--annotation-gutter-width);
+  z-index: 9;
+  overflow: visible;
+  border-right: 1px solid var(--gutter-guide);
+  background: var(--bg-app);
+  pointer-events: none;
+}
+
+.annotation-gutter-guide {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+  background: var(--gutter-guide);
+}
+
+.annotation-gutter button {
   border: 0;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.annotation-gutter-tick {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
-  color: var(--text-dim);
-  font-size: 11px;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
+  background: transparent;
 }
-.offscreen-pill:hover {
-  color: var(--text-muted);
+
+.annotation-gutter-mark {
+  width: 7px;
+  height: 7px;
+  display: block;
+  opacity: 0.63;
+  transition:
+    width 0.12s ease,
+    height 0.12s ease,
+    opacity 0.12s ease,
+    box-shadow 0.14s ease;
 }
-.offscreen-pill-above {
-  top: 44px;
-  border-bottom: 1px solid var(--badge-format-bg);
+
+.annotation-gutter-mark-note {
+  border-radius: 50%;
+  background: var(--gutter-note-rest);
 }
-.offscreen-pill-below {
-  bottom: 0;
-  border-top: 1px solid var(--badge-format-bg);
+
+.annotation-gutter-mark-claude {
+  transform: rotate(45deg);
+  background: var(--gutter-thread);
 }
-.annotation-connector {
+
+.annotation-gutter-tick:hover .annotation-gutter-mark,
+.annotation-gutter-tick:focus-visible .annotation-gutter-mark {
+  width: 8px;
+  height: 8px;
+  opacity: 1;
+}
+
+.annotation-gutter-tick:hover .annotation-gutter-mark-note,
+.annotation-gutter-tick:focus-visible .annotation-gutter-mark-note {
+  background: var(--gutter-note);
+}
+
+.annotation-gutter-tick:focus-visible {
+  outline: none;
+}
+
+.annotation-gutter-mark.is-active {
+  width: 9px;
+  height: 9px;
+  opacity: 1;
+}
+
+.annotation-gutter-mark-note.is-active {
+  background: var(--gutter-note);
+  box-shadow: 0 0 0 5.5px var(--gutter-note-halo);
+}
+
+.annotation-gutter-mark-claude.is-active {
+  box-shadow: 0 0 0 5.5px var(--gutter-thread-halo);
+}
+
+.annotation-gutter-count {
   position: absolute;
-  left: -44px;
-  width: 44px;
-  height: 1px;
-  z-index: 4;
+  left: 50%;
+  min-width: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: color-mix(in srgb, var(--bg-app) 92%, transparent);
+  color: var(--gutter-count-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1;
+}
+
+.annotation-gutter-count:hover,
+.annotation-gutter-count:focus-visible {
+  color: var(--text-muted);
+  outline: none;
+}
+
+.annotation-gutter-count-above {
+  top: 5px;
+}
+
+.annotation-gutter-count-below {
+  bottom: 5px;
+}
+
+.annotation-gutter-cluster {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  background: transparent;
+}
+
+.annotation-gutter-cluster-count {
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--gutter-count-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  transition: opacity 0.12s ease;
+}
+
+.annotation-gutter-cluster.is-active .annotation-gutter-cluster-count {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gutter-note) 15%, transparent);
+}
+
+.annotation-gutter-cluster-fan {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
   pointer-events: none;
-  background: var(--hl-line);
-  opacity: 0.5;
+  transition: opacity 0.12s ease;
+}
+
+.annotation-gutter-cluster-member {
+  --annotation-fan-offset: 0px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, calc(-50% + var(--annotation-fan-offset)));
+  display: flex;
+  align-items: center;
+}
+
+.annotation-gutter-cluster-member .annotation-gutter-mark {
+  width: 6px;
+  height: 6px;
+  opacity: 1;
+}
+
+.annotation-gutter-cluster-connector {
+  position: absolute;
+  right: 7px;
+  width: 5px;
+  height: 1px;
+  background: var(--gutter-guide);
+}
+
+.annotation-gutter-cluster:hover .annotation-gutter-cluster-count,
+.annotation-gutter-cluster:focus-visible .annotation-gutter-cluster-count {
+  opacity: 0;
+}
+
+.annotation-gutter-cluster:hover .annotation-gutter-cluster-fan,
+.annotation-gutter-cluster:focus-visible .annotation-gutter-cluster-fan {
+  opacity: 1;
+}
+
+.annotation-gutter-cluster:focus-visible {
+  outline: none;
 }
 .comments-empty-state {
   position: absolute;
@@ -3094,6 +3343,13 @@ del.track-delete {
   font-family: var(--font-mono);
   font-size: 10px;
 }
+.comment-panel-list .comments-empty-state {
+  position: static;
+  width: 100%;
+  margin: auto 0;
+  transform: none;
+  pointer-events: none;
+}
 .comment-inline-notice {
   margin: 0 13px 9px;
   color: var(--text-muted);
@@ -3102,8 +3358,8 @@ del.track-delete {
 }
 
 /* Selection comments use the hybrid flow from Design Q4: the trigger stays
-   beside the selection, while the captured quote and composer live in the
-   anchored panel-card system. */
+   beside the selection, while the captured quote and composer join the flat
+   panel list at their document position. */
 .studio-body .add-comment-btn {
   width: 28px;
   height: 28px;
@@ -3120,14 +3376,13 @@ del.track-delete {
   color: var(--accent-text);
 }
 .comments .add-comment-compose {
-  position: absolute;
-  right: 14px;
-  left: 14px;
-  width: auto;
+  position: relative;
+  right: auto;
+  left: auto;
+  width: 100%;
   z-index: 5;
   overflow: hidden;
-  border: 1px solid var(--border-card);
-  border-left: 3px solid var(--hl-line);
+  border: 1px solid var(--accent);
   border-radius: 10px;
   background: var(--bg-card);
   box-shadow: 0 5px 18px rgba(50, 42, 25, 0.1);
@@ -3137,13 +3392,14 @@ del.track-delete {
 }
 .comment-composer-quote {
   margin: 12px 12px 0;
-  padding: 7px 9px;
+  padding: 3px 9px;
   overflow: hidden;
-  border-left: 2px solid var(--hl-line);
-  background: var(--hl-bg);
+  border-left: 2.5px solid var(--note-quote-rule);
+  border-radius: 0 5px 5px 0;
+  background: var(--note-quote-bg);
   color: var(--text-muted);
   font-family: var(--font-doc-body);
-  font-size: 12.5px;
+  font-size: 12px;
   font-style: italic;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -3167,6 +3423,16 @@ del.track-delete {
   border-color: var(--accent);
   outline: 2px solid var(--hl-bg);
 }
+.composer-no-session {
+  margin: 6px 12px 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.composer-no-session-hint {
+  color: var(--text-muted);
+  font-weight: 600;
+}
 .comment-composer-tip {
   padding: 5px 13px 0;
   color: var(--text-faint);
@@ -3174,9 +3440,9 @@ del.track-delete {
   font-size: 9.5px;
 }
 .comments .comment-composer-actions {
-  margin-top: 8px;
-  padding: 8px 12px 10px;
-  border-top: 1px solid var(--border-card);
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--note-badge-bg);
 }
 .comments .comment-composer-actions .btn-primary,
 .comments .comment-composer-actions .btn-ghost {
@@ -3444,8 +3710,12 @@ del.track-delete {
 /* ── Studio suggestion cards (Phase C1) ───────────────────────── */
 .comments .comment-card,
 .comments .suggestion-card {
-  left: 14px;
-  right: 14px;
+  position: relative;
+  top: auto !important;
+  right: auto;
+  left: auto;
+  width: 100%;
+  flex: none;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: 10px;
@@ -3468,8 +3738,35 @@ del.track-delete {
 }
 .comments .comment-card-active,
 .comments .suggestion-card-active {
-  border-color: var(--accent) !important;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 10%, transparent);
+  transform: translateY(-1px);
+  box-shadow: var(--annotation-focus-shadow);
+}
+.comments .comment-card-active > .comment-thread-line {
+  width: 5px;
+}
+.comments .suggestion-card-active {
+  border-left-width: 5px;
+}
+.comments .comment-card,
+.comments .suggestion-card {
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.1s ease;
+}
+.annotation-card-flash {
+  animation: annotation-card-flash 0.5s ease-out;
+}
+@keyframes annotation-card-flash {
+  0% {
+    filter: brightness(1.06);
+  }
+  55% {
+    filter: brightness(1.025);
+  }
+  100% {
+    filter: brightness(1);
+  }
 }
 :root[data-theme='gruvbox'] .comments .suggestion-card-delete {
   border-left-color: var(--removed-accent);
@@ -3596,60 +3893,42 @@ del.track-delete {
   font-style: italic;
 }
 
-/* ── Studio Claude reply block (Design Q7) ───────────────────── */
+/* ── Single-player Claude thread turns ────────────────────────── */
 .comments .comment-reply-ai {
   position: relative;
-  margin-top: 0;
-  padding: 11px 13px 12px;
-  border-top: 1px solid var(--border-card);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--bg-panel) 46%, var(--bg-card));
-}
-.comments .comment-reply-ai .comment-header {
+  margin: 12px 12px 0;
   padding: 0;
   border: 0;
-  gap: 7px;
+  border-radius: 0;
+  background: transparent;
 }
-.comments .comment-reply-ai .comment-author {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text);
-  font-size: 12.5px;
+.comments .comment-reply-user {
+  margin: 11px 12px 0;
+}
+.comments .comment-user-band {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--bg-rail);
+}
+.comments .comment-reply-claude {
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 12px;
   font-weight: 600;
-}
-.comments .comment-reply-ai .ai-badge {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  padding: 0;
-  border-radius: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ai-badge-bg);
-  color: var(--ai-badge-text);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-.comments .comment-reply-model {
-  order: 2;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-}
-.comments .comment-reply-ai .comment-time {
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: 11px;
 }
 .comments .comment-reply-ai .comment-reply-text {
-  margin-top: 8px;
-  color: var(--text-muted);
+  margin: 0;
+  padding: 0;
+  color: var(--text-body);
   font-size: 12.5px;
   line-height: 1.55;
+}
+.comments .comment-user-band .comment-reply-text {
+  margin: 0;
+  padding: 0;
+  color: var(--text-body);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 .comments .ai-thinking {
   color: var(--text-dim);
@@ -3731,7 +4010,7 @@ del.track-delete {
   align-items: center;
   gap: 7px;
 }
-.reply-view-suggestion,
+.reply-suggestions-chip,
 .reply-dismiss {
   height: 27px;
   padding: 0 10px;
@@ -3742,12 +4021,12 @@ del.track-delete {
   font-size: 11.5px;
   cursor: pointer;
 }
-.reply-view-suggestion {
+.reply-suggestions-chip {
   background: var(--accent-soft);
   color: var(--accent-text);
   font-weight: 600;
 }
-.reply-view-suggestion:hover {
+.reply-suggestions-chip:hover {
   background: var(--hl-bg);
 }
 .reply-dismiss {
@@ -3811,17 +4090,6 @@ del.track-delete {
   background: var(--color-ink-light);
 }
 
-.comment-layer::-webkit-scrollbar {
-  width: 4px;
-}
-.comment-layer::-webkit-scrollbar-track {
-  background: transparent;
-}
-.comment-layer::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 2px;
-}
-
 /* ── Print / Export to PDF ──────────────────────────────────────────
    "Export to PDF" is print-to-PDF (handleExportPdf → window.print()), so
    these rules define the printed artifact: a *clean copy* of the document.
@@ -3849,7 +4117,6 @@ del.track-delete {
   .update-banner,
   .add-comment-btn,
   .add-comment-compose,
-  .editor-bottom-spacer,
   .app-modal-overlay {
     display: none !important;
   }

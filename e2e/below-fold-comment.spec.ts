@@ -1,13 +1,7 @@
 /**
- * Spec 09 — a comment anchored at the end of a viewport-filling document must be
- * scrollable fully into view without adding content to the doc.
- *
- * The card column is overflow-hidden and its cards paint at `nudgedTop − scrollTop`.
- * Before the fix, a card whose bottom sat past the document's own content was
- * unreachable: no scroll position revealed it. App now sizes a dynamic
- * `.editor-bottom-spacer` on the scrollable content (extending scroll range only
- * when a low-anchored card needs it) and `scrollCardIntoView` brings the full card
- * on-screen on activation. This test exercises the real layout end-to-end.
+ * A comment anchored at the end of a tall document remains reachable through
+ * the independent flat list and its gutter navigation. No annotation card may
+ * extend the document's own scroll range.
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -22,7 +16,7 @@ async function setup(page: Page) {
   return editor;
 }
 
-test('a comment on the last line of a tall document scrolls fully into view', async ({ page }) => {
+test('a last-line comment stays reachable without extending document scroll', async ({ page }) => {
   // Belt-and-braces: document setup dominates this test's runtime, and under
   // parallel-worker load the default 30s budget has been blown before the
   // assertion ever ran.
@@ -56,35 +50,40 @@ test('a comment on the last line of a tall document scrolls fully into view', as
   await plusBtn.click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill('last-line note');
-  // Submit via Cmd+Enter — the compose popover's submit button can render below
+  // Submit the local note via Cmd+Shift+Enter — the compose popover's buttons can render below
   // the fold for a last-line selection, so don't depend on it being on-screen.
-  await textarea.press('ControlOrMeta+Enter');
+  await textarea.press('ControlOrMeta+Shift+Enter');
 
-  // Scroll back to the top so the card starts off-screen and activation has to
-  // bring it into view (adding a comment focuses it, so scroll up first).
+  // Scroll back to the top. The card remains in the flat list while its text
+  // anchor collapses into the gutter's below-viewport count.
   const scrollArea = page.locator('.editor-scroll-area');
   await scrollArea.evaluate((el) => (el.scrollTop = 0));
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(page.locator('.editor-bottom-spacer')).toHaveCount(0);
 
-  // Activate the card by clicking its commented text.
-  const mark = editor.locator('mark[data-comment-id]').last();
-  await mark.scrollIntoViewIfNeeded();
-  await mark.click();
-
-  // The card must sit fully within the scroll area's viewport, with a positive
-  // bottom gap — proving the spacer opened enough range and scrollCardIntoView
-  // used it. No content was added to the document to make this fit.
-  const card = page.locator('.comment-card-active');
+  const panelList = page.locator('.comment-panel-list');
+  const card = page.locator('.comment-card');
   await expect(card).toBeVisible();
+  await expect(page.locator('.annotation-gutter-count-below')).toHaveAttribute(
+    'aria-label',
+    '1 annotations below the viewport',
+  );
+  await page.locator('.annotation-gutter-count-below').click();
+  await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await expect(card).toHaveClass(/comment-card-active/);
+
+  // Its card is contained by the panel's own viewport, independent of the
+  // document's scroll geometry.
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const area = document.querySelector('.editor-scroll-area') as HTMLElement;
-        const el = document.querySelector('.comment-card-active') as HTMLElement;
+        const area = document.querySelector('.comment-panel-list') as HTMLElement;
+        const el = document.querySelector('.comment-card') as HTMLElement;
         const a = area.getBoundingClientRect();
         const c = el.getBoundingClientRect();
-        return c.top >= a.top && c.bottom < a.bottom;
+        return c.top >= a.top && c.bottom <= a.bottom;
       }),
     )
     .toBe(true);
+  await expect(panelList).toHaveCSS('overflow-y', 'auto');
 });

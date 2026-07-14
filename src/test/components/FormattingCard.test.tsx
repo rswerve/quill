@@ -26,6 +26,7 @@ const change: TrackedChangeInfo = {
 
 const originComment: Comment = {
   id: 'c1',
+  kind: 'claude',
   anchorText: 'Please fix this formatting',
   from: 1,
   to: 4,

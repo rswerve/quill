@@ -5,7 +5,13 @@ import type { Comment, Reply } from '../types';
 interface UseCommentsReturn {
   comments: Comment[];
   setComments: React.Dispatch<React.SetStateAction<Comment[]>>;
-  addComment: (anchorText: string, from: number, to: number, author: string) => Comment;
+  addComment: (
+    anchorText: string,
+    from: number,
+    to: number,
+    author: string,
+    kind?: Comment['kind'],
+  ) => Comment;
   addReply: (commentId: string, text: string, author: string) => void;
   resolveComment: (commentId: string) => void;
   unresolveComment: (commentId: string, anchor?: { from: number; to: number }) => void;
@@ -25,7 +31,15 @@ export function useComments(): UseCommentsReturn {
   const [comments, setComments] = useState<Comment[]>([]);
 
   const addComment = useCallback(
-    (anchorText: string, from: number, to: number, author: string): Comment => {
+    (
+      anchorText: string,
+      from: number,
+      to: number,
+      author: string,
+      // Unspecified defaults to a private note — the safe, offline, non-networked
+      // kind; the composer's Ask-Claude action passes 'claude' explicitly.
+      kind: Comment['kind'] = 'note',
+    ): Comment => {
       const comment: Comment = {
         id: uuidv4(),
         anchorText,
@@ -34,6 +48,7 @@ export function useComments(): UseCommentsReturn {
         author,
         createdAt: new Date().toISOString(),
         resolved: false,
+        kind,
         replies: [],
       };
       setComments((prev) => [...prev, comment]);

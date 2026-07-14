@@ -19,9 +19,20 @@ describe('useComments', () => {
       expect(c.to).toBe(11);
       expect(c.author).toBe('Alice');
       expect(c.resolved).toBe(false);
+      expect(c.kind).toBe('note');
       expect(c.replies).toEqual([]);
       expect(c.id).toBeTruthy();
       expect(c.id).toBe(comment!.id);
+    });
+
+    it('defaults unspecified comments to a private note', () => {
+      const { result } = renderHook(() => useComments());
+
+      act(() => {
+        result.current.addComment('text', 0, 4, 'Alice');
+      });
+
+      expect(result.current.comments[0].kind).toBe('note');
     });
 
     it('assigns unique IDs to multiple comments', () => {

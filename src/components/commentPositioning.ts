@@ -1,94 +1,97 @@
-export interface AnchoredCardInput {
+export type GutterAnnotationKind = 'note' | 'claude';
+export type GutterTargetKind = 'comment' | 'suggestion';
+
+export interface GutterTickInput {
   cardId: string;
+  targetKind: GutterTargetKind;
+  annotationKind: GutterAnnotationKind;
   anchorTop: number;
-  height: number;
+  viewportY: number;
   documentOrder: number;
 }
 
-export interface PositionedCard extends AnchoredCardInput {
-  top: number;
+export interface GutterTickCluster {
+  clusterId: string;
+  viewportY: number;
+  members: GutterTickInput[];
 }
 
-export interface AnchoredPanelLayout {
-  positions: PositionedCard[];
-  above: string[];
-  below: string[];
-}
-
-interface LayoutOptions {
-  viewportTop: number;
-  viewportBottom: number;
-  cardViewportTop?: number;
-  cardViewportBottom?: number;
-  activeCardId: string | null;
-  gap: number;
+export interface GutterLayout {
+  above: GutterTickInput[];
+  below: GutterTickInput[];
+  visible: GutterTickCluster[];
 }
 
 /**
- * Positions anchored cards without changing document order.
- *
- * At rest collisions cascade downward. When one card is active, it keeps its
- * exact anchor top; earlier neighbors reflow upward and later neighbors reflow
- * downward around it. Cards whose anchors are outside the panel viewport are
- * represented by the `above` / `below` lists instead of card positions.
+ * Splits line-aligned gutter ticks by viewport and collapses ticks closer than
+ * `clusterDistance` into one stable, document-ordered cluster. This is purely
+ * visual grouping; each member keeps its own navigation target.
  */
-export function layoutAnchoredCards(
-  cards: AnchoredCardInput[],
-  {
-    viewportTop,
-    viewportBottom,
-    cardViewportTop = viewportTop,
-    cardViewportBottom = viewportBottom,
-    activeCardId,
-    gap,
-  }: LayoutOptions,
-): AnchoredPanelLayout {
-  const ordered = [...cards].sort(
-    (a, b) => a.anchorTop - b.anchorTop || a.documentOrder - b.documentOrder,
+export function layoutGutterTicks(
+  ticks: GutterTickInput[],
+  viewportHeight: number,
+  clusterDistance = 14,
+): GutterLayout {
+  const ordered = [...ticks].sort(
+    (a, b) => a.viewportY - b.viewportY || a.documentOrder - b.documentOrder,
   );
-  const above = ordered.filter((card) => card.anchorTop < viewportTop).map((card) => card.cardId);
-  const below = ordered
-    .filter((card) => card.anchorTop >= viewportBottom)
-    .map((card) => card.cardId);
-  const visible = ordered.filter(
-    (card) => card.anchorTop >= viewportTop && card.anchorTop < viewportBottom,
-  );
-
-  if (visible.length === 0) return { positions: [], above, below };
-
-  const positions: PositionedCard[] = visible.map((card) => ({
-    ...card,
-    top: Math.min(
-      Math.max(card.anchorTop, cardViewportTop),
-      Math.max(cardViewportTop, cardViewportBottom - card.height),
-    ),
-  }));
-  const activeIndex = activeCardId
-    ? positions.findIndex((card) => card.cardId === activeCardId)
-    : -1;
-
-  if (activeIndex < 0) {
-    let cursor = positions[0].top;
-    for (const card of positions) {
-      card.top = Math.max(card.top, cursor);
-      cursor = card.top + card.height + gap;
+  const above = ordered.filter((tick) => tick.viewportY < 0);
+  const below = ordered.filter((tick) => tick.viewportY >= viewportHeight);
+  const inView = ordered.filter((tick) => tick.viewportY >= 0 && tick.viewportY < viewportHeight);
+  const groups: GutterTickInput[][] = [];
+  for (const tick of inView) {
+    const current = groups.at(-1);
+    if (!current || tick.viewportY - current.at(-1)!.viewportY >= clusterDistance) {
+      groups.push([tick]);
+    } else {
+      current.push(tick);
     }
-    return { positions, above, below };
   }
 
-  const activeTop = positions[activeIndex].top;
-  positions[activeIndex].top = activeTop;
-  for (let index = activeIndex - 1; index >= 0; index -= 1) {
-    const card = positions[index];
-    const next = positions[index + 1];
-    card.top = Math.min(card.top, next.top - gap - card.height);
-  }
-  let cursor = positions[activeIndex].top + positions[activeIndex].height + gap;
-  for (let index = activeIndex + 1; index < positions.length; index += 1) {
-    const card = positions[index];
-    card.top = Math.max(card.top, cursor);
-    cursor = card.top + card.height + gap;
-  }
+  return {
+    above,
+    below,
+    visible: groups.map((members) => ({
+      clusterId: members.map((member) => member.cardId).join(':'),
+      viewportY: members.reduce((total, member) => total + member.viewportY, 0) / members.length,
+      members,
+    })),
+  };
+}
 
-  return { positions, above, below };
+/** The annotation whose document-space anchor is nearest the viewport center. */
+export function nearestGutterTick(
+  ticks: GutterTickInput[],
+  viewportCenter: number,
+): GutterTickInput | null {
+  let nearest: GutterTickInput | null = null;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const tick of ticks) {
+    const nextDistance = Math.abs(tick.anchorTop - viewportCenter);
+    if (
+      nextDistance < distance ||
+      (nextDistance === distance && nearest !== null && tick.documentOrder < nearest.documentOrder)
+    ) {
+      nearest = tick;
+      distance = nextDistance;
+    }
+  }
+  return nearest;
+}
+
+/**
+ * Returns a centered scroll target only when the card has left the middle 60%
+ * comfort band. `null` means the panel should stay still.
+ */
+export function panelNudgeTarget(
+  panelScrollTop: number,
+  panelHeight: number,
+  cardTop: number,
+  cardHeight: number,
+): number | null {
+  const bandTop = panelScrollTop + panelHeight * 0.2;
+  const bandBottom = panelScrollTop + panelHeight * 0.8;
+  const cardBottom = cardTop + cardHeight;
+  if (cardTop >= bandTop && cardBottom <= bandBottom) return null;
+  return Math.max(0, cardTop + cardHeight / 2 - panelHeight / 2);
 }

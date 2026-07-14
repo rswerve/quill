@@ -1,12 +1,9 @@
-import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
 
-// Guard test (spec 11 + Studio Q4): both comment composers must advertise the
-// @claude affordance. The anchored new-comment card uses Design's compact
-// placeholder plus a separate visible hint; the reply composer keeps the hint
-// in its placeholder. Paired with a negative control proving the check can fail.
-// Paths resolve from the repo root (vitest runs with cwd = repo root).
+// Guard the single-player margin contract at its source boundary: Claude is an
+// explicit action/object identity, never a magic token parsed from prose.
 
 function source(rel: string): string {
   return readFileSync(join(process.cwd(), rel), 'utf8');
@@ -17,22 +14,36 @@ function placeholders(src: string): string[] {
   return [...src.matchAll(/placeholder="([^"]*)"/g)].map((m) => m[1]);
 }
 
-describe('comment composers advertise @claude', () => {
-  it('the anchored new-comment composer has Design placeholder and a visible @claude hint', () => {
+function hasClaudeTriggerRegex(src: string): boolean {
+  return src.includes('/@claude\\b/');
+}
+
+describe('single-player margin composer copy', () => {
+  it('offers explicit Ask-Claude and Add-note actions without advertising @claude', () => {
     const component = source('src/components/CommentComposerCard.tsx');
-    expect(placeholders(component)).toEqual(['Add a comment…']);
-    expect(component).toContain('Type @claude to ping');
+    expect(placeholders(component)).toEqual(['Ask Claude to change this, or jot a private note…']);
+    expect(component).toContain('Ask Claude');
+    expect(component).toContain('Add note');
+    expect(component).not.toContain('@claude');
   });
 
-  it('the reply composer placeholder mentions @claude', () => {
+  it('addresses replies to Claude without a text trigger', () => {
     const found = placeholders(source('src/components/CommentCard.tsx'));
-    expect(found.length).toBeGreaterThan(0);
-    for (const p of found) expect(p).toContain('@claude');
+    expect(found).toContain('Reply to Claude…');
+    for (const placeholder of found) expect(placeholder).not.toContain('@claude');
   });
 
-  it('negative control: a placeholder lacking @claude fails the check', () => {
-    const found = placeholders('<textarea placeholder="Add a comment…" />');
-    expect(found).toEqual(['Add a comment…']);
-    expect(found.every((p) => p.includes('@claude'))).toBe(false);
+  it('contains no executable @claude trigger in either composer or their routing layer', () => {
+    for (const path of [
+      'src/components/CommentComposerCard.tsx',
+      'src/components/CommentCard.tsx',
+      'src/components/DocumentTab.tsx',
+    ]) {
+      expect(hasClaudeTriggerRegex(source(path)), path).toBe(false);
+    }
+  });
+
+  it('negative control detects the retired executable trigger', () => {
+    expect(hasClaudeTriggerRegex('if (/@claude\\b/i.test(text)) send(text);')).toBe(true);
   });
 });

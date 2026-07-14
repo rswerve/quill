@@ -18,6 +18,7 @@ const sidecar = JSON.stringify({
   comments: [
     {
       id: 'comment-1',
+      kind: 'claude',
       anchorText: 'zeta',
       from: 32,
       to: 36,
@@ -249,14 +250,13 @@ test('form controls and every review-card kind use the intended UI scale and fam
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.comment-author').first(), '12.5px');
-  await expectType(page.locator('.comment-avatar').first(), '11px');
+  await expectType(page.locator('.comment-thread-title').first(), '12px');
   await expectType(page.locator('.comment-time').first(), '11px');
-  await expectType(page.locator('.comment-anchor-text').first(), '13px');
-  await expectType(page.locator('.comment-reply-text').first(), '13px');
-  await expectType(page.locator('.comment-reply .ai-badge'), '8.5px', {
+  await expectType(page.locator('.comment-anchor-text').first(), '12px', {
     checkUiFamily: false,
   });
+  await expectType(page.locator('.comment-reply-claude').first(), '12px');
+  await expectType(page.locator('.comment-reply-text').first(), '12.5px');
   await expectType(page.locator('.suggestion-ai-badge').first(), '8.5px', {
     checkUiFamily: false,
   });
@@ -267,7 +267,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await expectType(page.locator('.formatting-change-description'), '12px');
   await expectType(page.locator('.suggestion-accept-btn').first(), '12px');
 
-  await expectType(page.locator('.comment-reply-trigger'), '13px');
+  await expectType(page.locator('.comment-reply-trigger'), '12px');
   await page.locator('.comment-reply-trigger').click();
   await expectType(page.locator('.comment-reply-input'), '13px');
 

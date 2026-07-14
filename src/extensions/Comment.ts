@@ -3,11 +3,17 @@ import { Mark, mergeAttributes } from '@tiptap/core';
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     comment: {
-      setComment: (commentId: string) => ReturnType;
+      setComment: (commentId: string, kind?: 'note' | 'claude') => ReturnType;
       unsetComment: (commentId: string) => ReturnType;
       /** Re-stamp a comment mark over an explicit range (used to restore the
-       *  in-text highlight when a resolved comment is unresolved). */
-      setCommentRange: (commentId: string, from: number, to: number) => ReturnType;
+       *  in-text highlight when a resolved comment is unresolved, and to switch
+       *  a note's highlight to a Claude thread's on promotion). */
+      setCommentRange: (
+        commentId: string,
+        from: number,
+        to: number,
+        kind?: 'note' | 'claude',
+      ) => ReturnType;
     };
   }
 }
@@ -28,6 +34,14 @@ export const CommentMark = Mark.create({
         default: false,
         parseHTML: (el) => el.getAttribute('data-resolved') === 'true',
         renderHTML: (attrs) => ({ 'data-resolved': String(attrs.resolved) }),
+      },
+      // Drives the in-document highlight: a private `note` renders as a gray
+      // dotted underline, a `claude` thread as the amber highlight. Defaults to
+      // `claude` (the pre-existing amber look) for any legacy/parsed mark.
+      kind: {
+        default: 'claude',
+        parseHTML: (el) => (el.getAttribute('data-comment-kind') === 'note' ? 'note' : 'claude'),
+        renderHTML: (attrs) => ({ 'data-comment-kind': attrs.kind }),
       },
     };
   },
@@ -50,9 +64,9 @@ export const CommentMark = Mark.create({
   addCommands() {
     return {
       setComment:
-        (commentId: string) =>
+        (commentId: string, kind: 'note' | 'claude' = 'claude') =>
         ({ commands }) => {
-          return commands.setMark(this.name, { commentId, resolved: false });
+          return commands.setMark(this.name, { commentId, kind, resolved: false });
         },
       unsetComment:
         (commentId: string) =>
@@ -78,7 +92,7 @@ export const CommentMark = Mark.create({
       // the comment's stored from/to since the mark — the usual source of the
       // live range — is no longer in the document.
       setCommentRange:
-        (commentId: string, from: number, to: number) =>
+        (commentId: string, from: number, to: number, kind: 'note' | 'claude' = 'claude') =>
         ({ state, dispatch }) => {
           if (!dispatch) return true;
           const { tr, doc } = state;
@@ -86,7 +100,11 @@ export const CommentMark = Mark.create({
           const clampedFrom = Math.max(0, Math.min(from, doc.content.size));
           const clampedTo = Math.max(clampedFrom, Math.min(to, doc.content.size));
           if (clampedTo > clampedFrom) {
-            tr.addMark(clampedFrom, clampedTo, markType.create({ commentId, resolved: false }));
+            tr.addMark(
+              clampedFrom,
+              clampedTo,
+              markType.create({ commentId, kind, resolved: false }),
+            );
             dispatch(tr);
           }
           return true;

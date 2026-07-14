@@ -28,3 +28,42 @@ the code. Grows as learnings surface new domain nouns.
 - **Session-document index** — the app-local mapping from a Claude session id to
   the most recent saved document that used it, providing human-readable picker
   labels without changing the portable document sidecar.
+
+## Documents, tabs & workspace
+
+- **Tab / DocumentTab** — one open document. Quill is multi-document: `App.tsx` is
+  the shell that owns the tab list, and each tab's per-document state (editor,
+  comments, suggestions, linked session) lives in its own `DocumentTab` instance,
+  all mounted at once with only the active one visible.
+
+- **Workspace envelope** — the `workspace.json` file that records the open set of
+  tabs (each as a saved path or an embedded snapshot of unsaved work), giving
+  browser-style session restore on relaunch and atomic crash recovery. It
+  supersedes the older single-document `draft.json`.
+
+- **Studio shell** — the app's visual frame: a formatting **rail** down the left
+  edge, the top bar and tab strip, the document, and the right-hand review panel
+  (the `studio-main` / `studio-body` layout).
+
+## AI collaboration
+
+- **Session binding** — the link from a document to a Claude Code session
+  (`AISessionBinding` in the sidecar), so `@claude` replies and chat resume that
+  conversation; it may be auto-discovered on open, chosen from the picker, or
+  minted fresh by "Start new session".
+
+- **Document chat** — the whole-document conversation in the Chat panel. Unlike
+  `@claude` comment replies, it is suggestions-only: its edits arrive as tracked
+  changes, never as margin comments.
+
+- **AI gate** — the per-document rule that only one Claude request (a comment
+  reply or a chat turn) runs at a time, so two `--resume` processes never touch
+  the same session concurrently.
+
+- **Tracked formatting** — a formatting change (bold, italic, strikethrough, or
+  inline code) recorded as a suggestion in Suggesting mode, accepted or rejected
+  like a text change rather than applied outright.
+
+- **Provenance (origin ids)** — the `originCommentId` / `originChatMessageId`
+  stamped on an AI-authored suggestion, recording which comment or chat message
+  produced it so the card and its source can cross-link.

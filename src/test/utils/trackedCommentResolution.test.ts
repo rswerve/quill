@@ -18,6 +18,7 @@ import {
 
 const COMMENT: Comment = {
   id: 'comment-1',
+  kind: 'note',
   anchorText: 'hello',
   from: 1,
   to: 6,

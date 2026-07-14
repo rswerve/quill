@@ -36,6 +36,7 @@ const BINDING: AISessionBinding = {
 function makeComment(): Comment {
   return {
     id: 'c1',
+    kind: 'claude',
     anchorText: 'anchor',
     from: 1,
     to: 7,
