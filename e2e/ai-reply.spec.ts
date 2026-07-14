@@ -8,6 +8,7 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { expectSelectionText } from './helpers/deterministicWaits';
 import { ipcFixtures } from './helpers/ipcFixtures';
 import { activeEditor, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
@@ -70,7 +71,7 @@ async function setupWithMockScripts(
           (async () => {
             for (const step of steps) {
               if (cancelled) return;
-              await new Promise((r) => setTimeout(r, 30));
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
               if (cancelled) return;
               if (step.kind === 'pause') {
                 // Park indefinitely; only cancel will resolve.
@@ -98,7 +99,7 @@ async function setupWithMockScripts(
   const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
 }
 
 // The common case: one script replayed for every spawn.
@@ -116,12 +117,11 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, anchor);
   // Open comment composer
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill('seed comment');
   await page.locator('.add-comment-compose .btn-primary').click();
-  await page.waitForTimeout(150);
   // Reply containing @claude
   await page.locator('.comment-reply-trigger').click();
   await page.locator('.comment-reply-input').fill(replyText);
@@ -135,7 +135,7 @@ async function setupWithoutSession(page: Page): Promise<void> {
   const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
 }
 
 // Adds a comment whose initial composer body itself contains @claude (no reply
@@ -145,7 +145,7 @@ async function addCommentTaggingClaude(page: Page, anchor: string, body: string)
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, anchor);
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill(body);
   await page.locator('.add-comment-compose .btn-primary').click();
@@ -311,16 +311,20 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
   expect(prompt).toContain('Here is the full current document:');
 
   await page.keyboard.press('ControlOrMeta+s');
-  const sidecar = await page.evaluate(() => {
-    const files = (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles;
-    return JSON.parse(files['/docs/review.comments.json']);
-  });
-  expect(sidecar.aiSession).toMatchObject({
-    provider: ipcFixtures.autoBindSession.provider,
-    sessionId,
-    cwd: '/docs',
-    createdByQuill: true,
-  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const files = (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles;
+        const raw = files['/docs/review.comments.json'];
+        return raw ? JSON.parse(raw).aiSession : null;
+      }),
+    )
+    .toMatchObject({
+      provider: ipcFixtures.autoBindSession.provider,
+      sessionId,
+      cwd: '/docs',
+      createdByQuill: true,
+    });
 });
 
 test('AI reply: a session-loss error shows Re-link primary plus a secondary Retry', async ({
@@ -397,11 +401,10 @@ async function addCommentOnPrefix(page: Page, anchor: string, count: number, rep
   await page.keyboard.down('Shift');
   for (let i = 0; i < count; i++) await page.keyboard.press('ArrowRight');
   await page.keyboard.up('Shift');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, anchor.slice(0, count));
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill('seed comment');
   await page.locator('.add-comment-compose .btn-primary').click();
-  await page.waitForTimeout(150);
   await page.locator('.comment-reply-trigger').click();
   await page.locator('.comment-reply-input').fill(replyText);
   await page.locator('.comment-card .btn-primary').click();

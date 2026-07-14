@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { expectSelectionText } from './helpers/deterministicWaits';
 
 async function setupEditor(page: Page) {
   await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
   return editor;
 }
 
@@ -14,20 +15,15 @@ test('bold button applies formatting to selected text', async ({ page }) => {
   const editor = await setupEditor(page);
 
   await page.keyboard.type('hello world');
-  await page.waitForTimeout(100);
 
   // Select all with Cmd+A
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(100);
+  await expectSelectionText(page, 'hello world');
 
   await page.locator('[title="Bold (Cmd+B)"]').click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).toContain('<strong>');
-  expect(html).toContain('hello world');
+  await expect(editor.locator('strong')).toHaveText('hello world');
 });
 
 test('italic button applies formatting to selected text', async ({ page }) => {
@@ -37,13 +33,10 @@ test('italic button applies formatting to selected text', async ({ page }) => {
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(100);
+  await expectSelectionText(page, 'hello world');
 
   await page.locator('[title="Italic (Cmd+I)"]').click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).toContain('<em>');
+  await expect(editor.locator('em')).toHaveText('hello world');
 });
 
 test('bold button with partial selection', async ({ page }) => {
@@ -55,13 +48,10 @@ test('bold button with partial selection', async ({ page }) => {
   await page.keyboard.down('Shift');
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
   await page.keyboard.up('Shift');
-  await page.waitForTimeout(100);
+  await expectSelectionText(page, 'world');
 
   await page.locator('[title="Bold (Cmd+B)"]').click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).toContain('<strong>world</strong>');
+  await expect(editor.locator('strong')).toHaveText('world');
 });
 
 test('bold rail state distinguishes full, mixed, and plain selections', async ({ page }) => {

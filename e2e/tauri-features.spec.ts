@@ -13,6 +13,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
 import { activeEditor } from './helpers/memoryTauri';
+import { expectPageTitleToContain, expectSelectionText } from './helpers/deterministicWaits';
 
 type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
 
@@ -38,6 +39,9 @@ async function setupWithIPC(
       const callbacks = new Map<number, (payload: unknown) => void>();
       let nextCbId = 1;
       const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+      const emittedEvents: string[] = [];
+      (window as unknown as Record<string, unknown>).__quillTauriListeners = listeners;
+      (window as unknown as Record<string, unknown>).__quillEmittedTauriEvents = emittedEvents;
 
       (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
         transformCallback: (cb: (payload: unknown) => void) => {
@@ -87,6 +91,7 @@ async function setupWithIPC(
           for (const l of listeners) {
             if (l.event === event) l.cb({ event, id: 0, payload });
           }
+          emittedEvents.push(event);
         };
       } else {
         (window as unknown as Record<string, unknown>).__emitTauri = (
@@ -96,6 +101,7 @@ async function setupWithIPC(
           for (const l of listeners) {
             if (l.event === event) l.cb({ event, id: 0, payload });
           }
+          emittedEvents.push(event);
         };
       }
     },
@@ -109,6 +115,54 @@ async function setupWithIPC(
 
   await page.goto('/');
   await activeEditor(page).waitFor({ timeout: 5000 });
+}
+
+async function waitForTauriListener(page: Page, event: string) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (eventName) =>
+          (
+            (window as unknown as { __quillTauriListeners: Array<{ event: string }> })
+              .__quillTauriListeners ?? []
+          ).some((listener) => listener.event === eventName),
+        event,
+      ),
+    )
+    .toBe(true);
+}
+
+async function emitTauriAndWait(page: Page, event: string, payload: unknown) {
+  await waitForTauriListener(page, event);
+  const countBefore = await page.evaluate(
+    (eventName) =>
+      (
+        (window as unknown as { __quillEmittedTauriEvents: string[] }).__quillEmittedTauriEvents ??
+        []
+      ).filter((name) => name === eventName).length,
+    event,
+  );
+  await page.evaluate(
+    ({ eventName, eventPayload }) => {
+      (window as unknown as { __emitTauri: (name: string, value: unknown) => void }).__emitTauri(
+        eventName,
+        eventPayload,
+      );
+    },
+    { eventName: event, eventPayload: payload },
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (eventName) =>
+          (
+            (window as unknown as { __quillEmittedTauriEvents: string[] })
+              .__quillEmittedTauriEvents ?? []
+          ).filter((name) => name === eventName).length,
+        event,
+      ),
+    )
+    .toBe(countBefore + 1);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -148,8 +202,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
     timeout: 3000,
   });
   // Title should show dirty bullet because auto-bind marks the file dirty.
-  await page.waitForTimeout(150);
-  expect(await page.title()).toContain('•');
+  await expectPageTitleToContain(page, '•');
 });
 
 test('auto-bind: no match leaves session unbound (no false link)', async ({ page }) => {
@@ -169,8 +222,9 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('o');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(300);
 
+  await expect(activeEditor(page)).toContainText('Doc that matches nothing');
+  await expect(page.locator('.crumbs .cur')).toContainText('orphan.md');
   // No linked-session chip in the status bar (still showing its link affordance).
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
   await expect(page.locator('.footer-ai-binding').first()).toContainText('LINK SESSION');
@@ -189,15 +243,22 @@ async function fireAIReplyAndCaptureCompactionCall(
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, 'content to comment on');
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill('seed');
   await page.locator('.add-comment-compose .btn-primary').click();
-  await page.waitForTimeout(150);
   await page.locator('.comment-reply-trigger').click();
   await page.locator('.comment-reply-input').fill('@claude evaluate');
   await page.locator('.comment-card .btn-primary').click();
-  await page.waitForTimeout(400);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          (window as unknown as { __capturedCalls: Array<{ cmd: string }> }).__capturedCalls ?? []
+        ).some((call) => call.cmd === 'spawn_claude_resume'),
+      ),
+    )
+    .toBe(true);
   return page.evaluate(
     () =>
       (window as unknown as Record<string, unknown>).__capturedCalls as {
@@ -300,16 +361,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
 
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
-  // Give App.tsx's useEffect a tick to register its listen('deep-link-open').
-  await page.waitForTimeout(200);
-
-  // Fire the event through our IPC shim.
-  await page.evaluate(() => {
-    (window as unknown as { __emitTauri: (e: string, p: unknown) => void }).__emitTauri(
-      'deep-link-open',
-      '/tmp/linked.md',
-    );
-  });
+  await emitTauriAndWait(page, 'deep-link-open', '/tmp/linked.md');
 
   // Editor should now contain the linked content.
   await expect(activeEditor(page)).toContainText('Linked document content', {
@@ -347,14 +399,8 @@ test('deep-link: opening a doc with no linked session forces the session picker'
   };
 
   await setupWithIPC(page, { handler });
-  await page.waitForTimeout(200);
 
-  await page.evaluate(() => {
-    (window as unknown as { __emitTauri: (e: string, p: unknown) => void }).__emitTauri(
-      'deep-link-open',
-      '/tmp/unbound.md',
-    );
-  });
+  await emitTauriAndWait(page, 'deep-link-open', '/tmp/unbound.md');
 
   // Doc loads…
   await expect(activeEditor(page)).toContainText('no linked session', { timeout: 3000 });
@@ -390,28 +436,28 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
     'Reference folder: /refs/research (click to change)',
   );
   // Linking marks the document dirty so the binding gets saved.
-  await page.waitForTimeout(150);
-  expect(await page.title()).toContain('•');
+  await expectPageTitleToContain(page, '•');
 
   // Save: the sidecar must be written (not deleted) even though there are no
   // comments/suggestions, and it must carry the folder.
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('s');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(300);
-
-  const calls = await page.evaluate(
-    () =>
-      (window as unknown as Record<string, unknown>).__capturedCalls as {
-        cmd: string;
-        args: Record<string, unknown>;
-      }[],
-  );
-  const sidecarWrite = calls.find(
-    (c) => c.cmd === 'write_file' && (c.args.path as string).endsWith('.comments.json'),
-  );
-  expect(sidecarWrite).toBeDefined();
-  expect(JSON.parse(sidecarWrite!.args.content as string).contextFolder).toBe('/refs/research');
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const calls = (window as unknown as Record<string, unknown>).__capturedCalls as Array<{
+          cmd: string;
+          args: Record<string, unknown>;
+        }>;
+        const write = calls.find(
+          (call) =>
+            call.cmd === 'write_file' && (call.args.path as string).endsWith('.comments.json'),
+        );
+        return write ? JSON.parse(write.args.content as string).contextFolder : null;
+      }),
+    )
+    .toBe('/refs/research');
 
   // Unlink: chip reverts to the link affordance.
   await page.locator('.footer-context-binding-unlink').click();
@@ -465,15 +511,7 @@ test('context folder: @claude request passes --add-dir and a file manifest', asy
 test('deep-link: empty payload is ignored (no crash, no file load)', async ({ page }) => {
   const handler = () => null;
   await setupWithIPC(page, { handler });
-  await page.waitForTimeout(200);
-
-  await page.evaluate(() => {
-    (window as unknown as { __emitTauri: (e: string, p: unknown) => void }).__emitTauri(
-      'deep-link-open',
-      '',
-    );
-  });
-  await page.waitForTimeout(200);
+  await emitTauriAndWait(page, 'deep-link-open', '');
 
   // Filename stays at Untitled.
   await expect(page.locator('.crumbs .cur')).toContainText('Untitled');

@@ -7,13 +7,14 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
+import { expectSelectionText } from './helpers/deterministicWaits';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
   return { editor };
 }
 
@@ -137,7 +138,7 @@ test.describe('Find & replace', () => {
     await page.keyboard.down('ControlOrMeta');
     await page.keyboard.press('a');
     await page.keyboard.up('ControlOrMeta');
-    await page.waitForTimeout(50);
+    await expectSelectionText(page, 'alpha beta');
     await page.keyboard.press('Backspace');
     await expect(editor.locator('del.track-delete')).toHaveText('alpha beta');
 

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
+import { expectEditorHtml, expectSelectionText } from './helpers/deterministicWaits';
 
 // Export to PDF is print-to-PDF: the artifact is defined entirely by the
 // `@media print` rules in App.css (handleExportPdf just calls window.print()).
@@ -15,7 +16,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
   return { editor };
 }
 
@@ -80,21 +81,15 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     // insertion — both halves of suggesting-mode markup present in the doc.
     await editor.click();
     await page.keyboard.type('Keep cut');
-    await page.waitForTimeout(100);
 
     await enableSuggesting(page);
     await editor.click();
 
     // Delete " cut" → wrapped in <del class="track-delete">.
     for (let i = 0; i < 4; i++) await page.keyboard.press('Backspace');
-    await page.waitForTimeout(100);
     // Insert " added" → wrapped in <ins class="track-insert">.
     await page.keyboard.type(' added');
-    await page.waitForTimeout(150);
-
-    const html = await editor.innerHTML();
-    expect(html).toContain('track-delete');
-    expect(html).toContain('track-insert');
+    await expectEditorHtml(editor, { contains: ['track-delete', 'track-insert'] });
 
     await page.emulateMedia({ media: 'print' });
 
@@ -122,19 +117,16 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
 
     await editor.click();
     await page.keyboard.type('Commented text');
-    await page.waitForTimeout(100);
 
     // Select all and add a comment via the floating + button.
     await page.keyboard.down('ControlOrMeta');
     await page.keyboard.press('a');
     await page.keyboard.up('ControlOrMeta');
-    await page.waitForTimeout(50);
+    await expectSelectionText(page, 'Commented text');
     await page.locator('.add-comment-btn').click();
     await page.locator('.add-comment-compose textarea').fill('a remark');
     await page.locator('.add-comment-compose .btn-primary').click();
-    await page.waitForTimeout(150);
-
-    expect(await editor.innerHTML()).toContain('comment-mark');
+    await expectEditorHtml(editor, { contains: ['comment-mark'] });
 
     await page.emulateMedia({ media: 'print' });
 

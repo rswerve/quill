@@ -234,10 +234,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           compaction: { compacted: true, originalMarkdown: null },
           spawn: (args: unknown, onEvent: (event: unknown) => void) => {
             globals.__quillLastSpawnArgs = args;
-            setTimeout(() => {
+            queueMicrotask(() => {
               onEvent({ kind: 'delta', text: aiReplyText });
               onEvent({ kind: 'done' });
-            }, 0);
+            });
             return 'fixture-token';
           },
           cancel: () => undefined,

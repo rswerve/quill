@@ -175,7 +175,19 @@ test('resolved comments jump only to safely located text and unresolve never sta
   });
   const beforeClick = await editorScroll.evaluate((element) => element.scrollTop);
   await page.locator('.comment-card').click();
-  expect(await editorScroll.evaluate((element) => element.scrollTop)).toBe(beforeClick);
+  await expect
+    .poll(() =>
+      editorScroll.evaluate(
+        (element) =>
+          new Promise<{ first: number; settled: number }>((resolve) => {
+            const first = element.scrollTop;
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => resolve({ first, settled: element.scrollTop })),
+            );
+          }),
+      ),
+    )
+    .toEqual({ first: beforeClick, settled: beforeClick });
 
   await page.getByTitle('Unresolve').click();
   await expect(page.locator('.comment-card-resolved')).toBeVisible();

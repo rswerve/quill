@@ -43,7 +43,7 @@ async function setupChatScripts(page: Page, scripts: MockScriptStep[][]) {
           void (async () => {
             for (const step of steps) {
               if (cancelled) return;
-              await new Promise((resolve) => setTimeout(resolve, 35));
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
               if (cancelled) return;
               if (step.kind === 'pause') return;
               onEvent(step);
@@ -443,12 +443,13 @@ test('an imported context folder is confirmed for the loaded document path', asy
   const notice = page.locator('.app-modal');
   await expect(notice).toContainText('This document had a reference folder');
   await notice.getByRole('button', { name: 'Choose folder' }).click();
-  const permissions = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('quill-sidecar-permissions-v1') ?? '{}'),
-  );
-  expect(permissions).toMatchObject({
-    '/docs/context.md': { contextFolder: folder },
-  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('quill-sidecar-permissions-v1') ?? '{}')),
+    )
+    .toMatchObject({
+      '/docs/context.md': { contextFolder: folder },
+    });
 });
 
 test('chat persists per document/session and a new session starts a fresh thread', async ({
@@ -529,7 +530,8 @@ test('a background tab finishes only its own chat suggestions', async ({ page })
   await sendChat(page, 'Revise it');
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('Second tab text');
-  await page.waitForTimeout(400);
+  const firstTab = page.locator('.document-tab-host').first();
+  await expect(firstTab.locator('.chat-suggestion-chip')).toHaveText(/→ 1 suggestion in the doc/);
   await expect(activeEditor(page)).toHaveText('Second tab text');
   await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
 

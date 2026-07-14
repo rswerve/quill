@@ -82,7 +82,6 @@ test('clean document: Cmd+N adds and focuses a new tab', async ({ page }) => {
   await setupWithIPC(page, { handler });
 
   await pressShortcut(page, 'n');
-  await page.waitForTimeout(200);
 
   await expect(page.locator('.app-modal')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(2);

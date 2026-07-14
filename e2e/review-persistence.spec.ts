@@ -133,6 +133,7 @@ test.describe('review metadata survives save and reopen', () => {
     await selectLastCharacters(page, 'old'.length);
     await page.keyboard.type('new');
     await page.keyboard.press('ControlOrMeta+s');
+    await expect(page.locator('.dirty-dot')).toHaveCount(0);
 
     const files = await page.evaluate(() => window.__quillFiles);
     expect(files[DOC_PATH]).toBeDefined();
@@ -828,13 +829,15 @@ test.describe('desktop fallback regressions', () => {
       (window as unknown as { __quillCalls: unknown[] }).__quillCalls.length = 0;
     });
     await page.keyboard.press('ControlOrMeta+Shift+S');
-
-    const commands = await page.evaluate(() =>
-      (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.map(
-        (call) => call.cmd,
-      ),
-    );
-    expect(commands).toContain('show_save_dialog');
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.map(
+            (call) => call.cmd,
+          ),
+        ),
+      )
+      .toContain('show_save_dialog');
   });
 
   test('footer line number follows the cursor paragraph, not schema depth', async ({ page }) => {

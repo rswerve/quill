@@ -62,6 +62,20 @@ export default tseslint.config(
     },
   },
   {
+    files: ['e2e/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name='waitForTimeout']",
+          message:
+            'Use a locator assertion, expect.poll on the resulting state, or Playwright Clock instead of a wall-clock sleep.',
+        },
+      ],
+    },
+  },
+  {
     // docs/assets/source holds one-off asset-generation scripts (browser +
     // node globals mixed), same category as src-tauri/icons/source.
     // .claude/ holds agent worktrees — full repo mirrors whose nested paths

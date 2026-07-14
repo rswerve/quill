@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
+import { expectEditorHtml, expectSelectionText } from './helpers/deterministicWaits';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
   const editor = page.locator('.ProseMirror');
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
-  await page.waitForTimeout(100);
+  await expect(editor).toBeFocused();
   return { editor };
 }
 
@@ -31,11 +32,7 @@ test('typing in suggesting mode wraps text in tracked_insert mark', async ({ pag
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('hello');
-  await page.waitForTimeout(150);
-
-  const html = await editor.innerHTML();
-  expect(html).toContain('<ins');
-  expect(html).toContain('track-insert');
+  await expectEditorHtml(editor, { contains: ['<ins', 'track-insert'] });
   // Each keystroke produces a separate <ins> node, so check textContent not innerHTML
   const text = await editor.textContent();
   expect(text).toContain('hello');
@@ -46,11 +43,7 @@ test('typing in normal mode does NOT produce tracked_insert marks', async ({ pag
 
   await editor.click();
   await page.keyboard.type('hello');
-  await page.waitForTimeout(150);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).toContain('hello');
+  await expectEditorHtml(editor, { contains: ['hello'], excludes: ['<ins'] });
 });
 
 // ── Deletion tracking ─────────────────────────────────────────────────────────
@@ -61,7 +54,6 @@ test('deleting text in suggesting mode wraps it in tracked_delete mark', async (
   // Type some text in normal mode so it is committed content
   await editor.click();
   await page.keyboard.type('hello world');
-  await page.waitForTimeout(100);
 
   await enableSuggesting(page);
   await editor.click();
@@ -70,13 +62,9 @@ test('deleting text in suggesting mode wraps it in tracked_delete mark', async (
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, 'hello world');
   await page.keyboard.press('Backspace');
-  await page.waitForTimeout(150);
-
-  const html = await editor.innerHTML();
-  expect(html).toContain('<del');
-  expect(html).toContain('track-delete');
+  await expectEditorHtml(editor, { contains: ['<del', 'track-delete'] });
 });
 
 test('deleting text in normal mode removes it outright with no tracked mark', async ({ page }) => {
@@ -84,18 +72,13 @@ test('deleting text in normal mode removes it outright with no tracked mark', as
 
   await editor.click();
   await page.keyboard.type('hello world');
-  await page.waitForTimeout(100);
 
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, 'hello world');
   await page.keyboard.press('Backspace');
-  await page.waitForTimeout(150);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<del');
-  expect(html).not.toContain('hello world');
+  await expectEditorHtml(editor, { excludes: ['<del', 'hello world'] });
 });
 
 // ── Suggestion cards ──────────────────────────────────────────────────────────
@@ -106,7 +89,6 @@ test('suggestion card appears in the margin after typing in suggesting mode', as
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('suggested text');
-  await page.waitForTimeout(300);
 
   const card = page.locator('.suggestion-card').first();
   await expect(card).toBeVisible();
@@ -118,7 +100,6 @@ test('deletion suggestion card appears after deleting committed text', async ({ 
 
   await editor.click();
   await page.keyboard.type('delete me');
-  await page.waitForTimeout(100);
 
   await enableSuggesting(page);
   await editor.click();
@@ -127,9 +108,8 @@ test('deletion suggestion card appears after deleting committed text', async ({ 
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, 'delete me');
   await page.keyboard.press('Backspace');
-  await page.waitForTimeout(300);
 
   const card = page.locator('.suggestion-card').first();
   await expect(card).toBeVisible();
@@ -144,16 +124,11 @@ test('accepting an insertion removes the tracked mark and keeps the text', async
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('keep me');
-  await page.waitForTimeout(300);
 
   const acceptBtn = page.locator('.suggestion-accept-btn').first();
   await expect(acceptBtn).toBeVisible();
   await acceptBtn.click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).toContain('keep me');
+  await expectEditorHtml(editor, { contains: ['keep me'], excludes: ['<ins'] });
 });
 
 test('rejecting an insertion removes the tracked mark and removes the text', async ({ page }) => {
@@ -162,16 +137,11 @@ test('rejecting an insertion removes the tracked mark and removes the text', asy
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('discard me');
-  await page.waitForTimeout(300);
 
   const rejectBtn = page.locator('.suggestion-reject-btn').first();
   await expect(rejectBtn).toBeVisible();
   await rejectBtn.click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).not.toContain('discard me');
+  await expectEditorHtml(editor, { excludes: ['<ins', 'discard me'] });
 });
 
 test('accepting a deletion removes the tracked mark and removes the text', async ({ page }) => {
@@ -179,7 +149,6 @@ test('accepting a deletion removes the tracked mark and removes the text', async
 
   await editor.click();
   await page.keyboard.type('remove me');
-  await page.waitForTimeout(100);
 
   await enableSuggesting(page);
   await editor.click();
@@ -187,17 +156,12 @@ test('accepting a deletion removes the tracked mark and removes the text', async
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page, 'remove me');
   await page.keyboard.press('Backspace');
-  await page.waitForTimeout(300);
 
   const acceptBtn = page.locator('.suggestion-accept-btn').first();
   await acceptBtn.click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<del');
-  expect(html).not.toContain('remove me');
+  await expectEditorHtml(editor, { excludes: ['<del', 'remove me'] });
 });
 
 test('rejecting a deletion removes the tracked mark and restores the text', async ({ page }) => {
@@ -205,7 +169,6 @@ test('rejecting a deletion removes the tracked mark and restores the text', asyn
 
   await editor.click();
   await page.keyboard.type('restore me');
-  await page.waitForTimeout(100);
 
   await enableSuggesting(page);
   await editor.click();
@@ -216,16 +179,12 @@ test('rejecting a deletion removes the tracked mark and restores the text', asyn
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('ArrowLeft');
   await page.keyboard.up('Shift');
-  await page.waitForTimeout(50);
+  await expectSelectionText(page);
   await page.keyboard.press('Backspace');
-  await page.waitForTimeout(300);
 
   const rejectBtn = page.locator('.suggestion-reject-btn').first();
   await rejectBtn.click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<del');
+  await expectEditorHtml(editor, { excludes: ['<del'] });
   // "me" should be restored
   const text = await editor.textContent();
   expect(text).toContain('me');
@@ -240,15 +199,9 @@ test('Accept All removes all tracked marks and keeps inserted text', async ({ pa
   await editor.click();
   await page.keyboard.type('first ');
   await page.keyboard.type('second');
-  await page.waitForTimeout(300);
 
   await page.locator('[title="Accept all suggestions"]').click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).toContain('first');
-  expect(html).toContain('second');
+  await expectEditorHtml(editor, { contains: ['first', 'second'], excludes: ['<ins'] });
 });
 
 test('Reject All removes all tracked marks and discards inserted text', async ({ page }) => {
@@ -257,14 +210,9 @@ test('Reject All removes all tracked marks and discards inserted text', async ({
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('ephemeral');
-  await page.waitForTimeout(300);
 
   await page.locator('[title="Reject all suggestions"]').click();
-  await page.waitForTimeout(200);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).not.toContain('ephemeral');
+  await expectEditorHtml(editor, { excludes: ['<ins', 'ephemeral'] });
 });
 
 test('Accept All and Reject All buttons only appear when pending changes exist', async ({
@@ -300,9 +248,5 @@ test('toggling back to editing mode stops tracking new changes', async ({ page }
 
   await editor.click();
   await page.keyboard.type('normal text');
-  await page.waitForTimeout(150);
-
-  const html = await editor.innerHTML();
-  expect(html).not.toContain('<ins');
-  expect(html).toContain('normal text');
+  await expectEditorHtml(editor, { contains: ['normal text'], excludes: ['<ins'] });
 });
