@@ -874,7 +874,7 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await addCommentViaPlusButton(page, 'note');
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
-  await expect(page.locator('.annotation-connector')).toBeVisible();
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
 });
 
 test('Escape clears the annotation focus', async ({ page }) => {
@@ -886,7 +886,7 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('.comment-card-active')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
-  await expect(page.locator('.annotation-connector')).toHaveCount(0);
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toHaveCount(0);
 });
 
 test('clicking commented text activates its card', async ({ page }) => {
@@ -900,6 +900,7 @@ test('clicking commented text activates its card', async ({ page }) => {
   await editor.locator('mark.comment-mark').click();
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
+  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
 });
 
 test('clicking plain text clears the annotation focus', async ({ page }) => {
@@ -1253,7 +1254,7 @@ test('add-comment button stays aligned with the selection across zoom levels', a
   expect(Math.abs(deltaLarge - deltaSmall)).toBeLessThan(5);
 });
 
-test('comment card realigns with its anchor when zoom changes', async ({ page }) => {
+test('gutter tick realigns with its anchor when zoom changes', async ({ page }) => {
   const { editor } = await setup(page);
   for (let i = 0; i < 3; i++) {
     await editor.type(`Paragraph number ${i} with some filler text.`);
@@ -1264,19 +1265,15 @@ test('comment card realigns with its anchor when zoom changes', async ({ page })
 
   const mark = page.locator('mark.comment-mark');
   const card = page.locator('.comment-card');
+  const tick = page.locator('.annotation-gutter-tick');
   await expect(card).toBeVisible();
+  await expect(tick).toBeVisible();
+  await expect(card).toHaveCSS('position', 'relative');
 
   const alignmentError = async () => {
     const markBox = (await mark.boundingBox())!;
-    const cardBox = (await card.boundingBox())!;
-    const panelBox = (await page.locator('.comments').boundingBox())!;
-    const expectedTop = Math.min(
-      Math.max(markBox.y, panelBox.y + 44),
-      // Maz removed the 62px general-comment chrome; anchored cards now use
-      // the full panel height and clamp directly above its bottom edge.
-      panelBox.y + panelBox.height - cardBox.height,
-    );
-    return Math.abs(cardBox.y - expectedTop);
+    const tickBox = (await tick.boundingBox())!;
+    return Math.abs(tickBox.y + tickBox.height / 2 - markBox.y);
   };
 
   await setZoom(page, 0.6);

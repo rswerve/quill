@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './Editor';
 import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
 import type { ComposerIntent } from './CommentComposerCard';
-import CommentLayer, { computeBottomSpacer } from './CommentLayer';
+import CommentLayer from './CommentLayer';
 import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
 import PanelHeader from './PanelHeader';
@@ -71,7 +71,6 @@ const AUTHOR = 'Anonymous';
 
 // Breathing room (px) left above/below a card when it's scrolled into view, and
 // the extra scroll range the bottom spacer adds past the lowest card's bottom.
-const CARD_SCROLL_MARGIN = 24;
 
 function lastReplyModel(comments: Comment[]): string | null {
   for (let commentIndex = comments.length - 1; commentIndex >= 0; commentIndex--) {
@@ -231,6 +230,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     kind: AnnotationKind;
     id: string;
   } | null>(null);
+  const [highlightActivationRevision, setHighlightActivationRevision] = useState(0);
   const activeCommentId = activeAnnotation?.kind === 'comment' ? activeAnnotation.id : null;
   const activeSuggestionId = activeAnnotation?.kind === 'suggestion' ? activeAnnotation.id : null;
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
@@ -244,11 +244,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [zoom, setZoom] = useState(defaultZoom);
   const [scrollTick, setScrollTick] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
-  // Lowest comment/suggestion card bottom (document space), reported by
-  // CommentLayer. Drives `bottomSpacer` so a below-fold card can be scrolled
-  // fully into view (see the effect below).
-  const [maxCardBottom, setMaxCardBottom] = useState(0);
-  const [bottomSpacer, setBottomSpacer] = useState(0);
   const [findOpen, setFindOpen] = useState(false);
   const [suggestingModeNotice, setSuggestingModeNotice] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<'comments' | 'chat'>('comments');
@@ -592,8 +587,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   });
   chatThreadRef.current = aiSession ? documentChat.getThread(aiSession.sessionId) : undefined;
 
-  // Re-render on scroll so the comment column tracks the document (cards are
-  // translated by scrollTop) and the add-comment button tracks coordsAtPos.
+  // Re-render on scroll so the line-aligned annotation gutter and the
+  // add-comment button track the visible document coordinates.
   // Keyed on `editor` so the listener attaches once the editor subtree has
   // mounted `.editor-scroll-area` — with an empty dep array the query could
   // run before the element existed, leaving scrollTop stuck at 0 (cards never
@@ -610,22 +605,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setScrollTop((el as HTMLElement).scrollTop);
     return () => el.removeEventListener('scroll', onScroll);
   }, [editor]);
-
-  // Size the bottom spacer so the lowest comment/suggestion card can be
-  // scrolled fully into view. The card column is overflow-hidden and its cards
-  // paint at `nudgedTop − scrollTop`, so a card whose bottom sits past the
-  // document's own content is unreachable without extra scroll range. We
-  // measure the scroll area's *natural* content height (scrollHeight minus the
-  // spacer we already added, so the spacer's own height doesn't feed back) and
-  // extend it just enough via `computeBottomSpacer`. A `prev === next` guard
-  // keeps this from looping. Normal docs get spacer 0 (no trailing dead space).
-  useEffect(() => {
-    const el = scrollAreaRef.current?.querySelector('.editor-scroll-area') as HTMLElement | null;
-    if (!el) return;
-    const baseContentHeight = el.scrollHeight - bottomSpacer;
-    const next = computeBottomSpacer(maxCardBottom, baseContentHeight, CARD_SCROLL_MARGIN);
-    setBottomSpacer((prev) => (prev === next ? prev : next));
-  }, [maxCardBottom, bottomSpacer, scrollTick, zoom, editor]);
 
   // Re-render once after a text-size change so the add-comment button re-reads
   // coordsAtPos after the editor has reflowed. The style lands in the DOM after
@@ -1122,6 +1101,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       candidates.sort((a, b) => a.size - b.size);
       const winner = candidates[0];
       setActiveAnnotation({ kind: winner.kind, id: winner.id });
+      setHighlightActivationRevision((revision) => revision + 1);
     },
     [editor],
   );
@@ -1342,36 +1322,31 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [unresolveComment, editor, comments, markDirty],
   );
 
-  // Scroll the editor's scroll area so a comment/suggestion card is fully
-  // on-screen. The card lives in an overflow-hidden column translated by
-  // -scrollTop, so its `offsetTop` there equals its document-space top (same
-  // frame as scrollTop). The bottom spacer guarantees enough range exists for a
-  // below-fold card. Deferred by one rAF so the spacer effect has committed
-  // (it runs after this handler returns; scrolling synchronously would clamp
-  // against the pre-spacer range).
+  // The panel is an independent flat list. Directed provenance/highlight jumps
+  // reveal their card without moving the document scroll surface.
   const scrollCardIntoView = useCallback((cardId: string) => {
     requestAnimationFrame(() => {
-      const scrollArea = scrollAreaRef.current?.querySelector(
-        '.editor-scroll-area',
+      const panel = commentLayerRef.current?.querySelector(
+        '.comment-panel-list',
       ) as HTMLElement | null;
       const card = commentLayerRef.current?.querySelector(
         `[data-card-id="${CSS.escape(cardId)}"]`,
       ) as HTMLElement | null;
-      if (!scrollArea || !card) return;
-      const cardTop = card.offsetTop;
-      const cardBottom = cardTop + card.offsetHeight;
-      const viewTop = scrollArea.scrollTop;
-      const viewBottom = viewTop + scrollArea.clientHeight;
-      let nextTop = viewTop;
-      if (cardTop < viewTop + CARD_SCROLL_MARGIN) {
-        nextTop = cardTop - CARD_SCROLL_MARGIN;
-      } else if (cardBottom > viewBottom - CARD_SCROLL_MARGIN) {
-        nextTop = cardBottom + CARD_SCROLL_MARGIN - scrollArea.clientHeight;
-      }
-      if (nextTop !== viewTop) {
-        scrollArea.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
-      }
+      if (!panel || !card) return;
+      const panelRect = panel.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.top >= panelRect.top + 24 && cardRect.bottom <= panelRect.bottom - 24) return;
+      panel.scrollTo({
+        top: Math.max(0, card.offsetTop + card.offsetHeight / 2 - panel.clientHeight / 2),
+        behavior: 'smooth',
+      });
     });
+  }, []);
+
+  const handleSyncActivate = useCallback((kind: AnnotationKind, id: string) => {
+    setActiveAnnotation((previous) =>
+      previous?.kind === kind && previous.id === id ? previous : { kind, id },
+    );
   }, []);
 
   const handleActivateComment = useCallback(
@@ -1409,8 +1384,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const { node } = editor.view.domAtPos(range.from);
       const element = node instanceof HTMLElement ? node : node.parentElement;
       element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+      scrollCardIntoView(commentId);
     },
-    [comments, editor],
+    [comments, editor, scrollCardIntoView],
   );
 
   const handleActivateSuggestion = useCallback(
@@ -1576,10 +1552,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
   const resolvedCommentCount = comments.length - unresolvedCommentCount;
 
-  useEffect(() => {
-    if (panelMode === 'chat') setMaxCardBottom(0);
-  }, [panelMode]);
-
   const handleCloseSessionPicker = useCallback(() => {
     pendingChatTurnRef.current = null;
   }, []);
@@ -1708,12 +1680,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 onOpenChat={openChat}
               />
             </div>
-            {/* Extends the scroll range only when a low-anchored card would
-              otherwise be unreachable (see the spacer effect). Height 0 for
-              normal docs; hidden in print so it never affects PDF output. */}
-            {bottomSpacer > 0 && (
-              <div className="editor-bottom-spacer" style={{ height: bottomSpacer }} aria-hidden />
-            )}
           </div>
 
           {selectionInfo &&
@@ -1765,6 +1731,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             scrollTop={scrollTop}
             zoom={zoom}
             layoutRevision={scrollTick}
+            highlightActivationRevision={highlightActivationRevision}
             hidden={panelMode !== 'comments'}
             showResolved={showResolvedComments}
             onShowResolvedChange={setShowResolvedComments}
@@ -1788,13 +1755,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onActivate={handleActivateComment}
             onActivateHistory={handleActivateHistoryComment}
             onActivateSuggestion={handleActivateSuggestion}
+            onSyncActivate={handleSyncActivate}
             onActivateChatMessage={handleActivateChatMessage}
             onAcceptChange={handleAcceptChange}
             onRejectChange={handleRejectChange}
             onSubmitComment={handleAddComment}
             onCancelComment={handleCancelCommentComposer}
             hasSession={aiSession != null}
-            onMaxCardBottomChange={setMaxCardBottom}
           />
           <ChatPanel
             hidden={panelMode !== 'chat'}
