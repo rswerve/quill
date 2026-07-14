@@ -5,6 +5,7 @@ import type { Comment } from '../../types';
 
 const originComment: Comment = {
   id: 'comment-1',
+  kind: 'claude',
   anchorText: 'A linked comment',
   from: 1,
   to: 4,

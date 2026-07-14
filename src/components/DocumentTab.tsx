@@ -2,6 +2,7 @@ import { forwardRef, useState, useCallback, useRef, useEffect, useImperativeHand
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './Editor';
 import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
+import type { ComposerIntent } from './CommentComposerCard';
 import CommentLayer, { computeBottomSpacer } from './CommentLayer';
 import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
@@ -1198,30 +1199,30 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   );
 
   const handleAddComment = useCallback(
-    (text: string) => {
+    (text: string, intent: ComposerIntent) => {
       const sel = pendingCommentSelection ?? selectionInfo;
       if (!sel || !editor) return;
       const { from, to, text: anchorText } = sel;
-      const comment = addComment(anchorText, from, to, AUTHOR);
+      const kind: Comment['kind'] = intent === 'claude' ? 'claude' : 'note';
+      const comment = addComment(anchorText, from, to, AUTHOR, kind);
       // Apply comment mark
-      editor.chain().focus().setTextSelection({ from, to }).setComment(comment.id).run();
-      // Add the initial "comment body" as the first reply if user typed text
+      editor.chain().focus().setTextSelection({ from, to }).setComment(comment.id, kind).run();
+      // The comment has no body field — the user's text is stored as the first
+      // reply. Must run before claudeReply.ask() queues its pending AI reply, or
+      // Claude's answer renders above the user's question in the thread.
       if (text) {
-        // The comment has no body field — treat the text as the first reply.
-        // Must run before claudeReply.ask() queues its pending AI reply, or
-        // Claude's answer renders above the user's question in the thread.
         addReply(comment.id, text, AUTHOR);
-        // Tagging @claude in the initial comment should ask Claude too — same
-        // as tagging it in a later reply. We pass the just-created comment
-        // directly rather than going through handleAIReplyRequest, which looks
-        // up `comments` (the new comment isn't in that array until next render).
-        if (/@claude\b/i.test(text)) {
-          if (aiSession) {
-            void claudeReply.ask(comment, text, aiSession);
-          } else {
-            pendingAIRequestRef.current = { commentId: comment.id, userText: text };
-            openSessionPicker();
-          }
+      }
+      // Ask Claude only when the user chose the Claude action. The @claude text
+      // trigger is retired — intent now comes from the composer's Ask/Note
+      // buttons. With no linked session, defer: open the picker and fire once
+      // linked (the typed text is preserved on pendingAIRequestRef).
+      if (intent === 'claude' && text) {
+        if (aiSession) {
+          void claudeReply.ask(comment, text, aiSession);
+        } else {
+          pendingAIRequestRef.current = { commentId: comment.id, userText: text };
+          openSessionPicker();
         }
       }
       setActiveAnnotation({ kind: 'comment', id: comment.id });
@@ -1281,6 +1282,36 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [deleteComment, editor, clearActiveIf, markDirty],
   );
 
+  // "Ask Claude about this" on a note: flip the same anchored card to a Claude
+  // thread in place (no duplicate) and send its own text as the first request.
+  // Reuses the no-session deferral so a note can be promoted before linking.
+  const handlePromoteNote = useCallback(
+    (commentId: string) => {
+      const note = comments.find((c) => c.id === commentId);
+      if (!note) return;
+      const userText = note.replies.find((r) => r.authorKind !== 'ai')?.text ?? '';
+      if (!userText) return;
+      const promoted: Comment = { ...note, kind: 'claude' };
+      setComments((prev) => prev.map((c) => (c.id === commentId ? { ...c, kind: 'claude' } : c)));
+      // Switch the in-document highlight from a note (dotted gray) to a Claude
+      // thread (amber): drop the note mark, then re-stamp the span as 'claude'.
+      // Two separate commands, not a chain — unsetComment dispatches its own
+      // transaction (matching how resolve/unresolve use these commands), and
+      // removeMark leaves positions unchanged so the stored range stays valid.
+      editor?.commands.unsetComment(commentId);
+      editor?.commands.setCommentRange(commentId, note.from, note.to, 'claude');
+      markDirty();
+      if (aiSession) {
+        void claudeReply.ask(promoted, userText, aiSession);
+      } else {
+        pendingAIRequestRef.current = { commentId, userText };
+        openSessionPicker();
+      }
+      setActiveAnnotation({ kind: 'comment', id: commentId });
+    },
+    [comments, setComments, editor, markDirty, aiSession, claudeReply, openSessionPicker],
+  );
+
   // Resolving hides the card (unless "Show resolved" is on), so it also drops
   // the focus rather than leaving an outline on a vanished card. The in-text
   // mark is removed entirely so the text goes plain — a resolved comment leaves
@@ -1304,7 +1335,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Queue the validated range and unresolved state before restoring the
       // mark, so the mark transaction reconciles against the updated record.
       unresolveComment(commentId, anchor);
-      editor.commands.setCommentRange(commentId, anchor.from, anchor.to);
+      editor.commands.setCommentRange(commentId, anchor.from, anchor.to, comment.kind);
       markDirty();
       return true;
     },
@@ -1753,6 +1784,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onResolve={handleResolveComment}
             onUnresolve={handleUnresolveComment}
             onDelete={handleDeleteComment}
+            onPromoteNote={handlePromoteNote}
             onActivate={handleActivateComment}
             onActivateHistory={handleActivateHistoryComment}
             onActivateSuggestion={handleActivateSuggestion}
@@ -1761,6 +1793,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onRejectChange={handleRejectChange}
             onSubmitComment={handleAddComment}
             onCancelComment={handleCancelCommentComposer}
+            hasSession={aiSession != null}
             onMaxCardBottomChange={setMaxCardBottom}
           />
           <ChatPanel

@@ -75,6 +75,7 @@ function sanitizeComment(raw: unknown): Comment | null {
   const replies = Array.isArray(raw.replies)
     ? raw.replies.map(sanitizeReply).filter((r): r is Reply => r !== null)
     : [];
+  const kind: Comment['kind'] = raw.kind === 'claude' ? 'claude' : 'note';
   return {
     id: raw.id,
     anchorText: typeof raw.anchorText === 'string' ? raw.anchorText : '',
@@ -83,6 +84,7 @@ function sanitizeComment(raw: unknown): Comment | null {
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     resolved: raw.resolved === true,
+    kind,
     replies,
   };
 }

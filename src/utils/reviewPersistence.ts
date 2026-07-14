@@ -155,7 +155,7 @@ function restoreCommentMarks(
     tr.addMark(
       range.from,
       range.to,
-      commentType.create({ commentId: comment.id, resolved: false }),
+      commentType.create({ commentId: comment.id, kind: comment.kind, resolved: false }),
     );
   }
 }

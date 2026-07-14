@@ -21,7 +21,7 @@ async function setupWithIPC(
   page: Page,
   opts: {
     handler: InvokeHandler;
-    // Optional: inject a fake aiSession so the @claude path runs.
+    // Optional: inject a fake aiSession so the anchored Claude path runs.
     testSession?: Record<string, unknown>;
     // Optional: capture invoke calls for later assertions.
     captureKey?: string;
@@ -338,7 +338,7 @@ test('linking a saved document records its session name for the next picker open
 async function fireAIReplyAndCaptureCompactionCall(
   page: Page,
 ): Promise<{ cmd: string; args: Record<string, unknown> }[]> {
-  // Add a comment with @claude so useClaudeReply.ask fires.
+  // Ask Claude from the anchored composer so useClaudeReply.ask fires.
   await activeEditor(page).click();
   await page.keyboard.type('content to comment on');
   await page.keyboard.down('ControlOrMeta');
@@ -346,11 +346,8 @@ async function fireAIReplyAndCaptureCompactionCall(
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, 'content to comment on');
   await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('seed');
-  await page.locator('.add-comment-compose .btn-primary').click();
-  await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill('@claude evaluate');
-  await page.locator('.comment-card .btn-primary').click();
+  await page.locator('.add-comment-compose textarea').fill('Evaluate');
+  await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -570,7 +567,9 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
   );
 });
 
-test('context folder: @claude request passes --add-dir and a file manifest', async ({ page }) => {
+test('context folder: anchored Claude request passes --add-dir and a file manifest', async ({
+  page,
+}) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_folder_dialog') return '/refs/research';
     if (cmd === 'list_context_files') return ['sources.md', 'notes/interview.txt'];

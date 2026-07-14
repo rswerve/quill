@@ -13,6 +13,7 @@ const mockInvoke = vi.mocked(invoke);
 
 const SAMPLE_COMMENT: Comment = {
   id: 'c1',
+  kind: 'note',
   anchorText: 'hi',
   from: 0,
   to: 2,

@@ -30,6 +30,7 @@ async function saveNewAndReopen(page: import('@playwright/test').Page) {
 
 const LIVE_COMMENT = {
   id: 'live-comment',
+  kind: 'note',
   anchorText: 'hello',
   from: 8,
   to: 13,
@@ -51,7 +52,13 @@ async function openLiveComment(
     files: {
       [DOC_PATH]: 'prefix hello world',
       [SIDECAR_PATH]: sidecar({
-        comments: [{ ...LIVE_COMMENT, resolved: options.resolved ?? false }],
+        comments: [
+          {
+            ...LIVE_COMMENT,
+            kind: options.mockAI ? 'claude' : 'note',
+            resolved: options.resolved ?? false,
+          },
+        ],
         ...(options.mockAI ? { aiSession: ipcFixtures.autoBindSession } : {}),
       }),
     },
@@ -88,6 +95,7 @@ async function selectCommentSlice(page: import('@playwright/test').Page, from: n
 
 const CLAUDE_COMMENT = {
   ...LIVE_COMMENT,
+  kind: 'claude',
   from: 1,
   to: 6,
 };
@@ -117,8 +125,8 @@ async function openWithCommentedClaudeReplacement(
   });
   await openMemoryFile(page);
   await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill('@claude make the edit');
-  await page.locator('.comment-card .btn-primary').click();
+  await page.locator('.comment-reply-input').fill('Make the edit');
+  await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
   await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
 }
 
@@ -201,6 +209,7 @@ test.describe('review metadata survives save and reopen', () => {
           comments: [
             {
               id: 'fixture-comment',
+              kind: 'note',
               anchorText: 'hello',
               from: 1,
               to: 6,
@@ -286,14 +295,14 @@ test.describe('review metadata survives save and reopen', () => {
 });
 
 test.describe('live comment reconciliation', () => {
-  test('document shifts keep @claude anchored to the current marked text', async ({ page }) => {
+  test('document shifts keep Claude anchored to the current marked text', async ({ page }) => {
     await openLiveComment(page, { mockAI: true });
     await placeCaretAtDocumentStart(page);
     await page.keyboard.type('XYZ');
 
     await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('@claude inspect this');
-    await page.locator('.comment-card .btn-primary').click();
+    await page.locator('.comment-reply-input').fill('Inspect this');
+    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
     await expect.poll(() => page.evaluate(() => Boolean(window.__quillLastSpawnArgs))).toBe(true);
 
     const prompt = await page.evaluate(
@@ -586,13 +595,22 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 test.describe('suggestion cards link back to their origin comment', () => {
   const comment = {
     id: 'fixture-comment',
+    kind: 'claude',
     anchorText: 'hello',
     from: 1,
     to: 6,
     author: 'Reviewer',
     createdAt: '2026-07-11T18:00:00Z',
     resolved: false,
-    replies: [],
+    replies: [
+      {
+        id: 'fixture-root-reply',
+        author: 'Reviewer',
+        authorKind: 'user',
+        text: 'Review this',
+        createdAt: '2026-07-11T18:00:00Z',
+      },
+    ],
   };
   // The edit targets "world" — OUTSIDE the comment's highlight ("hello") —
   // exercising the document-scale protocol end to end.
@@ -616,12 +634,12 @@ test.describe('suggestion cards link back to their origin comment', () => {
     });
     await openMemoryFile(page);
     await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('@claude replace the noun');
-    await page.locator('.comment-card .btn-primary').click();
+    await page.locator('.comment-reply-input').fill('Replace the noun');
+    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
     await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
   }
 
-  test('a mocked @claude edit stamps the origin and the card chips back to the comment', async ({
+  test('a mocked Claude edit stamps the origin and the card chips back to the comment', async ({
     page,
   }) => {
     await openWithClaudeEdit(page);
@@ -713,13 +731,22 @@ test.describe('suggestion cards link back to their origin comment', () => {
 test.describe('review-only mutations participate in dirty-state safety', () => {
   const comment = {
     id: 'fixture-comment',
+    kind: 'note',
     anchorText: 'hello',
     from: 1,
     to: 6,
     author: 'Reviewer',
     createdAt: '2026-07-11T18:00:00Z',
     resolved: false,
-    replies: [],
+    replies: [
+      {
+        id: 'fixture-root-reply',
+        author: 'Reviewer',
+        authorKind: 'user',
+        text: 'Review this',
+        createdAt: '2026-07-11T18:00:00Z',
+      },
+    ],
   };
 
   async function openAndEstablishCleanBaseline(
@@ -734,7 +761,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
       files: {
         [DOC_PATH]: 'hello world',
         [SIDECAR_PATH]: sidecar({
-          comments: [{ ...comment, resolved }],
+          comments: [{ ...comment, kind: mockAI ? 'claude' : 'note', resolved }],
           ...(mockAI ? { aiSession: ipcFixtures.autoBindSession } : {}),
         }),
       },
@@ -755,19 +782,19 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await expect(page.locator('.dirty-dot')).toHaveCount(0);
   });
 
-  test('adding a user reply marks the document dirty', async ({ page }) => {
+  test('promoting a note marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
-    await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('persist me');
-    await page.locator('.comment-card .btn-primary').click();
+    await page.getByRole('button', { name: 'Ask Claude about this' }).click();
+    await expect(page.locator('.comment-card-claude')).toBeVisible();
+    await expect(page.locator('.comment-card-note')).toHaveCount(0);
     await expect(page.locator('.dirty-dot')).toBeVisible();
   });
 
   test('finishing an AI reply marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, false, true);
     await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('@claude answer this');
-    await page.locator('.comment-card .btn-primary').click();
+    await page.locator('.comment-reply-input').fill('Answer this');
+    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
     await expect(page.locator('.comment-reply-ai')).toContainText('Persist this answer.');
     await expect(page.locator('.dirty-dot')).toBeVisible();
   });

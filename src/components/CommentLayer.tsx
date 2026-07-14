@@ -5,7 +5,7 @@ import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
 import FormattingCard from './FormattingCard';
-import CommentComposerCard from './CommentComposerCard';
+import CommentComposerCard, { type ComposerIntent } from './CommentComposerCard';
 import type { SelectionInfo } from './Editor';
 import { groupSuggestionCards } from '../utils/suggestionCards';
 import {
@@ -39,14 +39,18 @@ interface CommentLayerProps {
   onResolve: (commentId: string) => void;
   onUnresolve: (commentId: string) => boolean;
   onDelete: (commentId: string) => void;
+  onPromoteNote: (commentId: string) => void;
   onActivate: (commentId: string) => void;
   onActivateHistory: (commentId: string) => void;
   onActivateSuggestion: (id: string) => void;
   onActivateChatMessage: (messageId: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
-  onSubmitComment: (text: string) => void;
+  onSubmitComment: (text: string, intent: ComposerIntent) => void;
   onCancelComment: () => void;
+  /** Whether a Claude session is linked — drives the composer's Ask-Claude
+   *  primary label and the offline note banner. */
+  hasSession: boolean;
   /** Lowest card bottom in document space (`nudgedTop + measuredHeight`), so
    *  App can extend the scroll range to reach a below-fold card. 0 when empty. */
   onMaxCardBottomChange: (maxBottom: number) => void;
@@ -148,6 +152,7 @@ export default function CommentLayer({
   onResolve,
   onUnresolve,
   onDelete,
+  onPromoteNote,
   onActivate,
   onActivateHistory,
   onActivateSuggestion,
@@ -156,6 +161,7 @@ export default function CommentLayer({
   onRejectChange,
   onSubmitComment,
   onCancelComment,
+  hasSession,
   onMaxCardBottomChange,
 }: CommentLayerProps) {
   const [panelLayout, setPanelLayout] = useState<AnchoredPanelLayout>(EMPTY_LAYOUT);
@@ -487,6 +493,7 @@ export default function CommentLayer({
         onResolve={onResolve}
         onUnresolve={onUnresolve}
         onDelete={onDelete}
+        onPromoteNote={onPromoteNote}
         onClick={showResolved ? onActivateHistory : onActivate}
       />
     );
@@ -532,7 +539,7 @@ export default function CommentLayer({
             </span>
             <strong>No comments yet</strong>
             <p>
-              Select text and press <b>+</b>, or type <code>@claude</code>.
+              Select text and press <b>+</b> to add a note or ask Claude.
             </p>
           </div>
         )}
@@ -548,6 +555,7 @@ export default function CommentLayer({
             <CommentComposerCard
               quote={commentComposer.text}
               top={positionById.get(COMMENT_COMPOSER_CARD_ID)!.top}
+              hasSession={hasSession}
               onSubmit={onSubmitComment}
               onCancel={onCancelComment}
             />

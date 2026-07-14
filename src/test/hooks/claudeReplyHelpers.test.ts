@@ -5,6 +5,7 @@ import type { Comment, Reply, TrackedChangeInfo } from '../../types';
 function makeComment(replies: Partial<Reply>[]): Comment {
   return {
     id: 'c1',
+    kind: 'claude',
     anchorText: 'anchor',
     from: 1,
     to: 7,

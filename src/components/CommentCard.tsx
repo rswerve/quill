@@ -19,6 +19,9 @@ interface CommentCardProps {
   onUnresolve: (commentId: string) => boolean;
   onDelete: (commentId: string) => void;
   onClick: (commentId: string) => void;
+  /** Promote a note into a Claude thread ("Ask Claude about this"): the note's
+   *  text + anchor become the thread's first request. */
+  onPromoteNote: (commentId: string) => void;
 }
 
 function ReplyErrorActions({
@@ -154,13 +157,13 @@ function ReplyView({
         {!reply.pending && linkedSuggestionIds.length > 0 && (
           <div className="comment-reply-linked-actions">
             <button
-              className="reply-view-suggestion"
+              className="reply-suggestions-chip"
               onClick={(event) => {
                 event.stopPropagation();
                 onViewSuggestion(linkedSuggestionIds);
               }}
             >
-              <span aria-hidden>↗</span> View suggestion
+              → {linkedSuggestionIds.length} suggestion{linkedSuggestionIds.length === 1 ? '' : 's'}
             </button>
             <button
               className="reply-dismiss"
@@ -178,20 +181,19 @@ function ReplyView({
   }
 
   return (
-    <div className={`comment-reply${isAI ? ' comment-reply-ai' : ''}`}>
-      <div className="comment-header">
-        <span className="comment-author">
-          {isAI && <span className="ai-badge">AI</span>}
-          {reply.author}
-        </span>
-        <span className="comment-time">{timeAgo(reply.createdAt)}</span>
-        {isAI && reply.model && (
-          <span className="comment-reply-model" title={`Model: ${reply.model}`}>
-            {reply.model}
-          </span>
-        )}
-      </div>
-      {replyBody}
+    <div className={`comment-reply${isAI ? ' comment-reply-ai' : ' comment-reply-user'}`}>
+      {/* Single-player thread turns: your text sits in an unlabeled tinted band;
+          Claude's reply sits on the card surface under a small "Claude" label
+          (no "AI" chip, and no per-reply model tag or timestamp — the header
+          carries the one timestamp, the active model lives in the status bar). */}
+      {isAI ? (
+        <>
+          <span className="comment-reply-claude">Claude</span>
+          {replyBody}
+        </>
+      ) : (
+        <div className="comment-user-band">{replyBody}</div>
+      )}
     </div>
   );
 }
@@ -212,11 +214,13 @@ export default function CommentCard({
   onUnresolve,
   onDelete,
   onClick,
+  onPromoteNote,
 }: CommentCardProps) {
   const [replyText, setReplyText] = useState('');
   const [showReply, setShowReply] = useState(false);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isNote = comment.kind === 'note';
 
   useEffect(() => {
     if (!inlineNotice) return;
@@ -229,11 +233,11 @@ export default function CommentCard({
     const trimmed = replyText.trim();
     if (!trimmed) return;
     onReply(comment.id, trimmed);
-    // No session linked yet is fine — the request handler opens the session
-    // picker and fires the request once one is chosen.
-    if (/@claude\b/i.test(trimmed)) {
-      onAIReplyRequest(comment.id, trimmed);
-    }
+    // Every reply in a Claude thread continues the conversation with Claude —
+    // the @claude token is retired; the thread's kind carries the intent. No
+    // session linked yet is fine: the handler opens the picker and fires once
+    // one is chosen.
+    onAIReplyRequest(comment.id, trimmed);
     setReplyText('');
     setShowReply(false);
   }
@@ -250,7 +254,7 @@ export default function CommentCard({
 
   return (
     <div
-      className={`comment-card${isActive ? ' comment-card-active' : ''}${comment.resolved ? ' comment-card-resolved' : ''}`}
+      className={`comment-card comment-card-${comment.kind}${isActive ? ' comment-card-active' : ''}${comment.resolved ? ' comment-card-resolved' : ''}`}
       style={top === undefined ? undefined : { top }}
       data-card-id={comment.id}
       onClick={() => onClick(comment.id)}
@@ -258,10 +262,11 @@ export default function CommentCard({
       <div className="comment-thread-line" />
 
       <div className="comment-header">
-        <span className="comment-avatar">
-          {(comment.author.trim().charAt(0) || '?').toUpperCase()}
-        </span>
-        <span className="comment-author">{comment.author}</span>
+        {isNote ? (
+          <span className="comment-note-badge">Note</span>
+        ) : (
+          <span className="comment-thread-title">Claude thread</span>
+        )}
         <span className="comment-time">{timeAgo(comment.createdAt)}</span>
         <button
           className="comment-resolve-btn"
@@ -307,24 +312,44 @@ export default function CommentCard({
         </p>
       )}
 
-      {comment.replies
-        .filter((reply) => !reply.dismissed)
-        .map((reply) => (
-          <ReplyView
-            key={reply.id}
-            reply={reply}
-            onCancel={() => onCancelAIReply(reply.id)}
-            onRetry={() => onRetryAIReply(reply.id)}
-            onRelink={onOpenSessionPicker}
-            onDismiss={() => onDismissAIReply(comment.id, reply.id)}
-            onViewSuggestion={onViewReplySuggestion}
-            linkedSuggestionIds={(reply.suggestionIds ?? []).filter((id) =>
-              pendingSuggestionIds.has(id),
-            )}
-          />
-        ))}
+      {isNote
+        ? comment.replies
+            .filter((reply) => !reply.dismissed)
+            .map((reply) => (
+              <p key={reply.id} className="comment-note-body">
+                {reply.text}
+              </p>
+            ))
+        : comment.replies
+            .filter((reply) => !reply.dismissed)
+            .map((reply) => (
+              <ReplyView
+                key={reply.id}
+                reply={reply}
+                onCancel={() => onCancelAIReply(reply.id)}
+                onRetry={() => onRetryAIReply(reply.id)}
+                onRelink={onOpenSessionPicker}
+                onDismiss={() => onDismissAIReply(comment.id, reply.id)}
+                onViewSuggestion={onViewReplySuggestion}
+                linkedSuggestionIds={(reply.suggestionIds ?? []).filter((id) =>
+                  pendingSuggestionIds.has(id),
+                )}
+              />
+            ))}
 
-      {showReply ? (
+      {isNote && !comment.resolved && (
+        <button
+          className="comment-promote-note"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPromoteNote(comment.id);
+          }}
+        >
+          <span aria-hidden>✦</span> Ask Claude about this
+        </button>
+      )}
+
+      {!isNote && showReply && (
         <form className="comment-reply-form" onSubmit={handleReplySubmit}>
           <textarea
             ref={textareaRef}
@@ -332,7 +357,7 @@ export default function CommentCard({
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Reply… (@claude to get an AI response)"
+            placeholder="Reply to Claude…"
             rows={2}
             autoFocus
           />
@@ -352,19 +377,19 @@ export default function CommentCard({
             </button>
           </div>
         </form>
-      ) : (
-        !comment.resolved && (
-          <button
-            className="comment-reply-trigger"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowReply(true);
-              setTimeout(() => textareaRef.current?.focus(), 0);
-            }}
-          >
-            Reply
-          </button>
-        )
+      )}
+
+      {!isNote && !showReply && !comment.resolved && (
+        <button
+          className="comment-reply-trigger"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowReply(true);
+            setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
+        >
+          Reply to Claude…
+        </button>
       )}
     </div>
   );

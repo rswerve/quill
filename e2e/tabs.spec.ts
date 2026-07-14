@@ -24,7 +24,7 @@ async function selectAll(page: Page) {
 async function addCommentToSelection(page: Page, body: string) {
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill(body);
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.getByRole('button', { name: 'Add note' }).click();
 }
 
 test('mounted tabs preserve independent text, undo, zoom, mode, comments, and suggestions', async ({

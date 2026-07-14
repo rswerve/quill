@@ -125,7 +125,7 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     await expectSelectionText(page, 'Commented text');
     await page.locator('.add-comment-btn').click();
     await page.locator('.add-comment-compose textarea').fill('a remark');
-    await page.locator('.add-comment-compose .btn-primary').click();
+    await page.getByRole('button', { name: 'Add note' }).click();
     await expectEditorHtml(editor, { contains: ['comment-mark'] });
 
     await page.emulateMedia({ media: 'print' });

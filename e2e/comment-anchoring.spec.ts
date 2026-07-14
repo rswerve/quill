@@ -19,7 +19,7 @@ async function addComment(page: Page, text: string) {
   await page.locator('.add-comment-btn').click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill(text);
-  await textarea.press('ControlOrMeta+Enter');
+  await textarea.press('ControlOrMeta+Shift+Enter');
   await expect(page.locator('.comment-card-active')).toBeVisible();
 }
 

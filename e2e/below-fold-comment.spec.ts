@@ -56,9 +56,9 @@ test('a comment on the last line of a tall document scrolls fully into view', as
   await plusBtn.click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill('last-line note');
-  // Submit via Cmd+Enter — the compose popover's submit button can render below
+  // Submit the local note via Cmd+Shift+Enter — the compose popover's buttons can render below
   // the fold for a last-line selection, so don't depend on it being on-screen.
-  await textarea.press('ControlOrMeta+Enter');
+  await textarea.press('ControlOrMeta+Shift+Enter');
 
   // Scroll back to the top so the card starts off-screen and activation has to
   // bring it into view (adding a comment focuses it, so scroll up first).

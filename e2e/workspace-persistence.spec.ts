@@ -169,7 +169,7 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await selectAll(page);
   await page.locator('.add-comment-btn').click();
   await page.locator('.add-comment-compose textarea').fill('Recovered comment');
-  await page.locator('.add-comment-compose .btn-primary').click();
+  await page.getByRole('button', { name: 'Add note' }).click();
 
   await page.locator('.tab-add').click();
   await page.getByRole('button', { name: 'Suggesting' }).click();

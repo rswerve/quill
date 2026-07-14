@@ -24,9 +24,11 @@ function comment(
   range: ParagraphRange,
   resolved: boolean,
   replies: Array<Record<string, unknown>> = [],
+  kind: 'note' | 'claude' = 'note',
 ) {
   return {
     id,
+    kind,
     anchorText: range.text,
     from: range.from,
     to: range.to,
@@ -120,16 +122,22 @@ test('View suggestion from All switches to Open before focusing the existing sug
 }) => {
   const paragraphs = ['hello world'];
   const [range] = paragraphRanges(paragraphs);
-  const origin = comment('1', { ...range, text: 'hello', to: 6 }, true, [
-    {
-      id: 'ai-reply',
-      author: 'Claude',
-      text: 'I proposed the linked edit.',
-      createdAt: '2026-07-12T19:00:00Z',
-      authorKind: 'ai',
-      suggestionIds: ['linked-insert'],
-    },
-  ]);
+  const origin = comment(
+    '1',
+    { ...range, text: 'hello', to: 6 },
+    true,
+    [
+      {
+        id: 'ai-reply',
+        author: 'Claude',
+        text: 'I proposed the linked edit.',
+        createdAt: '2026-07-12T19:00:00Z',
+        authorKind: 'ai',
+        suggestionIds: ['linked-insert'],
+      },
+    ],
+    'claude',
+  );
   const suggestion = {
     id: 'linked-insert',
     type: 'insertion',
@@ -148,7 +156,7 @@ test('View suggestion from All switches to Open before focusing the existing sug
   await activeTab.locator('.comments-head .filter').click();
   await expect(activeTab.locator('.comment-history-list')).toBeVisible();
   await expect(page.locator('.suggestion-card')).toHaveCount(0);
-  await page.getByRole('button', { name: /View suggestion/i }).click();
+  await page.getByRole('button', { name: /suggestions?/i }).click();
 
   await expect(activeTab.locator('.comments-head .filter')).toContainText('Open');
   await expect(page.locator('.comment-history-list')).toHaveCount(0);
