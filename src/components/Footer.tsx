@@ -4,11 +4,13 @@ import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types'
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
 import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 import { cx } from '../utils/cx';
+import { computeDocumentStats } from '../utils/documentStats';
+import type { DocumentStats } from '../utils/documentStats';
 import styles from './Footer.module.css';
 
 interface FooterProps {
   editor: Editor | null;
-  stats?: { words: number; chars: number; line: number; column: number };
+  stats?: DocumentStats;
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
@@ -24,11 +26,11 @@ interface FooterProps {
   onUnlinkContextFolder: () => void;
 }
 
-function countWords(text: string): number {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w.length > 0).length;
+/** "chosen/total" while a range is selected, otherwise just the total. */
+function formatCount(total: number, selected?: number): string {
+  return selected === undefined
+    ? total.toLocaleString()
+    : `${selected.toLocaleString()}/${total.toLocaleString()}`;
 }
 
 export default function Footer({
@@ -58,21 +60,7 @@ export default function Footer({
       />
     );
 
-  const text = editor.state.doc.textContent;
-  const { head } = editor.state.selection;
-  const resolved = editor.state.doc.resolve(head);
-  let derivedLine = 0;
-  editor.state.doc.nodesBetween(0, head, (node) => {
-    if (node.isTextblock) derivedLine += 1;
-  });
-  const documentStats =
-    stats ??
-    ({
-      words: countWords(text),
-      chars: text.length,
-      line: Math.max(1, derivedLine),
-      column: resolved.parentOffset + 1,
-    } satisfies NonNullable<FooterProps['stats']>);
+  const documentStats = stats ?? computeDocumentStats(editor);
 
   const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
 
@@ -84,8 +72,26 @@ export default function Footer({
       data-print-hidden
     >
       <div className={styles.group}>
-        <span className={styles.item}>{documentStats.words.toLocaleString()} WORDS</span>
-        <span className={styles.item}>{documentStats.chars.toLocaleString()} CHARS</span>
+        <span
+          className={styles.item}
+          title={
+            documentStats.selection
+              ? `${documentStats.selection.words.toLocaleString()} of ${documentStats.words.toLocaleString()} words selected`
+              : undefined
+          }
+        >
+          {formatCount(documentStats.words, documentStats.selection?.words)} WORDS
+        </span>
+        <span
+          className={styles.item}
+          title={
+            documentStats.selection
+              ? `${documentStats.selection.chars.toLocaleString()} of ${documentStats.chars.toLocaleString()} characters selected`
+              : undefined
+          }
+        >
+          {formatCount(documentStats.chars, documentStats.selection?.chars)} CHARS
+        </span>
         <span className={styles.item}>
           LN {documentStats.line}:{documentStats.column}
         </span>

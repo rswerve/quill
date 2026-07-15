@@ -44,6 +44,8 @@ import {
 } from '../utils/trackedCommentResolution';
 import { basename, dirname } from '../utils/path';
 import { sidecarPath } from '../utils/sidecarPath';
+import { computeDocumentStats } from '../utils/documentStats';
+import type { DocumentStats } from '../utils/documentStats';
 import { clampZoom } from '../utils/zoomPreference';
 import {
   authorizeSidecarAccess,
@@ -90,13 +92,6 @@ function lastChatModel(thread: DocumentChatThread | undefined): string | null {
     if (thread.messages[index].model) return thread.messages[index].model ?? null;
   }
   return null;
-}
-
-export interface DocumentStats {
-  words: number;
-  chars: number;
-  line: number;
-  column: number;
 }
 
 export interface DocumentTabChromeSnapshot {
@@ -169,30 +164,6 @@ interface DocumentTabProps {
     binding: AISessionBinding,
   ) => { allowed: boolean; ownerTitle?: string };
   onReleaseSession: (tabId: string) => void;
-}
-
-function countWords(text: string): number {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter((word) => word.length > 0).length;
-}
-
-function readDocumentStats(editor: TiptapEditor | null): DocumentStats {
-  if (!editor) return { words: 0, chars: 0, line: 1, column: 1 };
-  const text = editor.state.doc.textContent;
-  const { head } = editor.state.selection;
-  const resolved = editor.state.doc.resolve(head);
-  let line = 0;
-  editor.state.doc.nodesBetween(0, head, (node) => {
-    if (node.isTextblock) line += 1;
-  });
-  return {
-    words: countWords(text),
-    chars: text.length,
-    line: Math.max(1, line),
-    column: resolved.parentOffset + 1,
-  };
 }
 
 const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function DocumentTab(
@@ -1528,7 +1499,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       lastKnownModel,
-      stats: readDocumentStats(editor),
+      stats: computeDocumentStats(editor),
     });
   }, [
     aiSession,

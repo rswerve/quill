@@ -69,6 +69,44 @@ describe('Footer zoom controls', () => {
   });
 });
 
+function renderForEditor(ed: Editor) {
+  return render(
+    <Footer
+      editor={ed}
+      zoom={1}
+      onZoomChange={vi.fn()}
+      aiSession={null}
+      lastKnownModel={null}
+      claudeModel={null}
+      claudeEffort={null}
+      onClaudeModelChange={vi.fn()}
+      onClaudeEffortChange={vi.fn()}
+      onOpenSessionPicker={vi.fn()}
+      onUnlinkSession={vi.fn()}
+      contextFolder={null}
+      onLinkContextFolder={vi.fn()}
+      onUnlinkContextFolder={vi.fn()}
+    />,
+  );
+}
+
+describe('Footer selection counts', () => {
+  it('shows just the totals when nothing is selected', () => {
+    editor = new Editor({ extensions: [StarterKit], content: '<p>Hello World</p>' });
+    renderForEditor(editor);
+    expect(screen.getByText('2 WORDS')).toBeInTheDocument();
+    expect(screen.getByText('11 CHARS')).toBeInTheDocument();
+  });
+
+  it('shows chosen/total for words and chars while a range is selected', () => {
+    editor = new Editor({ extensions: [StarterKit], content: '<p>Hello World</p>' });
+    editor.commands.setTextSelection({ from: 2, to: 5 }); // "ell"
+    renderForEditor(editor);
+    expect(screen.getByText('1/2 WORDS')).toBeInTheDocument();
+    expect(screen.getByText('3/11 CHARS')).toBeInTheDocument();
+  });
+});
+
 function renderWithZoom(zoom: number) {
   editor?.destroy();
   editor = new Editor({ extensions: [StarterKit], content: '<p>draft</p>' });
