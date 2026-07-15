@@ -550,6 +550,51 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'document-chat');
       });
 
+      test('chat session menus when linked and unlinked', async ({ page }) => {
+        const session = {
+          provider: 'claude-code',
+          sessionId: 'feedface12345678',
+          cwd: '/Users/maz/Documents/Quill',
+          linkedAt: '2026-07-14T16:00:00.000Z',
+          createdByQuill: false,
+        };
+        await openVisualDocument(
+          page,
+          theme,
+          'The session menu keeps document chat ownership explicit.',
+          sidecar({ aiSession: session }),
+          { trustedSidecarPaths: [DOC_PATH] },
+        );
+
+        const active = activeTabHost(page);
+        const panel = active.getByRole('complementary', { name: 'Review panel' });
+        await active.getByRole('tab', { name: 'Chat', exact: true }).click();
+        await expect(active.getByRole('tab', { name: 'Chat', exact: true })).toHaveAttribute(
+          'aria-selected',
+          'true',
+        );
+        await expect(active.getByTitle(`Claude session ${session.sessionId}`)).toContainText(
+          'FEEDFACE',
+        );
+
+        const trigger = active.getByRole('button', { name: 'Chat session menu' });
+        await trigger.click();
+        const linkedMenu = active.getByRole('menu');
+        await expect(linkedMenu.getByRole('menuitem', { name: 'Change session' })).toBeEnabled();
+        await expect(linkedMenu.getByRole('menuitem', { name: 'Start new session' })).toBeEnabled();
+        const unlink = linkedMenu.getByRole('menuitem', { name: 'Unlink' });
+        await expect(unlink).toBeEnabled();
+        await shot(page, theme, 'panel-session-menu-linked', panel);
+
+        await unlink.click();
+        await expect(linkedMenu).toHaveCount(0);
+        await expect(active.getByTitle('No Claude session linked')).toContainText('NO SESSION');
+        await trigger.click();
+        const unlinkedMenu = active.getByRole('menu');
+        await expect(unlinkedMenu.getByRole('menuitem', { name: 'Unlink' })).toBeDisabled();
+        await shot(page, theme, 'panel-session-menu-unlinked', panel);
+      });
+
       test('session picker', async ({ page }) => {
         const sessions = [
           {
