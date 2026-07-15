@@ -16,6 +16,7 @@ import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
 import type { WorkspaceReadResult } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
 import { useTabRegistry } from './hooks/useTabRegistry';
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
 import {
   readClaudeRunOptions,
   writeClaudeEffort,
@@ -28,12 +29,7 @@ import {
   getRecentFiles,
   syncRecentMenu,
 } from './utils/recentFiles';
-import {
-  clampZoom,
-  DEFAULT_ZOOM,
-  loadZoomPreference,
-  saveZoomPreference,
-} from './utils/zoomPreference';
+import { clampZoom, loadZoomPreference, saveZoomPreference } from './utils/zoomPreference';
 import {
   buildDiscardedRecoveryWorkspaceFile,
   buildDiscardedWorkspaceFile,
@@ -719,84 +715,18 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    function handleBrowserFileShortcut(event: KeyboardEvent): boolean {
-      if (hasNativeMenu) return false;
-      if (event.key.toLowerCase() === 's' && event.shiftKey) {
-        event.preventDefault();
-        void handleSaveAs();
-        return true;
-      }
-
-      const action = {
-        s: handleSave,
-        o: handleOpen,
-        n: addNewTab,
-      }[event.key];
-      if (action) {
-        event.preventDefault();
-        void action();
-        return true;
-      }
-
-      if (event.key === 'p' && !event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        handleExportPdf();
-        return true;
-      }
-      return false;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      const meta = event.metaKey || event.ctrlKey;
-      if (!meta) {
-        if (event.key === 'Escape') activeHandle()?.clearActiveAnnotation();
-        return;
-      }
-      if (handleBrowserFileShortcut(event)) return;
-
-      if (event.key === 'f' && !event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        activeHandle()?.focusFind();
-        return;
-      }
-      if (event.key === '/' && !event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        activeHandle()?.openChat();
-        return;
-      }
-      if (event.key === '=' || event.key === '+') {
-        event.preventDefault();
-        const next = clampZoom(Math.round((chromeRef.current.zoom + 0.12) * 100) / 100);
-        setDefaultZoom(next);
-        activeHandle()?.setZoom(next);
-        return;
-      }
-      if (event.key === '-') {
-        event.preventDefault();
-        const next = clampZoom(Math.round((chromeRef.current.zoom - 0.12) * 100) / 100);
-        setDefaultZoom(next);
-        activeHandle()?.setZoom(next);
-        return;
-      }
-      if (event.key === '0') {
-        event.preventDefault();
-        setDefaultZoom(DEFAULT_ZOOM);
-        activeHandle()?.setZoom(DEFAULT_ZOOM);
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    activeHandle,
-    addNewTab,
-    handleExportPdf,
-    handleOpen,
-    handleSave,
-    handleSaveAs,
+  const getCurrentZoom = useCallback(() => chromeRef.current.zoom, []);
+  useGlobalShortcuts({
     hasNativeMenu,
-  ]);
+    getActiveHandle: activeHandle,
+    getCurrentZoom,
+    setDefaultZoom,
+    onNewTab: addNewTab,
+    onOpen: handleOpen,
+    onSave: handleSave,
+    onSaveAs: handleSaveAs,
+    onExportPdf: handleExportPdf,
+  });
 
   const handleZoomChange = useCallback(
     (nextZoom: number) => {
