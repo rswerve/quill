@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { AISessionBinding } from '../types';
 import { cx } from '../utils/cx';
@@ -54,6 +54,45 @@ export default function SessionPicker({
   const [preview, setPreview] = useState<SessionPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const headingId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Modal focus management: on open, move focus to a safe control (Close, which
+  // is present immediately — not an async session row) and restore the prior
+  // focus on close, mirroring the hardened AppModal pattern.
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => {
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [open]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const focusable = Array.from(
+      panel.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input, select, textarea'),
+    ).filter((element) => element.tabIndex >= 0 && !element.hasAttribute('hidden'));
+    const first = focusable[0] ?? panel;
+    const last = focusable.at(-1) ?? panel;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !panel.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -107,16 +146,26 @@ export default function SessionPicker({
   }
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
+    <div data-print-hidden className={styles.overlay} onClick={onClose}>
       <div
+        ref={panelRef}
         className={styles.panel}
         role="dialog"
+        aria-modal="true"
         aria-labelledby={headingId}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
       >
         <div className={styles.header}>
           <span id={headingId}>Link Claude Code session</span>
-          <button className={styles.close} onClick={onClose} title="Close" aria-label="Close">
+          <button
+            ref={closeRef}
+            className={styles.close}
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
