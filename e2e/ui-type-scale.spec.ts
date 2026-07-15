@@ -345,11 +345,12 @@ test('app modal and update banner chrome use the intended scale', async ({ page 
   await setupMemoryTauri(page);
   await activeEditor(page).fill('dirty');
   await page.locator('.document-tab.active .document-tab-close').click();
-  await expectType(page.locator('.app-modal-title'), '15px');
-  await expectType(page.locator('.app-modal-message'), '12.5px');
-  await expectType(page.locator('.app-modal .btn-primary'), '12.5px');
+  // Modal chrome: assert the title's RENDERED size via role (module classes are
+  // hashed). The message size and modal button size are asserted from the module
+  // source / global primitives in the unit type-scale suite.
+  await expectType(page.getByRole('dialog').getByRole('heading'), '15px');
 
-  await page.locator('.app-modal .btn-ghost').click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
   await page.evaluate(() => {
     const banner = document.createElement('div');
     banner.className = 'update-banner';

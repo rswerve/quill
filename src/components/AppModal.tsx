@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import './AppModal.css';
+import { useEffect, useId, useRef } from 'react';
+import styles from './AppModal.module.css';
 
 export interface AppModalButton {
   label: string;
@@ -28,6 +28,8 @@ const BUTTON_CLASS: Record<NonNullable<AppModalButton['kind']>, string> = {
  */
 export default function AppModal({ title, message, buttons }: AppModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const messageId = useId();
 
   useEffect(() => {
     const previouslyFocused =
@@ -77,17 +79,28 @@ export default function AppModal({ title, message, buttons }: AppModalProps) {
   return (
     <div
       ref={dialogRef}
-      className="app-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
+      data-print-hidden
+      className={styles.overlay}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="app-modal">
-        <h2 className="app-modal-title">{title}</h2>
-        <p className="app-modal-message">{message}</p>
-        <div className="app-modal-actions">
+      {/* role="dialog" is on the card, not the backdrop overlay: the card IS
+          the dialog. The overlay carries data-print-hidden + the focus/keydown
+          container. */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        className={styles.modal}
+      >
+        <h2 id={titleId} className={styles.title}>
+          {title}
+        </h2>
+        <p id={messageId} className={styles.message}>
+          {message}
+        </p>
+        <div className={styles.actions}>
           {buttons.map((b) => (
             <button
               key={b.label}

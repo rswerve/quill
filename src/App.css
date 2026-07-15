@@ -1288,9 +1288,9 @@ del.track-delete {
   background: #9a3329;
 }
 
-/* App modal (confirmations & notices) styles are co-located in
-   src/components/AppModal.css. The @media print override for .app-modal-overlay
-   remains below with the other print rules. */
+/* App modal (confirmations & notices) styles are module-scoped in
+   src/components/AppModal.module.css. Print hiding is global via the
+   [data-print-hidden] policy rule below. */
 
 /* ── Show resolved button ───────────────────────────────────────── */
 .show-resolved-btn {
@@ -3836,8 +3836,13 @@ del.track-delete {
   .find-bar,
   .update-banner,
   .add-comment-btn,
-  .add-comment-compose,
-  .app-modal-overlay {
+  .add-comment-compose {
+    display: none !important;
+  }
+  /* Transient chrome opts out of print with this policy attribute (see
+     docs/css-modules.md) instead of being named by class here — reusable by any
+     overlay; the AppModal overlay is the first adopter. */
+  [data-print-hidden] {
     display: none !important;
   }
 

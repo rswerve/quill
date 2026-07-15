@@ -1,8 +1,8 @@
-/* ── App modal (confirmations & notices) ────────────────────────── */
-/* Co-located with AppModal.tsx. Global class names preserved; design tokens
-   resolve from src/styles/tokens.css. The @media print override for
-   .app-modal-overlay stays in App.css with the other print rules. */
-.app-modal-overlay {
+/* AppModal — module-scoped styles (hashed class names, private to the
+   component). Shared button primitives (.btn-*) stay global and are composed
+   via className; design tokens resolve from src/styles/tokens.css. Print hiding
+   is a global policy: the overlay carries data-print-hidden (see App.css). */
+.overlay {
   position: fixed;
   inset: 0;
   background: rgba(15, 23, 42, 0.4);
@@ -13,7 +13,7 @@
      picker is open stays readable. */
   z-index: 200;
 }
-.app-modal {
+.modal {
   width: 420px;
   max-width: 90vw;
   background: var(--color-page);
@@ -22,13 +22,13 @@
   padding: 20px;
   font-family: var(--font-sans);
 }
-.app-modal-title {
+.title {
   margin: 0 0 8px;
   font-size: 15px;
   font-weight: 600;
   color: var(--color-ink);
 }
-.app-modal-message {
+.message {
   margin: 0 0 16px;
   font-size: var(--text-meta);
   font-weight: 300;
@@ -38,7 +38,7 @@
   max-height: 50vh;
   overflow-y: auto;
 }
-.app-modal-actions {
+.actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;

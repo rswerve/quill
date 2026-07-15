@@ -237,7 +237,7 @@ for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
     await activeEditor(page).fill('Unsaved source document');
     await page.keyboard.press('ControlOrMeta+Shift+s');
 
-    const modal = page.locator('.app-modal');
+    const modal = page.getByRole('dialog');
     await expect(modal).toContainText('File already open');
     await expect(page.locator('.document-tab.active')).toContainText('owned.md');
     await expect(activeEditor(page)).toHaveText('Original owned document');
@@ -316,7 +316,7 @@ test('quitting with multiple dirty tabs presents one combined guard', async ({ p
       .__quillEmit;
     emit('menu-quit', null);
   });
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog');
   await expect(modal).toContainText('2 open documents have unsaved changes');
   await expect(modal.getByRole('button', { name: 'Save All' })).toBeVisible();
   await expect(modal.getByRole('button', { name: 'Discard All' })).toBeVisible();
@@ -372,7 +372,7 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
       null,
     );
   });
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog');
   await expect(modal).toContainText('2 open documents have unsaved changes');
   await modal.getByRole('button', { name: 'Save All' }).click();
 

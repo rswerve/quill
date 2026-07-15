@@ -342,7 +342,7 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   });
 
   await openMemoryFile(page);
-  const permissionNotice = page.locator('.app-modal');
+  const permissionNotice = page.getByRole('dialog');
   await expect(permissionNotice).toContainText('Reconnect Claude access');
   await expect(permissionNotice.getByRole('button', { name: 'Relink session' })).toBeVisible();
   await expect(permissionNotice.getByRole('button', { name: 'Choose folder' })).toBeVisible();
@@ -403,7 +403,7 @@ test('a Quill-created sidecar session reopens silently with a constrained cwd', 
   });
 
   await openMemoryFile(page);
-  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.session-picker')).toHaveCount(0);
   await openChat(page);
   await sendChat(page, 'Continue');
@@ -440,7 +440,7 @@ test('an imported context folder is confirmed for the loaded document path', asy
   });
 
   await openMemoryFile(page);
-  const notice = page.locator('.app-modal');
+  const notice = page.getByRole('dialog');
   await expect(notice).toContainText('This document had a reference folder');
   await notice.getByRole('button', { name: 'Choose folder' }).click();
   await expect

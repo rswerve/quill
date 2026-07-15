@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { readAppStyles } from '../utils/readAppStyles';
+import { readAppStyles, readComponentModules } from '../utils/readAppStyles';
 
 const css = readAppStyles();
+const modules = readComponentModules();
 
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -34,7 +35,11 @@ describe('UI type scale', () => {
   });
 
   it('keeps direct Studio component sizes within the handoff type scale', () => {
-    const explicit = [...css.matchAll(/font-size:\s*([\d.]+)px/g)].map((match) => match[1]);
+    // Scan the global layer AND every component module, so the scale invariant
+    // holds everywhere as components migrate to Modules.
+    const explicit = [...`${css}\n${modules}`.matchAll(/font-size:\s*([\d.]+)px/g)].map(
+      (match) => match[1],
+    );
     expect(new Set(explicit)).toEqual(
       new Set([
         '8',
@@ -57,7 +62,10 @@ describe('UI type scale', () => {
     );
     expect(ruleBody('.link-editor-input')).toContain('font-size: 14px');
     expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
-    expect(ruleBody('.app-modal-title')).toContain('font-size: 15px');
+    // AppModal is module-scoped: assert its title (15px) and message
+    // (var(--text-meta) = 12.5px, see the token above) from the module source.
+    expect(modules).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
+    expect(modules).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
     expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
     expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');

@@ -162,7 +162,7 @@ async function openVisualDocument(
     () =>
       new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
-  const notice = page.locator('.app-modal');
+  const notice = page.getByRole('dialog');
   if (await notice.count()) {
     const restoredCardClasses = await page
       .locator('.suggestion-card')
@@ -531,8 +531,8 @@ test.describe('visual regression safety net', () => {
         await setupVisual(page, theme);
         await activeEditor(page).fill('Unsaved work that must not be discarded silently.');
         await page.locator('.document-tab.active .document-tab-close').click();
-        await expect(page.locator('.app-modal')).toBeVisible();
-        await shot(page, theme, 'unsaved-modal', page.locator('.app-modal'));
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await shot(page, theme, 'unsaved-modal', page.getByRole('dialog'));
       });
 
       test('status footer', async ({ page }) => {

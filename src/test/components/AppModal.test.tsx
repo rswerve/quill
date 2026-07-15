@@ -20,11 +20,16 @@ describe('AppModal — dialog safety contract', () => {
         buttons={[btn({ label: 'OK' })]}
       />,
     );
-    const dialog = screen.getByRole('dialog');
+    // aria-labelledby wires the accessible name to the title heading (so the
+    // name query resolves it); aria-describedby wires the description to the
+    // message.
+    const dialog = screen.getByRole('dialog', { name: 'Unsaved changes' });
     expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(dialog.getAttribute('aria-label')).toBe('Unsaved changes');
-    // getByText throws if absent, so this is the assertion:
-    screen.getByText('Save before closing?');
+    const describedBy = dialog.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toBe('Save before closing?');
+    // The overlay opts into the global print-hide policy (see printPolicy.test.ts).
+    expect(dialog.closest('[data-print-hidden]')).not.toBeNull();
   });
 
   it('maps button kind to its class and defaults to ghost, and fires onClick', () => {
