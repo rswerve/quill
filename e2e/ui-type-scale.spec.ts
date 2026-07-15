@@ -309,7 +309,7 @@ test('form controls and every review-card kind use the intended UI scale and fam
 
   await expect(page.getByRole('button', { name: 'Add comment to selection' })).toBeVisible();
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
+  await expectType(page.locator('[data-card-id="comment-composer"] textarea'), '12.5px');
 
   await expectType(
     page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),

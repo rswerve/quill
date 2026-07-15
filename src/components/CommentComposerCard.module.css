@@ -1,0 +1,103 @@
+/* CommentComposerCard — module-scoped styles (hashed, private to the component).
+   The anchored "add a note / ask Claude" composer. Design tokens resolve from
+   src/styles/tokens.css.
+
+   FLATTENED cascade (the absolute Open layer is dead — the composer renders only
+   inside the .comments panel): each rule is the effective union of the historic
+   base and its `.comments`/panel-list override, one flat rule. The historic
+   `.comment-reply-input`/`.comment-reply-actions` global BASE rules stay in
+   App.css (CommentCard still uses the borderless base); here the composer fully
+   overrode them into a bordered box + padded footer, folded into `.input`/
+   `.actions`. `.btn-primary`/`.btn-ghost` stay global (AppModal/SessionPicker
+   share them); the composer's contextual restyle reaches them via `.actions
+   :global(.btn-…)` at (0,2,0), which beats the (0,1,0) base deterministically. */
+
+.composer {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 5px 18px rgba(50, 42, 25, 0.1);
+  z-index: 5;
+}
+:global(:root[data-theme='gruvbox']) .composer {
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.28);
+}
+
+.quote {
+  margin: 12px 12px 0;
+  padding: 3px 9px;
+  overflow: hidden;
+  border-left: 2.5px solid var(--note-quote-rule);
+  border-radius: 0 5px 5px 0;
+  background: var(--note-quote-bg);
+  color: var(--text-muted);
+  font-family: var(--font-doc-body);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input {
+  width: calc(100% - 24px);
+  min-height: 68px;
+  margin: 10px 12px 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  resize: none;
+  outline: none;
+}
+.input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--hl-bg);
+}
+
+.noSession {
+  margin: 6px 12px 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.noSessionHint {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--note-badge-bg);
+}
+.actions :global(.btn-primary),
+.actions :global(.btn-ghost) {
+  height: 27px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+.actions :global(.btn-primary) {
+  background: var(--accent);
+  color: var(--bg-app);
+}
+.actions :global(.btn-primary):hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.actions :global(.btn-primary):disabled {
+  opacity: 0.45;
+}

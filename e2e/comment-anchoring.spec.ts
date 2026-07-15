@@ -17,7 +17,7 @@ async function selectCurrentLine(page: Page) {
 
 async function addComment(page: Page, text: string) {
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  const textarea = page.locator('.add-comment-compose textarea');
+  const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill(text);
   await textarea.press('ControlOrMeta+Shift+Enter');
   await expect(page.locator('.comment-card-active')).toBeVisible();

@@ -137,7 +137,7 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await expectSelectionText(page, anchor);
   // Open the anchored composer and ask Claude directly.
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(replyText);
   await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 
@@ -159,7 +159,7 @@ async function addClaudeThread(page: Page, anchor: string, body: string) {
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, anchor);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(body);
   await page.getByRole('button', { name: /Ask Claude|Link a session to ask/ }).click();
 }
 
@@ -168,7 +168,7 @@ async function addLocalNote(page: Page, anchor: string, body: string) {
   await page.keyboard.press('ControlOrMeta+a');
   await expectSelectionText(page, anchor);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(body);
   await page.getByRole('button', { name: 'Add note' }).click();
 }
 
@@ -318,7 +318,7 @@ test('AI reply: Ask Claude with no linked session preserves the request and open
   await page.keyboard.press('ControlOrMeta+a');
   await expectSelectionText(page, 'hello world');
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  const composer = page.locator('.add-comment-compose');
+  const composer = page.locator('[data-card-id="comment-composer"]');
   await composer.locator('textarea').fill('Take a look');
   await expect(composer.getByRole('button', { name: 'Link a session to ask' })).toBeVisible();
   await expect(composer).toContainText('No Claude session linked yet — note works offline.');
@@ -380,7 +380,7 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
   await editor.click();
   await page.keyboard.press('ControlOrMeta+a');
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await page.locator('.add-comment-compose textarea').fill('Take a look');
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('Take a look');
   await page.getByRole('button', { name: 'Link a session to ask' }).click();
 
   const startNew = page.getByRole('button', { name: 'Start new session' });
@@ -495,7 +495,7 @@ async function addCommentOnPrefix(page: Page, anchor: string, count: number, rep
   await page.keyboard.up('Shift');
   await expectSelectionText(page, anchor.slice(0, count));
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(replyText);
   await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 

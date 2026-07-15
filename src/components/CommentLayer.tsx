@@ -730,7 +730,6 @@ export default function CommentLayer({
                 <CommentComposerCard
                   key={item.cardId}
                   quote={item.selection.text}
-                  top={0}
                   hasSession={hasSession}
                   onSubmit={onSubmitComment}
                   onCancel={onCancelComment}

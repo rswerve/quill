@@ -48,7 +48,7 @@ test('a last-line comment stays reachable without extending document scroll', as
 
   const plusBtn = page.getByRole('button', { name: 'Add comment to selection' });
   await plusBtn.click();
-  const textarea = page.locator('.add-comment-compose textarea');
+  const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill('last-line note');
   // Submit the local note via Cmd+Shift+Enter — the compose popover's buttons can render below
   // the fold for a last-line selection, so don't depend on it being on-screen.

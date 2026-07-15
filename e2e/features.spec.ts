@@ -62,10 +62,10 @@ async function addCommentViaPlusButton(page: Page, replyText: string) {
   // The floating "+" button only appears while a selection is active.
   const btn = page.getByRole('button', { name: 'Add comment to selection' });
   await btn.click();
-  const textarea = page.locator('.add-comment-compose textarea');
+  const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill(replyText);
   await page.getByRole('button', { name: 'Add note' }).click();
-  await expect(page.locator('.add-comment-compose')).toHaveCount(0);
+  await expect(page.locator('[data-card-id="comment-composer"]')).toHaveCount(0);
 }
 
 async function setZoom(page: Page, zoom: number) {
@@ -688,10 +688,10 @@ test('clicking "+" opens compose box', async ({ page }) => {
   await page.keyboard.type('hello world');
   await selectAll(page);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  const composer = page.locator('.comments .add-comment-compose');
+  const composer = page.locator('[data-card-id="comment-composer"]');
   await expect(composer).toBeVisible();
-  await expect(composer.locator('.comment-composer-quote')).toContainText('hello world');
-  await expect(page.locator('.add-comment-compose textarea')).toBeFocused();
+  await expect(composer.locator('blockquote')).toContainText('hello world');
+  await expect(page.locator('[data-card-id="comment-composer"] textarea')).toBeFocused();
 });
 
 test('selected range stays highlighted while composing a comment', async ({ page }) => {
@@ -702,7 +702,7 @@ test('selected range stays highlighted while composing a comment', async ({ page
   // The textarea has focus (native selection is gone) — the decoration
   // stands in for it.
   await expect(page.locator('.ProseMirror .pending-comment')).toContainText('hello world');
-  await page.locator('.add-comment-compose textarea').fill('still highlighted?');
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('still highlighted?');
   await expect(page.locator('.ProseMirror .pending-comment')).toContainText('hello world');
 });
 
@@ -732,7 +732,7 @@ test('Escape in the composer also clears the pending highlight', async ({ page }
   await selectAll(page);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
-  await page.locator('.add-comment-compose textarea').press('Escape');
+  await page.locator('[data-card-id="comment-composer"] textarea').press('Escape');
   await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
 });
 

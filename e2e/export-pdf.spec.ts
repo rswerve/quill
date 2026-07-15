@@ -128,7 +128,7 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     await page.keyboard.up('ControlOrMeta');
     await expectSelectionText(page, 'Commented text');
     await page.getByRole('button', { name: 'Add comment to selection' }).click();
-    await page.locator('.add-comment-compose textarea').fill('a remark');
+    await page.locator('[data-card-id="comment-composer"] textarea').fill('a remark');
     await page.getByRole('button', { name: 'Add note' }).click();
     await expectEditorHtml(editor, { contains: ['comment-mark'] });
 
