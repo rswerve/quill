@@ -41,7 +41,7 @@ test('off-screen anchors collapse into navigable gutter counts', async ({ page }
   await selectCurrentLine(page);
   await addComment(page, 'bottom note');
 
-  await expect(page.locator('.panel-tab-count')).toHaveText('2');
+  await expect(page.getByRole('tab', { name: 'Comments 2' })).toBeVisible();
   const above = page.getByRole('button', { name: /annotations above the viewport/ });
   await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
   await above.click();

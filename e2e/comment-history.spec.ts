@@ -86,7 +86,9 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   const activeTab = activeTabHost(page);
   const panelList = activeTab.locator('.comment-panel-list');
   const editorScroll = activeTab.locator('.editor-scroll-area');
-  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Open');
+  await expect(activeTab.getByRole('button', { name: 'Toggle resolved comments' })).toHaveText(
+    'Open',
+  );
   await expect(panelList).toBeVisible();
   await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeVisible();
   await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
@@ -104,9 +106,11 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect(activeTab.locator('.comment-card-active')).toHaveCount(1);
   await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Toggle resolved comments' }).click();
   const history = activeTab.locator('.comment-history-list');
-  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Resolved');
+  await expect(activeTab.getByRole('button', { name: 'Toggle resolved comments' })).toHaveText(
+    'Resolved',
+  );
   await expect(history).toBeVisible();
   await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeHidden();
   // Raw DOM query, not getByRole: the nav is hidden, so its tick buttons are out
@@ -166,12 +170,14 @@ test('View suggestion from Resolved switches to Open before focusing the existin
   await openReviewFile(page, paragraphs, [origin], [suggestion]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Toggle resolved comments' }).click();
   await expect(activeTab.locator('.comment-history-list')).toBeVisible();
   await expect(page.locator('.suggestion-card')).toHaveCount(0);
   await page.getByRole('button', { name: /suggestions?/i }).click();
 
-  await expect(activeTab.locator('.comments-head .filter')).toContainText('Open');
+  await expect(activeTab.getByRole('button', { name: 'Toggle resolved comments' })).toContainText(
+    'Open',
+  );
   await expect(page.locator('.comment-history-list')).toHaveCount(0);
   await expect(page.locator('.suggestion-card-active')).toBeVisible();
 });
@@ -189,7 +195,7 @@ test('resolved comments jump only to safely located text and unresolve never sta
   await openReviewFile(page, paragraphs, [stale]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Toggle resolved comments' }).click();
   const editorScroll = activeTab.locator('.editor-scroll-area');
   await editorScroll.evaluate((element) => {
     element.scrollTop = 300;
@@ -227,7 +233,7 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   await openReviewFile(page, paragraphs, [stale]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Toggle resolved comments' }).click();
   const editorScroll = activeTab.locator('.editor-scroll-area');
   await page.locator('.comment-card').click();
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
@@ -236,5 +242,5 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   await expect(page.locator('.comment-card-resolved')).toHaveCount(0);
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveText('unique moved anchor');
   await expect(page.locator('.comment-inline-notice')).toHaveCount(0);
-  await expect(activeTab.locator('.comments-head .filter')).toBeEnabled();
+  await expect(activeTab.getByRole('button', { name: 'Toggle resolved comments' })).toBeEnabled();
 });

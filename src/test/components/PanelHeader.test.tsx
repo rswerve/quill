@@ -36,7 +36,7 @@ describe('PanelHeader', () => {
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
     expect(props.onModeChange).toHaveBeenCalledWith('chat');
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle resolved comments' }));
     expect(props.onToggleResolved).toHaveBeenCalledOnce();
   });
 

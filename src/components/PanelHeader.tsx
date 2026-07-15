@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AISessionBinding } from '../types';
+import { cx } from '../utils/cx';
+import styles from './PanelHeader.module.css';
 
 interface PanelHeaderProps {
   mode: 'comments' | 'chat';
@@ -39,18 +41,18 @@ export default function PanelHeader({
   }, [menuOpen]);
 
   return (
-    <header className="comments-head panel-head">
-      <div className="panel-toggle" role="tablist" aria-label="Review panel">
+    <header className={styles.head}>
+      <div className={styles.toggle} role="tablist" aria-label="Review panel">
         <button
-          className={`panel-tab${mode === 'comments' ? ' on' : ''}`}
+          className={cx(styles.tab, mode === 'comments' && styles.on)}
           role="tab"
           aria-selected={mode === 'comments'}
           onClick={() => onModeChange('comments')}
         >
-          Comments <span className="panel-tab-count">{commentCount}</span>
+          Comments <span className={styles.tabCount}>{commentCount}</span>
         </button>
         <button
-          className={`panel-tab${mode === 'chat' ? ' on' : ''}`}
+          className={cx(styles.tab, mode === 'chat' && styles.on)}
           role="tab"
           aria-selected={mode === 'chat'}
           onClick={() => onModeChange('chat')}
@@ -62,7 +64,8 @@ export default function PanelHeader({
 
       {mode === 'comments' ? (
         <button
-          className="filter"
+          className={styles.filter}
+          aria-label="Toggle resolved comments"
           onClick={onToggleResolved}
           disabled={!showResolved && resolvedCount === 0}
           title={resolvedCount ? 'Show or hide resolved comments' : 'No resolved comments'}
@@ -81,14 +84,14 @@ export default function PanelHeader({
       ) : (
         <>
           <span
-            className={`panel-session-chip${aiSession ? ' linked' : ''}`}
+            className={cx(styles.sessionChip, aiSession && styles.linked)}
             title={aiSession ? `Claude session ${aiSession.sessionId}` : 'No Claude session linked'}
           >
             ✦ {aiSession ? aiSession.sessionId.slice(0, 8).toUpperCase() : 'NO SESSION'}
           </span>
-          <div className="panel-session-menu" ref={menuRef}>
+          <div className={styles.sessionMenu} ref={menuRef}>
             <button
-              className="panel-session-menu-trigger"
+              className={styles.trigger}
               aria-label="Chat session menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((open) => !open)}
@@ -96,7 +99,7 @@ export default function PanelHeader({
               ⋯
             </button>
             {menuOpen && (
-              <div className="panel-session-menu-popover" role="menu">
+              <div className={styles.popover} role="menu">
                 <button
                   role="menuitem"
                   onClick={() => {

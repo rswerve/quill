@@ -147,7 +147,7 @@ test.describe('Link editor', () => {
 
     await editor.locator('a').click();
     await urlInput(page).fill('https://also-discard.example.com');
-    await page.locator('.comments-head').click();
+    await page.locator('header:has([aria-label="Review panel"])').click();
     await expect(linkEditor(page)).toHaveCount(0);
     await expect(editor.locator('a[href="https://example.com"]')).toHaveText('unchanged link');
   });

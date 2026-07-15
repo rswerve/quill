@@ -104,7 +104,7 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   const jump = assistant.locator('.chat-suggestion-chip');
   await expect(jump).toBeVisible();
   await expect(jump).toHaveText(/→ 1 suggestion in the doc/);
-  await expect(activeTabHost(page).locator('.panel-tab-count')).toHaveText('1');
+  await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 1' })).toBeVisible();
   await expect(page.locator('[title="Accept all suggestions"]')).toContainText('1');
   await expect(page.locator('[title="Reject all suggestions"]')).toContainText('1');
   await jump.click();
@@ -506,7 +506,7 @@ test('chat persists per document/session and a new session starts a fresh thread
   await active.getByRole('button', { name: 'Chat session menu' }).click();
   await active.getByRole('menuitem', { name: 'Start new session' }).click();
   await expect(active.locator('.chat-message')).toHaveCount(0);
-  await expect(active.locator('.panel-session-chip')).not.toContainText(
+  await expect(active.getByTitle(/^(Claude session|No Claude session)/)).not.toContainText(
     ipcFixtures.autoBindSession.sessionId.slice(0, 8).toUpperCase(),
   );
 });

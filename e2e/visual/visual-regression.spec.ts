@@ -436,7 +436,7 @@ test.describe('visual regression safety net', () => {
         ];
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
         const active = activeTabHost(page);
-        await active.locator('.comments-head .filter').click();
+        await active.getByRole('button', { name: 'Toggle resolved comments' }).click();
         await expect(active.locator('.comment-history-list')).toBeVisible();
         await shot(page, theme, 'comments-resolved');
       });

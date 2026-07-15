@@ -797,7 +797,7 @@ test('resolving a comment hides it from the default view', async ({ page }) => {
   await addCommentViaPlusButton(page, 'todo');
   await page.locator('.comment-resolve-btn').click();
   await expect(page.locator('.comment-card.comment-card-resolved')).toHaveCount(0);
-  await expect(page.locator('.comments-head .filter')).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Toggle resolved comments' })).toBeEnabled();
 });
 
 test('resolving a comment drops its in-text highlight', async ({ page }) => {
@@ -822,7 +822,7 @@ test('comments filter reveals resolved comments', async ({ page }) => {
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
   await page.locator('.comment-resolve-btn').click();
-  await page.locator('.comments-head .filter').click();
+  await page.getByRole('button', { name: 'Toggle resolved comments' }).click();
   await expect(page.locator('.comment-card-resolved')).toBeVisible();
 });
 

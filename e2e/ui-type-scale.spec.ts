@@ -259,8 +259,10 @@ test('document chat uses the intended control and metadata scale', async ({ page
   expect(
     await composer.evaluate((element) => getComputedStyle(element, '::placeholder').fontSize),
   ).toBe('12.5px');
-  await expectType(tab.locator('.panel-tab').first(), '12px');
-  await expectType(tab.locator('.panel-session-chip'), '10px', { checkUiFamily: false });
+  await expectType(tab.getByRole('tab').first(), '12px');
+  await expectType(tab.getByTitle(/^(Claude session|No Claude session)/), '10px', {
+    checkUiFamily: false,
+  });
   await expectType(tab.locator('.chat-box-foot .kbd-hint'), '9px', {
     checkUiFamily: false,
   });
