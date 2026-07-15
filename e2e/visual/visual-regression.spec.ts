@@ -304,6 +304,11 @@ test.describe('visual regression safety net', () => {
       test('empty document', async ({ page }) => {
         await setupVisual(page, theme);
         await expect(page.locator('.editor-empty-state')).toBeVisible();
+        const reviewPanel = activeTabHost(page).getByRole('complementary', {
+          name: 'Review panel',
+        });
+        await expect(reviewPanel).toBeVisible();
+        await expect(reviewPanel.getByText('No comments yet', { exact: true })).toBeVisible();
         await shot(page, theme, 'empty-document');
       });
 
