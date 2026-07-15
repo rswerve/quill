@@ -341,13 +341,13 @@ test('session picker body text and controls inherit the app font', async ({ page
   await expectVisibleControlsUseUiFamily(page);
 });
 
-test('app modal and update banner chrome use the intended scale', async ({ page }) => {
+test('app modal chrome uses the intended scale', async ({ page }) => {
   await setupMemoryTauri(page);
   await activeEditor(page).fill('dirty');
   await page.locator('.document-tab.active .document-tab-close').click();
   // Modal chrome: assert the title's RENDERED size via role (module classes are
-  // hashed). The message size and modal button size are asserted from the module
-  // source / global primitives in the unit type-scale suite.
+  // hashed). Message + button sizes, and the UpdateBanner scale, are asserted
+  // from their module sources / global primitives in the unit type-scale suite.
   await expectType(
     page.getByRole('dialog', { name: 'Unsaved changes' }).getByRole('heading'),
     '15px',
@@ -357,15 +357,5 @@ test('app modal and update banner chrome use the intended scale', async ({ page 
     .getByRole('dialog', { name: 'Unsaved changes' })
     .getByRole('button', { name: 'Cancel' })
     .click();
-  await page.evaluate(() => {
-    const banner = document.createElement('div');
-    banner.className = 'update-banner';
-    banner.dataset.typeAudit = 'true';
-    banner.innerHTML =
-      '<span>Quill <strong>9.9.9</strong> is available.</span><button class="update-banner-link">View release</button><button class="update-banner-dismiss">×</button>';
-    document.querySelector('.app')?.prepend(banner);
-  });
-  await expectType(page.locator('[data-type-audit="true"]'), '13px');
-  await expectType(page.locator('[data-type-audit="true"] .update-banner-link'), '13px');
   await expectVisibleControlsUseUiFamily(page);
 });

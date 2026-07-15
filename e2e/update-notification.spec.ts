@@ -41,7 +41,7 @@ test('a newer release opens externally, stays dismissed, and a later version rea
   await setupMemoryTauri(page);
 
   await mountUpdateHarness(page);
-  const banner = page.locator('[data-update-integration-host] .update-banner');
+  const banner = page.locator('[data-update-integration-host]').getByRole('status');
   await expect(banner).toContainText('Quill 9.9.9 is available.');
   await banner.getByRole('button', { name: 'View release' }).click();
   await expect

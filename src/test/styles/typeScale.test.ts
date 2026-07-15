@@ -66,6 +66,9 @@ describe('UI type scale', () => {
     // (var(--text-meta) = 12.5px, see the token above) from the module source.
     expect(modules).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
     expect(modules).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
+    // UpdateBanner is module-scoped too: the banner text sits at the UI scale
+    // (var(--text-ui) = 13px); the link inherits it via `font: inherit`.
+    expect(modules).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
     expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
     expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
