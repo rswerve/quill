@@ -550,6 +550,74 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'document-chat');
       });
 
+      test('document chat error terminal with a linked suggestion', async ({ page }) => {
+        const session = {
+          provider: 'claude-code',
+          sessionId: 'visual-terminal-session',
+          cwd: '/tmp',
+          linkedAt: '2026-07-14T16:00:00.000Z',
+          createdByQuill: true,
+        };
+        const markdown = 'The opening should lead with the conclusion.';
+        const [range] = paragraphRanges([markdown]);
+        const assistantId = 'chat-assistant-terminal';
+        const suggestionId = 'chat-terminal-suggestion';
+        const chat = {
+          sessionId: session.sessionId,
+          messages: [
+            {
+              id: 'chat-user-terminal',
+              role: 'user',
+              text: 'Make the opening more direct.',
+              createdAt: '2026-07-14T16:40:00.000Z',
+            },
+            {
+              id: assistantId,
+              role: 'assistant',
+              text: 'I drafted a more direct opening before the session stopped.',
+              createdAt: '2026-07-14T16:40:02.000Z',
+              model: 'claude-sonnet',
+              error: 'Claude Code exited before completing the reply.',
+              suggestionIds: [suggestionId],
+            },
+          ],
+        };
+        const suggestions = [
+          {
+            id: suggestionId,
+            type: 'change',
+            author: 'claude',
+            createdAt: '2026-07-14T16:40:02.000Z',
+            status: 'pending',
+            originChatMessageId: assistantId,
+            segments: [{ kind: 'insert', ...range }],
+          },
+        ];
+
+        await openVisualDocument(
+          page,
+          theme,
+          markdown,
+          sidecar({ aiSession: session, chat, suggestions }),
+        );
+        const active = activeTabHost(page);
+        await active.getByRole('tab', { name: 'Chat', exact: true }).click();
+
+        const assistant = active.locator(`[data-chat-message-id="${assistantId}"]`);
+        await expect(assistant).toContainText('Claude Code exited before completing the reply.');
+        await expect(assistant.getByRole('button', { name: 'Retry' })).toBeVisible();
+        await expect(assistant.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+        await expect(
+          assistant.getByRole('button', { name: /1 suggestion in the doc/ }),
+        ).toBeVisible();
+        await shot(
+          page,
+          theme,
+          'document-chat-terminal',
+          active.getByRole('complementary', { name: 'Review panel' }),
+        );
+      });
+
       test('chat session menus when linked and unlinked', async ({ page }) => {
         const session = {
           provider: 'claude-code',
