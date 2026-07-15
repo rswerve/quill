@@ -398,6 +398,64 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'suggestion-cards');
       });
 
+      test('suggestion provenance and direct-active states', async ({ page }) => {
+        const paragraphs = [
+          'The origin comment asks Claude to tighten the next sentence.',
+          'The suggested sentence leads with a clearer conclusion.',
+          'Stable context follows the linked review objects.',
+        ];
+        const ranges = paragraphRanges(paragraphs);
+        const originCommentId = 'visual-suggestion-origin';
+        const suggestionId = 'visual-origin-suggestion';
+        const comments = [
+          comment(originCommentId, ranges[0], {
+            kind: 'claude',
+            body: 'Make the next sentence more direct.',
+          }),
+        ];
+        const suggestions = [
+          {
+            id: suggestionId,
+            type: 'change',
+            author: 'claude',
+            createdAt: '2026-07-14T16:39:00.000Z',
+            status: 'pending',
+            originCommentId,
+            segments: [{ kind: 'insert', ...ranges[1] }],
+          },
+        ];
+        await openVisualDocument(
+          page,
+          theme,
+          paragraphs.join('\n\n'),
+          sidecar({ comments, suggestions }),
+        );
+
+        const active = activeTabHost(page);
+        const originComment = active.locator(`[data-card-id="${originCommentId}"]`);
+        const suggestion = active.locator(`[data-card-id="${suggestionId}"]`);
+        await expect(suggestion.getByRole('button', { name: '↳ from comment' })).toBeVisible();
+
+        await originComment.click();
+        await expect(suggestion).toHaveClass(/card-origin-active/);
+        await shot(
+          page,
+          theme,
+          'suggestion-origin-active',
+          active.getByRole('complementary', { name: 'Review panel' }),
+        );
+
+        await suggestion.click();
+        await expect(suggestion).toHaveClass(/suggestion-card-active/);
+        await expect(suggestion).not.toHaveClass(/card-origin-active/);
+        await shot(
+          page,
+          theme,
+          'suggestion-direct-active',
+          active.getByRole('complementary', { name: 'Review panel' }),
+        );
+      });
+
       test('open comments list', async ({ page }) => {
         const paragraphs = ['Opening paragraph.', 'Private note anchor.', 'Claude thread anchor.'];
         const ranges = paragraphRanges(paragraphs);
