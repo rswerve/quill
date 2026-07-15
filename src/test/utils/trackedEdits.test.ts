@@ -292,7 +292,10 @@ describe('trackedEdits helpers', () => {
         },
       ]);
 
-      expect(notice).toContain('“missing phrase” — text wasn’t found.');
+      // Heading attributes the outcome (not applied) without the error-tinged
+      // "skipped"; pluralizes with the count.
+      expect(notice).toContain('3 changes weren’t applied:');
+      expect(notice).toContain('“missing phrase” — this text isn’t in the document.');
       expect(notice).toContain('more than one link has that label.');
       expect(notice).toContain('“already right” — it already matches the proposal.');
       expect(notice).not.toContain('x'.repeat(80));
