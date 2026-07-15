@@ -573,8 +573,17 @@ test.describe('visual regression safety net', () => {
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
         await selectText(page, 'New selection.');
         await page.getByRole('button', { name: 'Add comment to selection' }).click();
-        await expect(page.locator('.add-comment-compose')).toBeVisible();
-        await page.locator('.add-comment-compose textarea').fill('A new margin thought.');
+        const composer = activeTabHost(page).locator('[data-card-id="comment-composer"]');
+        const composerInput = composer.getByRole('textbox');
+        await expect(composer).toBeVisible();
+        await expect(composerInput).toBeFocused();
+        await expect(composer.getByRole('note')).toHaveText(
+          'No Claude session linked yet — note works offline.',
+        );
+        await expect(
+          composer.getByRole('button', { name: 'Link a session to ask' }),
+        ).toBeVisible();
+        await composerInput.fill('A new margin thought.');
         const panelList = activeTabHost(page).locator('.comment-panel-list');
         const panelScrollEnd = await panelList.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
