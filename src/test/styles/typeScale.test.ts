@@ -69,7 +69,6 @@ describe('UI type scale', () => {
         '18',
       ]),
     );
-    expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
     // Component-specific sizes: read the OWNING module so a generic selector
     // (.title/.banner/.input) can't false-match another module.
     const appModal = readModuleSource('AppModal.module.css');

@@ -4,22 +4,35 @@ import { ToolbarButton } from '../../components/Toolbar';
 
 // Contract for the shared button helper's stateClasses seam (added so Rail can
 // module-scope `.btn.active`/`.mixed`/`.disabled`). The safety net that matters
-// when touching shared infra: prove Toolbar's literal-class fallback is
-// byte-identical, and that a supplied map fully replaces the literals.
+// when touching shared infra: prove the legacy literal STATE classes still apply
+// when no map is supplied (Toolbar's fallback), and that a supplied map fully
+// replaces them. baseClassName is required, so each render names an explicit base.
 describe('ToolbarButton stateClasses contract', () => {
   it('emits the legacy literal state classes when no map is supplied', () => {
     render(
-      <ToolbarButton onClick={vi.fn()} active mixed disabled title="X">
+      <ToolbarButton
+        onClick={vi.fn()}
+        active
+        mixed
+        disabled
+        title="X"
+        baseClassName="test-toolbar-button"
+      >
         X
       </ToolbarButton>,
     );
     const button = screen.getByRole('button', { name: 'X' });
-    expect(button).toHaveClass('toolbar-btn', 'active', 'mixed', 'disabled');
+    expect(button).toHaveClass('test-toolbar-button', 'active', 'mixed', 'disabled');
   });
 
   it('applies only the state classes whose flag is set', () => {
     render(
-      <ToolbarButton onClick={vi.fn()} active title="Only active">
+      <ToolbarButton
+        onClick={vi.fn()}
+        active
+        title="Only active"
+        baseClassName="test-toolbar-button"
+      >
         A
       </ToolbarButton>,
     );
@@ -56,6 +69,7 @@ describe('ToolbarButton stateClasses contract', () => {
         onClick={vi.fn()}
         mixed
         title="P"
+        baseClassName="test-toolbar-button"
         stateClasses={{ active: 'a', mixed: 'm', disabled: 'd' }}
       >
         P
@@ -69,6 +83,7 @@ describe('ToolbarButton stateClasses contract', () => {
         onClick={vi.fn()}
         active
         title="P"
+        baseClassName="test-toolbar-button"
         stateClasses={{ active: 'a', mixed: 'm', disabled: 'd' }}
       >
         P

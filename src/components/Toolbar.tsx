@@ -63,7 +63,9 @@ interface ButtonProps {
   title: string;
   children: React.ReactNode;
   className?: string;
-  baseClassName?: string;
+  /** The button's visual owner. Required — there is no styled default; every
+   *  caller names its own base class (Rail/Topbar their module class). */
+  baseClassName: string;
   stateClasses?: ToolbarButtonStateClasses;
 }
 
@@ -75,7 +77,7 @@ export function ToolbarButton({
   title,
   children,
   className,
-  baseClassName = 'toolbar-btn',
+  baseClassName,
   stateClasses,
 }: ButtonProps) {
   const state = stateClasses ?? LEGACY_STATE_CLASSES;
@@ -245,7 +247,7 @@ export function LinkButton({
   wrapperClassName,
 }: {
   editor: Editor;
-  baseClassName?: string;
+  baseClassName: string;
   stateClasses?: ToolbarButtonStateClasses;
   /** Extra class on the wrapper div, composed with the global `link-button-wrap`
    *  base. Rail passes its module class to own the wrapper's rail-context flex. */

@@ -35,7 +35,7 @@ afterEach(() => {
 describe('LinkButton consolidated editor', () => {
   it('opens from a click inside an existing link and edits both values', () => {
     const ed = makeEditor('<p>Read <a href="https://old.example.com">the guide</a>.</p>');
-    render(<LinkButton editor={ed} baseClassName="rail-btn" />);
+    render(<LinkButton editor={ed} baseClassName="test-toolbar-button" />);
 
     fireEvent.click(ed.view.dom.querySelector('a')!);
     expect(screen.getByRole('dialog', { name: 'Edit link' })).toBeInTheDocument();
@@ -54,7 +54,7 @@ describe('LinkButton consolidated editor', () => {
 
   it('removes a clicked link without removing its display text', () => {
     const ed = makeEditor('<p><a href="https://example.com">keep me</a></p>');
-    render(<LinkButton editor={ed} />);
+    render(<LinkButton editor={ed} baseClassName="test-toolbar-button" />);
 
     fireEvent.click(ed.view.dom.querySelector('a')!);
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
@@ -65,7 +65,7 @@ describe('LinkButton consolidated editor', () => {
   it('opens the same editor from Cmd+K for selected text with URL focused', async () => {
     const ed = makeEditor('<p>Draft quickly</p>');
     ed.commands.setTextSelection({ from: 1, to: 6 });
-    const { container } = render(<LinkButton editor={ed} />);
+    const { container } = render(<LinkButton editor={ed} baseClassName="test-toolbar-button" />);
 
     fireEvent.keyDown(window, { key: 'k', metaKey: true });
 
