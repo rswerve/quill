@@ -94,6 +94,9 @@ describe('ChatPanel', () => {
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('Claude is thinking…');
+    // The status carries its decorative pulse dot (aria-hidden) before any text
+    // streams — the only coverage of the pending-before-first-delta state.
+    expect(screen.getByRole('status').querySelector('[aria-hidden="true"]')).toBeInTheDocument();
     expect(container.querySelector('[data-chat-caret]')).not.toBeInTheDocument();
 
     rerender(
