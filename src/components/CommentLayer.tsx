@@ -193,6 +193,9 @@ export default function CommentLayer({
   const panelUserSuppressedUntilRef = useRef(0);
   const lastHighlightActivationRef = useRef(highlightActivationRevision);
   const lastActiveSyncScrollTopRef = useRef(scrollTop);
+  // Bumped on every explicit focus clear so an already-scheduled active-sync
+  // frame can detect it is stale and decline to reactivate.
+  const activeSyncGenerationRef = useRef(0);
   const previousActivePanelCardIdRef = useRef<string | null>(null);
   const lastDocumentScrollIntentAtRef = useRef(Number.NEGATIVE_INFINITY);
   const [anchorTops, setAnchorTops] = useState<Map<string, number>>(new Map());
@@ -409,6 +412,11 @@ export default function CommentLayer({
     const previous = previousActivePanelCardIdRef.current;
     if (previous !== null && activePanelCardId === null) {
       lastActiveSyncScrollTopRef.current = scrollTop;
+      // Invalidate any sync frame scheduled before this explicit clear so a
+      // stale frame can't reselect the nearest annotation after Escape / a
+      // plain-text click (a load-widened race the frame cleanup alone misses,
+      // because clearing the active annotation does not re-run the sync effect).
+      activeSyncGenerationRef.current += 1;
     }
     previousActivePanelCardIdRef.current = activePanelCardId;
   }, [activePanelCardId, scrollTop]);
@@ -500,7 +508,11 @@ export default function CommentLayer({
     ) {
       return;
     }
+    const generation = activeSyncGenerationRef.current;
     const frame = requestAnimationFrame(() => {
+      // An explicit clear (Escape / plain-text click) after this frame was
+      // scheduled bumps the generation; a stale frame must not reactivate.
+      if (activeSyncGenerationRef.current !== generation) return;
       const nearest = nearestGutterTick(gutterTicks, scrollTop + viewportHeight / 2);
       if (!nearest) return;
       const alreadyActive =
