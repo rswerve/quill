@@ -337,6 +337,35 @@ mod tests {
         assert_eq!(recent_menu_label(""), "");
     }
 
+    #[test]
+    fn native_menu_rebuild_model_replaces_open_recent_in_order() {
+        let first =
+            recent_menu_entries(&["/tmp/First.md".to_string(), "/tmp/Second.md".to_string()]);
+        assert_eq!(
+            first,
+            [
+                RecentMenuEntry {
+                    id: "recent:/tmp/First.md".to_string(),
+                    label: "First.md".to_string(),
+                },
+                RecentMenuEntry {
+                    id: "recent:/tmp/Second.md".to_string(),
+                    label: "Second.md".to_string(),
+                },
+            ]
+        );
+
+        let rebuilt = recent_menu_entries(&["/tmp/Only.md".to_string()]);
+        assert_eq!(
+            rebuilt,
+            [RecentMenuEntry {
+                id: "recent:/tmp/Only.md".to_string(),
+                label: "Only.md".to_string(),
+            }]
+        );
+        assert!(!rebuilt.iter().any(|entry| entry.label == "First.md"));
+    }
+
     // --- workspace persistence ---
 
     #[test]
@@ -364,6 +393,18 @@ mod tests {
             Some("second".to_string())
         );
         assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn failed_atomic_workspace_write_preserves_the_last_good_envelope() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        let blocked_tmp = path.with_extension("json.tmp");
+        std::fs::write(&path, "last-good").unwrap();
+        std::fs::create_dir(&blocked_tmp).unwrap();
+
+        assert!(write_workspace_at(&path, "new-but-incomplete").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "last-good");
     }
 
     #[test]
@@ -413,6 +454,22 @@ mod tests {
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|name| name.starts_with("workspace.corrupt-") && name.ends_with(".json")));
+    }
+
+    #[test]
+    fn workspace_quarantine_falls_back_to_the_legacy_draft() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().join("workspace.json");
+        let legacy = dir.path().join("draft.json");
+        let invalid = b"legacy bytes that failed schema validation";
+        std::fs::write(&legacy, invalid).unwrap();
+
+        let quarantined = quarantine_workspace_at(&workspace, &legacy)
+            .unwrap()
+            .expect("legacy recovery file should be quarantined");
+
+        assert!(!legacy.exists());
+        assert_eq!(std::fs::read(quarantined).unwrap(), invalid);
     }
 
     // --- Claude session → document index ---
@@ -596,6 +653,38 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "# 日本語\nHello 🌍");
     }
 
+    #[test]
+    fn document_commands_round_trip_real_markdown_and_sidecar_files() {
+        let dir = tempdir().unwrap();
+        let document = dir.path().join("round-trip.md");
+        let sidecar = dir.path().join("round-trip.comments.json");
+
+        write_file(
+            document.to_string_lossy().into_owned(),
+            "# Round trip\n\nUnicode: 日本語 🌍".to_string(),
+        )
+        .unwrap();
+        write_file(
+            sidecar.to_string_lossy().into_owned(),
+            r#"{"version":2,"comments":[],"suggestions":[]}"#.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_file(document.to_string_lossy().into_owned()).unwrap(),
+            "# Round trip\n\nUnicode: 日本語 🌍"
+        );
+        assert_eq!(
+            read_file(sidecar.to_string_lossy().into_owned()).unwrap(),
+            r#"{"version":2,"comments":[],"suggestions":[]}"#
+        );
+
+        delete_file(document.to_string_lossy().into_owned()).unwrap();
+        delete_file(sidecar.to_string_lossy().into_owned()).unwrap();
+        assert!(!document.exists());
+        assert!(!sidecar.exists());
+    }
+
     // --- delete_file ---
 
     #[test]
@@ -753,6 +842,34 @@ mod tests {
         // Canonicalized, so compare against the canonical form.
         let canonical = fs::canonicalize(&path).unwrap();
         assert_eq!(result, Some(canonical.to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn deep_link_decodes_spaces_unicode_and_query_safe_path_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("Q2 notes + 日本語.md");
+        fs::write(&path, "# Encoded path").unwrap();
+        let encoded = path
+            .to_string_lossy()
+            .bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'-' | b'_' => {
+                    char::from(byte).to_string()
+                }
+                _ => format!("%{byte:02X}"),
+            })
+            .collect::<String>();
+        let url = format!("quill://open?file={encoded}&source=fixture");
+
+        assert_eq!(
+            parse_quill_open(&url),
+            Some(
+                fs::canonicalize(path)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
     }
 
     #[test]
@@ -2638,6 +2755,22 @@ fn recent_menu_label(path: &str) -> String {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RecentMenuEntry {
+    id: String,
+    label: String,
+}
+
+fn recent_menu_entries(recent: &[String]) -> Vec<RecentMenuEntry> {
+    recent
+        .iter()
+        .map(|path| RecentMenuEntry {
+            id: format!("recent:{path}"),
+            label: recent_menu_label(path),
+        })
+        .collect()
+}
+
 /// Build the native application menu and route File-menu clicks to frontend
 /// events. The menu mirrors the existing keyboard shortcuts (Cmd/Ctrl+N/O/S,
 /// Cmd/Ctrl+Shift+S) so file operations are reachable without knowing them.
@@ -2673,11 +2806,11 @@ fn build_menu(app: &tauri::AppHandle, recent: &[String]) -> Result<(), Box<dyn s
     // the click handler can forward it), then Clear Menu — disabled when there
     // is nothing to clear, matching the macOS convention.
     let mut recent_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
-    for path in recent {
+    for entry in recent_menu_entries(recent) {
         recent_items.push(Box::new(MenuItem::with_id(
             app,
-            format!("recent:{path}"),
-            recent_menu_label(path),
+            entry.id,
+            entry.label,
             true,
             None::<&str>,
         )?));
