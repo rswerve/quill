@@ -17,6 +17,7 @@ import type { WorkspaceReadResult } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
 import { useTabRegistry } from './hooks/useTabRegistry';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
+import { useSessionClaimRegistry } from './hooks/useSessionClaimRegistry';
 import {
   readClaudeRunOptions,
   writeClaudeEffort,
@@ -164,7 +165,16 @@ export default function App() {
   > | null>(null);
   const [persistenceSuspended, setPersistenceSuspended] = useState(false);
   const [tabHandleRevision, setTabHandleRevision] = useState(0);
-  const [sessionClaimRevision, setSessionClaimRevision] = useState(0);
+  // Cross-tab "one Claude session per document" registry. Its callbacks are
+  // referentially stable; destructuring them keeps App's dependency arrays
+  // granular (a member-expression dep collapses to the whole object in eslint).
+  const {
+    claim: registryClaimSession,
+    releaseTab: releaseSessionClaim,
+    clear: clearSessionClaims,
+    getOwnerTabId: getSessionClaimOwner,
+    revision: sessionClaimRevision,
+  } = useSessionClaimRegistry();
   const [claudeModel, setClaudeModel] = useState<ClaudeModelAlias | null>(
     () => readClaudeRunOptions(window.localStorage).model,
   );
@@ -203,7 +213,6 @@ export default function App() {
   const tabHandleReadyIdsRef = useRef(new Set<string>());
   const tabRefCallbacksRef = useRef(new Map<string, (handle: DocumentTabHandle | null) => void>());
   const chromeByTabRef = useRef(new Map<string, DocumentTabChromeSnapshot>());
-  const sessionClaimsRef = useRef(new Map<string, string>());
   const runOptionsRef = useRef<ClaudeRunOptions>({
     model: claudeModel,
     effort: claudeEffort,
@@ -290,8 +299,7 @@ export default function App() {
       tabHandleReadyIdsRef.current.clear();
       tabRefCallbacksRef.current.clear();
       chromeByTabRef.current.clear();
-      sessionClaimsRef.current.clear();
-      setSessionClaimRevision((revision) => revision + 1);
+      clearSessionClaims();
       commitTabs({ type: 'hydrate', tabs: restored.tabs, activeTabId: restored.activeTabId });
       setChrome(
         emptyChrome(
@@ -300,7 +308,7 @@ export default function App() {
         ),
       );
     },
-    [commitTabs],
+    [commitTabs, clearSessionClaims],
   );
 
   const activateTab = useCallback(
@@ -315,36 +323,16 @@ export default function App() {
     [chromeForTab, commitTabs],
   );
 
-  const releaseSessionClaim = useCallback((tabId: string) => {
-    let changed = false;
-    for (const [sessionId, ownerId] of sessionClaimsRef.current) {
-      if (ownerId !== tabId) continue;
-      sessionClaimsRef.current.delete(sessionId);
-      changed = true;
-    }
-    if (changed) setSessionClaimRevision((revision) => revision + 1);
-  }, []);
-
-  const claimSession = useCallback((tabId: string, binding: AISessionBinding) => {
-    const ownerId = sessionClaimsRef.current.get(binding.sessionId);
-    if (ownerId && ownerId !== tabId) {
-      const owner = tabsRef.current.find((tab) => tab.id === ownerId);
+  // Translate the registry's tab-id verdict into a human notice for DocumentTab.
+  const claimSession = useCallback(
+    (tabId: string, binding: AISessionBinding) => {
+      const result = registryClaimSession(tabId, binding.sessionId);
+      if (result.allowed) return { allowed: true };
+      const owner = tabsRef.current.find((tab) => tab.id === result.ownerTabId);
       return { allowed: false, ownerTitle: owner?.title ?? 'another open document' };
-    }
-
-    let changed = false;
-    for (const [sessionId, currentOwnerId] of sessionClaimsRef.current) {
-      if (currentOwnerId !== tabId || sessionId === binding.sessionId) continue;
-      sessionClaimsRef.current.delete(sessionId);
-      changed = true;
-    }
-    if (ownerId !== tabId) {
-      sessionClaimsRef.current.set(binding.sessionId, tabId);
-      changed = true;
-    }
-    if (changed) setSessionClaimRevision((revision) => revision + 1);
-    return { allowed: true };
-  }, []);
+    },
+    [registryClaimSession],
+  );
 
   const addNewTab = useCallback(() => {
     if (!workspaceReadyRef.current) return;
@@ -843,7 +831,7 @@ export default function App() {
         newSessionCwd={pickerTab?.filePath ? dirname(pickerTab.filePath) : null}
         getSessionOwner={(sessionId) => {
           void sessionClaimRevision;
-          const ownerId = sessionClaimsRef.current.get(sessionId);
+          const ownerId = getSessionClaimOwner(sessionId);
           if (!ownerId || ownerId === pickerTargetId) return null;
           return tabsRef.current.find((tab) => tab.id === ownerId)?.title ?? 'another document';
         }}
