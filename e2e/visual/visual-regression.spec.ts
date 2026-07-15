@@ -285,6 +285,50 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'rich-page');
       });
 
+      test('complete application shell', async ({ page }) => {
+        const paragraphs = [
+          'The complete shell fixture keeps every application region visible.',
+          'A private note gives the review panel real content.',
+          'A Claude thread shows the second margin-object identity.',
+          'The final paragraph keeps the document comfortably populated.',
+        ];
+        const ranges = paragraphRanges(paragraphs);
+        const comments = [
+          comment('shell-note', ranges[1], {
+            body: 'Keep this supporting detail available during revision.',
+          }),
+          comment('shell-claude', ranges[2], {
+            kind: 'claude',
+            body: 'Can you make this claim more concrete?',
+            replies: [
+              {
+                id: 'shell-claude-answer',
+                author: 'Claude',
+                text: 'I would name the exact outcome and remove the abstract qualifier.',
+                createdAt: '2026-07-14T16:36:00.000Z',
+                authorKind: 'ai',
+                model: 'claude-sonnet',
+              },
+            ],
+          }),
+        ];
+        await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
+
+        const shell = page.locator('.app');
+        await expect(shell).toBeVisible();
+        await expect(page.locator('.rail')).toBeVisible();
+        await expect(page.locator('.topbar')).toBeVisible();
+        await expect(page.locator('.tabstrip')).toBeVisible();
+        await expect(activeEditor(page)).toContainText('complete shell fixture');
+        await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(2);
+        await expect(page.locator('.footer')).toBeVisible();
+        await expect(shell).toHaveCSS(
+          'background-color',
+          theme === 'paper' ? 'rgb(251, 250, 247)' : 'rgb(40, 40, 40)',
+        );
+        await shot(page, theme, 'app-shell', shell);
+      });
+
       test('suggesting mode with insertion, deletion, replacement, and format cards', async ({
         page,
       }) => {
