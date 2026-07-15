@@ -51,7 +51,7 @@ import type {
 } from './types';
 import './App.css';
 
-interface TabMeta extends TabStripItem {
+export interface TabMeta extends TabStripItem {
   filePath: string | null;
   initialFilePath: string | null;
   initialWorkspaceSnapshot: DraftFile | null;
