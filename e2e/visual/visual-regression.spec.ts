@@ -348,7 +348,7 @@ test.describe('visual regression safety net', () => {
         await expect(page.getByRole('toolbar', { name: 'Document actions' })).toBeVisible();
         await expect(page.locator('.tabstrip')).toBeVisible();
         await expect(activeEditor(page)).toContainText('complete shell fixture');
-        await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(2);
+        await expect(activeTabHost(page).locator('[data-comment-card]')).toHaveCount(2);
         await expect(page.getByRole('contentinfo', { name: 'Document status' })).toBeVisible();
         await expect(shell).toHaveCSS(
           'background-color',
@@ -477,7 +477,7 @@ test.describe('visual regression safety net', () => {
           }),
         ];
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
-        await expect(page.locator('.comment-card')).toHaveCount(2);
+        await expect(page.locator('[data-comment-card]')).toHaveCount(2);
         await shot(page, theme, 'comments-open');
       });
 

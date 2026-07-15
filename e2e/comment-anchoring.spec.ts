@@ -20,7 +20,7 @@ async function addComment(page: Page, text: string) {
   const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill(text);
   await textarea.press('ControlOrMeta+Shift+Enter');
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
 }
 
 test('off-screen anchors collapse into navigable gutter counts', async ({ page }) => {
@@ -45,11 +45,11 @@ test('off-screen anchors collapse into navigable gutter counts', async ({ page }
   const above = page.getByRole('button', { name: /annotations above the viewport/ });
   await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
   await above.click();
-  await expect(page.locator('.comment-card-active')).toContainText('top note');
+  await expect(page.locator('[data-active]')).toContainText('top note');
   const below = page.getByRole('button', { name: /annotations below the viewport/ });
   await expect(below).toHaveAttribute('aria-label', '1 annotations below the viewport');
 
   await below.click();
-  await expect(page.locator('.comment-card-active')).toContainText('bottom note');
+  await expect(page.locator('[data-active]')).toContainText('bottom note');
   await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
 });

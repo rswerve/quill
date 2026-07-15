@@ -92,10 +92,10 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect(resolvedFilter).toHaveAttribute('aria-pressed', 'false');
   await expect(panelList).toBeVisible();
   await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeVisible();
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
   expect(
     await page
-      .locator('.comment-card')
+      .locator('[data-comment-card]')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
   ).toEqual(['1', '3', '5', '7', '9', '11']);
 
@@ -104,7 +104,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await editorScroll.hover();
   await page.mouse.wheel(0, 900);
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  await expect(activeTab.locator('.comment-card-active')).toHaveCount(1);
+  await expect(activeTab.locator('[data-active]')).toHaveCount(1);
   await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
   await resolvedFilter.click();
@@ -119,10 +119,10 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect(
     activeTab.locator('nav[aria-label="Document annotations"] button[aria-label^="Show "]'),
   ).toHaveCount(0);
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
   expect(
     await page
-      .locator('.comment-card')
+      .locator('[data-comment-card]')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
   ).toEqual(['0', '2', '4', '6', '8', '10']);
 
@@ -131,7 +131,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await page.mouse.wheel(0, 700);
   await expect.poll(() => history.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   expect(await editorScroll.evaluate((element) => element.scrollTop)).toBe(editorBefore);
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
 });
 
 test('View suggestion from Resolved switches to Open before focusing the existing suggestion', async ({
@@ -201,7 +201,7 @@ test('resolved comments jump only to safely located text and unresolve never sta
     element.scrollTop = 300;
   });
   const beforeClick = await editorScroll.evaluate((element) => element.scrollTop);
-  await page.locator('.comment-card').click();
+  await page.locator('[data-comment-card]').click();
   await expect
     .poll(() =>
       editorScroll.evaluate(
@@ -217,8 +217,8 @@ test('resolved comments jump only to safely located text and unresolve never sta
     .toEqual({ first: beforeClick, settled: beforeClick });
 
   await page.getByTitle('Unresolve').click();
-  await expect(page.locator('.comment-card-resolved')).toBeVisible();
-  await expect(page.locator('.comment-inline-notice')).toContainText('remains resolved');
+  await expect(page.locator('[data-card-resolved]')).toBeVisible();
+  await expect(page.locator('[data-inline-notice]')).toContainText('remains resolved');
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveCount(0);
 });
 
@@ -235,12 +235,12 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   const activeTab = activeTabHost(page);
   await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
   const editorScroll = activeTab.locator('.editor-scroll-area');
-  await page.locator('.comment-card').click();
+  await page.locator('[data-comment-card]').click();
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await page.getByTitle('Unresolve').click();
 
-  await expect(page.locator('.comment-card-resolved')).toHaveCount(0);
+  await expect(page.locator('[data-card-resolved]')).toHaveCount(0);
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveText('unique moved anchor');
-  await expect(page.locator('.comment-inline-notice')).toHaveCount(0);
+  await expect(page.locator('[data-inline-notice]')).toHaveCount(0);
   await expect(activeTab.getByRole('button', { name: 'Show resolved comments' })).toBeEnabled();
 });

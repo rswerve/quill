@@ -745,8 +745,8 @@ test('submitting a comment creates a comment card', async ({ page }) => {
   await page.keyboard.type('hello world');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'this needs work');
-  await expect(page.locator('.comment-card').first()).toBeVisible();
-  await expect(page.locator('.comment-card').first()).toContainText('this needs work');
+  await expect(page.locator('[data-comment-card]').first()).toBeVisible();
+  await expect(page.locator('[data-comment-card]').first()).toContainText('this needs work');
   await expect(page.locator('.comments-empty-state')).toHaveCount(0);
 });
 
@@ -763,7 +763,7 @@ test('comment card shows the anchor text snippet', async ({ page }) => {
   await page.keyboard.type('the quick brown fox');
   await selectLastNChars(page, 3); // "fox"
   await addCommentViaPlusButton(page, 'animal');
-  await expect(page.locator('.comment-anchor-text').first()).toContainText('fox');
+  await expect(page.locator('[data-anchor-text]').first()).toContainText('fox');
 });
 
 test('a private note offers promotion instead of a reply textarea', async ({ page }) => {
@@ -771,9 +771,9 @@ test('a private note offers promotion instead of a reply textarea', async ({ pag
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'first');
-  await expect(page.locator('.comment-card-note')).toBeVisible();
+  await expect(page.locator('[data-comment-card="note"]')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Ask Claude about this' })).toBeVisible();
-  await expect(page.locator('.comment-reply-trigger')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Reply to Claude/ })).toHaveCount(0);
 });
 
 test('promoting a note converts it to a Claude thread and opens session linking', async ({
@@ -785,8 +785,8 @@ test('promoting a note converts it to a Claude thread and opens session linking'
   await addCommentViaPlusButton(page, 'first');
   await page.getByRole('button', { name: 'Ask Claude about this' }).click();
 
-  await expect(page.locator('.comment-card-claude')).toContainText('first');
-  await expect(page.locator('.comment-note-badge')).toHaveCount(0);
+  await expect(page.locator('[data-comment-card="claude"]')).toContainText('first');
+  await expect(page.getByText('Note', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
 });
 
@@ -795,8 +795,8 @@ test('resolving a comment hides it from the default view', async ({ page }) => {
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
-  await page.locator('.comment-resolve-btn').click();
-  await expect(page.locator('.comment-card.comment-card-resolved')).toHaveCount(0);
+  await page.getByTitle(/^(un)?resolve$/i).click();
+  await expect(page.locator('[data-comment-card][data-card-resolved]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Show resolved comments' })).toBeEnabled();
 });
 
@@ -807,7 +807,7 @@ test('resolving a comment drops its in-text highlight', async ({ page }) => {
   await addCommentViaPlusButton(page, 'todo');
   await expect(editor.locator('mark.comment-active')).toHaveCount(1);
 
-  await page.locator('.comment-resolve-btn').click();
+  await page.getByTitle(/^(un)?resolve$/i).click();
 
   // Resolving strips the comment mark outright — no highlight of any kind
   // remains in the text (active or resolved).
@@ -821,9 +821,9 @@ test('comments filter reveals resolved comments', async ({ page }) => {
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
-  await page.locator('.comment-resolve-btn').click();
+  await page.getByTitle(/^(un)?resolve$/i).click();
   await page.getByRole('button', { name: 'Show resolved comments' }).click();
-  await expect(page.locator('.comment-card-resolved')).toBeVisible();
+  await expect(page.locator('[data-card-resolved]')).toBeVisible();
 });
 
 test('deleting a comment removes the card and the mark', async ({ page }) => {
@@ -832,8 +832,8 @@ test('deleting a comment removes the card and the mark', async ({ page }) => {
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
   await expectEditorHtml(editor, { contains: ['data-comment-id'] });
-  await page.locator('.comment-delete-btn').click();
-  await expect(page.locator('.comment-card')).toHaveCount(0);
+  await page.getByTitle('Delete comment').click();
+  await expect(page.locator('[data-comment-card]')).toHaveCount(0);
   await expectEditorHtml(editor, { excludes: ['data-comment-id'] });
 });
 
@@ -856,7 +856,7 @@ test('multiple comments stack without overlapping', async ({ page }) => {
   await expectSelectionText(page, 'three');
   await addCommentViaPlusButton(page, 'B');
 
-  const cards = page.locator('.comment-card');
+  const cards = page.locator('[data-comment-card]');
   await expect(cards).toHaveCount(2);
   const a = await cards.nth(0).boundingBox();
   const b = await cards.nth(1).boundingBox();
@@ -874,7 +874,7 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await page.keyboard.type('hello world');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'note');
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
   await expect(
     page
@@ -888,9 +888,9 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await page.keyboard.type('hello world');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'note');
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.comment-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
   await expect(
     page
@@ -905,10 +905,10 @@ test('clicking commented text activates its card', async ({ page }) => {
   await selectAll(page);
   await addCommentViaPlusButton(page, 'note');
   await page.keyboard.press('Escape');
-  await expect(page.locator('.comment-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
 
   await editor.locator('mark.comment-mark').click();
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
   await expect(
     page
@@ -922,14 +922,14 @@ test('clicking plain text clears the annotation focus', async ({ page }) => {
   await page.keyboard.type('the quick brown fox');
   await selectLastNChars(page, 3); // "fox"
   await addCommentViaPlusButton(page, 'animal');
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
 
   // Click the un-commented start of the paragraph.
   await editor
     .locator('p')
     .first()
     .click({ position: { x: 5, y: 5 } });
-  await expect(page.locator('.comment-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
 });
 
@@ -970,8 +970,8 @@ test('clicking a comment card highlights its anchor text', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
 
-  await page.locator('.comment-card').click();
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await page.locator('[data-comment-card]').click();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('fox');
 });
 
@@ -986,8 +986,8 @@ test('overlapping annotations: the innermost one wins the click', async ({ page 
   await page.keyboard.press('Escape');
 
   await editor.locator('mark.comment-mark').click();
-  await expect(page.locator('.comment-card-active')).toBeVisible();
-  await expect(page.locator('[data-active]')).toHaveCount(0);
+  await expect(page.locator('[data-comment-card][data-active]')).toBeVisible();
+  await expect(page.locator('[data-suggestion-kind][data-active]')).toHaveCount(0);
 });
 
 test('accepting a suggestion clears its focus', async ({ page }) => {
@@ -1009,7 +1009,7 @@ test('resolving a focused comment clears its focus', async ({ page }) => {
   await addCommentViaPlusButton(page, 'todo');
   await expect(page.locator('.ProseMirror .annotation-focus')).toBeVisible();
 
-  await page.locator('.comment-resolve-btn').click();
+  await page.getByTitle(/^(un)?resolve$/i).click();
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
 });
 
@@ -1300,7 +1300,7 @@ test('gutter tick realigns with its anchor when zoom changes', async ({ page }) 
   await addCommentViaPlusButton(page, 'zoom alignment check');
 
   const mark = page.locator('mark.comment-mark');
-  const card = page.locator('.comment-card');
+  const card = page.locator('[data-comment-card]');
   const tick = page
     .getByRole('navigation', { name: 'Document annotations' })
     .getByRole('button', { name: /^Show (note|Claude thread)$/ });
@@ -1332,7 +1332,7 @@ test('comment can be added to text that is also tracked-inserted', async ({ page
   await selectAll(page);
   await addCommentViaPlusButton(page, 'note on insertion');
   await expectEditorHtml(editor, { contains: ['<ins', 'data-comment-id'] });
-  await expect(page.locator('.comment-card')).toHaveCount(1);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(1);
   // Plus one suggestion card for the insertion itself
   await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });

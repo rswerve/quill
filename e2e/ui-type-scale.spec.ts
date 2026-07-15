@@ -274,13 +274,13 @@ test('form controls and every review-card kind use the intended UI scale and fam
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.comment-thread-title').first(), '12px');
-  await expectType(page.locator('.comment-time').first(), '11px');
-  await expectType(page.locator('.comment-anchor-text').first(), '12px', {
+  await expectType(page.getByText('Claude thread').first(), '12px');
+  await expectType(page.locator('[data-comment-time]').first(), '11px');
+  await expectType(page.locator('[data-anchor-text]').first(), '12px', {
     checkUiFamily: false,
   });
-  await expectType(page.locator('.comment-reply-claude').first(), '12px');
-  await expectType(page.locator('.comment-reply-text').first(), '12.5px');
+  await expectType(page.getByText('Claude', { exact: true }).first(), '12px');
+  await expectType(page.locator('[data-reply-text]').first(), '12.5px');
   await expectType(page.locator('[data-suggestion-kind] .ai-badge').first(), '8.5px', {
     checkUiFamily: false,
   });
@@ -292,9 +292,9 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await expectType(page.getByText('bold added'), '12px');
   await expectType(page.getByRole('button', { name: 'Accept', exact: true }).first(), '12px');
 
-  await expectType(page.locator('.comment-reply-trigger'), '12px');
-  await page.locator('.comment-reply-trigger').click();
-  await expectType(page.locator('.comment-reply-input'), '13px');
+  await expectType(page.getByRole('button', { name: /Reply to Claude/ }), '12px');
+  await page.getByRole('button', { name: /Reply to Claude/ }).click();
+  await expectType(page.getByPlaceholder('Reply to Claude…'), '13px');
 
   await page.keyboard.press('ControlOrMeta+f');
   await expectType(page.locator('.find-bar-input').first(), '13px');

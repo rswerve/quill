@@ -62,14 +62,14 @@ test('a last-line comment stays reachable without extending document scroll', as
   await expect(page.locator('.editor-bottom-spacer')).toHaveCount(0);
 
   const panelList = page.locator('.comment-panel-list');
-  const card = page.locator('.comment-card');
+  const card = page.locator('[data-comment-card]');
   await expect(card).toBeVisible();
   await expect(
     page.getByRole('button', { name: /annotations below the viewport/ }),
   ).toHaveAttribute('aria-label', '1 annotations below the viewport');
   await page.getByRole('button', { name: /annotations below the viewport/ }).click();
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await expect(card).toHaveClass(/comment-card-active/);
+  await expect(card).toHaveAttribute('data-active');
 
   // Its card is contained by the panel's own viewport, independent of the
   // document's scroll geometry.
@@ -77,7 +77,7 @@ test('a last-line comment stays reachable without extending document scroll', as
     .poll(() =>
       page.evaluate(() => {
         const area = document.querySelector('.comment-panel-list') as HTMLElement;
-        const el = document.querySelector('.comment-card') as HTMLElement;
+        const el = document.querySelector('[data-comment-card]') as HTMLElement;
         const a = area.getBoundingClientRect();
         const c = el.getBoundingClientRect();
         return c.top >= a.top && c.bottom <= a.bottom;

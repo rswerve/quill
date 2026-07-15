@@ -112,7 +112,7 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   const suggestion = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
   await expect(suggestion).toBeVisible();
   await expect(suggestion.getByRole('button', { name: '↳ from chat' })).toBeVisible();
-  await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toHaveCount(0);
   await suggestion.getByRole('button', { name: '↳ from chat' }).click();
   await expect(page.getByRole('region', { name: 'Document chat' })).toBeVisible();
   await expect(assistant).toBeFocused();
@@ -253,7 +253,7 @@ test('document chat and anchored Claude replies never resume the same session co
   await page.locator('[data-card-id="comment-composer"] textarea').fill('Please tighten this');
   await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
 
-  const busyReply = activeTabHost(page).locator('.comment-reply-ai').last();
+  const busyReply = activeTabHost(page).locator('[data-reply-role="ai"]').last();
   await expect(busyReply).toContainText('already responding in this document');
   const spawnCountWhileBusy = await page.evaluate(
     () => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount,

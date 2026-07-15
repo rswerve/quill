@@ -2,11 +2,12 @@ import { useEffect, useState, useRef } from 'react';
 import type { Comment, Reply } from '../types';
 import { timeAgo } from '../utils/format';
 import { classifyReplyError } from '../hooks/useClaudeReply';
+import { cx } from '../utils/cx';
+import styles from './CommentCard.module.css';
 
 interface CommentCardProps {
   comment: Comment;
   isActive: boolean;
-  top?: number;
   onReply: (commentId: string, text: string) => void;
   onAIReplyRequest: (commentId: string, userText: string) => void;
   onCancelAIReply: (replyId: string) => void;
@@ -74,7 +75,7 @@ function ReplyErrorActions({
     );
   }
   return (
-    <div className="comment-reply-error-actions">
+    <div className={styles.replyErrorActions}>
       {actions}
       <button
         className="btn-ghost"
@@ -110,9 +111,9 @@ function ReplyView({
   let replyBody;
   if (reply.error) {
     replyBody = (
-      <div className="comment-reply-error">
-        <p className="comment-reply-error-title">Couldn’t complete the request.</p>
-        <p className="comment-reply-error-detail">{reply.error}</p>
+      <div className={styles.replyError} data-reply-error>
+        <p className={styles.replyErrorTitle}>Couldn’t complete the request.</p>
+        <p className={styles.replyErrorDetail}>{reply.error}</p>
         <ReplyErrorActions
           message={reply.error}
           onRetry={onRetry}
@@ -123,7 +124,7 @@ function ReplyView({
     );
   } else if (reply.cancelled) {
     replyBody = (
-      <div className="comment-reply-cancelled">
+      <div className={styles.replyCancelled} data-reply-cancelled>
         <p>Reply stopped.</p>
         <button className="btn-primary" onClick={onRetry}>
           Re-run
@@ -133,21 +134,25 @@ function ReplyView({
   } else {
     replyBody = (
       <>
-        <p className="comment-reply-text">
+        <p className={styles.replyText} data-reply-text>
           {reply.text}
           {reply.pending && reply.text.length === 0 && (
-            <span className="ai-thinking">Claude is thinking</span>
+            <span className={styles.aiThinking}>Claude is thinking</span>
           )}
           {reply.pending && (
             <span
-              className={`ai-spinner ${reply.text.length > 0 ? 'ai-stream-caret' : 'ai-thinking-dots'}`}
+              className={cx(
+                styles.aiSpinner,
+                reply.text.length > 0 ? styles.aiStreamCaret : styles.aiThinkingDots,
+              )}
+              data-ai-spinner
               aria-hidden="true"
             />
           )}
         </p>
         {reply.pending && (
           <button
-            className="btn-ghost btn-cancel-ai"
+            className={cx('btn-ghost', styles.cancelBtn)}
             aria-label="Cancel Claude reply"
             onClick={onCancel}
           >
@@ -155,9 +160,9 @@ function ReplyView({
           </button>
         )}
         {!reply.pending && linkedSuggestionIds.length > 0 && (
-          <div className="comment-reply-linked-actions">
+          <div className={styles.replyLinkedActions}>
             <button
-              className="reply-suggestions-chip"
+              className={styles.suggestionsChip}
               onClick={(event) => {
                 event.stopPropagation();
                 onViewSuggestion(linkedSuggestionIds);
@@ -166,7 +171,7 @@ function ReplyView({
               → {linkedSuggestionIds.length} suggestion{linkedSuggestionIds.length === 1 ? '' : 's'}
             </button>
             <button
-              className="reply-dismiss"
+              className={styles.replyDismiss}
               onClick={(event) => {
                 event.stopPropagation();
                 onDismiss();
@@ -181,18 +186,21 @@ function ReplyView({
   }
 
   return (
-    <div className={`comment-reply${isAI ? ' comment-reply-ai' : ' comment-reply-user'}`}>
+    <div
+      className={cx(styles.reply, isAI ? styles.replyAi : styles.replyUser)}
+      data-reply-role={isAI ? 'ai' : 'user'}
+    >
       {/* Single-player thread turns: your text sits in an unlabeled tinted band;
           Claude's reply sits on the card surface under a small "Claude" label
           (no "AI" chip, and no per-reply model tag or timestamp — the header
           carries the one timestamp, the active model lives in the status bar). */}
       {isAI ? (
         <>
-          <span className="comment-reply-claude">Claude</span>
+          <span className={styles.replyClaude}>Claude</span>
           {replyBody}
         </>
       ) : (
-        <div className="comment-user-band">{replyBody}</div>
+        <div className={styles.userBand}>{replyBody}</div>
       )}
     </div>
   );
@@ -201,7 +209,6 @@ function ReplyView({
 export default function CommentCard({
   comment,
   isActive,
-  top,
   onReply,
   onAIReplyRequest,
   onCancelAIReply,
@@ -254,22 +261,31 @@ export default function CommentCard({
 
   return (
     <div
-      className={`comment-card comment-card-${comment.kind}${isActive ? ' comment-card-active' : ''}${comment.resolved ? ' comment-card-resolved' : ''}`}
-      style={top === undefined ? undefined : { top }}
+      className={cx(
+        styles.card,
+        styles[comment.kind],
+        isActive && styles.active,
+        comment.resolved && styles.resolved,
+      )}
       data-card-id={comment.id}
+      data-comment-card={comment.kind}
+      data-active={isActive || undefined}
+      data-card-resolved={comment.resolved || undefined}
       onClick={() => onClick(comment.id)}
     >
-      <div className="comment-thread-line" />
+      <div className={styles.threadLine} />
 
-      <div className="comment-header">
+      <div className={styles.header}>
         {isNote ? (
-          <span className="comment-note-badge">Note</span>
+          <span className={styles.noteBadge}>Note</span>
         ) : (
-          <span className="comment-thread-title">Claude thread</span>
+          <span className={styles.threadTitle}>Claude thread</span>
         )}
-        <span className="comment-time">{timeAgo(comment.createdAt)}</span>
+        <span className={styles.time} data-comment-time>
+          {timeAgo(comment.createdAt)}
+        </span>
         <button
-          className="comment-resolve-btn"
+          className={styles.resolveBtn}
           title={comment.resolved ? 'Unresolve' : 'Resolve'}
           onClick={(e) => {
             e.stopPropagation();
@@ -288,7 +304,7 @@ export default function CommentCard({
           {comment.resolved ? '↺' : '✓'}
         </button>
         <button
-          className="comment-delete-btn"
+          className={styles.deleteBtn}
           title="Delete comment"
           onClick={(e) => {
             e.stopPropagation();
@@ -299,7 +315,7 @@ export default function CommentCard({
         </button>
       </div>
 
-      <div className="comment-anchor-text">
+      <div className={styles.anchorText} data-anchor-text>
         {'"'}
         {comment.anchorText.slice(0, 60)}
         {comment.anchorText.length > 60 ? '…' : ''}
@@ -307,7 +323,7 @@ export default function CommentCard({
       </div>
 
       {inlineNotice && (
-        <p className="comment-inline-notice" role="status">
+        <p className={styles.inlineNotice} role="status" data-inline-notice>
           {inlineNotice}
         </p>
       )}
@@ -316,7 +332,7 @@ export default function CommentCard({
         ? comment.replies
             .filter((reply) => !reply.dismissed)
             .map((reply) => (
-              <p key={reply.id} className="comment-note-body">
+              <p key={reply.id} className={styles.noteBody}>
                 {reply.text}
               </p>
             ))
@@ -339,7 +355,7 @@ export default function CommentCard({
 
       {isNote && !comment.resolved && (
         <button
-          className="comment-promote-note"
+          className={styles.promoteNote}
           onClick={(e) => {
             e.stopPropagation();
             onPromoteNote(comment.id);
@@ -350,10 +366,10 @@ export default function CommentCard({
       )}
 
       {!isNote && showReply && (
-        <form className="comment-reply-form" onSubmit={handleReplySubmit}>
+        <form className={styles.replyForm} data-reply-form onSubmit={handleReplySubmit}>
           <textarea
             ref={textareaRef}
-            className="comment-reply-input"
+            className={styles.replyInput}
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -361,7 +377,7 @@ export default function CommentCard({
             rows={2}
             autoFocus
           />
-          <div className="comment-reply-actions">
+          <div className={styles.replyActions}>
             <button type="submit" className="btn-primary" disabled={!replyText.trim()}>
               Reply
             </button>
@@ -381,7 +397,7 @@ export default function CommentCard({
 
       {!isNote && !showReply && !comment.resolved && (
         <button
-          className="comment-reply-trigger"
+          className={styles.replyTrigger}
           onClick={(e) => {
             e.stopPropagation();
             setShowReply(true);

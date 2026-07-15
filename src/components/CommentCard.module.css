@@ -1,0 +1,390 @@
+/* CommentCard — module-scoped styles (hashed, private to the component). The
+   note / Claude-thread comment card + its reply thread (user band, Claude turns,
+   AI thinking/streaming/error/cancelled states, resolve/delete, promote-note,
+   reply form). Design tokens resolve from src/styles/tokens.css.
+
+   FLATTENED cascade: every card renders only inside the dead-Open-layer's
+   `.comments` panel, so each rule is base ∪ `.comments` context, one flat rule.
+   Notes:
+   - `flex:none`/`max-width:none` come from the panel-list neutralizer rule (NOT
+     `.comments .comment-card`), folded into `.card` (the slice-15 catch).
+   - `.comment-card:hover` (accent-mid border) was DEAD (equal specificity, later
+     `.comments .comment-card` border won on hover too); dropped.
+   - The base spinner (`ai-spin`) is DISABLED by `.comments .ai-spinner`
+     (animation:none) — the dots/caret take over — so `@keyframes ai-spin` is dead
+     and dropped; `ai-dots`/`ai-caret` are kept.
+   - `.btn-primary`/`.btn-ghost` stay global; the cancel button's contextual
+     override reaches the global `.btn-ghost` via `.reply .cancelBtn` at (0,2,0).
+   - `.annotation-card-flash` stays global (CommentLayer applies it by classList). */
+
+.card {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.1s ease;
+}
+.active {
+  transform: translateY(-1px);
+  box-shadow: var(--annotation-focus-shadow);
+}
+.resolved {
+  opacity: 0.55;
+}
+
+.threadLine {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  width: 3px;
+  pointer-events: none;
+}
+.active > .threadLine {
+  width: 5px;
+}
+.note > .threadLine {
+  background: var(--note-stripe);
+}
+.claude > .threadLine {
+  background: var(--accent);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--note-badge-bg);
+}
+.noteBadge {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--note-badge-bg);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+.threadTitle {
+  flex: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.time {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+.resolveBtn,
+.deleteBtn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+}
+.resolveBtn:hover,
+.deleteBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.anchorText {
+  margin: 11px 12px 0;
+  padding: 3px 9px;
+  overflow: hidden;
+  border-left: 2.5px solid;
+  border-radius: 0 5px 5px 0;
+  color: var(--text-muted);
+  font-family: var(--font-doc-body);
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note .anchorText {
+  border-left-color: var(--note-quote-rule);
+  background: var(--note-quote-bg);
+}
+.claude .anchorText {
+  border-left-color: var(--hl-line);
+  background: var(--hl-bg);
+}
+
+.inlineNotice {
+  margin: 0 13px 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.noteBody {
+  padding: 10px 12px 12px;
+  color: var(--text-body);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Reply thread ─────────────────────────────────────────────── */
+.reply {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.replyAi {
+  position: relative;
+  margin: 12px 12px 0;
+}
+.replyUser {
+  margin: 11px 12px 0;
+}
+.userBand {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--bg-rail);
+}
+.replyClaude {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.replyText {
+  margin: 0;
+  padding: 0;
+  color: var(--text-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.userBand .replyText {
+  line-height: 1.5;
+}
+
+.aiThinking {
+  color: var(--text-dim);
+  font-style: normal;
+}
+.aiSpinner {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  margin-left: 3px;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  vertical-align: middle;
+}
+.aiThinkingDots::before {
+  content: '···';
+  animation: ai-dots 1.1s steps(4, end) infinite;
+}
+.aiStreamCaret {
+  width: 1px;
+  height: 13px;
+  background: var(--accent);
+  vertical-align: -2px;
+  animation: ai-caret 0.8s step-end infinite;
+}
+@keyframes ai-dots {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ai-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.reply .cancelBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+
+.replyError {
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-left: 3px solid var(--removed);
+  border-radius: 0 6px 6px 0;
+  background: var(--removed-bg);
+}
+:global(:root[data-theme='gruvbox']) .replyError {
+  border-left-color: var(--removed-accent);
+}
+.replyError p {
+  margin: 0;
+  color: var(--color-track-del-text);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.replyErrorTitle {
+  color: var(--removed);
+  font-weight: 600;
+}
+.replyErrorDetail {
+  color: var(--text-dim) !important;
+}
+.replyErrorActions,
+.replyLinkedActions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.replyCancelled {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--color-bg);
+}
+.replyCancelled p {
+  color: var(--color-ink-mid);
+  font-size: var(--text-ui);
+}
+
+.suggestionsChip,
+.replyDismiss {
+  height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.suggestionsChip {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.suggestionsChip:hover {
+  background: var(--hl-bg);
+}
+.replyDismiss {
+  color: var(--text-dim);
+}
+.replyDismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+/* ── Actions: promote-note, reply trigger, reply form ─────────── */
+.promoteNote {
+  width: 100%;
+  margin: 0;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid var(--note-badge-bg);
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  color: var(--accent-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.promoteNote:hover {
+  background: var(--bg-hover);
+}
+.promoteNote > span {
+  color: var(--accent-text);
+}
+.replyTrigger {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--note-badge-bg);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.replyTrigger:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+.replyForm {
+  margin: 12px 0 0;
+  border-top: 1px solid var(--note-badge-bg);
+}
+.replyInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
+  font-weight: 400;
+  line-height: var(--leading-ui);
+}
+.replyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 12px 8px;
+  border-top: 0;
+}

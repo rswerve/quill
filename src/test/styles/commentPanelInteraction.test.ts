@@ -31,11 +31,12 @@ describe('flat comment-panel interaction', () => {
   });
 
   it('keeps focused-card color tied to its own stripe instead of an accent ring', () => {
-    const active = ruleBody('.comments .comment-card-active');
-    const commentStripe = ruleBody('.comments .comment-card-active > .comment-thread-line');
-    expect(active).toContain('box-shadow: var(--annotation-focus-shadow)');
-    expect(active).not.toContain('border-color: var(--accent)');
-    expect(commentStripe).toContain('width: 5px');
+    // Comment cards are module-scoped (CommentCard.module.css); the active state
+    // carries the focus shadow + a widened own stripe, no accent ring.
+    const commentCard = readModuleSource('CommentCard.module.css');
+    expect(commentCard).toMatch(/\.active\s*\{[^}]*box-shadow: var\(--annotation-focus-shadow\)/s);
+    expect(commentCard).not.toMatch(/\.active\s*\{[^}]*border-color: var\(--accent\)/s);
+    expect(commentCard).toMatch(/\.active > \.threadLine\s*\{[^}]*width: 5px/s);
     // Suggestion cards are module-scoped; the active state carries the same
     // focus shadow plus a widened left stripe (no accent ring).
     const suggestionCard = readModuleSource('SuggestionCard.module.css');

@@ -1,23 +1,24 @@
-import { readAppStyles } from '../utils/readAppStyles';
+import { readAppStyles, readModuleSource } from '../utils/readAppStyles';
 import { describe, expect, it } from 'vitest';
 
 const css = readAppStyles();
+const commentCard = readModuleSource('CommentCard.module.css');
 
-function ruleBody(selector: string): string {
+function ruleBody(selector: string, source = css): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
-  if (!match) throw new Error(`${selector} is missing from App.css`);
+  const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  if (!match) throw new Error(`${selector} is missing`);
   return match[1];
 }
 
+// CommentCard is module-scoped (CommentCard.module.css); its kind/reply/footer
+// rules are asserted from the module source, with the module-local class names.
+const cardRule = (selector: string) => ruleBody(selector, commentCard);
+
 describe('single-player margin identities', () => {
   it('uses separate neutral and accent card stripes', () => {
-    expect(ruleBody('.comment-card-note .comment-thread-line')).toContain(
-      'background: var(--note-stripe)',
-    );
-    expect(ruleBody('.comment-card-claude .comment-thread-line')).toContain(
-      'background: var(--accent)',
-    );
+    expect(cardRule('.note > .threadLine')).toContain('background: var(--note-stripe)');
+    expect(cardRule('.claude > .threadLine')).toContain('background: var(--accent)');
   });
 
   it('renders private notes with the neutral document treatment', () => {
@@ -27,8 +28,8 @@ describe('single-player margin identities', () => {
   });
 
   it('keys anchored quotes to their note or Claude identity', () => {
-    const noteQuote = ruleBody('.comment-card-note .comment-anchor-text');
-    const claudeQuote = ruleBody('.comment-card-claude .comment-anchor-text');
+    const noteQuote = cardRule('.note .anchorText');
+    const claudeQuote = cardRule('.claude .anchorText');
 
     expect(css).toContain('--note-quote-bg: #F1EDE2');
     expect(css).toContain('--note-quote-bg: #282828');
@@ -39,9 +40,9 @@ describe('single-player margin identities', () => {
   });
 
   it('separates user and Claude turns without per-turn dividers', () => {
-    const reply = ruleBody('.comment-reply');
-    const userBand = ruleBody('.comment-user-band');
-    const claudeLabel = ruleBody('.comment-reply-claude');
+    const reply = cardRule('.reply');
+    const userBand = cardRule('.userBand');
+    const claudeLabel = cardRule('.replyClaude');
 
     expect(reply).toContain('border: 0');
     expect(reply).toContain('background: transparent');
@@ -50,9 +51,9 @@ describe('single-player margin identities', () => {
   });
 
   it('uses hairline footer affordances and an accent suggestion chip', () => {
-    const promote = ruleBody('.comment-promote-note');
-    const replyTrigger = ruleBody('.comment-reply-trigger');
-    const suggestions = ruleBody('.reply-suggestions-chip');
+    const promote = cardRule('.promoteNote');
+    const replyTrigger = cardRule('.replyTrigger');
+    const suggestions = cardRule('.suggestionsChip');
 
     expect(promote).toContain('border-top: 1px solid var(--note-badge-bg)');
     expect(promote).toContain('background: transparent');

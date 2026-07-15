@@ -58,11 +58,13 @@ test('mounted tabs preserve independent text, undo, zoom, mode, comments, and su
   await activeEditor(page).fill('Second tracked words');
   await expect(activeEditor(page).locator('ins')).toHaveText('Second tracked words');
   await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(1);
-  await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toHaveCount(0);
 
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First document words');
-  await expect(activeTabHost(page).locator('.comment-card')).toContainText('First tab comment');
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toContainText(
+    'First tab comment',
+  );
   await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(0);
   await expect(
     page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
