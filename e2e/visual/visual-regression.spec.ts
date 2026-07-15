@@ -447,16 +447,34 @@ test.describe('visual regression safety net', () => {
           (_, index) => `Paragraph ${index + 1} provides a stable annotation anchor for review.`,
         );
         const ranges = paragraphRanges(paragraphs);
-        const comments = [0, 1, 18, 35].map((index) =>
-          comment(`gutter-${index}`, ranges[index], {
-            kind: index === 18 ? 'claude' : 'note',
-            body: `Review paragraph ${index + 1}.`,
+        const comments = [
+          comment('gutter-cluster-note', ranges[0], {
+            body: 'Keep this first annotation as a private note.',
           }),
-        );
+          comment('gutter-cluster-claude', ranges[0], {
+            kind: 'claude',
+            body: 'Ask Claude about the same anchor.',
+          }),
+          ...[1, 18, 35].map((index) =>
+            comment(`gutter-${index}`, ranges[index], {
+              kind: index === 18 ? 'claude' : 'note',
+              body: `Review paragraph ${index + 1}.`,
+            }),
+          ),
+        ];
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
         const active = activeTabHost(page);
-        await expect(active.locator('.annotation-gutter')).toBeVisible();
-        await expect(active.locator('.annotation-gutter-count-below')).toBeVisible();
+        const gutter = active.getByRole('navigation', { name: 'Document annotations' });
+        const cluster = gutter.getByRole('button', {
+          name: 'Show first of 2 clustered annotations',
+        });
+        await expect(gutter).toBeVisible();
+        await expect(cluster).toBeVisible();
+        await expect(gutter.getByRole('button', { name: 'Show note' })).toBeVisible();
+        await expect(
+          gutter.getByRole('button', { name: '2 annotations below the viewport' }),
+        ).toBeVisible();
+        await cluster.hover();
         await shot(page, theme, 'annotation-gutter', active.locator('.studio-body'));
       });
 
