@@ -158,7 +158,7 @@ test('chat applies a Markdown-spelled link edit as one tracked link replacement'
   await expect(assistant.getByRole('button', { name: /in the doc/ })).toHaveText(
     /→ 2 suggestions in the doc/,
   );
-  await expect(assistant).not.toContainText('change was skipped');
+  await expect(assistant).not.toContainText('wasn’t applied');
   await assistant.getByRole('button', { name: /in the doc/ }).click();
 
   const replacements = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
@@ -189,9 +189,9 @@ test('chat identifies a skipped edit and its precise reason', async ({ page }) =
   await sendChat(page, 'Fix the missing phrase');
 
   const assistant = activeTabHost(page).locator('[data-chat-role="assistant"]').last();
-  await expect(assistant).toContainText('1 change was skipped:');
-  await expect(assistant).toContainText('“missing phrase” — text wasn’t found.');
-  await expect(assistant).not.toContainText('was already formatted as proposed');
+  await expect(assistant).toContainText('1 change wasn’t applied:');
+  await expect(assistant).toContainText('“missing phrase” — this text isn’t in the document.');
+  await expect(assistant).not.toContainText('it already matches the proposal');
 });
 
 test('chat shows a thinking indicator before the first streamed delta', async ({ page }) => {

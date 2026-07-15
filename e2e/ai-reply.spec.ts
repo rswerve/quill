@@ -602,8 +602,10 @@ test('AI edits: an edit whose find is nowhere in the document is skipped and sur
 
   const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  // The unlocatable edit is reported as skipped, and the document is unchanged.
-  await expect(aiReply.locator('[data-reply-text]')).toContainText('skipped', { timeout: 3000 });
+  // The unlocatable edit is reported as not applied, and the document is unchanged.
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('wasn’t applied', {
+    timeout: 3000,
+  });
   await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await expect(activeEditor(page)).not.toContainText('DELTA');
 });
