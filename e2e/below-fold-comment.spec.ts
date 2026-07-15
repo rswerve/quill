@@ -64,11 +64,10 @@ test('a last-line comment stays reachable without extending document scroll', as
   const panelList = page.locator('.comment-panel-list');
   const card = page.locator('.comment-card');
   await expect(card).toBeVisible();
-  await expect(page.locator('.annotation-gutter-count-below')).toHaveAttribute(
-    'aria-label',
-    '1 annotations below the viewport',
-  );
-  await page.locator('.annotation-gutter-count-below').click();
+  await expect(
+    page.getByRole('button', { name: /annotations below the viewport/ }),
+  ).toHaveAttribute('aria-label', '1 annotations below the viewport');
+  await page.getByRole('button', { name: /annotations below the viewport/ }).click();
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   await expect(card).toHaveClass(/comment-card-active/);
 

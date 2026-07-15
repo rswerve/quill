@@ -1,0 +1,184 @@
+/* AnnotationGutter — module-scoped styles (hashed, private to the component).
+   Design tokens resolve from src/styles/tokens.css. Self-contained namespace
+   (the former `.annotation-gutter*` family); the `.is-active` state is the
+   module-local `.active`. Moved verbatim — no cascade merge. */
+.gutter {
+  position: absolute;
+  left: 0;
+  /* Absolute positioning resolves against the containing panel, not the
+     comments-view child, so zero shares the editor viewport's origin. */
+  top: 0;
+  bottom: 0;
+  width: var(--annotation-gutter-width);
+  z-index: 9;
+  overflow: visible;
+  border-right: 1px solid var(--gutter-guide);
+  background: var(--bg-app);
+  pointer-events: none;
+}
+.gutter button {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.guide {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+  background: var(--gutter-guide);
+}
+.tick {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+.mark {
+  width: 7px;
+  height: 7px;
+  display: block;
+  opacity: 0.63;
+  transition:
+    width 0.12s ease,
+    height 0.12s ease,
+    opacity 0.12s ease,
+    box-shadow 0.14s ease;
+}
+.markNote {
+  border-radius: 50%;
+  background: var(--gutter-note-rest);
+}
+.markClaude {
+  transform: rotate(45deg);
+  background: var(--gutter-thread);
+}
+.tick:hover .mark,
+.tick:focus-visible .mark {
+  width: 8px;
+  height: 8px;
+  opacity: 1;
+}
+.tick:hover .markNote,
+.tick:focus-visible .markNote {
+  background: var(--gutter-note);
+}
+.tick:focus-visible {
+  outline: none;
+}
+.mark.active {
+  width: 9px;
+  height: 9px;
+  opacity: 1;
+}
+.markNote.active {
+  background: var(--gutter-note);
+  box-shadow: 0 0 0 5.5px var(--gutter-note-halo);
+}
+.markClaude.active {
+  box-shadow: 0 0 0 5.5px var(--gutter-thread-halo);
+}
+.count {
+  position: absolute;
+  left: 50%;
+  min-width: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: color-mix(in srgb, var(--bg-app) 92%, transparent);
+  color: var(--gutter-count-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1;
+}
+.count:hover,
+.count:focus-visible {
+  color: var(--text-muted);
+  outline: none;
+}
+.countAbove {
+  top: 5px;
+}
+.countBelow {
+  bottom: 5px;
+}
+.cluster {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  background: transparent;
+}
+.clusterCount {
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--gutter-count-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  transition: opacity 0.12s ease;
+}
+.cluster.active .clusterCount {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gutter-note) 15%, transparent);
+}
+.clusterFan {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.clusterMember {
+  --annotation-fan-offset: 0px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, calc(-50% + var(--annotation-fan-offset)));
+  display: flex;
+  align-items: center;
+}
+.clusterMember .mark {
+  width: 6px;
+  height: 6px;
+  opacity: 1;
+}
+.clusterConnector {
+  position: absolute;
+  right: 7px;
+  width: 5px;
+  height: 1px;
+  background: var(--gutter-guide);
+}
+.cluster:hover .clusterCount,
+.cluster:focus-visible .clusterCount {
+  opacity: 0;
+}
+.cluster:hover .clusterFan,
+.cluster:focus-visible .clusterFan {
+  opacity: 1;
+}
+.cluster:focus-visible {
+  outline: none;
+}

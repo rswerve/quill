@@ -1,4 +1,4 @@
-import { readAppStyles } from '../utils/readAppStyles';
+import { readAppStyles, readModuleSource } from '../utils/readAppStyles';
 import { describe, expect, it } from 'vitest';
 
 const css = readAppStyles();
@@ -40,13 +40,20 @@ describe('flat comment-panel interaction', () => {
   });
 
   it('renders kind as dot-versus-diamond and state as size/halo', () => {
-    expect(ruleBody('.annotation-gutter')).toContain('top: 0');
-    expect(ruleBody('.annotation-gutter-mark-note')).toContain('border-radius: 50%');
-    expect(ruleBody('.annotation-gutter-mark-claude')).toContain('transform: rotate(45deg)');
-    expect(ruleBody('.annotation-gutter-mark.is-active')).toContain('width: 9px');
-    expect(ruleBody('.annotation-gutter-mark-note.is-active')).toContain('var(--gutter-note-halo)');
-    expect(ruleBody('.annotation-gutter-mark-claude.is-active')).toContain(
-      'var(--gutter-thread-halo)',
-    );
+    // The gutter is module-scoped (AnnotationGutter.module.css); `.is-active` is
+    // the module-local `.active`.
+    const gutter = readModuleSource('AnnotationGutter.module.css');
+    const gutterRule = (selector: string): string => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = gutter.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      if (!match) throw new Error(`${selector} is missing from AnnotationGutter.module.css`);
+      return match[1];
+    };
+    expect(gutterRule('.gutter')).toContain('top: 0');
+    expect(gutterRule('.markNote')).toContain('border-radius: 50%');
+    expect(gutterRule('.markClaude')).toContain('transform: rotate(45deg)');
+    expect(gutterRule('.mark.active')).toContain('width: 9px');
+    expect(gutterRule('.markNote.active')).toContain('var(--gutter-note-halo)');
+    expect(gutterRule('.markClaude.active')).toContain('var(--gutter-thread-halo)');
   });
 });

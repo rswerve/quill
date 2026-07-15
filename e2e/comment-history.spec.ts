@@ -88,7 +88,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   const editorScroll = activeTab.locator('.editor-scroll-area');
   await expect(activeTab.locator('.comments-head .filter')).toHaveText('Open');
   await expect(panelList).toBeVisible();
-  await expect(activeTab.locator('.annotation-gutter')).toBeVisible();
+  await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeVisible();
   await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
   expect(
     await page
@@ -108,8 +108,10 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   const history = activeTab.locator('.comment-history-list');
   await expect(activeTab.locator('.comments-head .filter')).toHaveText('Resolved');
   await expect(history).toBeVisible();
-  await expect(activeTab.locator('.annotation-gutter')).toBeHidden();
-  await expect(activeTab.locator('.annotation-gutter-tick')).toHaveCount(0);
+  await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeHidden();
+  await expect(activeTab.getByRole('button', { name: /^Show (note|Claude thread)$/ })).toHaveCount(
+    0,
+  );
   await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
   expect(
     await page

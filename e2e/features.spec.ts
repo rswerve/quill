@@ -876,7 +876,9 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await addCommentViaPlusButton(page, 'note');
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
-  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
+  await expect(
+    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+  ).toBeVisible();
 });
 
 test('Escape clears the annotation focus', async ({ page }) => {
@@ -888,7 +890,9 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.locator('.comment-card-active')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
-  await expect(page.locator('.annotation-gutter-mark.is-active')).toHaveCount(0);
+  await expect(
+    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+  ).toHaveCount(0);
 });
 
 test('clicking commented text activates its card', async ({ page }) => {
@@ -902,7 +906,9 @@ test('clicking commented text activates its card', async ({ page }) => {
   await editor.locator('mark.comment-mark').click();
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
-  await expect(page.locator('.annotation-gutter-mark.is-active')).toBeVisible();
+  await expect(
+    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+  ).toBeVisible();
 });
 
 test('clicking plain text clears the annotation focus', async ({ page }) => {
@@ -1289,7 +1295,9 @@ test('gutter tick realigns with its anchor when zoom changes', async ({ page }) 
 
   const mark = page.locator('mark.comment-mark');
   const card = page.locator('.comment-card');
-  const tick = page.locator('.annotation-gutter-tick');
+  const tick = page
+    .getByRole('navigation', { name: 'Document annotations' })
+    .getByRole('button', { name: /^Show (note|Claude thread)$/ });
   await expect(card).toBeVisible();
   await expect(tick).toBeVisible();
   await expect(card).toHaveCSS('position', 'relative');

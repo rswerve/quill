@@ -1,4 +1,6 @@
 import { layoutGutterTicks, type GutterTickInput } from './commentPositioning';
+import { cx } from '../utils/cx';
+import styles from './AnnotationGutter.module.css';
 
 interface AnnotationGutterProps {
   ticks: GutterTickInput[];
@@ -11,7 +13,11 @@ interface AnnotationGutterProps {
 function TickMark({ tick, active = false }: { tick: GutterTickInput; active?: boolean }) {
   return (
     <span
-      className={`annotation-gutter-mark annotation-gutter-mark-${tick.annotationKind}${active ? ' is-active' : ''}`}
+      className={cx(
+        styles.mark,
+        tick.annotationKind === 'note' ? styles.markNote : styles.markClaude,
+        active && styles.active,
+      )}
       aria-hidden
     />
   );
@@ -29,13 +35,13 @@ export default function AnnotationGutter({
   const nearestBelow = layout.below[0];
 
   return (
-    <nav className="annotation-gutter" aria-label="Document annotations" hidden={hidden}>
-      <span className="annotation-gutter-guide" aria-hidden />
+    <nav className={styles.gutter} aria-label="Document annotations" hidden={hidden}>
+      <span className={styles.guide} aria-hidden />
 
       {nearestAbove && (
         <button
           type="button"
-          className="annotation-gutter-count annotation-gutter-count-above"
+          className={cx(styles.count, styles.countAbove)}
           aria-label={`${layout.above.length} annotations above the viewport`}
           onClick={() => onActivate(nearestAbove)}
         >
@@ -51,9 +57,10 @@ export default function AnnotationGutter({
             <button
               key={cluster.clusterId}
               type="button"
-              className="annotation-gutter-tick"
+              className={styles.tick}
               style={{ top: cluster.viewportY }}
               aria-label={`Show ${only.annotationKind === 'note' ? 'note' : 'Claude thread'}`}
+              aria-current={only.cardId === activeCardId ? 'true' : undefined}
               onClick={() => onActivate(only)}
             >
               <TickMark tick={only} active={only.cardId === activeCardId} />
@@ -67,22 +74,23 @@ export default function AnnotationGutter({
           <button
             key={cluster.clusterId}
             type="button"
-            className={`annotation-gutter-cluster${activeMember ? ' is-active' : ''}`}
+            className={cx(styles.cluster, activeMember && styles.active)}
             style={{ top: cluster.viewportY }}
             aria-label={`Show first of ${cluster.members.length} clustered annotations`}
+            aria-current={activeMember ? 'true' : undefined}
             onClick={() => onActivate(first)}
           >
-            <span className="annotation-gutter-cluster-count">{cluster.members.length}</span>
-            <span className="annotation-gutter-cluster-fan" aria-hidden>
+            <span className={styles.clusterCount}>{cluster.members.length}</span>
+            <span className={styles.clusterFan} aria-hidden>
               {cluster.members.map((member, index) => {
                 const offset = (index - (cluster.members.length - 1) / 2) * 10;
                 return (
                   <span
                     key={member.cardId}
-                    className="annotation-gutter-cluster-member"
+                    className={styles.clusterMember}
                     style={{ '--annotation-fan-offset': `${offset}px` } as React.CSSProperties}
                   >
-                    <span className="annotation-gutter-cluster-connector" />
+                    <span className={styles.clusterConnector} />
                     <TickMark tick={member} active={member.cardId === activeCardId} />
                   </span>
                 );
@@ -95,7 +103,7 @@ export default function AnnotationGutter({
       {nearestBelow && (
         <button
           type="button"
-          className="annotation-gutter-count annotation-gutter-count-below"
+          className={cx(styles.count, styles.countBelow)}
           aria-label={`${layout.below.length} annotations below the viewport`}
           onClick={() => onActivate(nearestBelow)}
         >
