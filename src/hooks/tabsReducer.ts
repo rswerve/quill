@@ -43,10 +43,13 @@ export type TabAction =
   // original addNewTab/addOrFocusPath add-then-activate atomicity). ID creation
   // stays in App; the created tab is passed in.
   | { type: 'addTab'; tab: TabMeta }
-  // Remove a tab; if it was the last, fall back to the passed-in fresh Untitled.
-  // If the closed tab was active, the next active is the tab that slid into its
-  // index (clamped), else the active id is unchanged.
-  | { type: 'close'; tabId: string; fallbackTab: TabMeta }
+  // Remove a tab. `fallbackTab` is consumed ONLY when the close empties the set
+  // (its provider — createUntitledTab — advances a counter, so App allocates it
+  // solely in that case and passes null otherwise; the reducer never calls it,
+  // staying pure). A would-empty close with a null fallback is rejected. If the
+  // closed tab was active, the next active is the tab that slid into its index
+  // (clamped), else the active id is unchanged.
+  | { type: 'close'; tabId: string; fallbackTab: TabMeta | null }
   | { type: 'clearInitialFilePath'; tabId: string }
   | { type: 'clearInitialWorkspaceSnapshot'; tabId: string }
   | { type: 'applyMetaSnapshot'; tabId: string; snapshot: DocumentTabMetaSnapshot };
@@ -77,7 +80,12 @@ export function tabsReducer(state: TabRegistryState, action: TabAction): TabRegi
       const closingIndex = state.tabs.findIndex((tab) => tab.id === action.tabId);
       if (closingIndex < 0) return state;
       let nextTabs = state.tabs.filter((tab) => tab.id !== action.tabId);
-      if (nextTabs.length === 0) nextTabs = [action.fallbackTab];
+      if (nextTabs.length === 0) {
+        // Can't empty the registry; App must supply the fresh Untitled. Reject
+        // rather than violate the never-empty invariant.
+        if (!action.fallbackTab) return state;
+        nextTabs = [action.fallbackTab];
+      }
       const closingActive = state.activeTabId === action.tabId;
       const activeTabId = closingActive
         ? nextTabs[Math.min(closingIndex, nextTabs.length - 1)].id

@@ -15,6 +15,7 @@ import UpdateBanner from './components/UpdateBanner';
 import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
 import type { WorkspaceReadResult } from './hooks/useDraftAutosave';
 import { useUpdateCheck } from './hooks/useUpdateCheck';
+import { useTabRegistry } from './hooks/useTabRegistry';
 import {
   readClaudeRunOptions,
   writeClaudeEffort,
@@ -49,7 +50,7 @@ import type {
   WorkspaceTab,
 } from './types';
 import './App.css';
-import type { TabMeta } from './hooks/tabsReducer';
+import type { TabAction, TabMeta } from './hooks/tabsReducer';
 
 interface DiscardGuard {
   tabIds: string[];
@@ -137,8 +138,14 @@ function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
 }
 
 export default function App() {
-  const [tabs, setTabs] = useState<TabMeta[]>(() => [createUntitledTab()]);
-  const [activeTabId, setActiveTabId] = useState(() => tabs[0].id);
+  const {
+    tabs,
+    activeTabId,
+    commit: rawCommitTabs,
+  } = useTabRegistry(() => {
+    const first = createUntitledTab();
+    return { tabs: [first], activeTabId: first.id };
+  });
   const [chrome, setChrome] = useState<DocumentTabChromeSnapshot>(() =>
     emptyChrome(tabs[0], loadZoomPreference()),
   );
@@ -174,6 +181,18 @@ export default function App() {
   tabsRef.current = tabs;
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  // Mirror each committed transition into the same-tick refs App reads. The
+  // registry's own stateRef drives multi-commit composition; this keeps App's
+  // read-refs (which eslint recognizes as stable useRefs) in lockstep.
+  const commitTabs = useCallback(
+    (action: TabAction) => {
+      const next = rawCommitTabs(action);
+      tabsRef.current = next.tabs;
+      activeTabIdRef.current = next.activeTabId;
+      return next;
+    },
+    [rawCommitTabs],
+  );
   const chromeRef = useRef(chrome);
   chromeRef.current = chrome;
   const defaultZoomRef = useRef(defaultZoom);
@@ -264,38 +283,40 @@ export default function App() {
     return tab ? emptyChrome(tab, defaultZoomRef.current) : chromeRef.current;
   }, []);
 
-  const applyWorkspaceState = useCallback((workspace: WorkspaceFile, includeDirty: boolean) => {
-    const restored = tabsFromWorkspace(workspace, includeDirty);
-    for (const tab of restored.tabs) {
-      const numericId = /^tab-(\d+)$/.exec(tab.id)?.[1];
-      if (numericId) nextTabNumber = Math.max(nextTabNumber, Number(numericId) + 1);
-    }
-    tabsRef.current = restored.tabs;
-    activeTabIdRef.current = restored.activeTabId;
-    tabHandlesRef.current.clear();
-    tabHandleReadyIdsRef.current.clear();
-    tabRefCallbacksRef.current.clear();
-    chromeByTabRef.current.clear();
-    sessionClaimsRef.current.clear();
-    setSessionClaimRevision((revision) => revision + 1);
-    setTabs(restored.tabs);
-    setActiveTabId(restored.activeTabId);
-    setChrome(
-      emptyChrome(
-        restored.tabs.find((tab) => tab.id === restored.activeTabId) ?? restored.tabs[0],
-        defaultZoomRef.current,
-      ),
-    );
-  }, []);
+  const applyWorkspaceState = useCallback(
+    (workspace: WorkspaceFile, includeDirty: boolean) => {
+      const restored = tabsFromWorkspace(workspace, includeDirty);
+      for (const tab of restored.tabs) {
+        const numericId = /^tab-(\d+)$/.exec(tab.id)?.[1];
+        if (numericId) nextTabNumber = Math.max(nextTabNumber, Number(numericId) + 1);
+      }
+      tabHandlesRef.current.clear();
+      tabHandleReadyIdsRef.current.clear();
+      tabRefCallbacksRef.current.clear();
+      chromeByTabRef.current.clear();
+      sessionClaimsRef.current.clear();
+      setSessionClaimRevision((revision) => revision + 1);
+      commitTabs({ type: 'hydrate', tabs: restored.tabs, activeTabId: restored.activeTabId });
+      setChrome(
+        emptyChrome(
+          restored.tabs.find((tab) => tab.id === restored.activeTabId) ?? restored.tabs[0],
+          defaultZoomRef.current,
+        ),
+      );
+    },
+    [commitTabs],
+  );
 
   const activateTab = useCallback(
     (tabId: string) => {
       if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
-      activeTabIdRef.current = tabId;
-      setActiveTabId(tabId);
+      commitTabs({ type: 'activate', tabId });
+      // Refresh chrome even when the tab is already active — the reducer bails
+      // to the same state in that case, but the original activateTab always
+      // re-pushed chrome, so preserve that.
       setChrome(chromeForTab(tabId));
     },
-    [chromeForTab],
+    [chromeForTab, commitTabs],
   );
 
   const releaseSessionClaim = useCallback((tabId: string) => {
@@ -332,11 +353,11 @@ export default function App() {
   const addNewTab = useCallback(() => {
     if (!workspaceReadyRef.current) return;
     const tab = createUntitledTab();
-    const nextTabs = [...tabsRef.current, tab];
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-    activateTab(tab.id);
-  }, [activateTab]);
+    // addTab appends AND activates atomically; chrome is the only side the
+    // reducer doesn't own, so push it here (what activateTab did before).
+    commitTabs({ type: 'addTab', tab });
+    setChrome(chromeForTab(tab.id));
+  }, [chromeForTab, commitTabs]);
 
   const addOrFocusPath = useCallback(
     (path: string) => {
@@ -354,14 +375,14 @@ export default function App() {
         return existing.id;
       }
 
+      // Canonical-path dedup stays here (App owns path identity); the registry
+      // just gets a clean add-then-activate.
       const tab = createFileTab(path);
-      const nextTabs = [...tabsRef.current, tab];
-      tabsRef.current = nextTabs;
-      setTabs(nextTabs);
-      activateTab(tab.id);
+      commitTabs({ type: 'addTab', tab });
+      setChrome(chromeForTab(tab.id));
       return tab.id;
     },
-    [activateTab],
+    [activateTab, chromeForTab, commitTabs],
   );
 
   const handleRequestSavePath = useCallback(
@@ -413,30 +434,32 @@ export default function App() {
   const closeTabImmediately = useCallback(
     (tabId: string) => {
       const currentTabs = tabsRef.current;
-      const closingIndex = currentTabs.findIndex((tab) => tab.id === tabId);
-      if (closingIndex < 0) return;
-
-      let nextTabs = currentTabs.filter((tab) => tab.id !== tabId);
-      if (nextTabs.length === 0) nextTabs = [createUntitledTab()];
+      if (!currentTabs.some((tab) => tab.id === tabId)) return;
+      // Capture before the commit — the commit rewrites activeTabIdRef.
       const closingActiveTab = activeTabIdRef.current === tabId;
-      const nextActiveId = closingActiveTab
-        ? nextTabs[Math.min(closingIndex, nextTabs.length - 1)].id
-        : activeTabIdRef.current;
-
-      tabsRef.current = nextTabs;
+      // Allocate the fresh Untitled ONLY when this close empties the set, so an
+      // ordinary close never advances the tab counter — and the reducer stays
+      // pure (it consumes fallbackTab, never mints it).
+      const willEmpty = currentTabs.length === 1;
+      const next = commitTabs({
+        type: 'close',
+        tabId,
+        fallbackTab: willEmpty ? createUntitledTab() : null,
+      });
       tabHandlesRef.current.delete(tabId);
       tabHandleReadyIdsRef.current.delete(tabId);
       chromeByTabRef.current.delete(tabId);
       releaseSessionClaim(tabId);
       tabRefCallbacksRef.current.delete(tabId);
-      setTabs(nextTabs);
       if (pickerTabId === tabId) {
         setPickerOpen(false);
         setPickerTabId(null);
       }
-      if (closingActiveTab) activateTab(nextActiveId);
+      // Only an active close moves focus; push chrome for the tab the reducer
+      // promoted (the slid-in survivor, or the fresh fallback).
+      if (closingActiveTab) setChrome(chromeForTab(next.activeTabId));
     },
-    [activateTab, pickerTabId, releaseSessionClaim],
+    [chromeForTab, commitTabs, pickerTabId, releaseSessionClaim],
   );
 
   const requestCloseTab = useCallback(
@@ -455,54 +478,26 @@ export default function App() {
         closeTabImmediately(tabId);
         return;
       }
-      const currentTabs = tabsRef.current;
-      const nextTabs = currentTabs.map((tab) =>
-        tab.id === tabId ? { ...tab, initialFilePath: null } : tab,
-      );
-      tabsRef.current = nextTabs;
-      setTabs(nextTabs);
+      commitTabs({ type: 'clearInitialFilePath', tabId });
     },
-    [closeTabImmediately],
+    [closeTabImmediately, commitTabs],
   );
 
-  const handleInitialWorkspaceLoaded = useCallback((tabId: string) => {
-    const currentTabs = tabsRef.current;
-    const nextTabs = currentTabs.map((tab) =>
-      tab.id === tabId ? { ...tab, initialWorkspaceSnapshot: null } : tab,
-    );
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-  }, []);
+  const handleInitialWorkspaceLoaded = useCallback(
+    (tabId: string) => {
+      commitTabs({ type: 'clearInitialWorkspaceSnapshot', tabId });
+    },
+    [commitTabs],
+  );
 
-  const handleTabMetaChange = useCallback((tabId: string, snapshot: DocumentTabMetaSnapshot) => {
-    const currentTabs = tabsRef.current;
-    let changed = false;
-    const nextTabs = currentTabs.map((tab) => {
-      if (tab.id !== tabId) return tab;
-      // A file tab publishes its initial blank hook state before its async
-      // load finishes. Keep the pending path/title until the real load lands.
-      if ((tab.initialFilePath || tab.initialWorkspaceSnapshot) && snapshot.filePath === null) {
-        return tab;
-      }
-      const next = {
-        ...tab,
-        filePath: snapshot.filePath,
-        initialFilePath: null,
-        title: snapshot.title,
-        isDirty: snapshot.isDirty,
-      };
-      changed =
-        changed ||
-        next.filePath !== tab.filePath ||
-        next.initialFilePath !== tab.initialFilePath ||
-        next.title !== tab.title ||
-        next.isDirty !== tab.isDirty;
-      return next;
-    });
-    if (!changed) return;
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-  }, []);
+  const handleTabMetaChange = useCallback(
+    (tabId: string, snapshot: DocumentTabMetaSnapshot) => {
+      // The keep-pending guard and skip-if-unchanged bail now live in the
+      // reducer; a same-ref return means React re-renders nothing.
+      commitTabs({ type: 'applyMetaSnapshot', tabId, snapshot });
+    },
+    [commitTabs],
+  );
 
   const handleChromeChange = useCallback((tabId: string, snapshot: DocumentTabChromeSnapshot) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);

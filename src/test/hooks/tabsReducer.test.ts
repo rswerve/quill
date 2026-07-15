@@ -135,6 +135,24 @@ describe('tabsReducer', () => {
       expect(next.activeTabId).toBe('fresh');
       expect(holdsInvariants(next)).toBe(true);
     });
+    // The reducer is PURE — it only consumes the fallback. App allocates a
+    // fresh Untitled solely when the close empties the set (its provider,
+    // createUntitledTab, advances a counter); on an ordinary close App passes
+    // null. So a supplied fallback must be ignored when survivors remain.
+    it('ignores a supplied fallbackTab when survivors remain', () => {
+      const next = tabsReducer(state([tab({ id: 'a' }), tab({ id: 'b' })], 'a'), {
+        type: 'close',
+        tabId: 'a',
+        fallbackTab: tab({ id: 'unused' }),
+      });
+      expect(next.tabs.map((t) => t.id)).toEqual(['b']);
+    });
+    // If App miscomputes and a would-empty close arrives with no fallback, the
+    // reducer refuses rather than violate the never-empty invariant.
+    it('rejects a would-empty close with a null fallback (same reference)', () => {
+      const s = state([tab({ id: 'only' })], 'only');
+      expect(tabsReducer(s, { type: 'close', tabId: 'only', fallbackTab: null })).toBe(s);
+    });
     it('is a no-op (same reference) for an unknown id', () => {
       const s = state([tab({ id: 'a' })], 'a');
       expect(tabsReducer(s, { type: 'close', tabId: 'ghost', fallbackTab: tab({ id: 'f' }) })).toBe(

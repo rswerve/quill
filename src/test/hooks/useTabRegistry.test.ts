@@ -21,8 +21,6 @@ describe('useTabRegistry', () => {
     const { result } = renderHook(() => useTabRegistry(init));
     expect(result.current.tabs.map((t) => t.id)).toEqual(['a']);
     expect(result.current.activeTabId).toBe('a');
-    expect(result.current.tabsRef.current).toBe(result.current.tabs);
-    expect(result.current.activeTabIdRef.current).toBe('a');
   });
 
   it('commit returns the next state', () => {
@@ -35,30 +33,20 @@ describe('useTabRegistry', () => {
     expect(returned?.activeTabId).toBe('b');
   });
 
-  it('advances the refs synchronously, before React re-renders', () => {
-    const { result } = renderHook(() => useTabRegistry(init));
-    act(() => {
-      const next = result.current.commit({ type: 'addTab', tab: tab('b') });
-      // Same tick, inside act, before the commit's re-render is observable:
-      // the refs must already point at the new state.
-      expect(result.current.tabsRef.current).toBe(next.tabs);
-      expect(result.current.tabsRef.current.map((t) => t.id)).toEqual(['a', 'b']);
-      expect(result.current.activeTabIdRef.current).toBe('b');
-    });
-  });
-
-  // THE contract that the sync-commit pattern exists for: two commits in the
-  // same tick must compose. The second reads the first's result via stateRef,
-  // NOT the state React last rendered. Deleting `stateRef.current = next` in
-  // the hook makes the second commit start from the stale rendered state and
-  // drop the first tab — this test is the guard for exactly that.
+  // THE contract the sync-commit pattern exists for: two commits in the same
+  // tick must compose. The second reduces off the first's result via the
+  // private stateRef, NOT the state React last rendered. Deleting
+  // `stateRef.current = next` in the hook makes the second commit start from the
+  // stale rendered state and drop the first tab — this test guards exactly that.
   it('composes two commits in a single tick', () => {
     const { result } = renderHook(() => useTabRegistry(init));
+    let afterSecond: TabRegistryState | undefined;
     act(() => {
       result.current.commit({ type: 'addTab', tab: tab('b') });
-      const afterSecond = result.current.commit({ type: 'addTab', tab: tab('c') });
-      expect(afterSecond.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+      afterSecond = result.current.commit({ type: 'addTab', tab: tab('c') });
     });
+    // The second commit's own return value already reflects the first.
+    expect(afterSecond?.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c']);
     // ...and the rendered state matches after the tick settles.
     expect(result.current.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c']);
     expect(result.current.activeTabId).toBe('c');
@@ -66,20 +54,24 @@ describe('useTabRegistry', () => {
 
   it('composes a close that reads the just-added tab in the same tick', () => {
     const { result } = renderHook(() => useTabRegistry(init));
+    let afterClose: TabRegistryState | undefined;
     act(() => {
       result.current.commit({ type: 'addTab', tab: tab('b') }); // -> [a, b], active b
-      // Close the freshly-added active tab; close must see [a, b] via stateRef,
-      // not the rendered [a], so it removes 'b' and re-activates 'a'.
-      const afterClose = result.current.commit({
+      // Close the ORIGINAL tab. Off the fresh [a, b] this leaves [b] (a survivor
+      // remains). Off the stale rendered [a] it would instead empty the set and
+      // mint the fallback — so asserting [b] pins that close reduced off [a, b],
+      // not [a]. (Closing the just-added 'b' would no-op on the stale [a] and
+      // pass by accident; closing 'a' does not.)
+      afterClose = result.current.commit({
         type: 'close',
-        tabId: 'b',
-        fallbackTab: tab('fresh'),
+        tabId: 'a',
+        fallbackTab: null, // survivors remain -> no fallback needed
       });
-      expect(afterClose.tabs.map((t) => t.id)).toEqual(['a']);
-      expect(afterClose.activeTabId).toBe('a');
     });
-    expect(result.current.tabs.map((t) => t.id)).toEqual(['a']);
-    expect(result.current.activeTabId).toBe('a');
+    expect(afterClose?.tabs.map((t) => t.id)).toEqual(['b']);
+    expect(afterClose?.activeTabId).toBe('b');
+    expect(result.current.tabs.map((t) => t.id)).toEqual(['b']);
+    expect(result.current.activeTabId).toBe('b');
   });
 
   it('keeps a stable commit identity across renders', () => {
