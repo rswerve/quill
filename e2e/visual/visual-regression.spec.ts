@@ -179,6 +179,12 @@ async function openVisualDocument(
     () =>
       new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
+  // A session-linked fixture surfaces the (expected) session picker — which is
+  // itself a role="dialog" — so dismiss it BEFORE the unexpected-dialog guard,
+  // otherwise the guard would flag the picker as a notice.
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
+  if (await picker.count()) await picker.getByRole('button', { name: 'Close' }).click();
+  // Any REMAINING dialog is an unexpected application notice — fail loudly.
   const notice = page.getByRole('dialog');
   if (await notice.count()) {
     const restoredCardClasses = await page
@@ -188,8 +194,6 @@ async function openVisualDocument(
       `Visual fixture triggered an application notice: ${await notice.innerText()}\nRestored cards: ${restoredCardClasses.join(', ')}`,
     );
   }
-  const picker = page.locator('.session-picker');
-  if (await picker.count()) await page.locator('.session-picker-close').click();
   await settleVisual(page);
 }
 
@@ -548,10 +552,13 @@ test.describe('visual regression safety net', () => {
           },
         });
         await page.locator('.footer-ai-binding-label').click();
-        await expect(page.locator('.session-picker')).toBeVisible();
-        await page.locator('.session-row').first().click();
-        await expect(page.locator('.session-picker-preview-messages')).toBeVisible();
-        await shot(page, theme, 'session-picker', page.locator('.session-picker'));
+        const sessionPicker = page.getByRole('dialog', { name: 'Link Claude Code session' });
+        await expect(sessionPicker).toBeVisible();
+        await sessionPicker.getByRole('button', { name: 'Research Notes.md' }).click();
+        await expect(
+          page.getByText('I reviewed the introduction and proposed two changes.'),
+        ).toBeVisible();
+        await shot(page, theme, 'session-picker', sessionPicker);
       });
 
       test('find and replace bar', async ({ page }) => {

@@ -25,13 +25,22 @@ describe('UI type scale', () => {
   });
 
   it('uses control size for session-preview body text', () => {
-    for (const selector of [
-      '.session-picker-hint,\n.session-picker-loading,\n.session-picker-empty',
-      '.session-picker-error',
-      '.session-preview-msg',
+    // SessionPicker is module-scoped: its header/rows/status/preview text sit at
+    // the UI scale (var(--text-ui)); row-meta drops to --text-label and the
+    // preview meta to --text-meta. Asserted from the module source.
+    const sessionPicker = readModuleSource('SessionPicker.module.css');
+    const ruleFor = (re: RegExp) => sessionPicker.match(re)?.[0] ?? '';
+    for (const re of [
+      /\.header\s*\{[^}]*/s,
+      /\.hint,\n\.loading,\n\.empty\s*\{[^}]*/s,
+      /\.error\s*\{[^}]*/s,
+      /\.rowTitle\s*\{[^}]*/s,
+      /\.previewMsg\s*\{[^}]*/s,
     ]) {
-      expect(ruleBody(selector)).toContain('font-size: var(--text-ui)');
+      expect(ruleFor(re)).toContain('font-size: var(--text-ui)');
     }
+    expect(ruleFor(/\.rowMeta\s*\{[^}]*/s)).toContain('font-size: var(--text-label)');
+    expect(ruleFor(/\.previewMeta\s*\{[^}]*/s)).toContain('font-size: var(--text-meta)');
   });
 
   it('keeps direct Studio component sizes within the handoff type scale', () => {
@@ -77,7 +86,9 @@ describe('UI type scale', () => {
     expect(linkEditor).toMatch(/\.urlRow \.input\s*\{[^}]*font-size: 12\.5px/s);
     expect(linkEditor).toMatch(/\.btn\s*\{[^}]*font-size: 12\.5px/s);
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
-    expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
+    expect(readModuleSource('SessionPicker.module.css')).toMatch(
+      /\.close\s*\{[^}]*font-size: 18px/s,
+    );
     expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
     expect(ruleBody('.topbar .seg')).toContain('font-size: 12px');
     expect(ruleBody('.footer.status')).toContain('font-size: 10px');

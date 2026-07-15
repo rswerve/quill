@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { AISessionBinding } from '../types';
+import { cx } from '../utils/cx';
+import styles from './SessionPicker.module.css';
 
 export interface SessionSummary {
   sessionId: string;
@@ -51,6 +53,7 @@ export default function SessionPicker({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<SessionPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const headingId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -104,21 +107,26 @@ export default function SessionPicker({
   }
 
   return (
-    <div className="session-picker-overlay" onClick={onClose}>
-      <div className="session-picker" onClick={(e) => e.stopPropagation()}>
-        <div className="session-picker-header">
-          <span>Link Claude Code session</span>
-          <button className="session-picker-close" onClick={onClose} title="Close">
+    <div className={styles.overlay} onClick={onClose}>
+      <div
+        className={styles.panel}
+        role="dialog"
+        aria-labelledby={headingId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={styles.header}>
+          <span id={headingId}>Link Claude Code session</span>
+          <button className={styles.close} onClick={onClose} title="Close" aria-label="Close">
             ×
           </button>
         </div>
 
-        <div className="session-picker-body">
-          <div className="session-picker-list">
-            {loadError && <div className="session-picker-error">{loadError}</div>}
-            {!sessions && !loadError && <div className="session-picker-loading">Loading…</div>}
+        <div className={styles.body}>
+          <div className={styles.list}>
+            {loadError && <div className={styles.error}>{loadError}</div>}
+            {!sessions && !loadError && <div className={styles.loading}>Loading…</div>}
             {sessions?.length === 0 && (
-              <div className="session-picker-empty">
+              <div className={styles.empty}>
                 No Claude Code sessions found under <code>~/.claude/projects/</code> — you can still
                 give this document a fresh one with “Start new session” below.
               </div>
@@ -126,24 +134,24 @@ export default function SessionPicker({
             {sessions?.map((s) => (
               <button
                 key={s.jsonlPath}
-                className={`session-row${s.jsonlPath === selectedPath ? ' selected' : ''}`}
+                className={cx(styles.row, s.jsonlPath === selectedPath && styles.selected)}
                 onClick={() => setSelectedPath(s.jsonlPath)}
               >
-                <div className="session-row-title">{sessionHeadline(s)}</div>
-                <div className="session-row-meta">
-                  <span className="session-row-cwd">{s.cwd}</span>
-                  <span className="session-row-time">{formatRelativeTime(s.lastUsed)}</span>
+                <div className={styles.rowTitle}>{sessionHeadline(s)}</div>
+                <div className={styles.rowMeta}>
+                  <span className={styles.rowCwd}>{s.cwd}</span>
+                  <span className={styles.rowTime}>{formatRelativeTime(s.lastUsed)}</span>
                 </div>
               </button>
             ))}
           </div>
 
-          <div className="session-picker-preview">
-            {!selectedPath && <div className="session-picker-hint">Pick a session to preview.</div>}
-            {previewLoading && <div className="session-picker-loading">Loading preview…</div>}
+          <div className={styles.preview}>
+            {!selectedPath && <div className={styles.hint}>Pick a session to preview.</div>}
+            {previewLoading && <div className={styles.loading}>Loading preview…</div>}
             {preview && !previewLoading && (
               <>
-                <div className="session-picker-preview-meta">
+                <div className={styles.previewMeta}>
                   <div>
                     <strong>Session:</strong> <code>{preview.sessionId}</code>
                   </div>
@@ -151,14 +159,12 @@ export default function SessionPicker({
                     <strong>cwd:</strong> <code>{preview.cwd}</code>
                   </div>
                 </div>
-                <div className="session-picker-preview-messages">
+                <div>
                   {preview.recentAssistantMessages.length === 0 && (
-                    <div className="session-picker-hint">
-                      No assistant messages in this session.
-                    </div>
+                    <div className={styles.hint}>No assistant messages in this session.</div>
                   )}
                   {preview.recentAssistantMessages.map((m, i) => (
-                    <div key={i} className="session-preview-msg">
+                    <div key={i} className={styles.previewMsg}>
                       {m}
                     </div>
                   ))}
@@ -168,10 +174,10 @@ export default function SessionPicker({
           </div>
         </div>
 
-        <div className="session-picker-footer">
-          <div className="session-picker-new-group">
+        <div className={styles.footer}>
+          <div className={styles.newGroup}>
             <button
-              className="btn-ghost session-picker-new"
+              className={cx('btn-ghost', styles.new)}
               onClick={handleStartNew}
               disabled={!newSessionCwd}
               title={
@@ -183,13 +189,13 @@ export default function SessionPicker({
               Start new session
             </button>
             {!newSessionCwd && (
-              <span className="session-picker-new-hint">
+              <span className={styles.newHint}>
                 Save the document first — a new session runs in its folder
               </span>
             )}
           </div>
           {sessionOwner && (
-            <span className="session-picker-owner-notice" role="status">
+            <span className={styles.ownerNotice} role="status">
               This session is already linked to {sessionOwner}.
             </span>
           )}

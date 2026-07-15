@@ -96,7 +96,7 @@ test('normal relaunch restores clean tab order and active tab, reloading files f
   await expect(page.locator('.document-tab').nth(1)).toContainText('workspace-second.md');
   await expect(page.locator('.document-tab.active')).toContainText('workspace-first.md');
   await expect(activeEditor(page)).toHaveText('Updated externally before relaunch');
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
 test('an edit made while Save is pending stays dirty and remains in recovery', async ({ page }) => {

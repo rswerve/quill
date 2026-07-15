@@ -312,7 +312,7 @@ test('AI reply: Ask Claude with no linked session preserves the request and open
 }) => {
   await setupWithoutSession(page);
   // Session picker must not be open yet.
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 
   await page.keyboard.type('hello world');
   await page.keyboard.press('ControlOrMeta+a');
@@ -325,7 +325,9 @@ test('AI reply: Ask Claude with no linked session preserves the request and open
   await composer.getByRole('button', { name: 'Link a session to ask' }).click();
 
   // The request is retained in its new Claude-thread card while linking.
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
   await expect(page.locator('.comment-card-claude')).toContainText('Take a look');
 });
 
@@ -333,17 +335,22 @@ test('AI reply: a Claude-thread reply with no linked session opens the session p
   page,
 }) => {
   await setupWithoutSession(page);
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 
   // Create a thread with an unsent request, dismiss linking, then continue that
   // same Claude thread. No magic token is involved in the reply.
   await addClaudeThread(page, 'hello world', 'Take a look');
-  await page.locator('.session-picker-close').click();
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'Close' })
+    .click();
   await page.locator('.comment-reply-trigger').click();
   await page.getByPlaceholder('Reply to Claude…').fill('A follow-up');
   await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
 
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
 });
 
 test('Session picker: Start new session is disabled until the document is saved', async ({
@@ -352,7 +359,7 @@ test('Session picker: Start new session is disabled until the document is saved'
   await setupWithoutSession(page);
   await addClaudeThread(page, 'hello world', 'Take a look');
 
-  const startNew = page.locator('.session-picker-new');
+  const startNew = page.getByRole('button', { name: 'Start new session' });
   await expect(startNew).toBeVisible();
   await expect(startNew).toBeDisabled();
 });
@@ -376,7 +383,7 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
   await page.locator('.add-comment-compose textarea').fill('Take a look');
   await page.getByRole('button', { name: 'Link a session to ask' }).click();
 
-  const startNew = page.locator('.session-picker-new');
+  const startNew = page.getByRole('button', { name: 'Start new session' });
   await expect(startNew).toBeEnabled();
   await startNew.click();
 

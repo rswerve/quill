@@ -325,14 +325,11 @@ test('session picker body text and controls inherit the app font', async ({ page
   });
   await page.locator('.footer-ai-binding-label').click();
 
-  await expectType(page.locator('.session-picker-header'), '13px');
-  await expectType(page.locator('.session-row'), '13px');
-  await expectType(page.locator('.session-row-title'), '13px');
-  await expectType(page.locator('.session-row-meta'), '11px');
-  await page.locator('.session-row').click();
-  await expectType(page.locator('.session-preview-msg'), '13px');
-  await expectType(page.locator('.session-picker-preview-meta'), '12.5px');
-  await expectType(page.locator('.session-picker-footer .btn-primary'), '12.5px');
+  // SessionPicker's type scale (header/rows/preview) is asserted from
+  // SessionPicker.module.css source in the unit type-scale suite (classes are
+  // hashed). The picker stays open here so its controls are covered by the
+  // UI-font-family sweep below.
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
   await expectVisibleControlsUseUiFamily(page);
 });
 

@@ -203,12 +203,12 @@ test('an auto-bound Claude session stays owned by one document and is blocked in
   }, secondPath);
   await expect(activeEditor(page)).toHaveText('Second document');
 
-  const picker = page.locator('.session-picker');
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible();
-  await picker.locator('.session-row').click();
+  await picker.getByRole('button', { name: 'Shared authoring session' }).click();
   await expect(picker).toContainText('already linked to first.md');
   await expect(picker.getByRole('button', { name: 'Link this session' })).toBeDisabled();
-  await picker.locator('.session-picker-close').click();
+  await picker.getByRole('button', { name: 'Close' }).click();
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
   await expect(page.locator('.document-tab.active .document-tab-dirty')).toHaveCount(0);
 

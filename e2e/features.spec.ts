@@ -785,7 +785,7 @@ test('promoting a note converts it to a Claude thread and opens session linking'
 
   await expect(page.locator('.comment-card-claude')).toContainText('first');
   await expect(page.locator('.comment-note-badge')).toHaveCount(0);
-  await expect(page.locator('.session-picker')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
 });
 
 test('resolving a comment hides it from the default view', async ({ page }) => {

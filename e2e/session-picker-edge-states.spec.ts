@@ -12,7 +12,7 @@ const EXISTING_SESSION = {
 
 async function openPicker(page: import('@playwright/test').Page) {
   await page.locator('.footer-ai-binding-label').click();
-  const picker = page.locator('.session-picker');
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible();
   return picker;
 }
@@ -33,9 +33,7 @@ test('a session-list failure is explicit and Cancel returns to the untouched doc
   });
 
   const picker = await openPicker(page);
-  await expect(picker.locator('.session-picker-error')).toContainText(
-    'Claude session directory unavailable',
-  );
+  await expect(picker.getByText('Claude session directory unavailable')).toBeVisible();
   await picker.getByRole('button', { name: 'Cancel' }).click();
   await expect(picker).toHaveCount(0);
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
@@ -48,12 +46,10 @@ test('an empty picker explains the state and keeps local note-taking available',
   await setupMemoryTauri(page, { claudeSessions: [] });
 
   const picker = await openPicker(page);
-  await expect(picker.locator('.session-picker-empty')).toContainText(
-    'No Claude Code sessions found',
-  );
-  await expect(picker.locator('.session-picker-new')).toBeDisabled();
-  await expect(picker.locator('.session-picker-new-hint')).toContainText('Save the document first');
-  await picker.locator('.session-picker-close').click();
+  await expect(picker.getByText(/No Claude Code sessions found/)).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Start new session' })).toBeDisabled();
+  await expect(picker.getByText(/Save the document first/)).toBeVisible();
+  await picker.getByRole('button', { name: 'Close' }).click();
 
   await page.locator('.ProseMirror').click();
   await page.keyboard.type('Local work continues');
@@ -73,8 +69,8 @@ test('Cancel after previewing a session never binds or records it', async ({ pag
   });
 
   const picker = await openPicker(page);
-  await picker.locator('.session-row').click();
-  await expect(picker.locator('.session-preview-msg')).toHaveText('A real preview message');
+  await picker.getByRole('button', { name: 'Existing writing session' }).click();
+  await expect(picker.getByText('A real preview message')).toBeVisible();
   await expect(picker.getByRole('button', { name: 'Link this session' })).toBeEnabled();
   await picker.getByRole('button', { name: 'Cancel' }).click();
 

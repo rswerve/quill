@@ -268,11 +268,10 @@ test('session picker headlines prefer document name, then AI title, then untitle
   await setupWithIPC(page, { handler });
   await page.locator('.footer-ai-binding-label').click();
 
-  await expect(page.locator('.session-row-title')).toHaveText([
-    'Design Brief.md',
-    'Claude fallback title',
-    'untitled-805faa5a',
-  ]);
+  const sessionDialog = page.getByRole('dialog', { name: 'Link Claude Code session' });
+  for (const title of ['Design Brief.md', 'Claude fallback title', 'untitled-805faa5a']) {
+    await expect(sessionDialog.getByRole('button', { name: title })).toBeVisible();
+  }
 });
 
 test('linking a saved document records its session name for the next picker open', async ({
@@ -315,10 +314,10 @@ test('linking a saved document records its session name for the next picker open
   await setupWithIPC(page, { handler });
   await page.keyboard.press('ControlOrMeta+o');
 
-  const picker = page.locator('.session-picker');
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible({ timeout: 3000 });
-  await expect(picker.locator('.session-row-title')).toHaveText('untitled-saved-do');
-  await picker.locator('.session-row').click();
+  await expect(picker.getByRole('button', { name: 'untitled-saved-do' })).toBeVisible();
+  await picker.getByRole('button', { name: 'untitled-saved-do' }).click();
   await picker.getByRole('button', { name: 'Link this session' }).click();
   await expect(picker).toHaveCount(0);
   await page.waitForFunction(
@@ -328,7 +327,11 @@ test('linking a saved document records its session name for the next picker open
   );
 
   await page.locator('.footer-ai-binding-label').click();
-  await expect(page.locator('.session-row-title')).toHaveText('Meeting Notes.md');
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Link Claude Code session' })
+      .getByRole('button', { name: 'Meeting Notes.md' }),
+  ).toBeVisible();
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -503,13 +506,25 @@ test('deep-link: opening a doc with no linked session forces the session picker'
   // Doc loads…
   await expect(activeEditor(page)).toContainText('no linked session', { timeout: 3000 });
   // …and the picker is surfaced so the user must choose a session.
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
 
   // Picking a session binds it: pick, link, and the picker closes.
-  await page.locator('.session-row').first().click();
-  await expect(page.locator('.session-picker .btn-primary')).toBeEnabled({ timeout: 2000 });
-  await page.locator('.session-picker .btn-primary').click();
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'My session' })
+    .click();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Link Claude Code session' })
+      .getByRole('button', { name: 'Link this session' }),
+  ).toBeEnabled({ timeout: 2000 });
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'Link this session' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────

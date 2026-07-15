@@ -290,8 +290,8 @@ export function activeEditor(page: Page) {
 }
 
 export async function closeSessionPickerIfOpen(page: Page) {
-  const picker = page.locator('.session-picker');
-  if (await picker.count()) await page.locator('.session-picker-close').click();
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
+  if (await picker.count()) await picker.getByRole('button', { name: 'Close' }).click();
 }
 
 export async function openMemoryFile(page: Page) {

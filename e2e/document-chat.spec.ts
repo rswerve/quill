@@ -292,11 +292,11 @@ test('the first no-session send queues through the picker and starts after linki
   await openMemoryFile(page);
   await openChat(page);
   await sendChat(page, 'Please summarize this');
-  await expect(page.locator('.session-picker')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
   await expect(activeTabHost(page).locator('.chat-message')).toHaveCount(0);
 
-  await page.locator('.session-picker-new').click();
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start new session' }).click();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
   await expect(activeTabHost(page).locator('.chat-message-user')).toHaveText(
     'Please summarize this',
   );
@@ -352,13 +352,13 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   );
   expect(spawnedBeforeConsent).toBeUndefined();
   await permissionNotice.getByRole('button', { name: 'Relink session' }).click();
-  await expect(page.locator('.session-picker')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
   const stillNotSpawned = await page.evaluate(
     () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
   );
   expect(stillNotSpawned).toBeUndefined();
 
-  await page.locator('.session-picker-new').click();
+  await page.getByRole('button', { name: 'Start new session' }).click();
   await openChat(page);
   await sendChat(page, 'Review this imported document');
   await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
@@ -404,7 +404,7 @@ test('a Quill-created sidecar session reopens silently with a constrained cwd', 
 
   await openMemoryFile(page);
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
   await openChat(page);
   await sendChat(page, 'Continue');
   await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
