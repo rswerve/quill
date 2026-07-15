@@ -546,7 +546,7 @@ test.describe('visual regression safety net', () => {
           sidecar({ aiSession: session, chat }),
         );
         await activeTabHost(page).getByRole('tab', { name: 'Chat', exact: true }).click();
-        await expect(page.locator('.chat-message')).toHaveCount(2);
+        await expect(page.locator('[data-chat-message-id]')).toHaveCount(2);
         await shot(page, theme, 'document-chat');
       });
 

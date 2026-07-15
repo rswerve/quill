@@ -107,14 +107,14 @@ test('blank document and comments panel show restrained Studio empty states', as
 test('Cmd+/ opens document chat and focuses its composer', async ({ page }) => {
   await setup(page);
   await page.keyboard.press('ControlOrMeta+/');
-  await expect(page.locator('.chat-view')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Document chat' })).toBeVisible();
   await expect(page.getByLabel('Ask Claude about this document')).toBeFocused();
 });
 
 test('the empty-document Claude hint opens document chat', async ({ page }) => {
   await setup(page);
   await page.locator('.editor-empty-chat').click();
-  await expect(page.locator('.chat-view')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Document chat' })).toBeVisible();
   await expect(page.getByLabel('Ask Claude about this document')).toBeFocused();
 });
 

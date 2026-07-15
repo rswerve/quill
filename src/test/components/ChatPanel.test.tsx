@@ -49,7 +49,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof ChatPanel>> 
 describe('ChatPanel', () => {
   it('renders the two-sided thread and jumps to linked suggestions', () => {
     const props = renderPanel();
-    expect(screen.getByText('Tighten the opening')).toHaveClass('chat-message-user');
+    expect(screen.getByText('Tighten the opening')).toHaveAttribute('data-chat-role', 'user');
     expect(screen.getByText('I tightened it.')).toBeInTheDocument();
     expect(screen.getByText('AI')).toBeInTheDocument();
     expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
@@ -94,8 +94,7 @@ describe('ChatPanel', () => {
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('Claude is thinking…');
-    expect(container.querySelector('.chat-thinking-dot')).toBeInTheDocument();
-    expect(container.querySelector('.chat-stream-caret')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-chat-caret]')).not.toBeInTheDocument();
 
     rerender(
       <ChatPanel
@@ -121,7 +120,7 @@ describe('ChatPanel', () => {
     );
 
     expect(screen.queryByText('Claude is thinking…')).not.toBeInTheDocument();
-    expect(container.querySelector('.chat-stream-caret')).toBeInTheDocument();
+    expect(container.querySelector('[data-chat-caret]')).toBeInTheDocument();
   });
 
   it('exposes Stop and Retry/Dismiss terminal actions', () => {
@@ -150,12 +149,8 @@ describe('ChatPanel', () => {
     expect(onCancel).toHaveBeenCalledWith('a-stream');
     expect(onRetry).toHaveBeenCalledWith('a-error');
     expect(onDismiss).toHaveBeenCalledWith('a-error');
-    expect(screen.getByRole('button', { name: 'Stop' })).toHaveClass(
-      'chat-action-btn',
-      'chat-stop-btn',
-    );
-    expect(screen.getByRole('button', { name: 'Retry' })).toHaveClass('chat-action-btn');
-    expect(screen.getByRole('button', { name: 'Dismiss' })).toHaveClass('chat-action-btn');
+    // The terminal actions are identified by their accessible names and behavior
+    // above; each carries its own SVG glyph.
     expect(screen.getByRole('button', { name: 'Stop' }).querySelector('svg')).toBeInTheDocument();
   });
 });

@@ -263,7 +263,7 @@ test('document chat uses the intended control and metadata scale', async ({ page
   await expectType(tab.getByTitle(/^(Claude session|No Claude session)/), '10px', {
     checkUiFamily: false,
   });
-  await expectType(tab.locator('.chat-box-foot .kbd-hint'), '9px', {
+  await expectType(tab.getByText('⌘↵ SEND'), '9px', {
     checkUiFamily: false,
   });
   await expectVisibleControlsUseUiFamily(page);
