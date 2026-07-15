@@ -1,6 +1,20 @@
 import { useEffect } from 'react';
-import type { DocumentTabHandle } from '../components/DocumentTab';
 import { clampZoom, DEFAULT_ZOOM } from '../utils/zoomPreference';
+
+/**
+ * The narrow slice of the active tab this hook drives — just the four commands
+ * the shortcuts invoke. A DocumentTabHandle satisfies it structurally, but the
+ * hook depends only on this, not the full 21-method handle.
+ */
+export interface ShortcutTarget {
+  clearActiveAnnotation: () => void;
+  focusFind: () => void;
+  openChat: () => void;
+  setZoom: (zoom: number) => void;
+}
+
+/** File/tab actions are fire-and-forget; some return a promise we intentionally drop. */
+type ShortcutAction = () => void | Promise<unknown>;
 
 export interface GlobalShortcutOptions {
   /**
@@ -10,15 +24,15 @@ export interface GlobalShortcutOptions {
    */
   hasNativeMenu: boolean;
   /** Resolve the active tab AT event time (not render time). */
-  getActiveHandle: () => DocumentTabHandle | null;
+  getActiveHandle: () => ShortcutTarget | null;
   /** Read the live document zoom AT event time (preserves chromeRef semantics). */
   getCurrentZoom: () => number;
   setDefaultZoom: (zoom: number) => void;
-  onNewTab: () => void;
-  onOpen: () => void;
-  onSave: () => void;
-  onSaveAs: () => void;
-  onExportPdf: () => void;
+  onNewTab: ShortcutAction;
+  onOpen: ShortcutAction;
+  onSave: ShortcutAction;
+  onSaveAs: ShortcutAction;
+  onExportPdf: ShortcutAction;
 }
 
 /**
@@ -49,7 +63,7 @@ export function useGlobalShortcuts(options: GlobalShortcutOptions): void {
       if (hasNativeMenu) return false;
       if (event.key.toLowerCase() === 's' && event.shiftKey) {
         event.preventDefault();
-        onSaveAs();
+        void onSaveAs();
         return true;
       }
 
@@ -60,13 +74,13 @@ export function useGlobalShortcuts(options: GlobalShortcutOptions): void {
       }[event.key];
       if (action) {
         event.preventDefault();
-        action();
+        void action();
         return true;
       }
 
       if (event.key === 'p' && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        onExportPdf();
+        void onExportPdf();
         return true;
       }
       return false;

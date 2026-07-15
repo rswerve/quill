@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useGlobalShortcuts, type GlobalShortcutOptions } from '../../hooks/useGlobalShortcuts';
-import type { DocumentTabHandle } from '../../components/DocumentTab';
 
 function makeHandle() {
   return {
@@ -15,7 +14,7 @@ function makeHandle() {
 function setup(overrides: Partial<GlobalShortcutOptions> = {}, handle = makeHandle()) {
   const opts: GlobalShortcutOptions = {
     hasNativeMenu: false,
-    getActiveHandle: () => handle as unknown as DocumentTabHandle,
+    getActiveHandle: () => handle,
     getCurrentZoom: () => 1,
     setDefaultZoom: vi.fn(),
     onNewTab: vi.fn(),
@@ -82,8 +81,10 @@ describe('useGlobalShortcuts', () => {
       expect(printed.defaultPrevented).toBe(true);
 
       const shifted = press('P', { meta: true, shift: true });
-      expect(opts.onExportPdf).toHaveBeenCalledTimes(1); // unchanged
+      const alted = press('p', { meta: true, alt: true });
+      expect(opts.onExportPdf).toHaveBeenCalledTimes(1); // neither modified chord fires
       expect(shifted.defaultPrevented).toBe(false);
+      expect(alted.defaultPrevented).toBe(false);
     });
     it('leaves an unhandled Cmd chord alone', () => {
       const { opts } = setup();
@@ -94,19 +95,27 @@ describe('useGlobalShortcuts', () => {
   });
 
   describe('always-web shortcuts (independent of the native menu)', () => {
-    it('Cmd+F focuses find; Cmd+Shift+F does not', () => {
+    it('Cmd+F focuses find; Cmd+Shift+F and Cmd+Alt+F do not', () => {
       const { handle } = setup();
       const e = press('f', { meta: true });
       expect(handle.focusFind).toHaveBeenCalledTimes(1);
       expect(e.defaultPrevented).toBe(true);
-      press('f', { meta: true, shift: true });
+      const shifted = press('f', { meta: true, shift: true });
+      const alted = press('f', { meta: true, alt: true });
       expect(handle.focusFind).toHaveBeenCalledTimes(1); // unchanged
+      expect(shifted.defaultPrevented).toBe(false);
+      expect(alted.defaultPrevented).toBe(false);
     });
-    it('Cmd+/ opens chat', () => {
+    it('Cmd+/ opens chat; Cmd+Shift+/ and Cmd+Alt+/ do not', () => {
       const { handle } = setup();
       const e = press('/', { meta: true });
       expect(handle.openChat).toHaveBeenCalledTimes(1);
       expect(e.defaultPrevented).toBe(true);
+      const shifted = press('/', { meta: true, shift: true });
+      const alted = press('/', { meta: true, alt: true });
+      expect(handle.openChat).toHaveBeenCalledTimes(1); // unchanged
+      expect(shifted.defaultPrevented).toBe(false);
+      expect(alted.defaultPrevented).toBe(false);
     });
     it('unmodified Escape clears the active annotation (and does not preventDefault)', () => {
       const { handle } = setup();
@@ -119,12 +128,23 @@ describe('useGlobalShortcuts', () => {
       press('Escape', { meta: true });
       expect(handle.clearActiveAnnotation).not.toHaveBeenCalled();
     });
-    it('resolves the active handle at event time, tolerating a null handle', () => {
-      const { opts } = setup({ getActiveHandle: () => null });
+    it('tolerates a null active handle (no throw, still prevents default)', () => {
+      setup({ getActiveHandle: () => null });
       const e = press('f', { meta: true });
-      // No throw, still prevents default for a recognized shortcut.
       expect(e.defaultPrevented).toBe(true);
-      expect(opts.onSave).not.toHaveBeenCalled();
+    });
+    it('resolves the active handle LIVE at event time, not captured at render', () => {
+      const h1 = makeHandle();
+      const h2 = makeHandle();
+      let current = h1;
+      setup({ getActiveHandle: () => current });
+      press('f', { meta: true });
+      expect(h1.focusFind).toHaveBeenCalledTimes(1);
+      // Switch the active tab WITHOUT a rerender — the next event must target h2.
+      current = h2;
+      press('f', { meta: true });
+      expect(h2.focusFind).toHaveBeenCalledTimes(1);
+      expect(h1.focusFind).toHaveBeenCalledTimes(1); // h1 not re-hit
     });
   });
 
@@ -138,6 +158,17 @@ describe('useGlobalShortcuts', () => {
       expect(e.defaultPrevented).toBe(true);
       press('+', { meta: true, shift: true });
       expect(setDefaultZoom).toHaveBeenLastCalledWith(1.12);
+    });
+    it('reads the zoom LIVE at event time, not captured at render', () => {
+      let zoom = 1;
+      const setDefaultZoom = vi.fn();
+      setup({ setDefaultZoom, getCurrentZoom: () => zoom });
+      press('=', { meta: true });
+      expect(setDefaultZoom).toHaveBeenLastCalledWith(1.12);
+      // Zoom changes AFTER render, no rerender; the next event uses the new base.
+      zoom = 2;
+      press('=', { meta: true });
+      expect(setDefaultZoom).toHaveBeenLastCalledWith(2.12);
     });
     it('Cmd+- zooms out', () => {
       const setDefaultZoom = vi.fn();
@@ -188,10 +219,35 @@ describe('useGlobalShortcuts', () => {
       const find = press('f', { meta: true });
       expect(handle.focusFind).toHaveBeenCalledTimes(1);
       expect(find.defaultPrevented).toBe(true);
+      const chat = press('/', { meta: true });
+      expect(handle.openChat).toHaveBeenCalledTimes(1);
+      expect(chat.defaultPrevented).toBe(true);
       press('=', { meta: true });
       expect(handle.setZoom).toHaveBeenCalledTimes(1);
       press('Escape');
       expect(handle.clearActiveAnnotation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // 11th parity trap: the listener is TARGET-NEUTRAL — shortcuts fire even when
+  // a form control is focused. This characterizes the current (intentional)
+  // behavior so a future "ignore inputs" cleanup can't change it unnoticed.
+  describe('target neutrality', () => {
+    it('fires shortcuts dispatched from a focused textarea', () => {
+      const { opts } = setup();
+      const textarea = document.createElement('textarea');
+      document.body.appendChild(textarea);
+      textarea.focus();
+      const event = new KeyboardEvent('keydown', {
+        key: 's',
+        metaKey: true,
+        cancelable: true,
+        bubbles: true,
+      });
+      textarea.dispatchEvent(event); // bubbles to window
+      expect(opts.onSave).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+      textarea.remove();
     });
   });
 
