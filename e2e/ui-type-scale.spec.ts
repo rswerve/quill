@@ -229,7 +229,9 @@ test('document typography stays pinned while both themes keep chrome vertically 
     await expectVerticallyContained(
       page.getByRole('navigation', { name: 'Formatting' }).locator('button:visible'),
     );
-    await expectVerticallyContained(page.locator('header[data-print-hidden] button:visible'));
+    await expectVerticallyContained(
+      page.getByRole('toolbar', { name: 'Document actions' }).locator('button:visible'),
+    );
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }

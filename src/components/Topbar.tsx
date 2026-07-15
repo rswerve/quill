@@ -50,7 +50,12 @@ export default function Topbar({
   const parentName = parentPath ? basename(parentPath) : null;
 
   return (
-    <header className={styles.topbar} data-print-hidden>
+    <header
+      className={styles.topbar}
+      role="toolbar"
+      aria-label="Document actions"
+      data-print-hidden
+    >
       <div className={styles.crumbs} aria-label="Document location">
         {parentName && (
           <>

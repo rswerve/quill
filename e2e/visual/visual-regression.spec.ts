@@ -343,7 +343,7 @@ test.describe('visual regression safety net', () => {
         const shell = page.locator('.app');
         await expect(shell).toBeVisible();
         await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
-        await expect(page.locator('header[data-print-hidden]')).toBeVisible();
+        await expect(page.getByRole('toolbar', { name: 'Document actions' })).toBeVisible();
         await expect(page.locator('.tabstrip')).toBeVisible();
         await expect(activeEditor(page)).toContainText('complete shell fixture');
         await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(2);

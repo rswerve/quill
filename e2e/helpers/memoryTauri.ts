@@ -322,11 +322,10 @@ export async function openMemoryFile(page: Page) {
       ).length > previous,
     openCallsBefore,
   );
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[aria-label="Document location"]')?.textContent?.trim() !==
-      'Untitled',
-  );
+  await page.waitForFunction(() => {
+    const location = document.querySelector('[aria-label="Document location"]');
+    return location !== null && location.textContent?.trim() !== 'Untitled';
+  });
   // filePath publishes before loadFileResult's session-picker state reaches
   // the DOM. Let that same open settle so the helper cannot miss a late picker
   // and leave an invisible modal intercepting the next real interaction.
