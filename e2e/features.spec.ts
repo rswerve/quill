@@ -381,9 +381,9 @@ test('suggestion cards persist after exiting Suggesting mode', async ({ page }) 
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('hello');
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
   await disableSuggesting(page);
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 test('topbar segmented control shows Suggesting while in suggesting mode', async ({ page }) => {
@@ -415,7 +415,7 @@ test('typing 5 chars in suggesting mode produces ONE suggestion card (not five)'
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('hello');
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 test('suggestion card text matches the inserted text', async ({ page }) => {
@@ -423,7 +423,7 @@ test('suggestion card text matches the inserted text', async ({ page }) => {
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('hello');
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   await expect(card).toContainText('hello');
   // And no garbled repetition like 'hheelllllllooooo'
   const cardText = await card.textContent();
@@ -439,7 +439,7 @@ test('typing slowly produces ONE suggestion card per logical insertion', async (
     await page.keyboard.type(ch);
     await page.clock.runFor(80);
   }
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 test('insertion card shows "Insertion" badge', async ({ page }) => {
@@ -447,7 +447,7 @@ test('insertion card shows "Insertion" badge', async ({ page }) => {
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('hi');
-  await expect(page.locator('.suggestion-card').first()).toContainText('Insertion');
+  await expect(page.locator('[data-suggestion-kind]').first()).toContainText('Insertion');
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -475,7 +475,7 @@ test('deletion card shows "Deletion" badge with the deleted text', async ({ page
   await editor.click();
   await selectAll(page);
   await page.keyboard.press('Backspace');
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   await expect(card).toContainText('Deletion');
   await expect(card).toContainText('delete me');
 });
@@ -492,7 +492,7 @@ test('progressive backspace: 5 backspaces delete 5 chars', async ({ page }) => {
   for (let i = 0; i < 5; i++) {
     await page.keyboard.press('Backspace');
   }
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   // Expect "world" to be the marked deletion
   await expect(card).toContainText('world');
 });
@@ -507,7 +507,7 @@ test('progressive backspace produces ONE deletion card, not five', async ({ page
   for (let i = 0; i < 5; i++) {
     await page.keyboard.press('Backspace');
   }
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 test('deleting a pending insertion just removes it (no separate delete mark)', async ({ page }) => {
@@ -520,7 +520,7 @@ test('deleting a pending insertion just removes it (no separate delete mark)', a
   // No deletion mark — the user is deleting their own pending insertion
   await expectEditorHtml(editor, { excludes: ['<del'] });
   // And only an insertion card should remain (text "hel")
-  await expect(page.locator('.suggestion-card').first()).toContainText('hel');
+  await expect(page.locator('[data-suggestion-kind]').first()).toContainText('hel');
 });
 
 test('repeated letters: backspacing through "aaa" deletes all three', async ({ page }) => {
@@ -549,7 +549,7 @@ test('repeated letters in committed text: backspacing "book" produces tracked de
   await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   // All three backspaces should be tracked — last three chars of "book" deleted
   await expect(card).toContainText('ook');
 });
@@ -563,7 +563,7 @@ test('accepting an insertion keeps the text and removes the <ins> mark', async (
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('keep me');
-  await page.locator('.suggestion-accept-btn').first().click();
+  await page.getByRole('button', { name: 'Accept', exact: true }).first().click();
   await expectEditorHtml(editor, { excludes: ['<ins'] });
   await expect(editor).toContainText('keep me');
 });
@@ -573,7 +573,7 @@ test('rejecting an insertion removes the text', async ({ page }) => {
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('discard me');
-  await page.locator('.suggestion-reject-btn').first().click();
+  await page.getByRole('button', { name: 'Reject', exact: true }).first().click();
   await expect(editor).not.toContainText('discard me');
   await expectEditorHtml(editor, { excludes: ['<ins'] });
 });
@@ -586,7 +586,7 @@ test('accepting a deletion removes the text', async ({ page }) => {
   await editor.click();
   await selectAll(page);
   await page.keyboard.press('Backspace');
-  await page.locator('.suggestion-accept-btn').first().click();
+  await page.getByRole('button', { name: 'Accept', exact: true }).first().click();
   await expect(editor).not.toContainText('remove me');
   await expectEditorHtml(editor, { excludes: ['<del'] });
 });
@@ -599,7 +599,7 @@ test('rejecting a deletion restores the text without the <del> mark', async ({ p
   await editor.click();
   await selectLastNChars(page, 2);
   await page.keyboard.press('Backspace');
-  await page.locator('.suggestion-reject-btn').first().click();
+  await page.getByRole('button', { name: 'Reject', exact: true }).first().click();
   await expect(editor).toContainText('me');
   await expectEditorHtml(editor, { excludes: ['<del'] });
 });
@@ -636,7 +636,7 @@ test('Accept All collapses suggestion cards', async ({ page }) => {
   await editor.click();
   await page.keyboard.type('hello');
   await page.locator('[title="Accept all suggestions"]').click();
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -660,7 +660,7 @@ test('pending changes survive toggling Suggesting off and back on', async ({ pag
   await page.keyboard.type('hello');
   await disableSuggesting(page);
   await enableSuggesting(page);
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -938,11 +938,11 @@ test('clicking suggested text activates its accept/reject card', async ({ page }
   await enableSuggesting(page);
   await editor.click();
   await page.keyboard.type('suggested text');
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
-  await expect(page.locator('.suggestion-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
 
   await editor.locator('ins.track-insert').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('suggested text');
 });
 
@@ -952,13 +952,13 @@ test('clicking a suggestion card highlights its text in the document', async ({ 
   await editor.click();
   await page.keyboard.type('suggested text');
 
-  await page.locator('.suggestion-card').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await page.locator('[data-suggestion-kind]').click();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('suggested text');
 
   // Clicking the active card again toggles the focus off.
-  await page.locator('.suggestion-card').click();
-  await expect(page.locator('.suggestion-card-active')).toHaveCount(0);
+  await page.locator('[data-suggestion-kind]').click();
+  await expect(page.locator('[data-active]')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
 });
 
@@ -987,7 +987,7 @@ test('overlapping annotations: the innermost one wins the click', async ({ page 
 
   await editor.locator('mark.comment-mark').click();
   await expect(page.locator('.comment-card-active')).toBeVisible();
-  await expect(page.locator('.suggestion-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
 });
 
 test('accepting a suggestion clears its focus', async ({ page }) => {
@@ -996,9 +996,9 @@ test('accepting a suggestion clears its focus', async ({ page }) => {
   await editor.click();
   await page.keyboard.type('keep me');
   await editor.locator('ins.track-insert').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
 
-  await page.locator('.suggestion-accept-btn').click();
+  await page.getByRole('button', { name: 'Accept', exact: true }).click();
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
 });
 
@@ -1030,7 +1030,7 @@ async function makeReplacement(page: Page, editor: Locator) {
     if (sel === 'world') break;
   }
   await page.keyboard.type('earth');
-  await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
   await expect(editor.locator('del')).toContainText('world');
   await expect(editor.locator('ins')).toContainText('earth');
 }
@@ -1039,42 +1039,42 @@ test('typing over a selection shows ONE replacement card with old → new', asyn
   const { editor } = await setup(page);
   await makeReplacement(page, editor);
 
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
-  const card = page.locator('.suggestion-card-replace');
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
+  const card = page.locator('[data-suggestion-kind="replace"]');
   await expect(card).toBeVisible();
-  await expect(card.locator('.suggestion-type-badge')).toHaveText('Replacement');
-  await expect(card.locator('.suggestion-replace-old')).toContainText('world');
-  await expect(card.locator('.suggestion-replace-new')).toContainText('earth');
+  await expect(card.getByText('Replacement')).toBeVisible();
+  await expect(card.locator('[data-replace="old"]')).toContainText('world');
+  await expect(card.locator('[data-replace="new"]')).toContainText('earth');
 });
 
 test('accepting a replacement keeps the new text and removes the old', async ({ page }) => {
   const { editor } = await setup(page);
   await makeReplacement(page, editor);
 
-  await page.locator('.suggestion-accept-btn').click();
+  await page.getByRole('button', { name: 'Accept', exact: true }).click();
   await expect(editor).toContainText('hello earth');
   await expect(editor).not.toContainText('world');
   await expectEditorHtml(editor, { excludes: ['<ins', '<del'] });
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
 });
 
 test('rejecting a replacement restores the original text', async ({ page }) => {
   const { editor } = await setup(page);
   await makeReplacement(page, editor);
 
-  await page.locator('.suggestion-reject-btn').click();
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
   await expect(editor).toContainText('hello world');
   await expect(editor).not.toContainText('earth');
   await expectEditorHtml(editor, { excludes: ['<ins', '<del'] });
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
 });
 
 test('clicking a replacement card highlights both old and new text', async ({ page }) => {
   const { editor } = await setup(page);
   await makeReplacement(page, editor);
 
-  await page.locator('.suggestion-card-replace').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await page.locator('[data-suggestion-kind="replace"]').click();
+  await expect(page.locator('[data-active]')).toBeVisible();
   const focused = page.locator('.ProseMirror .annotation-focus');
   await expect(focused.filter({ hasText: 'earth' }).first()).toBeVisible();
   await expect(focused.filter({ hasText: 'world' }).first()).toBeVisible();
@@ -1083,17 +1083,17 @@ test('clicking a replacement card highlights both old and new text', async ({ pa
 test('clicking either text half activates the replacement card', async ({ page }) => {
   const { editor } = await setup(page);
   await makeReplacement(page, editor);
-  await expect(page.locator('.suggestion-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
 
   // The inserted half…
   await editor.locator('ins.track-insert').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.suggestion-card-active')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toHaveCount(0);
 
   // …and the deleted half both focus the pair: card active, both texts lit.
   await editor.locator('del.track-delete').click();
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
   const focused = page.locator('.ProseMirror .annotation-focus');
   await expect(focused.filter({ hasText: 'earth' }).first()).toBeVisible();
   await expect(focused.filter({ hasText: 'world' }).first()).toBeVisible();
@@ -1111,8 +1111,8 @@ test('separate insert and delete still render two independent cards', async ({ p
   await page.keyboard.press('Home');
   await page.keyboard.type('intro ');
 
-  await expect(page.locator('.suggestion-card')).toHaveCount(2);
-  await expect(page.locator('.suggestion-card-replace')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(2);
+  await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1334,7 +1334,7 @@ test('comment can be added to text that is also tracked-inserted', async ({ page
   await expectEditorHtml(editor, { contains: ['<ins', 'data-comment-id'] });
   await expect(page.locator('.comment-card')).toHaveCount(1);
   // Plus one suggestion card for the insertion itself
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
 });
 
 test('typing newline in suggesting mode blocks the paragraph split but keeps inline typing', async ({
@@ -1366,8 +1366,8 @@ test('replacement (type over selection) shows both <del> and <ins>', async ({ pa
   await expect(editor).toContainText('hello'); // kept
   await expect(editor).toContainText('earth'); // inserted
   // The paired halves render as a single replacement card.
-  await expect(page.locator('.suggestion-card')).toHaveCount(1);
-  await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(1);
+  await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
 });
 
 test('undo in suggesting mode reverts the last tracked change', async ({ page }) => {

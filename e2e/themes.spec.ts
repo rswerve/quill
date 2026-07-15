@@ -50,8 +50,8 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
   await editor.click();
   await page.keyboard.type('A restrained suggestion');
 
-  const accept = page.locator('.suggestion-accept-btn');
-  const reject = page.locator('.suggestion-reject-btn');
+  const accept = page.getByRole('button', { name: 'Accept', exact: true });
+  const reject = page.getByRole('button', { name: 'Reject', exact: true });
   const acceptAll = page.locator('[title="Accept all suggestions"]');
   const rejectAll = page.locator('[title="Reject all suggestions"]');
 

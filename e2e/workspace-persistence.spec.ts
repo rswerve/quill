@@ -184,7 +184,7 @@ test('one recovery decision atomically restores every dirty tab and its annotati
 
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(activeEditor(page)).toContainText('Second dirty suggestion');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(1);
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(1);
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First dirty document');
   await expect(activeTabHost(page).locator('.comment-card')).toContainText('Recovered comment');

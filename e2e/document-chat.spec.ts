@@ -109,7 +109,7 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   await expect(page.locator('[title="Reject all suggestions"]')).toContainText('1');
   await jump.click();
 
-  const suggestion = activeTabHost(page).locator('.suggestion-card-replace');
+  const suggestion = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
   await expect(suggestion).toBeVisible();
   await expect(suggestion.getByRole('button', { name: '↳ from chat' })).toBeVisible();
   await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(0);
@@ -161,7 +161,7 @@ test('chat applies a Markdown-spelled link edit as one tracked link replacement'
   await expect(assistant).not.toContainText('change was skipped');
   await assistant.getByRole('button', { name: /in the doc/ }).click();
 
-  const replacements = activeTabHost(page).locator('.suggestion-card-replace');
+  const replacements = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
   await expect(replacements).toHaveCount(2);
   const linkReplacement = replacements.filter({ hasText: 'CNN' });
   await linkReplacement.getByRole('button', { name: 'Accept' }).click();
@@ -541,12 +541,12 @@ test('a background tab finishes only its own chat suggestions', async ({ page })
     /→ 1 suggestion in the doc/,
   );
   await expect(activeEditor(page)).toHaveText('Second tab text');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(0);
 
   await page.locator('.document-tab').first().click();
   await activeTabHost(page)
     .getByRole('tab', { name: /Comments/ })
     .click();
-  await expect(activeTabHost(page).locator('.suggestion-card-replace')).toBeVisible();
+  await expect(activeTabHost(page).locator('[data-suggestion-kind="replace"]')).toBeVisible();
   await expect(activeEditor(page)).toContainText('First tab text');
 });

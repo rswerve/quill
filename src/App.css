@@ -516,16 +516,6 @@ del.track-delete {
 
 /* Review actions are intentionally tonal rather than filled: the tracked text
    is the primary signal, while these controls remain immediately scannable. */
-.suggestion-accept-btn,
-.suggestion-reject-btn {
-  appearance: none;
-  box-shadow: none;
-  font-family: var(--font-sans);
-  font-weight: 600;
-  transition:
-    background-color 0.12s ease,
-    color 0.12s ease;
-}
 
 /* ── Comment panel ──────────────────────────────────────────────── */
 .comment-layer {
@@ -893,145 +883,6 @@ del.track-delete {
 }
 
 /* ── Suggestion cards ──────────────────────────────────────────── */
-.suggestion-card {
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  background: var(--color-page);
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  cursor: pointer;
-  transition: border-color 0.1s;
-}
-.suggestion-card:hover {
-  border-color: var(--color-accent-mid);
-}
-.suggestion-card-insert .comment-thread-line {
-  background: var(--color-track-add-line);
-}
-.suggestion-card-delete .comment-thread-line {
-  background: var(--color-track-del-line);
-}
-.suggestion-card-replace .comment-thread-line {
-  background: linear-gradient(var(--color-track-del-line), var(--color-track-add-line));
-}
-.suggestion-card-format .comment-thread-line {
-  background: var(--color-accent-mid);
-}
-
-.suggestion-type-badge {
-  font-size: var(--text-meta);
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-.suggestion-type-badge.insert {
-  background: var(--color-track-add-bg);
-  color: var(--color-track-add-text);
-}
-.suggestion-type-badge.delete {
-  background: var(--color-track-del-bg);
-  color: var(--color-track-del-text);
-}
-.suggestion-type-badge.replace {
-  background: var(--color-highlight-bg);
-  color: var(--color-ink);
-}
-.suggestion-type-badge.format {
-  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
-  color: var(--color-accent);
-}
-.formatting-change-description {
-  margin: 6px 12px 0;
-  color: var(--color-ink-mid);
-  font-size: var(--text-meta);
-  font-weight: 600;
-}
-
-/* Provenance chip: links a Claude suggestion card back to the comment whose
-   @claude request produced it. Muted by design — metadata, not an action. */
-.suggestion-origin-chip {
-  display: inline-block;
-  margin: 6px 12px 0;
-  padding: 1px 7px;
-  font-size: var(--text-meta);
-  font-family: var(--font-sans);
-  color: var(--color-ink-light);
-  background: transparent;
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-}
-.suggestion-origin-chip:hover {
-  color: var(--color-ink-mid);
-  border-color: var(--color-accent-mid);
-}
-
-/* Reverse link: while a comment is the active annotation, its child
-   suggestion cards carry a subtle outline (cards only — the in-document
-   highlight is AnnotationFocus's job). */
-.card-origin-active {
-  outline: 1.5px solid var(--color-accent-mid);
-  outline-offset: 1px;
-}
-
-.suggestion-replace-old {
-  text-decoration: line-through;
-  color: var(--color-track-del-text);
-}
-.suggestion-replace-arrow {
-  color: var(--color-ink-light);
-}
-.suggestion-replace-new {
-  color: var(--color-track-add-text);
-}
-
-.suggestion-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-}
-.suggestion-accept-btn {
-  flex: 1;
-  min-height: 29px;
-  padding: 3px 8px;
-  background: transparent;
-  color: var(--color-action-accept-text);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: var(--text-ui);
-}
-.suggestion-accept-btn:hover {
-  background: var(--color-action-accept-hover);
-}
-.suggestion-accept-btn:active {
-  background: var(--color-action-accept-active);
-}
-.suggestion-reject-btn {
-  flex: 1;
-  min-height: 29px;
-  padding: 3px 8px;
-  background: transparent;
-  color: var(--color-action-reject-text);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: var(--text-ui);
-}
-.suggestion-reject-btn:hover {
-  background: var(--color-action-reject-hover);
-}
-.suggestion-reject-btn:active {
-  background: var(--color-action-reject-active);
-}
-.suggestion-accept-btn:focus-visible,
-.suggestion-reject-btn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
 
 /* Footer / status bar is module-scoped in src/components/Footer.module.css: the
    two-generation cascade collapsed to effective values, and the old dead footer
@@ -1394,7 +1245,6 @@ del.track-delete {
 }
 
 .comment-panel-list .comment-card,
-.comment-panel-list .suggestion-card,
 .comment-panel-list .add-comment-compose {
   position: relative;
   top: auto !important;
@@ -1631,8 +1481,7 @@ del.track-delete {
 /* Footer status-bar rules are module-scoped in Footer.module.css (see the footer section above). */
 
 /* ── Studio suggestion cards (Phase C1) ───────────────────────── */
-.comments .comment-card,
-.comments .suggestion-card {
+.comments .comment-card {
   position: relative;
   top: auto !important;
   right: auto;
@@ -1644,34 +1493,14 @@ del.track-delete {
   border-radius: 10px;
 }
 
-.comments .suggestion-card {
-  border-left-width: 3px;
-}
-.comments .suggestion-card-insert {
-  border-left-color: var(--added);
-}
-.comments .suggestion-card-delete {
-  border-left-color: var(--removed);
-}
-.comments .suggestion-card-replace {
-  border-left-color: var(--sugg-replace);
-}
-.comments .suggestion-card-format {
-  border-left-color: var(--sugg-format);
-}
-.comments .comment-card-active,
-.comments .suggestion-card-active {
+.comments .comment-card-active {
   transform: translateY(-1px);
   box-shadow: var(--annotation-focus-shadow);
 }
 .comments .comment-card-active > .comment-thread-line {
   width: 5px;
 }
-.comments .suggestion-card-active {
-  border-left-width: 5px;
-}
-.comments .comment-card,
-.comments .suggestion-card {
+.comments .comment-card {
   transition:
     transform 0.14s ease,
     box-shadow 0.14s ease,
@@ -1690,130 +1519,6 @@ del.track-delete {
   100% {
     filter: brightness(1);
   }
-}
-:root[data-theme='gruvbox'] .comments .suggestion-card-delete {
-  border-left-color: var(--removed-accent);
-}
-
-.suggestion-head {
-  padding: 11px 13px 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.suggestion-head .comment-author {
-  flex: none;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-}
-.suggestion-head .comment-time {
-  margin: 0;
-  color: var(--text-faint);
-  font-size: 11px;
-}
-.suggestion-head-spacer {
-  flex: 1;
-}
-
-.suggestion-type-badge {
-  flex: none;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-}
-.suggestion-type-badge.insert {
-  background: var(--added-bg);
-  color: var(--added);
-}
-.suggestion-type-badge.delete {
-  background: var(--removed-bg);
-  color: var(--removed);
-}
-.suggestion-type-badge.replace {
-  background: var(--accent-soft);
-  color: var(--sugg-replace);
-}
-.suggestion-type-badge.format {
-  background: var(--badge-format-bg);
-  color: var(--sugg-format);
-}
-
-.suggestion-ai-badge {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  padding: 0;
-  border-radius: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ai-badge-bg);
-  color: var(--ai-badge-text);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.suggestion-origin-chip {
-  width: max-content;
-  margin: 8px 13px 0;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--bg-app);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-.suggestion-origin-chip:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
-.suggestion-preview {
-  padding: 9px 13px 12px;
-  color: var(--text-body);
-  font-family: var(--font-serif);
-  font-size: 13px;
-  font-style: italic;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.suggestion-added {
-  color: var(--added);
-}
-.suggestion-removed {
-  color: var(--removed);
-  text-decoration: line-through;
-}
-:root[data-theme='gruvbox'] .suggestion-removed {
-  text-decoration-color: var(--removed-accent);
-}
-.suggestion-replace-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.suggestion-format-preview {
-  font-style: normal;
-}
-.formatting-change-description {
-  margin: 0 0 3px;
-  color: var(--text-muted);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 400;
-}
-.suggestion-format-quote {
-  color: var(--text-body);
-  font-style: italic;
 }
 
 /* ── Single-player Claude thread turns ────────────────────────── */
@@ -1958,44 +1663,6 @@ del.track-delete {
 .reply-dismiss:hover {
   background: var(--bg-hover);
   color: var(--text-muted);
-}
-
-.suggestion-actions {
-  margin: 0;
-  gap: 0;
-  display: flex;
-  border-top: 1px solid var(--badge-format-bg);
-}
-.suggestion-accept-btn,
-.suggestion-reject-btn {
-  min-height: 0;
-  flex: 1;
-  padding: 9px 0;
-  border: 0;
-  border-radius: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: transparent;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
-}
-.suggestion-accept-btn {
-  border-right: 1px solid var(--badge-format-bg);
-  color: var(--added);
-}
-.suggestion-reject-btn {
-  color: var(--removed);
-}
-.suggestion-accept-btn:hover,
-.suggestion-accept-btn:active {
-  background: var(--added-bg);
-}
-.suggestion-reject-btn:hover,
-.suggestion-reject-btn:active {
-  background: var(--removed-bg);
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────── */

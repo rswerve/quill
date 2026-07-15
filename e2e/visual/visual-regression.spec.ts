@@ -195,7 +195,7 @@ async function openVisualDocument(
   const notice = page.getByRole('dialog');
   if (await notice.count()) {
     const restoredCardClasses = await page
-      .locator('.suggestion-card')
+      .locator('[data-suggestion-kind]')
       .evaluateAll((cards) => cards.map((card) => card.className));
     throw new Error(
       `Visual fixture triggered an application notice: ${await notice.innerText()}\nRestored cards: ${restoredCardClasses.join(', ')}`,
@@ -393,7 +393,7 @@ test.describe('visual regression safety net', () => {
         await selectText(page, 'Replace this wording.');
         await page.keyboard.type('Clearer wording.');
         for (const kind of ['insert', 'delete', 'replace', 'format']) {
-          await expect(page.locator(`.suggestion-card-${kind}`)).toBeVisible();
+          await expect(page.locator(`[data-suggestion-kind="${kind}"]`)).toBeVisible();
         }
         await shot(page, theme, 'suggestion-cards');
       });
@@ -437,7 +437,7 @@ test.describe('visual regression safety net', () => {
         await expect(suggestion.getByRole('button', { name: '↳ from comment' })).toBeVisible();
 
         await originComment.click();
-        await expect(suggestion).toHaveClass(/card-origin-active/);
+        await expect(suggestion).toHaveAttribute('data-origin-active');
         await shot(
           page,
           theme,
@@ -446,8 +446,8 @@ test.describe('visual regression safety net', () => {
         );
 
         await suggestion.click();
-        await expect(suggestion).toHaveClass(/suggestion-card-active/);
-        await expect(suggestion).not.toHaveClass(/card-origin-active/);
+        await expect(suggestion).toHaveAttribute('data-active');
+        await expect(suggestion).not.toHaveAttribute('data-origin-active');
         await shot(
           page,
           theme,

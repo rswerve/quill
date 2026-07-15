@@ -31,12 +31,18 @@ describe('flat comment-panel interaction', () => {
   });
 
   it('keeps focused-card color tied to its own stripe instead of an accent ring', () => {
-    const active = ruleBody('.comments .comment-card-active,\n.comments .suggestion-card-active');
+    const active = ruleBody('.comments .comment-card-active');
     const commentStripe = ruleBody('.comments .comment-card-active > .comment-thread-line');
     expect(active).toContain('box-shadow: var(--annotation-focus-shadow)');
     expect(active).not.toContain('border-color: var(--accent)');
     expect(commentStripe).toContain('width: 5px');
-    expect(css).toMatch(/\.comments \.suggestion-card-active\s*\{[^}]*border-left-width: 5px/);
+    // Suggestion cards are module-scoped; the active state carries the same
+    // focus shadow plus a widened left stripe (no accent ring).
+    const suggestionCard = readModuleSource('SuggestionCard.module.css');
+    expect(suggestionCard).toMatch(
+      /\.active\s*\{[^}]*box-shadow: var\(--annotation-focus-shadow\)/s,
+    );
+    expect(suggestionCard).toMatch(/\.active\s*\{[^}]*border-left-width: 5px/s);
   });
 
   it('renders kind as dot-versus-diamond and state as size/halo', () => {

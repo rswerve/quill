@@ -1,6 +1,7 @@
 import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
+import styles from './SuggestionCard.module.css';
 
 interface SuggestionCardProps {
   change: TrackedChangeInfo;
@@ -61,8 +62,8 @@ export default function SuggestionCard({
       onActivateChatMessage={onActivateChatMessage}
     >
       {preview && (
-        <div className="suggestion-preview">
-          <span className={isInsert ? 'suggestion-added' : 'suggestion-removed'}>“{preview}”</span>
+        <div className={styles.preview}>
+          <span className={isInsert ? styles.added : styles.removed}>“{preview}”</span>
         </div>
       )}
     </SuggestionCardShell>

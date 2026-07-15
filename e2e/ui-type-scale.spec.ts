@@ -281,15 +281,16 @@ test('form controls and every review-card kind use the intended UI scale and fam
   });
   await expectType(page.locator('.comment-reply-claude').first(), '12px');
   await expectType(page.locator('.comment-reply-text').first(), '12.5px');
-  await expectType(page.locator('.suggestion-ai-badge').first(), '8.5px', {
+  await expectType(page.locator('[data-suggestion-kind] .ai-badge').first(), '8.5px', {
     checkUiFamily: false,
   });
-  await expectType(page.locator('.suggestion-type-badge.insert'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.delete'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.replace'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.format'), '10px');
-  await expectType(page.locator('.formatting-change-description'), '12px');
-  await expectType(page.locator('.suggestion-accept-btn').first(), '12px');
+  // Each type badge is the card's kind label; target it by that text.
+  await expectType(page.getByText('Insertion'), '10px');
+  await expectType(page.getByText('Deletion'), '10px');
+  await expectType(page.getByText('Replacement'), '10px');
+  await expectType(page.getByText('Formatting'), '10px');
+  await expectType(page.getByText('bold added'), '12px');
+  await expectType(page.getByRole('button', { name: 'Accept', exact: true }).first(), '12px');
 
   await expectType(page.locator('.comment-reply-trigger'), '12px');
   await page.locator('.comment-reply-trigger').click();

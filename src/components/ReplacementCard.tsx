@@ -1,6 +1,8 @@
 import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
+import { cx } from '../utils/cx';
+import styles from './SuggestionCard.module.css';
 
 interface ReplacementCardProps {
   change: TrackedChangeInfo;
@@ -60,9 +62,13 @@ export default function ReplacementCard({
       onActivateComment={onActivateComment}
       onActivateChatMessage={onActivateChatMessage}
     >
-      <div className="suggestion-preview suggestion-replace-preview">
-        <span className="suggestion-replace-old suggestion-removed">“{clip(originalText)}”</span>
-        <span className="suggestion-replace-new suggestion-added">“{clip(replacementText)}”</span>
+      <div className={cx(styles.preview, styles.replacePreview)}>
+        <span className={styles.removed} data-replace="old">
+          “{clip(originalText)}”
+        </span>
+        <span className={styles.added} data-replace="new">
+          “{clip(replacementText)}”
+        </span>
       </div>
     </SuggestionCardShell>
   );

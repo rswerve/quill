@@ -95,7 +95,8 @@ describe('FormattingCard', () => {
     );
 
     const card = container.querySelector('[data-card-id="fmt1"]');
-    expect(card).toHaveClass('suggestion-card-format', 'suggestion-card-active');
+    expect(card).toHaveAttribute('data-suggestion-kind', 'format');
+    expect(card).toHaveAttribute('data-active');
     fireEvent.click(card!);
     fireEvent.click(screen.getByTitle('Accept formatting'));
     fireEvent.click(screen.getByTitle('Reject formatting'));

@@ -172,14 +172,14 @@ test('View suggestion from Resolved switches to Open before focusing the existin
   const activeTab = activeTabHost(page);
   await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
   await expect(activeTab.locator('.comment-history-list')).toBeVisible();
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await page.getByRole('button', { name: /suggestions?/i }).click();
 
   await expect(activeTab.getByRole('button', { name: 'Show resolved comments' })).toContainText(
     'Open',
   );
   await expect(page.locator('.comment-history-list')).toHaveCount(0);
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
 });
 
 test('resolved comments jump only to safely located text and unresolve never stamps ambiguity', async ({

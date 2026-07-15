@@ -231,7 +231,7 @@ test.describe('Link editor', () => {
     await expect(editor.locator('a[href="https://old.example.com"] del.track-delete')).toHaveText(
       'style guide',
     );
-    await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
   });
 });
 
@@ -294,7 +294,7 @@ test.describe('Markdown link shortcuts', () => {
       await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
       await expect(editor.locator('del.track-delete')).toHaveCount(0);
       await expect(editor.locator('ins.track-insert')).toHaveText('text and');
-      await expect(page.locator('.suggestion-card-insert')).toHaveCount(1);
+      await expect(page.locator('[data-suggestion-kind="insert"]')).toHaveCount(1);
     });
   }
 

@@ -131,7 +131,7 @@ async function openWithCommentedClaudeReplacement(
   await page.locator('.comment-reply-trigger').click();
   await page.locator('.comment-reply-input').fill('Make the edit');
   await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
-  await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-suggestion-kind="replace"]')).toBeVisible({ timeout: 3000 });
 }
 
 test.describe('review metadata survives save and reopen', () => {
@@ -168,7 +168,7 @@ test.describe('review metadata survives save and reopen', () => {
     const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText(' added');
-    await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind]')).toHaveCount(1);
   });
 
   test('pending deletion remains pending after save and reopen', async ({ page }) => {
@@ -185,7 +185,7 @@ test.describe('review metadata survives save and reopen', () => {
     const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('remove');
-    await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind]')).toHaveCount(1);
   });
 
   test('pending replacement remains paired after save and reopen', async ({ page }) => {
@@ -203,7 +203,7 @@ test.describe('review metadata survives save and reopen', () => {
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('old');
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText('new');
-    await expect(reopened.locator('.suggestion-card-replace')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
   });
 
   test('re-stamps a loaded unresolved comment over its stored anchor', async ({ page }) => {
@@ -246,16 +246,19 @@ test.describe('review metadata survives save and reopen', () => {
     await page.keyboard.press('ControlOrMeta+b');
 
     await expect(editor.locator('span.track-format')).toHaveText('text');
-    await expect(page.locator('.suggestion-card-format')).toContainText('bold added');
+    await expect(page.locator('[data-suggestion-kind="format"]')).toContainText('bold added');
 
     const reopened = await saveNewAndReopen(page);
     const reopenedEditor = activeEditor(reopened);
     await expect(reopenedEditor.locator('span.track-format')).toHaveText('text');
     await expect(reopenedEditor.locator('strong')).toHaveText('text');
-    await expect(reopened.locator('.suggestion-card-format')).toContainText('bold added');
+    await expect(reopened.locator('[data-suggestion-kind="format"]')).toContainText('bold added');
 
-    await reopened.locator('.suggestion-card-format .suggestion-reject-btn').click();
-    await expect(reopened.locator('.suggestion-card-format')).toHaveCount(0);
+    await reopened
+      .locator('[data-suggestion-kind="format"]')
+      .getByRole('button', { name: 'Reject', exact: true })
+      .click();
+    await expect(reopened.locator('[data-suggestion-kind="format"]')).toHaveCount(0);
     await expect(reopenedEditor.locator('strong')).toHaveCount(0);
     await expect(reopenedEditor).toContainText('plain text');
   });
@@ -286,13 +289,13 @@ test.describe('review metadata survives save and reopen', () => {
     });
     await openMemoryFile(page);
 
-    const card = page.locator('.suggestion-card-format');
+    const card = page.locator('[data-suggestion-kind="format"]');
     await expect(card).toContainText('bold added · italic removed');
     await card.click();
     await expect(page.locator('.annotation-focus')).toHaveCount(2);
     expect(await page.locator('.annotation-focus').allTextContents()).toEqual(['one', 'two']);
 
-    await card.locator('.suggestion-reject-btn').click();
+    await card.getByRole('button', { name: 'Reject', exact: true }).click();
     const editor = activeEditor(page);
     await expect(editor.locator('strong')).toHaveCount(0);
     await expect(editor.locator('em')).toHaveText('two');
@@ -439,10 +442,13 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'hello', 'goodbye');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('goodbye world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -454,7 +460,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Accept all suggestions"]').click();
 
     await expect(activeEditor(page)).toContainText('goodbye world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -463,7 +469,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'ell', 'ipp');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hippo world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
@@ -475,7 +484,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hello planet');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
@@ -509,7 +521,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     });
     await openMemoryFile(page);
 
-    await page.locator('.suggestion-accept-btn').click();
+    await page.getByRole('button', { name: 'Accept', exact: true }).click();
 
     await expect(activeEditor(page)).toContainText('world');
     await expectOnlyResolvedComment(page);
@@ -520,7 +532,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');
 
-    await page.locator('.suggestion-card-replace .suggestion-reject-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Reject', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hello world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
@@ -533,10 +548,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedInsertion(page);
 
-    await page.locator('.suggestion-reject-btn').click();
+    await page.getByRole('button', { name: 'Reject', exact: true }).click();
 
     await expect(activeEditor(page)).toContainText('world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -546,7 +561,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Reject all suggestions"]').click();
 
     await expect(activeEditor(page)).toContainText('world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -650,7 +665,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await page.locator('.comment-reply-trigger').click();
     await page.locator('.comment-reply-input').fill('Replace the noun');
     await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
-    await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toBeVisible({ timeout: 3000 });
   }
 
   test('a mocked Claude edit stamps the origin and the card chips back to the comment', async ({
@@ -658,7 +673,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
   }) => {
     await openWithClaudeEdit(page);
 
-    const chip = page.locator('.suggestion-card-replace .suggestion-origin-chip');
+    const chip = page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: /↳ from/ });
     await expect(chip).toBeVisible();
     await expect(chip).toHaveText('↳ from comment');
     // The chip's tooltip carries the origin comment's anchor text.
@@ -666,15 +683,23 @@ test.describe('suggestion cards link back to their origin comment', () => {
 
     // Posting the reply leaves the comment active. A provenance chip is a
     // directed jump, so clicking it must not toggle its target back off.
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
     await chip.click();
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
 
     // From a different active annotation, the chip activates the origin.
-    await page.locator('.suggestion-card-replace').click();
-    await expect(page.locator('.suggestion-card-replace')).not.toHaveClass(/card-origin-active/);
+    await page.locator('[data-suggestion-kind="replace"]').click();
+    await expect(page.locator('[data-suggestion-kind="replace"]')).not.toHaveAttribute(
+      'data-origin-active',
+    );
     await chip.click();
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
 
     // Saving persists the provenance into the sidecar.
     await page.keyboard.press('ControlOrMeta+s');
@@ -695,9 +720,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await openWithClaudeEdit(page);
 
     const reopened = await saveNewAndReopen(page);
-    const card = reopened.locator('.suggestion-card-replace');
+    const card = reopened.locator('[data-suggestion-kind="replace"]');
     await expect(card).toBeVisible();
-    await expect(card.locator('.suggestion-origin-chip')).toHaveText('↳ from comment');
+    await expect(card.getByRole('button', { name: /↳ from/ })).toHaveText('↳ from comment');
   });
 
   test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {
@@ -721,9 +746,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
     });
     await openMemoryFile(reopened);
 
-    await expect(reopened.locator('.suggestion-card-replace')).toBeVisible();
-    await expect(reopened.locator('.suggestion-origin-chip')).toHaveCount(0);
-    await expect(reopened.locator('.card-origin-active')).toHaveCount(0);
+    await expect(reopened.locator('[data-suggestion-kind="replace"]')).toBeVisible();
+    await expect(reopened.getByRole('button', { name: /↳ from/ })).toHaveCount(0);
+    await expect(reopened.locator('[data-origin-active]')).toHaveCount(0);
   });
 
   test('the chip reveals and activates a resolved origin comment', async ({ page }) => {
@@ -731,8 +756,8 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await page.locator('.comment-resolve-btn').click();
     await expect(page.locator('.comment-card')).toHaveCount(0);
 
-    const card = page.locator('.suggestion-card-replace');
-    const chip = card.locator('.suggestion-origin-chip');
+    const card = page.locator('[data-suggestion-kind="replace"]');
+    const chip = card.getByRole('button', { name: /↳ from/ });
     await expect(chip).toBeVisible();
     await chip.click();
 
@@ -742,7 +767,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
     ).toBeVisible();
     await expect(card).toHaveCount(0);
     await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
-    await expect(card).toHaveClass(/card-origin-active/);
+    await expect(card).toHaveAttribute('data-origin-active');
   });
 });
 

@@ -1,0 +1,236 @@
+/* SuggestionCard family — module-scoped styles (hashed), shared by
+   SuggestionCardShell + SuggestionCard + ReplacementCard + FormattingCard.
+   Design tokens resolve from src/styles/tokens.css.
+
+   FLATTENED cascade: every card renders only inside the (dead-Open-layer)
+   `.comments` panel, so each rule below is the effective union of the historic
+   base rule and its `.comments`/later-block override, one flat module rule.
+   Notes on non-obvious merges:
+   - `.suggestion-card:hover` (accent-mid border) was DEAD — `.comments
+     .suggestion-card` had equal specificity but came later, so the panel border
+     won on hover too; dropped rather than resurrected.
+   - The `.suggestion-card-<kind> .comment-thread-line` rules were orphans (no
+     thread-line renders inside a suggestion card); dropped.
+   - type-badge / origin-chip / actions / accept-btn / reject-btn /
+     change-description each had two full blocks — the LATER block wins; merged
+     from it (early block contributed only already-covered props).
+   - replace-old/new carried colors already overridden by removed/added; the
+     elements keep only `.removed`/`.added`.
+   The shared `.ai-badge` stays global; the suggestion-specific 20px box overrides
+   it via `.head :global(.ai-badge)` (0,2,0 beats the base 0,1,0 deterministically).
+   `.annotation-card-flash` stays global (CommentLayer applies it by classList). */
+
+.card {
+  position: relative;
+  width: 100%;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--border-card);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.1s ease;
+}
+.card.insert {
+  border-left-color: var(--added);
+}
+.card.delete {
+  border-left-color: var(--removed);
+}
+.card.replace {
+  border-left-color: var(--sugg-replace);
+}
+.card.format {
+  border-left-color: var(--sugg-format);
+}
+:global(:root[data-theme='gruvbox']) .card.delete {
+  border-left-color: var(--removed-accent);
+}
+.active {
+  transform: translateY(-1px);
+  border-left-width: 5px;
+  box-shadow: var(--annotation-focus-shadow);
+}
+/* Reverse link: while the origin comment is the active annotation, its child
+   suggestion cards carry a subtle outline. */
+.originActive {
+  outline: 1.5px solid var(--color-accent-mid);
+  outline-offset: 1px;
+}
+
+.head {
+  padding: 11px 13px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.author {
+  flex: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.time {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+.headSpacer {
+  flex: 1;
+}
+.head :global(.ai-badge) {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ai-badge-bg);
+  color: var(--ai-badge-text);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.typeBadge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.typeBadge.insert {
+  background: var(--added-bg);
+  color: var(--added);
+}
+.typeBadge.delete {
+  background: var(--removed-bg);
+  color: var(--removed);
+}
+.typeBadge.replace {
+  background: var(--accent-soft);
+  color: var(--sugg-replace);
+}
+.typeBadge.format {
+  background: var(--badge-format-bg);
+  color: var(--sugg-format);
+}
+
+/* Provenance chip: links a Claude suggestion card back to the comment or chat
+   turn whose request produced it. Muted by design — metadata, not an action. */
+.originChip {
+  width: max-content;
+  margin: 8px 13px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+.originChip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.preview {
+  padding: 9px 13px 12px;
+  color: var(--text-body);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-style: italic;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.added {
+  color: var(--added);
+}
+.removed {
+  color: var(--removed);
+  text-decoration: line-through;
+}
+:global(:root[data-theme='gruvbox']) .removed {
+  text-decoration-color: var(--removed-accent);
+}
+.replacePreview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.formatPreview {
+  font-style: normal;
+}
+.changeDescription {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+}
+.formatQuote {
+  color: var(--text-body);
+  font-style: italic;
+}
+
+.actions {
+  margin: 0;
+  gap: 0;
+  display: flex;
+  border-top: 1px solid var(--badge-format-bg);
+}
+.acceptBtn,
+.rejectBtn {
+  min-height: 0;
+  flex: 1;
+  padding: 9px 0;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  appearance: none;
+  box-shadow: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.acceptBtn {
+  border-right: 1px solid var(--badge-format-bg);
+  color: var(--added);
+}
+.rejectBtn {
+  color: var(--removed);
+}
+.acceptBtn:hover,
+.acceptBtn:active {
+  background: var(--added-bg);
+}
+.rejectBtn:hover,
+.rejectBtn:active {
+  background: var(--removed-bg);
+}
+.acceptBtn:focus-visible,
+.rejectBtn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}

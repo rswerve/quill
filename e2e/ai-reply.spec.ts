@@ -527,10 +527,10 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
 
   // A suggestion card appears for the edit, authored by Claude.
-  const card = page.locator('.suggestion-card');
+  const card = page.locator('[data-suggestion-kind]');
   await expect(card.first()).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.suggestion-card .comment-author').first()).toHaveText('Claude');
-  await expect(page.locator('.suggestion-card .suggestion-ai-badge').first()).toHaveText('AI');
+  await expect(card.first().getByText('Claude', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-suggestion-kind] .ai-badge').first()).toHaveText('AI');
   // The new text "cats are" shows up as a tracked insertion in the document.
   await expect(activeEditor(page)).toContainText('cats are');
 
@@ -540,7 +540,7 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   const viewSuggestion = aiReply.getByRole('button', { name: /suggestions?/i });
   await expect(viewSuggestion).toBeVisible();
   await viewSuggestion.click();
-  await expect(card.first()).toHaveClass(/suggestion-card-active/);
+  await expect(card.first()).toHaveAttribute('data-active');
   await expect(card.first().getByRole('button', { name: 'Accept' })).toBeVisible();
   await expect(card.first().getByRole('button', { name: 'Reject' })).toBeVisible();
 
@@ -579,7 +579,7 @@ test('AI edits: an edit outside the highlight applies (edits are document-scale)
   await expect(aiReply).toBeVisible({ timeout: 2000 });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0, { timeout: 3000 });
   // The edit landed even though it was outside the highlight.
-  await expect(page.locator('.suggestion-card').first()).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('[data-suggestion-kind]').first()).toBeVisible({ timeout: 2000 });
   await expect(activeEditor(page)).toContainText('GAMMA');
 });
 
@@ -601,7 +601,7 @@ test('AI edits: an edit whose find is nowhere in the document is skipped and sur
   await expect(aiReply).toBeVisible({ timeout: 2000 });
   // The unlocatable edit is reported as skipped, and the document is unchanged.
   await expect(aiReply.locator('.comment-reply-text')).toContainText('skipped', { timeout: 3000 });
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await expect(activeEditor(page)).not.toContainText('DELTA');
 });
 

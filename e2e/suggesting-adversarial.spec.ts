@@ -105,7 +105,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
 
     await expect(acceptedText(editor)).resolves.toBe('base');
     await expectNoTracking(editor);
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   });
 
   test('inserting inside a pending deletion remains accept/reject safe', async ({ page }) => {
@@ -157,7 +157,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
 
     await expectNoTracking(editor);
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expect(editor.locator('strong')).toHaveCount(0);
   });
 
@@ -186,7 +186,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await codeButton.click();
     await selectText(editor, 0, 5);
     await codeButton.click();
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectNoTracking(editor);
   });
 
@@ -230,7 +230,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await page.evaluate(() => navigator.clipboard.writeText('earth'));
     await page.keyboard.press('ControlOrMeta+v');
 
-    await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
     await acceptAll(page);
     await expect(acceptedText(editor)).resolves.toBe('hello earth');
     await expectNoTracking(editor);
