@@ -274,9 +274,13 @@
 .replyLinkedActions {
   margin-top: 10px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
+}
+/* Only the error actions wrapped in the pre-conversion CSS; the linked-actions
+   row did not. */
+.replyErrorActions {
+  flex-wrap: wrap;
 }
 .replyCancelled {
   margin-top: 4px;

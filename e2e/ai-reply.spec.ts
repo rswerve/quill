@@ -306,7 +306,8 @@ test('AI reply: Ask Claude in the anchored composer triggers a reply', async ({ 
   // Thread order: the user's question must render above Claude's answer.
   const replies = page.locator('[data-reply-role]');
   await expect(replies.first()).toContainText('Please review this');
-  await expect(replies.first()).not.toHaveClass(/comment-reply-ai/);
+  await expect(replies.first()).toHaveAttribute('data-reply-role', 'user');
+  await expect(replies.nth(1)).toHaveAttribute('data-reply-role', 'ai');
 });
 
 test('AI reply: Ask Claude with no linked session preserves the request and opens the picker', async ({

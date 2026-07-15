@@ -4,11 +4,11 @@
 
    FLATTENED cascade (the absolute Open layer is dead — the composer renders only
    inside the .comments panel): each rule is the effective union of the historic
-   base and its `.comments`/panel-list override, one flat rule. The historic
-   `.comment-reply-input`/`.comment-reply-actions` global BASE rules stay in
-   App.css (CommentCard still uses the borderless base); here the composer fully
-   overrode them into a bordered box + padded footer, folded into `.input`/
-   `.actions`. `.btn-primary`/`.btn-ghost` stay global (AppModal/SessionPicker
+   base and its `.comments`/panel-list override, one flat rule. The composer fully
+   overrode the historic `.comment-reply-input`/`.comment-reply-actions` global
+   base into a bordered box + padded footer, folded here into `.input`/`.actions`.
+   (CommentCard flattened its own borderless versions in slice 16, so those global
+   base rules are now gone — the two consumers share no primitive.) `.btn-primary`/`.btn-ghost` stay global (AppModal/SessionPicker
    share them); the composer's contextual restyle reaches them via `.actions
    :global(.btn-…)` at (0,2,0), which beats the (0,1,0) base deterministically. */
 
