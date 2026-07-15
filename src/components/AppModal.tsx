@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import './AppModal.css';
 
 export interface AppModalButton {
   label: string;

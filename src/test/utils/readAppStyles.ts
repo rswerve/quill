@@ -14,7 +14,7 @@ import { join } from 'node:path';
  * load-bearing for current contracts — revisit only if an order-sensitive
  * cross-file contract ever appears.
  */
-const STYLESHEETS = ['src/styles/tokens.css', 'src/App.css'];
+const STYLESHEETS = ['src/styles/tokens.css', 'src/App.css', 'src/components/AppModal.css'];
 
 export function readAppStyles(): string {
   return STYLESHEETS.map((rel) => readFileSync(join(process.cwd(), rel), 'utf8')).join('\n');
