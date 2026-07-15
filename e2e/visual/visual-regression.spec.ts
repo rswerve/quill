@@ -78,6 +78,7 @@ function sidecar(
     suggestions?: unknown[];
     aiSession?: Record<string, unknown>;
     chat?: Record<string, unknown>;
+    contextFolder?: string;
   } = {},
 ) {
   return JSON.stringify({
@@ -86,6 +87,7 @@ function sidecar(
     suggestions: options.suggestions ?? [],
     ...(options.aiSession ? { aiSession: options.aiSession } : {}),
     ...(options.chat ? { chat: options.chat } : {}),
+    ...(options.contextFolder ? { contextFolder: options.contextFolder } : {}),
   });
 }
 
@@ -595,6 +597,40 @@ test.describe('visual regression safety net', () => {
         await openVisualDocument(page, theme, 'One two three four five.');
         await expect(page.locator('.footer')).toContainText('5 WORDS');
         await shot(page, theme, 'status-footer', page.locator('.footer'));
+      });
+
+      test('linked document status footer', async ({ page }) => {
+        const contextFolder = '/Users/maz/Documents/References';
+        const session = {
+          provider: 'claude-code',
+          sessionId: 'feedface12345678',
+          cwd: '/Users/maz/Documents/Quill',
+          linkedAt: '2026-07-14T16:00:00.000Z',
+          createdByQuill: false,
+        };
+        await openVisualDocument(
+          page,
+          theme,
+          'One two three four five.',
+          sidecar({ aiSession: session, contextFolder }),
+          { trustedSidecarPaths: [DOC_PATH] },
+        );
+
+        const footer = page.locator('footer');
+        await expect(
+          footer.getByTitle(`Reference folder: ${contextFolder} (click to change)`),
+        ).toBeVisible();
+        await expect(footer.getByTitle('Unlink reference folder')).toBeVisible();
+        await expect(
+          footer.getByTitle(`Linked to Claude session ${session.sessionId} (cwd ${session.cwd})`),
+        ).toBeVisible();
+        await expect(footer.getByTitle('Unlink Claude session')).toBeVisible();
+
+        await footer.getByLabel('Claude model').selectOption('opus');
+        await footer.getByLabel('Claude effort').selectOption('max');
+        await expect(footer.getByLabel('Claude model')).toHaveValue('opus');
+        await expect(footer.getByLabel('Claude effort')).toHaveValue('max');
+        await shot(page, theme, 'status-footer-linked', footer);
       });
 
       test('formatting rail', async ({ page }) => {
