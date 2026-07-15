@@ -186,6 +186,40 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
   await expect(page.locator('.document-tab')).toHaveCount(1);
 });
 
+test('Save As writes the document to the chosen path and rebinds the tab clean', async ({
+  page,
+}) => {
+  const handler = (cmd: string) => {
+    if (cmd === 'show_save_dialog') return '/tmp/report.md';
+    return null; // write_file / delete_file succeed silently
+  };
+  await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
+
+  await typeIntoEditor(page, 'Quarterly summary content');
+
+  // Cmd+Shift+S — Save As always prompts for a destination path.
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('ControlOrMeta');
+
+  // The active tab rebinds to the chosen filename and goes clean.
+  await expect(page.locator('.document-tab.active')).toContainText('report', { timeout: 3000 });
+  await expect(page.locator('.crumbs .cur')).toContainText('report');
+  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+
+  // The Markdown was written to exactly the chosen path, with the content.
+  const write = await page.evaluate(() => {
+    const calls = (window as unknown as Record<string, unknown>).__capturedCalls as {
+      cmd: string;
+      args: { path?: string; content?: string };
+    }[];
+    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/report.md');
+  });
+  expect(write?.args.content).toContain('Quarterly summary content');
+});
+
 test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_open_dialog') return '/tmp/next.md';
