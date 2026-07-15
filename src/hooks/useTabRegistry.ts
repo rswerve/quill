@@ -30,10 +30,10 @@ export interface TabRegistry {
 export function useTabRegistry(init: () => TabRegistryState): TabRegistry {
   const [state, setState] = useState<TabRegistryState>(init);
 
-  // Kept current on every render so an external re-render (there are none today,
-  // but the invariant is cheap) can't leave the composition source stale.
+  // The composition source. `commit` is the ONLY writer of `state` and advances
+  // this ref before every setState, so it stays current without a render-phase
+  // mutation — the useRef initializer seeds it and each commit keeps it fresh.
   const stateRef = useRef(state);
-  stateRef.current = state;
 
   const commit = useCallback((action: TabAction) => {
     const next = tabsReducer(stateRef.current, action);
