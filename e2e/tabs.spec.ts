@@ -346,3 +346,54 @@ test('quitting with multiple dirty tabs presents one combined guard', async ({ p
     )
     .toBe(true);
 });
+
+test('quit guard Save All: writes every dirty tab to its own path, then exits', async ({
+  page,
+}) => {
+  await setupMemoryTauri(page, {
+    files: { '/tmp/existing.md': '# Existing doc' },
+    openPath: '/tmp/existing.md',
+    savePath: '/tmp/new-tab.md',
+  });
+
+  // Tab 1: the initial Untitled document, made dirty (will save via the dialog).
+  await activeEditor(page).fill('Second dirty tab');
+
+  // Tab 2: open a saved document (its own path), then edit it dirty.
+  await openMemoryFile(page);
+  await expect(page.locator('.document-tab.active')).toContainText('existing', { timeout: 3000 });
+  await activeEditor(page).click();
+  await page.keyboard.type(' edited');
+
+  // Quit → combined guard → Save All.
+  await page.evaluate(() => {
+    (window as unknown as { __quillEmit: (event: string, value: null) => void }).__quillEmit(
+      'menu-quit',
+      null,
+    );
+  });
+  const modal = page.locator('.app-modal');
+  await expect(modal).toContainText('2 open documents have unsaved changes');
+  await modal.getByRole('button', { name: 'Save All' }).click();
+
+  // Every dirty tab is written to its own destination, and the app exits only
+  // after the saves — Save All is a persist-then-quit, not a quit-and-lose.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const calls = (
+          window as unknown as {
+            __quillCalls: Array<{ cmd: string; args?: { path?: string } }>;
+          }
+        ).__quillCalls;
+        const wrote = (path: string) =>
+          calls.some((call) => call.cmd === 'write_file' && call.args?.path === path);
+        return (
+          wrote('/tmp/new-tab.md') &&
+          wrote('/tmp/existing.md') &&
+          calls.some((call) => call.cmd === 'exit_app')
+        );
+      }),
+    )
+    .toBe(true);
+});
