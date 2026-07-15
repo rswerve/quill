@@ -1,12 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 import SessionPicker from '../../components/SessionPicker';
 
-// The picker fetches sessions on open; an empty list keeps the modal's fixed
-// controls (Close / Start new / Cancel / Link) as the focus set.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string) => (cmd === 'list_claude_sessions' ? [] : null)),
-}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+const invokeMock = vi.mocked(invoke);
+
+// The picker fetches sessions on open. Most cases want an empty list, which
+// keeps the modal's fixed controls (Close / Start new / Cancel / Link) as the
+// focus set; the trap-recompute case overrides this with a real session.
+const emptyList = async (cmd: string) => (cmd === 'list_claude_sessions' ? [] : null);
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(emptyList);
+});
 
 function renderPicker(open = true) {
   const onClose = vi.fn();
@@ -14,7 +22,7 @@ function renderPicker(open = true) {
     open,
     onClose,
     onPick: vi.fn(),
-    newSessionCwd: '/tmp/project',
+    newSessionCwd: '/Users/test/project',
     getSessionOwner: () => null,
   };
   const view = render(<SessionPicker {...props} />);
@@ -50,6 +58,25 @@ describe('SessionPicker — modal a11y', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('stops Escape from reaching the window keydown listener behind the modal', async () => {
+    const windowEscape = vi.fn();
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') windowEscape();
+    };
+    window.addEventListener('keydown', listener);
+    try {
+      const { onClose } = renderPicker();
+      fireEvent.keyDown(await screen.findByRole('dialog'), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledOnce();
+      // The window shortcut handler (which clears the active annotation behind
+      // the modal — useGlobalShortcuts) must not also fire. stopPropagation is
+      // the only thing standing between one Escape and a wiped annotation.
+      expect(windowEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', listener);
+    }
+  });
+
   it('traps Tab focus within the dialog (wraps first↔last both directions)', async () => {
     renderPicker();
     const dialog = await screen.findByRole('dialog');
@@ -64,5 +91,38 @@ describe('SessionPicker — modal a11y', () => {
     close.focus();
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
     await waitFor(() => expect(cancel).toHaveFocus());
+  });
+
+  it('recomputes the trap after a selection enables Link (wraps Link↔Close)', async () => {
+    // A loaded session + preview makes "Link this session" the last focusable —
+    // unlike the empty-list cases where Cancel is last. This pins that the trap
+    // reads the live focusable set on each keydown rather than a stale snapshot
+    // captured before the async row/preview arrived.
+    const session = {
+      sessionId: 'sess-1',
+      jsonlPath: '/proj/sess-1.jsonl',
+      cwd: '/proj',
+      title: 'Design session',
+      documentName: null,
+      lastUsed: Math.floor(Date.now() / 1000),
+    };
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'list_claude_sessions') return [session];
+      if (cmd === 'read_claude_session_preview')
+        return { sessionId: 'sess-1', cwd: '/proj', recentAssistantMessages: ['hi'] };
+      return null;
+    });
+
+    renderPicker();
+    const dialog = await screen.findByRole('dialog');
+    const close = screen.getByRole('button', { name: 'Close' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Design session/ }));
+    const link = await screen.findByRole('button', { name: 'Link this session' });
+    await waitFor(() => expect(link).toBeEnabled());
+
+    link.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    await waitFor(() => expect(close).toHaveFocus());
   });
 });

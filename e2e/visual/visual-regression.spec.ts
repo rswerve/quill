@@ -183,7 +183,12 @@ async function openVisualDocument(
   // itself a role="dialog" — so dismiss it BEFORE the unexpected-dialog guard,
   // otherwise the guard would flag the picker as a notice.
   const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
-  if (await picker.count()) await picker.getByRole('button', { name: 'Close' }).click();
+  if (await picker.count()) {
+    await picker.getByRole('button', { name: 'Close' }).click();
+    // Let the close commit before the guard counts dialogs, or the picker we
+    // just dismissed could still be mounted and read as an unexpected notice.
+    await expect(picker).toHaveCount(0);
+  }
   // Any REMAINING dialog is an unexpected application notice — fail loudly.
   const notice = page.getByRole('dialog');
   if (await notice.count()) {

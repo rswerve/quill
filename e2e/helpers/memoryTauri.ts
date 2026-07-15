@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { canonicalDocumentPath, dirname } from '../../src/utils/path';
 import { sidecarPath } from '../../src/utils/sidecarPath';
 
@@ -291,7 +291,12 @@ export function activeEditor(page: Page) {
 
 export async function closeSessionPickerIfOpen(page: Page) {
   const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
-  if (await picker.count()) await picker.getByRole('button', { name: 'Close' }).click();
+  if (await picker.count()) {
+    await picker.getByRole('button', { name: 'Close' }).click();
+    // Wait for React to commit the close before callers proceed — otherwise a
+    // still-mounted modal can intercept the next interaction under load.
+    await expect(picker).toHaveCount(0);
+  }
 }
 
 export async function openMemoryFile(page: Page) {

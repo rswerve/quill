@@ -73,6 +73,11 @@ export default function SessionPicker({
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
+      // Stop the native event before it reaches the window keydown listener,
+      // whose Escape branch clears the active annotation behind the modal
+      // (useGlobalShortcuts). Mirrors AppModal. Without this, one Escape both
+      // closes the picker and wipes the annotation the user was working on.
+      event.stopPropagation();
       onClose();
       return;
     }
