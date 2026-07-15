@@ -238,7 +238,9 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
   await typeIntoEditor(page, 'unsaved before open');
   await pressShortcut(page, 'o');
 
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // Cmd+O adds a tab and must NOT raise the dirty-save guard (the session picker
+  // may appear and is dismissed below — scope this to the guard specifically).
+  await expect(page.getByRole('dialog', { name: 'Unsaved changes' })).toHaveCount(0);
   await expect(activeEditor(page)).toContainText('The next document', { timeout: 3000 });
   const opened = await page.evaluate(() => {
     const calls = (window as unknown as Record<string, unknown>).__capturedCalls as {
