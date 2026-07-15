@@ -368,9 +368,9 @@ test.describe('live comment reconciliation', () => {
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expect(
-      activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }),
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
     ).toBeEnabled();
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
   });
@@ -384,9 +384,9 @@ test.describe('live comment reconciliation', () => {
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
     await expect(page.locator('.comment-card')).toHaveCount(0);
     await expect(
-      activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }),
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
     ).toBeEnabled();
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
   });
@@ -400,9 +400,9 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await expect(page.locator('.comment-card')).toHaveCount(0);
     await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 0' })).toBeVisible();
     await expect(
-      activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }),
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
     ).toBeEnabled();
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await expect(page.locator('.comment-card-resolved')).toBeVisible();
     await expect(page.locator('.comment-anchor-text')).toHaveText(anchorText);
   }
@@ -601,7 +601,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
 
     await expect(page.locator('mark[data-comment-id]')).toHaveCount(0);
     await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 0' })).toBeVisible();
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await expect(page.locator('.comment-card-resolved')).toHaveCount(2);
   });
 });
@@ -741,7 +741,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
       page.locator('.comment-card.comment-card-resolved.comment-card-active'),
     ).toBeVisible();
     await expect(card).toHaveCount(0);
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await expect(card).toHaveClass(/card-origin-active/);
   });
 });
@@ -835,7 +835,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
 
   test('unresolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await page.locator('.comment-resolve-btn').click();
     await expect(
       page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
@@ -844,7 +844,7 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
 
   test('deleting a resolved comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await activeTabHost(page).getByRole('button', { name: 'Toggle resolved comments' }).click();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
     await page.locator('.comment-delete-btn').click();
     await expect(
       page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),

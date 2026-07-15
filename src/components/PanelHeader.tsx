@@ -65,7 +65,8 @@ export default function PanelHeader({
       {mode === 'comments' ? (
         <button
           className={styles.filter}
-          aria-label="Toggle resolved comments"
+          aria-label="Show resolved comments"
+          aria-pressed={showResolved}
           onClick={onToggleResolved}
           disabled={!showResolved && resolvedCount === 0}
           title={resolvedCount ? 'Show or hide resolved comments' : 'No resolved comments'}
