@@ -177,7 +177,7 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await waitForDirtyTabCount(page, 2);
 
   await page.reload();
-  const recovery = page.getByRole('dialog');
+  const recovery = page.getByRole('dialog', { name: 'Recover unsaved workspace?' });
   await expect(recovery).toContainText('Restore 2 unsaved documents');
   await expect(recovery).toHaveCount(1);
   await recovery.getByRole('button', { name: 'Recover' }).click();
@@ -212,7 +212,10 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
   await waitForDirtyTabCount(page, 2);
 
   await page.reload();
-  await page.getByRole('dialog').getByRole('button', { name: 'Discard' }).click();
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Discard' })
+    .click();
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('saved-after-discard.md');
@@ -233,7 +236,7 @@ for (const [label, workspace] of [
   }) => {
     await setupMemoryTauri(page, { workspace });
 
-    const recovery = page.getByRole('dialog');
+    const recovery = page.getByRole('dialog', { name: 'Workspace recovery could not be read' });
     await expect(recovery).toContainText('Workspace recovery could not be read');
     const stateBeforeAcknowledgement = await page.evaluate(() => ({
       raw: sessionStorage.getItem('__quill_test_workspace'),
@@ -268,8 +271,13 @@ test('legacy draft.json payload migrates into a one-tab workspace recovery', asy
   };
   await setupMemoryTauri(page, { workspace: JSON.stringify(legacyDraft) });
 
-  await expect(page.getByRole('dialog')).toContainText('Restore 1 unsaved document');
-  await page.getByRole('dialog').getByRole('button', { name: 'Recover' }).click();
+  await expect(page.getByRole('dialog', { name: 'Recover unsaved workspace?' })).toContainText(
+    'Restore 1 unsaved document',
+  );
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Recover' })
+    .click();
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(activeEditor(page)).toHaveText('Legacy unsaved document');
   await expect(page.locator('.dirty-dot')).toBeVisible();
@@ -297,8 +305,13 @@ test('a missing clean file is dropped without breaking the rest of the restored 
     trustedSidecarPaths: [existingPath],
   });
 
-  await expect(page.getByRole('dialog')).toContainText('Could not open file');
-  await page.getByRole('dialog').getByRole('button', { name: 'OK' }).click();
+  await expect(page.getByRole('dialog', { name: 'Could not open file' })).toContainText(
+    'Could not open file',
+  );
+  await page
+    .getByRole('dialog', { name: 'Could not open file' })
+    .getByRole('button', { name: 'OK' })
+    .click();
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('still-here.md');
   await expect(activeEditor(page)).toHaveText('The remaining clean file');

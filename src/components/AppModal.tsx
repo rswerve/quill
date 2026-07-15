@@ -77,22 +77,19 @@ export default function AppModal({ title, message, buttons }: AppModalProps) {
   };
 
   return (
-    <div
-      ref={dialogRef}
-      data-print-hidden
-      className={styles.overlay}
-      tabIndex={-1}
-      onKeyDown={handleKeyDown}
-    >
-      {/* role="dialog" is on the card, not the backdrop overlay: the card IS
-          the dialog. The overlay carries data-print-hidden + the focus/keydown
-          container. */}
+    <div data-print-hidden className={styles.overlay}>
+      {/* The card IS the dialog: role, ARIA, focus ref, tab trap, and Escape all
+          live here so the accessibility, focus, and visual boundaries coincide.
+          The overlay is only the backdrop + the global print-hide opt-in. */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={messageId}
         className={styles.modal}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
       >
         <h2 id={titleId} className={styles.title}>
           {title}

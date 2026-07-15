@@ -342,7 +342,7 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   });
 
   await openMemoryFile(page);
-  const permissionNotice = page.getByRole('dialog');
+  const permissionNotice = page.getByRole('dialog', { name: 'Reconnect Claude access' });
   await expect(permissionNotice).toContainText('Reconnect Claude access');
   await expect(permissionNotice.getByRole('button', { name: 'Relink session' })).toBeVisible();
   await expect(permissionNotice.getByRole('button', { name: 'Choose folder' })).toBeVisible();
@@ -440,7 +440,7 @@ test('an imported context folder is confirmed for the loaded document path', asy
   });
 
   await openMemoryFile(page);
-  const notice = page.getByRole('dialog');
+  const notice = page.getByRole('dialog', { name: 'Reconnect Claude access' });
   await expect(notice).toContainText('This document had a reference folder');
   await notice.getByRole('button', { name: 'Choose folder' }).click();
   await expect

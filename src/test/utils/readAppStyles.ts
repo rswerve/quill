@@ -20,14 +20,16 @@ export function readAppStyles(): string {
 }
 
 /**
- * Every co-located component CSS Module, concatenated. Used by global-invariant
- * contracts (e.g. the type scale) that must hold across module sources as well
- * as the global layer, so new modules are covered automatically.
+ * Every co-located component CSS Module under src/, concatenated. Used by
+ * global-invariant contracts (e.g. the type scale) that must hold across module
+ * sources as well as the global layer. Discovery recurses so a module in a
+ * nested component folder (e.g. src/components/comments/X.module.css) can't
+ * silently escape the invariant as the tree grows.
  */
 export function readComponentModules(): string {
-  const dir = join(process.cwd(), 'src/components');
-  return readdirSync(dir)
-    .filter((name) => name.endsWith('.module.css'))
-    .map((name) => readFileSync(join(dir, name), 'utf8'))
+  const root = join(process.cwd(), 'src');
+  return readdirSync(root, { recursive: true, encoding: 'utf8' })
+    .filter((rel) => rel.endsWith('.module.css'))
+    .map((rel) => readFileSync(join(root, rel), 'utf8'))
     .join('\n');
 }

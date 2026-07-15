@@ -109,7 +109,7 @@ test('dirty tab close: Cancel keeps the tab and its document', async ({ page }) 
   await typeIntoEditor(page, 'disposable draft');
   await page.locator('.document-tab.active .document-tab-close').click();
 
-  const modal = page.getByRole('dialog');
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
   await expect(modal).toBeVisible({ timeout: 2000 });
   await modal.getByRole('button', { name: 'Cancel' }).click();
 
@@ -149,7 +149,10 @@ test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async 
 
   await typeIntoEditor(page, 'disposable draft');
   await page.locator('.document-tab.active .document-tab-close').click();
-  await page.getByRole('dialog').getByRole('button', { name: "Don't Save" }).click();
+  await page
+    .getByRole('dialog', { name: 'Unsaved changes' })
+    .getByRole('button', { name: "Don't Save" })
+    .click();
 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(1);
@@ -167,7 +170,7 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
   await typeIntoEditor(page, 'words worth keeping');
   await page.locator('.document-tab.active .document-tab-close').click();
 
-  const modal = page.getByRole('dialog');
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
   await expect(modal).toBeVisible({ timeout: 2000 });
   await modal.getByRole('button', { name: 'Save', exact: true }).click();
 
@@ -264,7 +267,7 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   await typeIntoEditor(page, 'doomed save');
   await pressShortcut(page, 's');
 
-  const modal = page.getByRole('dialog');
+  const modal = page.getByRole('dialog', { name: 'Could not save file' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Could not save file');
   await expect(modal).toContainText('/tmp/readonly.md');
@@ -292,7 +295,7 @@ test('corrupt sidecar on open shows a notice and the doc still loads', async ({ 
 
   await pressShortcut(page, 'o');
 
-  const modal = page.getByRole('dialog');
+  const modal = page.getByRole('dialog', { name: 'Comments file could not be read' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Comments file could not be read');
   await expect(modal).toContainText('/tmp/doc.comments.json');

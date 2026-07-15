@@ -39,8 +39,10 @@ Everything else is component-scoped.
 
 ## Composition
 
-- **True primitives stay global**; a component uses them by their global class:
-  `className={cx(styles.actions, 'btn-primary')}`.
+- **True primitives stay global**; a component uses them by their global class,
+  combined with any module-local tweak on the same element:
+  `<button className={cx(styles.confirm, 'btn-primary')}>` — `styles.confirm` is
+  module-local, `btn-primary` is the shared primitive.
 - Prefer an explicit `className` (a small `cx` helper) over CSS Modules
   `composes:` — `composes` is obscure, couples the module to global names
   anyway, and varies across bundlers.

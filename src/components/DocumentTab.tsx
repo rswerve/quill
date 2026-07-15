@@ -64,7 +64,6 @@ import type {
   TrackedEditOrigin,
   DocumentChatThread,
 } from '../types';
-import '../App.css';
 
 const CLAUDE_AUTHOR_ID = 'claude';
 

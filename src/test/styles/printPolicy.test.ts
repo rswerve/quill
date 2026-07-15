@@ -3,6 +3,19 @@ import { readAppStyles } from '../utils/readAppStyles';
 
 const css = readAppStyles();
 
+/** The body of the (single) global `@media print { … }` block, brace-balanced. */
+function mediaPrintBody(source: string): string {
+  const start = source.indexOf('@media print');
+  if (start === -1) return '';
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i);
+  }
+  return '';
+}
+
 /**
  * Transient chrome opts out of print via the [data-print-hidden] attribute
  * rather than being named by class in the global print block (see
@@ -11,14 +24,12 @@ const css = readAppStyles();
  * AppModal.test.tsx).
  */
 describe('print policy', () => {
-  it('hides [data-print-hidden] in the global @media print block', () => {
-    const printIdx = css.indexOf('@media print');
-    expect(printIdx, 'no @media print block found in the global layer').toBeGreaterThan(-1);
-    // The rule exists only inside the print block, so its presence after the
-    // @media print opener pins that it lives there.
-    expect(css.slice(printIdx)).toMatch(
-      /\[data-print-hidden\]\s*\{[^}]*display:\s*none\s*!important/,
-    );
+  it('hides [data-print-hidden] inside the global @media print block', () => {
+    const body = mediaPrintBody(css);
+    expect(body, 'no @media print block found in the global layer').not.toBe('');
+    // Assert INSIDE the balanced block body, so a rule placed outside print
+    // (but later in the file) cannot satisfy this contract.
+    expect(body).toMatch(/\[data-print-hidden\]\s*\{[^}]*display:\s*none\s*!important/);
   });
 
   it('no longer names the modal overlay class in the print block', () => {
