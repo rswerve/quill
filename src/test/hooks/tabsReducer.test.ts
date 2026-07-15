@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tabsReducer, type TabRegistryState } from '../../hooks/tabsReducer';
-import type { TabMeta } from '../../App';
+import { tabsReducer, type TabMeta, type TabRegistryState } from '../../hooks/tabsReducer';
 import type { DocumentTabMetaSnapshot } from '../../components/DocumentTab';
 
 const tab = (over: Partial<TabMeta> & { id: string }): TabMeta => ({
@@ -35,6 +34,22 @@ describe('tabsReducer', () => {
       expect(next.activeTabId).toBe('y');
       expect(holdsInvariants(next)).toBe(true);
     });
+    // hydrate is the one transition fed external (workspace) data, so it must
+    // enforce the invariants rather than trust the payload.
+    it('rejects an empty tab set (same reference — nothing to activate)', () => {
+      const s = state([tab({ id: 'a' })], 'a');
+      expect(tabsReducer(s, { type: 'hydrate', tabs: [], activeTabId: 'whatever' })).toBe(s);
+    });
+    it('clamps a stray active id (not present in the payload) to the first tab', () => {
+      const next = tabsReducer(state([tab({ id: 'a' })], 'a'), {
+        type: 'hydrate',
+        tabs: [tab({ id: 'x' }), tab({ id: 'y' })],
+        activeTabId: 'ghost',
+      });
+      expect(next.tabs.map((t) => t.id)).toEqual(['x', 'y']);
+      expect(next.activeTabId).toBe('x');
+      expect(holdsInvariants(next)).toBe(true);
+    });
   });
 
   describe('activate', () => {
@@ -67,14 +82,18 @@ describe('tabsReducer', () => {
   });
 
   describe('close', () => {
-    it('removing a non-active tab keeps the active id', () => {
-      const next = tabsReducer(state([tab({ id: 'a' }), tab({ id: 'b' })], 'b'), {
+    // [a,b,c] active c, close the non-active FIRST tab: the active id must be
+    // left as 'c'. If close instead *always* recomputed the active from the
+    // closed index (min(0, …) -> 'b'), 'c' would separate it — a plain [a,b]
+    // non-active close can't, because the survivor sits at the closed index.
+    it('removing a non-active tab leaves the active id untouched', () => {
+      const next = tabsReducer(state([tab({ id: 'a' }), tab({ id: 'b' }), tab({ id: 'c' })], 'c'), {
         type: 'close',
         tabId: 'a',
         fallbackTab: tab({ id: 'fresh' }),
       });
-      expect(next.tabs.map((t) => t.id)).toEqual(['b']);
-      expect(next.activeTabId).toBe('b');
+      expect(next.tabs.map((t) => t.id)).toEqual(['b', 'c']);
+      expect(next.activeTabId).toBe('c');
     });
     it('closing the active tab activates the tab that slid into its index', () => {
       const next = tabsReducer(state([tab({ id: 'a' }), tab({ id: 'b' }), tab({ id: 'c' })], 'b'), {
@@ -163,6 +182,22 @@ describe('tabsReducer', () => {
         snapshot: snap({ filePath: null, title: 'Untitled' }),
       });
       // Pending tab is left intact — same state reference (nothing published).
+      expect(next).toBe(s);
+    });
+    // The guard is (initialFilePath || initialWorkspaceSnapshot). A snapshot-
+    // backed recovery tab has a null initialFilePath but a live
+    // initialWorkspaceSnapshot, so this pins the second half of the OR: dropping
+    // it would let the blank first meta wipe the recovered title.
+    it('keeps a pending workspace-snapshot tab when the snapshot is still blank', () => {
+      const s = state(
+        [tab({ id: 'a', initialWorkspaceSnapshot: {} as never, title: 'Recovered' })],
+        'a',
+      );
+      const next = tabsReducer(s, {
+        type: 'applyMetaSnapshot',
+        tabId: 'a',
+        snapshot: snap({ filePath: null, title: 'Untitled' }),
+      });
       expect(next).toBe(s);
     });
     it('skips the publish (same reference) when nothing actually changed', () => {

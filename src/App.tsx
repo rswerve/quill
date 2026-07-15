@@ -10,7 +10,6 @@ import Footer from './components/Footer';
 import Rail from './components/Rail';
 import SessionPicker from './components/SessionPicker';
 import TabStrip from './components/TabStrip';
-import type { TabStripItem } from './components/TabStrip';
 import Topbar from './components/Topbar';
 import UpdateBanner from './components/UpdateBanner';
 import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
@@ -50,14 +49,7 @@ import type {
   WorkspaceTab,
 } from './types';
 import './App.css';
-
-export interface TabMeta extends TabStripItem {
-  filePath: string | null;
-  initialFilePath: string | null;
-  initialWorkspaceSnapshot: DraftFile | null;
-  initialWorkspaceDirty: boolean;
-  restoredFromWorkspace: boolean;
-}
+import type { TabMeta } from './hooks/tabsReducer';
 
 interface DiscardGuard {
   tabIds: string[];

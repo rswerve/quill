@@ -1,5 +1,20 @@
-import type { TabMeta } from '../App';
+import type { TabStripItem } from '../components/TabStrip';
+import type { DraftFile } from '../types';
 import type { DocumentTabMetaSnapshot } from '../components/DocumentTab';
+
+/**
+ * The shell's per-tab metadata — the element type of the registry state. It
+ * lives here (not in App) so the module that owns the tab model owns its shape;
+ * App and the registry hook both import it. The extra fields beyond the display
+ * `TabStripItem` are the async-load bookkeeping the reducer's transitions read.
+ */
+export interface TabMeta extends TabStripItem {
+  filePath: string | null;
+  initialFilePath: string | null;
+  initialWorkspaceSnapshot: DraftFile | null;
+  initialWorkspaceDirty: boolean;
+  restoredFromWorkspace: boolean;
+}
 
 /**
  * The pure tab-registry state model, lifted out of App's hand-synced
@@ -8,7 +23,9 @@ import type { DocumentTabMetaSnapshot } from '../components/DocumentTab';
  * transition is behavior-preserving with the original App implementation.
  *
  * Invariants (enforced here, relied on by App): `tabs` is never empty, and
- * `activeTabId` always names a tab in `tabs`.
+ * `activeTabId` always names a tab in `tabs`. `hydrate` is the one transition
+ * fed external (workspace) data, so it repairs a stray active id and rejects an
+ * empty set rather than trusting its caller.
  */
 export interface TabRegistryState {
   tabs: TabMeta[];
@@ -36,8 +53,17 @@ export type TabAction =
 
 export function tabsReducer(state: TabRegistryState, action: TabAction): TabRegistryState {
   switch (action.type) {
-    case 'hydrate':
-      return { tabs: action.tabs, activeTabId: action.activeTabId };
+    case 'hydrate': {
+      // Fed external workspace data — enforce the invariants here rather than
+      // trust the caller. An empty set can't be repaired (nothing to activate),
+      // so reject it; a stray active id is clamped to the first tab, matching
+      // how `tabsFromWorkspace` itself picks a fallback.
+      if (action.tabs.length === 0) return state;
+      const activeTabId = action.tabs.some((tab) => tab.id === action.activeTabId)
+        ? action.activeTabId
+        : action.tabs[0].id;
+      return { tabs: action.tabs, activeTabId };
+    }
 
     case 'activate':
       if (state.activeTabId === action.tabId) return state;
