@@ -517,7 +517,6 @@ del.track-delete {
 /* Review actions are intentionally tonal rather than filled: the tracked text
    is the primary signal, while these controls remain immediately scannable. */
 
-/* ── Comment panel ──────────────────────────────────────────────── */
 /* ── Add comment button / compose ───────────────────────────────── */
 /* .add-comment-btn moved to components/AddCommentButton.module.css (CSS slice 13). */
 /* .add-comment-compose moved to components/CommentComposerCard.module.css (CSS slice 15). */

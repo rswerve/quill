@@ -2,8 +2,8 @@
    review-panel body: the comments/suggestions view, the scrolling panel list,
    and the empty state. Design tokens resolve from src/styles/tokens.css.
 
-   Stays GLOBAL (not here): the `.comment-layer`/`.comments.comment-layer` aside
-   is DocumentTab's shell container (panel geometry + an e2e/print scoping
+   Stays GLOBAL (not here): the `.comment-layer` aside is DocumentTab's shell
+   container (panel geometry + an e2e/print scoping
    marker); `.panel-view` is shared with ChatPanel; `.annotation-card-flash` is
    applied by classList to card children. The `.comments` context that once
    styled the cards is fully flattened away (each card owns its rules now).
