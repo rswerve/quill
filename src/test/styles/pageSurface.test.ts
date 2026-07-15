@@ -86,7 +86,7 @@ describe('document zoom reflows text without scaling the page box', () => {
   it('uses inherited font sizing and never CSS zoom on the page wrapper', () => {
     expect(css).toMatch(/\.editor-page-zoom-wrapper\s*{[^}]*font-size:\s*100%/s);
     expect(css).not.toMatch(/(^|[;{\s])zoom\s*:/m);
-    expect(ruleBody(css, '.ProseMirror')).toMatch(/font-size:\s*var\(--text-body\)/);
+    expect(ruleBody(css, '.ProseMirror')).toMatch(/font-size:\s*var\(--text-doc-body\)/);
   });
 
   it('resets the inherited screen scale for print', () => {
