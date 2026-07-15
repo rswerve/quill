@@ -423,6 +423,21 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'comments-open');
       });
 
+      test('floating add-comment action', async ({ page }) => {
+        const paragraphs = [
+          'The opening establishes the document context.',
+          'Select this sentence to leave a focused review note.',
+          'The closing paragraph keeps the page comfortably populated.',
+        ];
+        await openVisualDocument(page, theme, paragraphs.join('\n\n'));
+        await selectText(page, 'Select this sentence to leave a focused review note.');
+
+        const addComment = page.getByRole('button', { name: 'Add comment to selection' });
+        await expect(addComment).toBeVisible();
+        await expect(addComment).toHaveCSS('position', 'fixed');
+        await shot(page, theme, 'add-comment-action', activeTabHost(page).locator('.studio-body'));
+      });
+
       test('resolved comments list', async ({ page }) => {
         const paragraphs = ['Resolved note anchor.', 'Resolved thread anchor.'];
         const ranges = paragraphRanges(paragraphs);
