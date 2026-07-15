@@ -877,7 +877,9 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
   await expect(
-    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+    page
+      .getByRole('navigation', { name: 'Document annotations' })
+      .locator('button[aria-current="true"]'),
   ).toBeVisible();
 });
 
@@ -891,7 +893,9 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await expect(page.locator('.comment-card-active')).toHaveCount(0);
   await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
   await expect(
-    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+    page
+      .getByRole('navigation', { name: 'Document annotations' })
+      .locator('button[aria-current="true"]'),
   ).toHaveCount(0);
 });
 
@@ -907,7 +911,9 @@ test('clicking commented text activates its card', async ({ page }) => {
   await expect(page.locator('.comment-card-active')).toBeVisible();
   await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
   await expect(
-    page.getByRole('navigation', { name: 'Document annotations' }).locator('[aria-current="true"]'),
+    page
+      .getByRole('navigation', { name: 'Document annotations' })
+      .locator('button[aria-current="true"]'),
   ).toBeVisible();
 });
 

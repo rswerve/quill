@@ -109,9 +109,12 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect(activeTab.locator('.comments-head .filter')).toHaveText('Resolved');
   await expect(history).toBeVisible();
   await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeHidden();
-  await expect(activeTab.getByRole('button', { name: /^Show (note|Claude thread)$/ })).toHaveCount(
-    0,
-  );
+  // Raw DOM query, not getByRole: the nav is hidden, so its tick buttons are out
+  // of the accessibility tree — a role query would report 0 vacuously. This
+  // proves there are genuinely no tick elements, not merely that they're hidden.
+  await expect(
+    activeTab.locator('nav[aria-label="Document annotations"] button[aria-label^="Show "]'),
+  ).toHaveCount(0);
   await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
   expect(
     await page
