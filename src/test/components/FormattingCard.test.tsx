@@ -53,7 +53,6 @@ describe('FormattingCard', () => {
         isActive={false}
         originComment={originComment}
         originActive={false}
-        top={20}
         onAccept={vi.fn()}
         onReject={vi.fn()}
         onClick={vi.fn()}
@@ -86,7 +85,6 @@ describe('FormattingCard', () => {
         isActive
         originComment={originComment}
         originActive
-        top={20}
         onAccept={onAccept}
         onReject={onReject}
         onClick={onClick}

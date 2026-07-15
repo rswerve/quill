@@ -36,7 +36,6 @@ describe('SuggestionCardShell', () => {
           isActive={false}
           originComment={null}
           originActive={false}
-          top={24}
           acceptTitle="Accept test"
           rejectTitle="Reject test"
           onAccept={vi.fn()}
@@ -74,7 +73,6 @@ describe('SuggestionCardShell', () => {
         isActive
         originComment={originComment}
         originActive
-        top={24}
         acceptTitle="Accept replacement"
         rejectTitle="Reject replacement"
         onAccept={onAccept}
@@ -120,7 +118,6 @@ describe('SuggestionCardShell', () => {
         originComment={null}
         originChatMessageId="chat-message-1"
         originActive={false}
-        top={24}
         acceptTitle="Accept insertion"
         rejectTitle="Reject insertion"
         onAccept={vi.fn()}

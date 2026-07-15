@@ -16,7 +16,6 @@ interface SuggestionCardShellProps {
   originComment: Comment | null;
   originChatMessageId?: string;
   originActive: boolean;
-  top: number;
   acceptTitle: string;
   rejectTitle: string;
   onAccept: () => void;
@@ -37,7 +36,6 @@ export default function SuggestionCardShell({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   acceptTitle,
   rejectTitle,
   onAccept,
@@ -57,7 +55,6 @@ export default function SuggestionCardShell({
         isActive && styles.active,
         originActive && styles.originActive,
       )}
-      style={{ top }}
       data-card-id={cardId}
       data-suggestion-kind={kind}
       data-active={isActive || undefined}

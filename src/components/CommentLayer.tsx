@@ -632,7 +632,6 @@ export default function CommentLayer({
           originComment={originComment}
           originChatMessageId={originChatMessageId}
           originActive={originActive}
-          top={0}
           onAccept={onAcceptChange}
           onReject={onRejectChange}
           onClick={onActivateSuggestion}
@@ -651,7 +650,6 @@ export default function CommentLayer({
           originComment={originComment}
           originChatMessageId={originChatMessageId}
           originActive={originActive}
-          top={0}
           onAccept={onAcceptChange}
           onReject={onRejectChange}
           onClick={onActivateSuggestion}
@@ -670,7 +668,6 @@ export default function CommentLayer({
         originComment={originComment}
         originChatMessageId={originChatMessageId}
         originActive={originActive}
-        top={0}
         onAccept={onAcceptChange}
         onReject={onRejectChange}
         onClick={onActivateSuggestion}

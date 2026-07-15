@@ -11,7 +11,6 @@ interface FormattingCardProps {
   originComment: Comment | null;
   originChatMessageId?: string;
   originActive: boolean;
-  top: number;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onClick: (id: string) => void;
@@ -52,7 +51,6 @@ export default function FormattingCard({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   onAccept,
   onReject,
   onClick,
@@ -73,7 +71,6 @@ export default function FormattingCard({
       originComment={originComment}
       originChatMessageId={originChatMessageId}
       originActive={originActive}
-      top={top}
       acceptTitle="Accept formatting"
       rejectTitle="Reject formatting"
       onAccept={() => onAccept(change.id)}

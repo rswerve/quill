@@ -15,7 +15,6 @@ interface SuggestionCardProps {
   /** True while the origin comment is the active annotation — the card gets a
    *  subtle outline linking it back to its comment. */
   originActive: boolean;
-  top: number;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onClick: (id: string) => void;
@@ -31,7 +30,6 @@ export default function SuggestionCard({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   onAccept,
   onReject,
   onClick,
@@ -52,7 +50,6 @@ export default function SuggestionCard({
       originComment={originComment}
       originChatMessageId={originChatMessageId}
       originActive={originActive}
-      top={top}
       acceptTitle="Accept change"
       rejectTitle="Reject change"
       onAccept={() => onAccept(change.id)}

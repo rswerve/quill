@@ -16,7 +16,6 @@ interface ReplacementCardProps {
   /** True while the origin comment is the active annotation — the card gets a
    *  subtle outline linking it back to its comment. */
   originActive: boolean;
-  top: number;
   onAccept: (changeId: string) => void;
   onReject: (changeId: string) => void;
   onClick: (changeId: string) => void;
@@ -32,7 +31,6 @@ export default function ReplacementCard({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   onAccept,
   onReject,
   onClick,
@@ -53,7 +51,6 @@ export default function ReplacementCard({
       originComment={originComment}
       originChatMessageId={originChatMessageId}
       originActive={originActive}
-      top={top}
       acceptTitle="Accept replacement"
       rejectTitle="Reject replacement"
       onAccept={() => onAccept(change.id)}
