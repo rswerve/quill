@@ -8,10 +8,12 @@ import { useCallback, useRef, useState } from 'react';
  * independent by design: it speaks only in tab ids and session ids — the shell
  * (App) translates an owning tab id into a human title for its notices.
  *
- * `revision` bumps on every mutation that changes ownership — claim, release,
- * and clear — so a component that reads ownership (e.g. the session picker)
- * re-renders when claims move. `clear` (workspace hydration resets every claim)
- * bumps unconditionally, matching the pre-extraction behavior.
+ * `revision` bumps only when a mutation actually changes ownership — a rejected
+ * claim, an idempotent re-claim, releasing a tab that owns nothing, or clearing
+ * an already-empty registry are all no-ops that leave revision untouched — so a
+ * component that reads ownership (e.g. the session picker) re-renders exactly
+ * when claims move. `clear` (workspace hydration resets every claim) bumps when
+ * it drops any claim, matching the pre-extraction hydration behavior.
  */
 export interface SessionClaimResult {
   allowed: boolean;

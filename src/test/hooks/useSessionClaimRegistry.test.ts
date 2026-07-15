@@ -23,13 +23,18 @@ describe('useSessionClaimRegistry', () => {
     act(() => {
       result.current.claim('tab-a', 's1');
     });
+    const before = result.current.revision;
     let conflict: SessionClaimResult | undefined;
     act(() => {
       conflict = result.current.claim('tab-b', 's1');
     });
     expect(conflict).toEqual({ allowed: false, ownerTabId: 'tab-a' });
-    // The rejected claim changed nothing.
+    // The rejected claim changed nothing — ownership held, and no revision bump
+    // (a rejected conflict must not force a re-render). Drop the early return in
+    // the hook and the claim falls through, stealing s1 AND bumping; this pins
+    // both halves.
     expect(result.current.getOwnerTabId('s1')).toBe('tab-a');
+    expect(result.current.revision).toBe(before);
   });
 
   // One session per tab: when a tab claims a new session it drops its previous
