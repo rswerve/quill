@@ -33,3 +33,13 @@ export function readComponentModules(): string {
     .map((rel) => readFileSync(join(root, rel), 'utf8'))
     .join('\n');
 }
+
+/**
+ * One component module's source, for COMPONENT-SPECIFIC rule assertions (e.g.
+ * "AppModal's .title is 15px"). Read the owning module directly so a generic
+ * selector like .title/.banner can't false-match another module — the recursive
+ * aggregate (readComponentModules) is only for the global allowed-scale set.
+ */
+export function readModuleSource(componentModule: string): string {
+  return readFileSync(join(process.cwd(), 'src/components', componentModule), 'utf8');
+}

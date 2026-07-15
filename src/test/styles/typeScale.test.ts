@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readAppStyles, readComponentModules } from '../utils/readAppStyles';
+import { readAppStyles, readComponentModules, readModuleSource } from '../utils/readAppStyles';
 
 const css = readAppStyles();
 const modules = readComponentModules();
@@ -62,13 +62,16 @@ describe('UI type scale', () => {
     );
     expect(ruleBody('.link-editor-input')).toContain('font-size: 14px');
     expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
-    // AppModal is module-scoped: assert its title (15px) and message
-    // (var(--text-meta) = 12.5px, see the token above) from the module source.
-    expect(modules).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
-    expect(modules).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
-    // UpdateBanner is module-scoped too: the banner text sits at the UI scale
-    // (var(--text-ui) = 13px); the link inherits it via `font: inherit`.
-    expect(modules).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
+    // Component-specific sizes: read the OWNING module so a generic selector
+    // (.title/.banner) can't false-match another module.
+    const appModal = readModuleSource('AppModal.module.css');
+    expect(appModal).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
+    // .message is var(--text-meta) = 12.5px (see the token above).
+    expect(appModal).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
+    // UpdateBanner: banner text sits at the UI scale (var(--text-ui) = 13px);
+    // the link inherits it via `font: inherit`.
+    const updateBanner = readModuleSource('UpdateBanner.module.css');
+    expect(updateBanner).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
     expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
     expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
