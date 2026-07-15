@@ -209,7 +209,10 @@ test('document typography stays pinned while both themes keep chrome vertically 
     page.getByRole('navigation', { name: 'Formatting' }).getByRole('button').first(),
     '13px',
   );
-  await expectType(page.locator('.mode-switch .seg').first(), '12px');
+  await expectType(
+    page.getByRole('group', { name: 'Editing mode' }).getByRole('button').first(),
+    '12px',
+  );
   await expect(
     page.locator(
       '.editor-scroll-area button, .editor-scroll-area input, .editor-scroll-area textarea, .editor-scroll-area select',
@@ -226,7 +229,7 @@ test('document typography stays pinned while both themes keep chrome vertically 
     await expectVerticallyContained(
       page.getByRole('navigation', { name: 'Formatting' }).locator('button:visible'),
     );
-    await expectVerticallyContained(page.locator('.topbar button:visible'));
+    await expectVerticallyContained(page.locator('header[data-print-hidden] button:visible'));
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }

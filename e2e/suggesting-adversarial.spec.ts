@@ -10,7 +10,10 @@ async function setup(page: Page, text: string): Promise<Locator> {
 }
 
 async function enableSuggesting(page: Page): Promise<void> {
-  await page.locator('.mode-switch').getByRole('button', { name: 'Suggesting' }).click();
+  await page
+    .getByRole('group', { name: 'Editing mode' })
+    .getByRole('button', { name: 'Suggesting' })
+    .click();
 }
 
 async function selectText(editor: Locator, from: number, to: number): Promise<void> {

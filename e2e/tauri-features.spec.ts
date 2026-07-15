@@ -224,7 +224,7 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
   await page.keyboard.up('ControlOrMeta');
 
   await expect(activeEditor(page)).toContainText('Doc that matches nothing');
-  await expect(page.locator('.crumbs .cur')).toContainText('orphan.md');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('orphan.md');
   // No linked-session chip in the status bar (still showing its link affordance).
   await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
   await expect(page.locator('.footer-ai-binding').first()).toContainText('LINK SESSION');
@@ -469,7 +469,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     timeout: 3000,
   });
   // Footer filename should reflect the opened file.
-  await expect(page.locator('.crumbs .cur')).toContainText('linked.md');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('linked.md');
 });
 
 test('deep-link: opening a doc with no linked session forces the session picker', async ({
@@ -629,5 +629,5 @@ test('deep-link: empty payload is ignored (no crash, no file load)', async ({ pa
   await emitTauriAndWait(page, 'deep-link-open', '');
 
   // Filename stays at Untitled.
-  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('Untitled');
 });

@@ -86,7 +86,7 @@ test('clean document: Cmd+N adds and focuses a new tab', async ({ page }) => {
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
-  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('Untitled');
 });
 
 test('dirty document: Cmd+N preserves it in a background tab without a guard', async ({ page }) => {
@@ -209,8 +209,10 @@ test('Save As writes the document to the chosen path and rebinds the tab clean',
 
   // The active tab rebinds to the chosen filename and goes clean.
   await expect(page.locator('.document-tab.active')).toContainText('report', { timeout: 3000 });
-  await expect(page.locator('.crumbs .cur')).toContainText('report');
-  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('report');
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
 
   // The Markdown was written to exactly the chosen path, with the content.
   const write = await page.evaluate(() => {
@@ -278,7 +280,9 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   await expect(modal).toHaveCount(0);
   // The document is still dirty — Untitled drops folder/meta chrome but keeps
   // the compact dirty dot after its filename.
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
   expect(await page.title()).toContain('•');
 });
 

@@ -90,7 +90,8 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
 
   const documentFont = await editor.evaluate((element) => getComputedStyle(element).fontFamily);
   const chromeFont = await page
-    .locator('.topbar .seg')
+    .getByRole('group', { name: 'Editing mode' })
+    .getByRole('button')
     .first()
     .evaluate((element) => getComputedStyle(element).fontFamily);
   const statusFont = await page
@@ -108,7 +109,7 @@ test('places the link at the end of the formatting rail and Editing in the topba
   await setup(page);
 
   const rail = page.getByRole('navigation', { name: 'Formatting' });
-  const toggle = page.locator('.topbar .mode-switch');
+  const toggle = page.getByRole('group', { name: 'Editing mode' });
   // The link ends the formatting controls: within the rail, the link button is
   // visible and only the theme toggle sits after it (a role/structure check —
   // no dependence on the global wrapper class or the hashed spacer).

@@ -59,13 +59,19 @@ test('mounted tabs preserve independent text, undo, zoom, mode, comments, and su
   await expect(activeTabHost(page).locator('.comment-card')).toContainText('First tab comment');
   await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
   await expect(page.locator('.footer-zoom-label')).toHaveText('112%');
-  await expect(page.getByRole('button', { name: 'Editing' })).toHaveClass(/on/);
+  await expect(page.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   await page.locator('.document-tab').nth(1).click();
   await expect(activeEditor(page)).toContainText('Second tracked words');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(activeEditor(page)).not.toContainText('Second tracked words');
-  await expect(page.getByRole('button', { name: 'Suggesting' })).toHaveClass(/on/);
+  await expect(page.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First document words');
@@ -302,7 +308,7 @@ test('closing the last clean tab leaves one fresh Untitled tab', async ({ page }
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
   await expect(activeEditor(page)).toHaveText('');
-  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toHaveText('Untitled');
 });
 
 test('quitting with multiple dirty tabs presents one combined guard', async ({ page }) => {

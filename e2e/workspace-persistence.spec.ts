@@ -188,7 +188,9 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First dirty document');
   await expect(activeTabHost(page).locator('.comment-card')).toContainText('Recovered comment');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
 });
 
 test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled tabs', async ({
@@ -280,7 +282,9 @@ test('legacy draft.json payload migrates into a one-tab workspace recovery', asy
     .click();
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(activeEditor(page)).toHaveText('Legacy unsaved document');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
 });
 
 test('a missing clean file is dropped without breaking the rest of the restored workspace', async ({

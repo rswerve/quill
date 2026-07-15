@@ -17,14 +17,18 @@ function sidecar(overrides: Record<string, unknown> = {}) {
 
 async function saveNewAndReopen(page: import('@playwright/test').Page) {
   await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
   const files = await page.evaluate(
     () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
   );
   const reopened = await page.context().newPage();
   await setupMemoryTauri(reopened, { files, openPath: DOC_PATH });
   await openMemoryFile(reopened);
-  await expect(reopened.locator('.crumbs .cur')).toContainText('review-persistence.md');
+  await expect(reopened.locator('[aria-label="Document location"]')).toContainText(
+    'review-persistence.md',
+  );
   return reopened;
 }
 
@@ -136,12 +140,14 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'old'.length);
     await page.keyboard.type('new');
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
 
     const files = await page.evaluate(() => window.__quillFiles);
     expect(files[DOC_PATH]).toBeDefined();
@@ -154,7 +160,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('base');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await page.keyboard.type(' added');
 
@@ -170,7 +176,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('keep remove');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'remove'.length);
     await page.keyboard.press('Backspace');
@@ -187,7 +193,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'old'.length);
     await page.keyboard.type('new');
@@ -234,7 +240,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('plain text');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'text'.length);
     await page.keyboard.press('ControlOrMeta+b');
@@ -341,7 +347,9 @@ test.describe('live comment reconciliation', () => {
     await selectCommentSlice(page, 0, 'hello'.length);
     await page.keyboard.press('Backspace');
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
 
     const files = await page.evaluate(() => window.__quillFiles);
     expect(files[SIDECAR_PATH]).toBeUndefined();
@@ -664,7 +672,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
 
     // Saving persists the provenance into the sidecar.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
     const suggestions = await page.evaluate(
       (path) => JSON.parse(window.__quillFiles[path]).suggestions,
       SIDECAR_PATH,
@@ -687,7 +697,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
   test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {
     await openWithClaudeEdit(page);
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
     const files = await page.evaluate(
       () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
     );
@@ -770,7 +782,9 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     // Current Tiptap setContent incorrectly marks an open dirty. Saving here
     // isolates each review-only mutation so that bug cannot mask another one.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
   }
 
   test('opening a clean file does not mark it dirty', async ({ page }) => {
@@ -779,7 +793,9 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
       files: { [DOC_PATH]: 'clean content', [SIDECAR_PATH]: sidecar() },
     });
     await openMemoryFile(page);
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
   });
 
   test('promoting a note marks the document dirty', async ({ page }) => {
@@ -787,7 +803,9 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await page.getByRole('button', { name: 'Ask Claude about this' }).click();
     await expect(page.locator('.comment-card-claude')).toBeVisible();
     await expect(page.locator('.comment-card-note')).toHaveCount(0);
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('finishing an AI reply marks the document dirty', async ({ page }) => {
@@ -796,27 +814,35 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     await page.locator('.comment-reply-input').fill('Answer this');
     await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
     await expect(page.locator('.comment-reply-ai')).toContainText('Persist this answer.');
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('resolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
     await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('unresolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
     await activeTabHost(page).locator('.comments-head .filter').click();
     await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('deleting a resolved comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
     await activeTabHost(page).locator('.comments-head .filter').click();
     await page.locator('.comment-delete-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 });
 

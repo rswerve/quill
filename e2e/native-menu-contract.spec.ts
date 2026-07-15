@@ -104,7 +104,9 @@ test('a native menu owns file accelerators while editor-only shortcuts remain in
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
   expect(
     await page.evaluate(() => ({
       nativeCalls: window.__quillCalls.filter((call) =>

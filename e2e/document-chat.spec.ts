@@ -105,8 +105,8 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   await expect(jump).toBeVisible();
   await expect(jump).toHaveText(/→ 1 suggestion in the doc/);
   await expect(activeTabHost(page).locator('.panel-tab-count')).toHaveText('1');
-  await expect(page.locator('[title="Accept all suggestions"] .review-count')).toHaveText('1');
-  await expect(page.locator('[title="Reject all suggestions"] .review-count')).toHaveText('1');
+  await expect(page.locator('[title="Accept all suggestions"]')).toContainText('1');
+  await expect(page.locator('[title="Reject all suggestions"]')).toContainText('1');
   await jump.click();
 
   const suggestion = activeTabHost(page).locator('.suggestion-card-replace');
@@ -479,7 +479,9 @@ test('chat persists per document/session and a new session starts a fresh thread
     'This answer should persist.',
   );
   await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
   const persisted = await page.evaluate((savedSidecarPath) => {
     const files = (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles;
     return JSON.parse(files[savedSidecarPath]);

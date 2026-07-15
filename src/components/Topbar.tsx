@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import { basename, dirname } from '../utils/path';
 import { RedoIcon, ToolbarButton, UndoIcon } from './Toolbar';
+import { cx } from '../utils/cx';
+import styles from './Topbar.module.css';
 
 interface TopbarProps {
   editor: Editor | null;
@@ -48,19 +50,19 @@ export default function Topbar({
   const parentName = parentPath ? basename(parentPath) : null;
 
   return (
-    <header className="topbar">
-      <div className="crumbs" aria-label="Document location">
+    <header className={styles.topbar} data-print-hidden>
+      <div className={styles.crumbs} aria-label="Document location">
         {parentName && (
           <>
-            <span className="crumb-parent">{parentName}</span>
-            <span className="sep">/</span>
+            <span className={styles.parent}>{parentName}</span>
+            <span className={styles.sep}>/</span>
           </>
         )}
-        <span className="cur">{fileName}</span>
-        {isDirty && <span className="dirty-dot footer-dirty" aria-label="Unsaved" />}
+        <span className={styles.cur}>{fileName}</span>
+        {isDirty && <span className={styles.dirtyDot} aria-label="Unsaved" />}
       </div>
       {filePath && (
-        <span className={`saved${isDirty ? ' dirty' : ''}`}>
+        <span className={cx(styles.saved, isDirty && styles.dirty)}>
           {isDirty ? 'Unsaved changes' : editedLabel(lastSavedAt)}
         </span>
       )}
@@ -68,7 +70,7 @@ export default function Topbar({
       <span className="grow" />
 
       <ToolbarButton
-        baseClassName="icon-btn"
+        baseClassName={styles.iconBtn}
         onClick={() => editor?.chain().focus().undo().run()}
         disabled={!editor?.can().undo()}
         title="Undo (Cmd+Z)"
@@ -76,7 +78,7 @@ export default function Topbar({
         <UndoIcon />
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="icon-btn"
+        baseClassName={styles.iconBtn}
         onClick={() => editor?.chain().focus().redo().run()}
         disabled={!editor?.can().redo()}
         title="Redo (Cmd+Shift+Z)"
@@ -87,30 +89,30 @@ export default function Topbar({
       {pendingSuggestionCount > 0 && (
         <>
           <button
-            className="topbar-review-btn topbar-accept-all"
+            className={cx(styles.reviewBtn, styles.acceptAll)}
             onClick={onAcceptAll}
             title="Accept all suggestions"
           >
             <span aria-hidden>✓</span>
             <span>Accept all</span>
-            <span className="review-count">{pendingSuggestionCount}</span>
+            <span className={styles.reviewCount}>{pendingSuggestionCount}</span>
           </button>
           <button
-            className="topbar-review-btn topbar-reject-all"
+            className={cx(styles.reviewBtn, styles.rejectAll)}
             onClick={onRejectAll}
             title="Reject all suggestions"
           >
             <span aria-hidden>×</span>
             <span>Reject all</span>
-            <span className="review-count">{pendingSuggestionCount}</span>
+            <span className={styles.reviewCount}>{pendingSuggestionCount}</span>
           </button>
-          <span className="vsep review-vsep" />
+          <span className={cx(styles.vsep, styles.reviewVsep)} />
         </>
       )}
 
-      <div className="segmented mode-switch" role="group" aria-label="Editing mode">
+      <div className={styles.modeSwitch} role="group" aria-label="Editing mode">
         <button
-          className={`seg${!isSuggesting ? ' on' : ''}`}
+          className={cx(styles.seg, !isSuggesting && styles.on)}
           aria-pressed={!isSuggesting}
           onClick={() => {
             if (isSuggesting) onToggleSuggesting();
@@ -119,7 +121,7 @@ export default function Topbar({
           Editing
         </button>
         <button
-          className={`seg${isSuggesting ? ' on' : ''}`}
+          className={cx(styles.seg, isSuggesting && styles.on)}
           aria-pressed={isSuggesting}
           onClick={() => {
             if (!isSuggesting) onToggleSuggesting();

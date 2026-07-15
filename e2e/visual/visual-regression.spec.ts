@@ -174,7 +174,7 @@ async function openVisualDocument(
     ).__quillListeners?.some((listener) => listener.event === 'menu-open'),
   );
   await page.keyboard.press('ControlOrMeta+o');
-  await expect(page.locator('.crumbs .cur')).not.toHaveText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).not.toHaveText('Untitled');
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
@@ -343,7 +343,7 @@ test.describe('visual regression safety net', () => {
         const shell = page.locator('.app');
         await expect(shell).toBeVisible();
         await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
-        await expect(page.locator('.topbar')).toBeVisible();
+        await expect(page.locator('header[data-print-hidden]')).toBeVisible();
         await expect(page.locator('.tabstrip')).toBeVisible();
         await expect(activeEditor(page)).toContainText('complete shell fixture');
         await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(2);
@@ -384,7 +384,10 @@ test.describe('visual regression safety net', () => {
       }) => {
         const fixture = reviewFixture();
         await openVisualDocument(page, theme, fixture.markdown, fixture.sidecar);
-        await page.locator('.mode-switch').getByRole('button', { name: 'Suggesting' }).click();
+        await page
+          .getByRole('group', { name: 'Editing mode' })
+          .getByRole('button', { name: 'Suggesting' })
+          .click();
         await selectText(page, 'Replace this wording.');
         await page.keyboard.type('Clearer wording.');
         for (const kind of ['insert', 'delete', 'replace', 'format']) {

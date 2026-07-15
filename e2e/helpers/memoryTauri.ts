@@ -323,7 +323,9 @@ export async function openMemoryFile(page: Page) {
     openCallsBefore,
   );
   await page.waitForFunction(
-    () => document.querySelector('.crumbs .cur')?.textContent?.trim() !== 'Untitled',
+    () =>
+      document.querySelector('[aria-label="Document location"]')?.textContent?.trim() !==
+      'Untitled',
   );
   // filePath publishes before loadFileResult's session-picker state reaches
   // the DOM. Let that same open settle so the helper cannot miss a late picker

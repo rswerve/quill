@@ -52,8 +52,8 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
 
   const accept = page.locator('.suggestion-accept-btn');
   const reject = page.locator('.suggestion-reject-btn');
-  const acceptAll = page.locator('.topbar-accept-all');
-  const rejectAll = page.locator('.topbar-reject-all');
+  const acceptAll = page.locator('[title="Accept all suggestions"]');
+  const rejectAll = page.locator('[title="Reject all suggestions"]');
 
   for (const theme of THEME_IDS) {
     if (theme !== 'paper') {

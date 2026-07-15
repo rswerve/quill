@@ -90,7 +90,7 @@ describe('UI type scale', () => {
       /\.close\s*\{[^}]*font-size: 18px/s,
     );
     expect(readModuleSource('Rail.module.css')).toMatch(/\.btn\.heading\s*\{[^}]*font-size: 11px/s);
-    expect(ruleBody('.topbar .seg')).toContain('font-size: 12px');
+    expect(readModuleSource('Topbar.module.css')).toMatch(/\.seg\s*\{[^}]*font-size: 12px/s);
     expect(ruleBody('.footer.status')).toContain('font-size: 10px');
     expect(ruleBody('.suggestion-ai-badge')).toContain('font-size: 8.5px');
   });

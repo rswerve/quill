@@ -28,7 +28,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const sw = page.locator('.mode-switch');
+  const sw = page.getByRole('group', { name: 'Editing mode' });
   await expect(sw.getByRole('button', { name: 'Editing' })).toHaveAttribute('aria-pressed', 'true');
   await sw.getByRole('button', { name: 'Suggesting' }).click();
   await expect(sw.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
@@ -38,7 +38,7 @@ async function enableSuggesting(page: Page) {
 }
 
 async function disableSuggesting(page: Page) {
-  const sw = page.locator('.mode-switch');
+  const sw = page.getByRole('group', { name: 'Editing mode' });
   await expect(sw.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -343,20 +343,20 @@ test('Cmd+Z keyboard shortcut undoes', async ({ page }) => {
 
 test('switch shows "Editing" by default', async ({ page }) => {
   await setup(page);
-  await expect(page.locator('.mode-switch')).toContainText('Editing');
+  await expect(page.getByRole('group', { name: 'Editing mode' })).toContainText('Editing');
 });
 
 test('clicking switch toggles to Suggesting mode', async ({ page }) => {
   await setup(page);
   await enableSuggesting(page);
-  await expect(page.locator('.mode-switch')).toContainText('Suggesting');
+  await expect(page.getByRole('group', { name: 'Editing mode' })).toContainText('Suggesting');
 });
 
 test('clicking switch again toggles back to Editing', async ({ page }) => {
   await setup(page);
   await enableSuggesting(page);
   await disableSuggesting(page);
-  await expect(page.locator('.mode-switch')).toContainText('Editing');
+  await expect(page.getByRole('group', { name: 'Editing mode' })).toContainText('Editing');
 });
 
 test('Accept All / Reject All buttons appear only when pending changes exist', async ({ page }) => {
@@ -1119,15 +1119,20 @@ test('char count updates as the user types', async ({ page }) => {
 
 test('topbar shows "Untitled" when no file is open', async ({ page }) => {
   await setup(page);
-  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toHaveText('Untitled');
 });
 
 test('Untitled breadcrumb stays collapsed after typing', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('x');
-  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
-  await expect(page.locator('.saved')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"]')).toHaveText('Untitled');
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
+  // Untitled has no file path, so the saved-state label is absent — and this doc
+  // is dirty, so if it rendered it would read "Unsaved changes". Asserting that
+  // text's absence is meaningful (the hashed .saved class would pass trivially).
+  await expect(page.getByText('Unsaved changes')).toHaveCount(0);
 });
 
 test('document title shows dirty bullet when modified', async ({ page }) => {

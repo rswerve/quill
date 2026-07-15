@@ -21,7 +21,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const badge = page.locator('.mode-switch');
+  const badge = page.getByRole('group', { name: 'Editing mode' });
   await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -46,14 +46,14 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
 
     // On screen the rail, topbar, and status bar are visible…
     await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
-    await expect(page.locator('.topbar')).toBeVisible();
+    await expect(page.locator('header[data-print-hidden]')).toBeVisible();
     await expect(page.locator('.footer')).toBeVisible();
 
     await page.emulateMedia({ media: 'print' });
 
     // …and gone under print media.
     expect(await display(page, 'nav[aria-label="Formatting"]')).toBe('none');
-    expect(await display(page, '.topbar')).toBe('none');
+    expect(await display(page, 'header[data-print-hidden]')).toBe('none');
     expect(await display(page, '.footer')).toBe('none');
     expect(await display(page, '.comment-layer')).toBe('none');
   });

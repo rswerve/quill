@@ -12,7 +12,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const badge = page.locator('.mode-switch');
+  const badge = page.getByRole('group', { name: 'Editing mode' });
   await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
     'true',
