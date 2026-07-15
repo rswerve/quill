@@ -386,13 +386,14 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
             __quillCalls: Array<{ cmd: string; args?: { path?: string } }>;
           }
         ).__quillCalls;
-        const wrote = (path: string) =>
-          calls.some((call) => call.cmd === 'write_file' && call.args?.path === path);
-        return (
-          wrote('/tmp/new-tab.md') &&
-          wrote('/tmp/existing.md') &&
-          calls.some((call) => call.cmd === 'exit_app')
-        );
+        const writeIndex = (path: string) =>
+          calls.findIndex((call) => call.cmd === 'write_file' && call.args?.path === path);
+        const exitIndex = calls.findIndex((call) => call.cmd === 'exit_app');
+        const newTab = writeIndex('/tmp/new-tab.md');
+        const existing = writeIndex('/tmp/existing.md');
+        // Both saves must PRECEDE the exit: persist, then quit — never the
+        // reverse, which would exit before the writes land (data loss).
+        return newTab >= 0 && existing >= 0 && exitIndex > newTab && exitIndex > existing;
       }),
     )
     .toBe(true);
