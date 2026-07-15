@@ -342,7 +342,7 @@ test.describe('visual regression safety net', () => {
 
         const shell = page.locator('.app');
         await expect(shell).toBeVisible();
-        await expect(page.locator('.rail')).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
         await expect(page.locator('.topbar')).toBeVisible();
         await expect(page.locator('.tabstrip')).toBeVisible();
         await expect(activeEditor(page)).toContainText('complete shell fixture');
@@ -597,8 +597,16 @@ test.describe('visual regression safety net', () => {
       test('formatting rail', async ({ page }) => {
         await openVisualDocument(page, theme, '**Bold selection** and plain prose.');
         await selectText(page, 'Bold selection');
-        await expect(page.locator('.rail-btn.bold')).toHaveClass(/active/);
-        await shot(page, theme, 'formatting-rail', page.locator('.rail'));
+        await expect(page.getByRole('button', { name: 'Bold (Cmd+B)' })).toHaveAttribute(
+          'aria-pressed',
+          'true',
+        );
+        await shot(
+          page,
+          theme,
+          'formatting-rail',
+          page.getByRole('navigation', { name: 'Formatting' }),
+        );
       });
 
       test('multi-row tab strip', async ({ page }) => {

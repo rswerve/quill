@@ -45,14 +45,14 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     await setup(page);
 
     // On screen the rail, topbar, and status bar are visible…
-    await expect(page.locator('.rail')).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
     await expect(page.locator('.topbar')).toBeVisible();
     await expect(page.locator('.footer')).toBeVisible();
 
     await page.emulateMedia({ media: 'print' });
 
     // …and gone under print media.
-    expect(await display(page, '.rail')).toBe('none');
+    expect(await display(page, 'nav[aria-label="Formatting"]')).toBe('none');
     expect(await display(page, '.topbar')).toBe('none');
     expect(await display(page, '.footer')).toBe('none');
     expect(await display(page, '.comment-layer')).toBe('none');

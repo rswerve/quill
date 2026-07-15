@@ -181,7 +181,12 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
         .filter(
           (element) =>
             !element.closest('.footer') &&
-            !element.matches('.rail-btn.italic, .rail-btn.quote, .rail-btn.code'),
+            // The italic/blockquote/inline-code rail buttons deliberately render
+            // in serif/mono, not the UI sans — exclude them by their stable
+            // titles (their module classes are hashed).
+            !element.matches(
+              '[title="Italic (Cmd+I)"], [title="Blockquote"], [title="Inline code"]',
+            ),
         )
         .map((element) => ({
           element: `${element.tagName.toLowerCase()}.${element.className}`,
@@ -200,7 +205,10 @@ test('document typography stays pinned while both themes keep chrome vertically 
 
   await expectType(activeTabHost(page).locator('.editor-scroll-area'), '18px');
   await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-  await expectType(page.locator('.rail-btn').first(), '13px');
+  await expectType(
+    page.getByRole('navigation', { name: 'Formatting' }).getByRole('button').first(),
+    '13px',
+  );
   await expectType(page.locator('.mode-switch .seg').first(), '12px');
   await expect(
     page.locator(
@@ -212,10 +220,12 @@ test('document typography stays pinned while both themes keep chrome vertically 
   const themes = ['paper', 'gruvbox'];
   for (const theme of themes) {
     if (theme !== 'paper') {
-      await page.locator('.rail .theme-toggle').click();
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
     }
     await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-    await expectVerticallyContained(page.locator('.rail button:visible'));
+    await expectVerticallyContained(
+      page.getByRole('navigation', { name: 'Formatting' }).locator('button:visible'),
+    );
     await expectVerticallyContained(page.locator('.topbar button:visible'));
     await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));

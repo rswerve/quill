@@ -74,4 +74,38 @@ describe('LinkButton consolidated editor', () => {
     await waitFor(() => expect(screen.getByLabelText('URL')).toHaveFocus());
     expect(container.querySelector('.link-popover')).toBeNull();
   });
+
+  it('forwards the disabled state map and wrapper class (Rail module seam)', () => {
+    // Collapsed cursor in plain text → not linkable → the button is disabled, so
+    // its state class must come from the supplied map, not the literal fallback.
+    const ed = makeEditor('<p>plain</p>');
+    ed.commands.setTextSelection({ from: 3, to: 3 });
+    render(
+      <LinkButton
+        editor={ed}
+        baseClassName="rail_btn"
+        stateClasses={{ active: 'a_hash', mixed: 'm_hash', disabled: 'd_hash' }}
+        wrapperClassName="wrap_hash"
+      />,
+    );
+    const button = screen.getByTitle('Link (Cmd+K)');
+    expect(button).toHaveClass('rail_btn', 'd_hash');
+    expect(button).not.toHaveClass('disabled');
+    expect(button.closest('.link-button-wrap')).toHaveClass('wrap_hash');
+  });
+
+  it('forwards the active state class when a link is active', () => {
+    const ed = makeEditor('<p><a href="https://example.com">linked</a></p>');
+    ed.commands.setTextSelection({ from: 2, to: 5 });
+    render(
+      <LinkButton
+        editor={ed}
+        baseClassName="rail_btn"
+        stateClasses={{ active: 'a_hash', mixed: 'm_hash', disabled: 'd_hash' }}
+      />,
+    );
+    const button = screen.getByTitle('Link (Cmd+K)');
+    expect(button).toHaveClass('a_hash');
+    expect(button).not.toHaveClass('active');
+  });
 });

@@ -78,7 +78,7 @@ test('rail formatting always targets the active mounted editor', async ({ page }
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('beta');
   await selectAll(page);
-  await page.locator('.rail-btn.bold').click();
+  await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
   await expect(activeEditor(page).locator('strong')).toHaveText('beta');
 
   await page.locator('.document-tab').first().click();

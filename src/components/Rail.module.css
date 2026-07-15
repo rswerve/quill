@@ -1,0 +1,117 @@
+/* Rail — module-scoped styles (hashed, private to the component). Design tokens
+   resolve from src/styles/tokens.css. The button base + its state/format
+   modifiers are applied through the shared ToolbarButton/LinkButton helpers,
+   which now accept hashed state classes (stateClasses) so this whole family can
+   be module-local instead of a global `.rail-btn` namespace. The link wrapper's
+   rail-context flex rides on LinkButton's `wrapperClassName` (see .linkButtonWrap
+   below) — a React-known variant, no :global escape hatch. */
+.rail {
+  width: 52px;
+  flex: none;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 2px;
+  user-select: none;
+  z-index: 20;
+}
+
+.btn {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover-rail);
+  color: var(--text);
+}
+.btn.active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.btn.mixed {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 42%, transparent) 0 50%,
+    color-mix(in srgb, var(--accent) 5%, transparent) 50% 100%
+  );
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.btn.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.btn svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+.btn.heading {
+  font-size: 11px;
+  font-weight: 600;
+}
+.btn.bold {
+  font-weight: 700;
+}
+.btn.italic {
+  font-family: var(--font-serif);
+  font-style: italic;
+}
+.btn.strike {
+  text-decoration: line-through;
+}
+.btn.quote {
+  padding-top: 5px;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+}
+.btn.code {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.sep {
+  width: 24px;
+  height: 1px;
+  flex: none;
+  background: var(--border-strong);
+  margin: 8px 0;
+}
+.spacer {
+  flex: 1;
+}
+.themeToggle {
+  margin-top: auto;
+}
+.themeDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, #fbfaf7 50%, #282828 50%);
+  border: 1px solid var(--dot);
+  display: inline-block;
+}
+/* Scoped under .rail on purpose: the global base `.link-button-wrap`
+   (App.css, position/inline-flex) shares this rule's would-be 0,1,0
+   specificity, so `.rail .linkButtonWrap` (0,2,0) guarantees the rail's
+   flex override wins regardless of stylesheet order. */
+.rail .linkButtonWrap {
+  display: flex;
+  flex: none;
+}

@@ -149,9 +149,9 @@ test.describe('Suggesting mode adversarial interactions', () => {
     const editor = await setup(page, 'alpha');
     await enableSuggesting(page);
     await selectText(editor, 0, 5);
-    await page.locator('.rail-btn[title^="Bold"]').click();
+    await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
     await selectText(editor, 0, 5);
-    await page.locator('.rail-btn[title^="Bold"]').click();
+    await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
 
     await expectNoTracking(editor);
     await expect(page.locator('.suggestion-card')).toHaveCount(0);
@@ -162,7 +162,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
     page,
   }) => {
     const editor = await setup(page, 'alpha');
-    const codeButton = page.locator('.rail-btn[title="Inline code"]');
+    const codeButton = page.getByRole('button', { name: 'Inline code' });
     await enableSuggesting(page);
 
     await selectText(editor, 0, 5);
@@ -251,7 +251,7 @@ test.describe('Suggesting mode adversarial interactions', () => {
   }) => {
     const editor = await setup(page, 'alpha beta');
     await selectText(editor, 0, 5);
-    await page.locator('.rail-btn[title^="Bold"]').click();
+    await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
     await enableSuggesting(page);
     await selectText(editor, 0, 5);
     await page.keyboard.press('Backspace');

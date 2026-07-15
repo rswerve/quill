@@ -107,10 +107,16 @@ test('places the link at the end of the formatting rail and Editing in the topba
 }) => {
   await setup(page);
 
-  const link = page.locator('.rail .link-button-wrap');
+  const rail = page.getByRole('navigation', { name: 'Formatting' });
+  const link = rail.locator('.link-button-wrap');
   const toggle = page.locator('.topbar .mode-switch');
   await expect(link).toBeVisible();
-  await expect(link.locator('xpath=following-sibling::*[1]')).toHaveClass(/rail-spacer/);
+  // The link ends the formatting controls: within the rail, only the theme
+  // toggle sits after it (a role/structure check, not the hashed spacer class).
+  const railButtons = rail.getByRole('button');
+  const buttonCount = await railButtons.count();
+  await expect(railButtons.nth(buttonCount - 1)).toHaveAccessibleName('Toggle theme');
+  await expect(railButtons.nth(buttonCount - 2)).toHaveAccessibleName('Link (Cmd+K)');
   await expect(toggle).toBeVisible();
   await expect(toggle.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',

@@ -1572,112 +1572,10 @@ del.track-delete {
   color: var(--text);
 }
 
-.rail {
-  width: 52px;
-  flex: none;
-  background: var(--bg-rail);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 0;
-  gap: 2px;
-  user-select: none;
-  z-index: 20;
-}
-
-.rail-btn {
-  width: 32px;
-  height: 32px;
-  flex: none;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  background: transparent;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  cursor: pointer;
-}
-.rail-btn:hover:not(:disabled) {
-  background: var(--bg-hover-rail);
-  color: var(--text);
-}
-.rail-btn.active {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
-}
-.rail-btn.mixed {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--accent) 42%, transparent) 0 50%,
-    color-mix(in srgb, var(--accent) 5%, transparent) 50% 100%
-  );
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-.rail-btn.disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.rail-btn svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.5;
-}
-.rail-btn.heading {
-  font-size: 11px;
-  font-weight: 600;
-}
-.rail-btn.bold {
-  font-weight: 700;
-}
-.rail-btn.italic {
-  font-family: var(--font-serif);
-  font-style: italic;
-}
-.rail-btn.strike {
-  text-decoration: line-through;
-}
-.rail-btn.quote {
-  padding-top: 5px;
-  font-family: var(--font-serif);
-  font-size: 17px;
-  font-weight: 600;
-}
-.rail-btn.code {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-}
-.rail-sep {
-  width: 24px;
-  height: 1px;
-  flex: none;
-  background: var(--border-strong);
-  margin: 8px 0;
-}
-.rail-spacer {
-  flex: 1;
-}
-.theme-toggle {
-  margin-top: auto;
-}
-.theme-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: linear-gradient(90deg, #fbfaf7 50%, #282828 50%);
-  border: 1px solid var(--dot);
-  display: inline-block;
-}
-.rail .link-button-wrap {
-  display: flex;
-  flex: none;
-}
+/* Rail (left formatting rail) is module-scoped in src/components/Rail.module.css
+   — including the whole button family, applied through ToolbarButton/LinkButton's
+   stateClasses + wrapperClassName seams. Print-hide rides on data-print-hidden on
+   the <nav>, not the chrome list below. */
 
 .studio-main {
   min-width: 0;
@@ -3514,8 +3412,8 @@ del.track-delete {
     margin: 0.75in;
   }
 
-  /* Hide every piece of chrome and any transient overlay. */
-  .rail,
+  /* Hide every piece of chrome and any transient overlay. (.rail opts in via
+     data-print-hidden on its <nav>.) */
   .topbar,
   .toolbar,
   .status,

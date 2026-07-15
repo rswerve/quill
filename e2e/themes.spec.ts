@@ -9,7 +9,7 @@ test('rail theme toggle switches between only Paper and Gruvbox and persists Gru
   await page.locator('.ProseMirror').waitFor();
 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
-  const toggle = page.locator('.rail .theme-toggle');
+  const toggle = page.getByRole('button', { name: 'Toggle theme' });
   await expect(toggle).toHaveAttribute('title', 'Switch to Gruvbox');
   await toggle.click();
 
@@ -19,7 +19,10 @@ test('rail theme toggle switches between only Paper and Gruvbox and persists Gru
 
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'gruvbox');
-  await expect(page.locator('.rail .theme-toggle')).toHaveAttribute('title', 'Switch to Paper');
+  await expect(page.getByRole('button', { name: 'Toggle theme' })).toHaveAttribute(
+    'title',
+    'Switch to Paper',
+  );
 });
 
 test('retired persisted theme ids fall back to Paper and are normalized', async ({ page }) => {
@@ -30,7 +33,10 @@ test('retired persisted theme ids fall back to Paper and are normalized', async 
     await page.evaluate((themeId) => localStorage.setItem('quill-theme', themeId), id);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
-    await expect(page.locator('.rail .theme-toggle')).toHaveAttribute('title', 'Switch to Gruvbox');
+    await expect(page.getByRole('button', { name: 'Toggle theme' })).toHaveAttribute(
+      'title',
+      'Switch to Gruvbox',
+    );
     expect(await page.evaluate(() => localStorage.getItem('quill-theme'))).toBe('paper');
   }
 });
@@ -51,7 +57,7 @@ test('review actions stay tonal, borderless, and distinct in both themes', async
 
   for (const theme of THEME_IDS) {
     if (theme !== 'paper') {
-      await page.locator('.rail .theme-toggle').click();
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
     }
 
     const base = await Promise.all(

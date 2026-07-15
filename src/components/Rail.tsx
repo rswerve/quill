@@ -10,7 +10,19 @@ import {
   ToolbarButton,
   applyTheme,
   type ThemeId,
+  type ToolbarButtonStateClasses,
 } from './Toolbar';
+import { cx } from '../utils/cx';
+import styles from './Rail.module.css';
+
+// The rail's hashed state classes, handed to the shared ToolbarButton/LinkButton
+// so `.btn.active`/`.mixed`/`.disabled` stay module-scoped. All three are
+// required by the helper contract — a complete map, never a partial one.
+const railStateClasses: ToolbarButtonStateClasses = {
+  active: styles.active,
+  mixed: styles.mixed,
+  disabled: styles.disabled,
+};
 
 interface RailProps {
   editor: Editor | null;
@@ -60,10 +72,11 @@ export default function Rail({ editor }: RailProps) {
   const strike = markState('strike');
 
   return (
-    <nav className="rail" aria-label="Formatting">
+    <nav className={styles.rail} aria-label="Formatting" data-print-hidden>
       <ToolbarButton
-        baseClassName="rail-btn"
-        className="bold"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
+        className={styles.bold}
         onClick={command(() => editor!.chain().focus().toggleBold().run())}
         active={bold.active}
         mixed={bold.mixed}
@@ -73,8 +86,9 @@ export default function Rail({ editor }: RailProps) {
         B
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="rail-btn"
-        className="italic"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
+        className={styles.italic}
         onClick={command(() => editor!.chain().focus().toggleItalic().run())}
         active={italic.active}
         mixed={italic.mixed}
@@ -84,8 +98,9 @@ export default function Rail({ editor }: RailProps) {
         I
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="rail-btn"
-        className="strike"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
+        className={styles.strike}
         onClick={command(() => editor!.chain().focus().toggleStrike().run())}
         active={strike.active}
         mixed={strike.mixed}
@@ -95,13 +110,14 @@ export default function Rail({ editor }: RailProps) {
         S
       </ToolbarButton>
 
-      <span className="rail-sep" />
+      <span className={styles.sep} />
 
       {([1, 2, 3] as const).map((level) => (
         <ToolbarButton
           key={level}
-          baseClassName="rail-btn"
-          className="heading"
+          baseClassName={styles.btn}
+          stateClasses={railStateClasses}
+          className={styles.heading}
           onClick={command(() => editor!.chain().focus().toggleHeading({ level }).run())}
           active={editor?.isActive('heading', { level }) ?? false}
           disabled={!editor}
@@ -111,10 +127,11 @@ export default function Rail({ editor }: RailProps) {
         </ToolbarButton>
       ))}
 
-      <span className="rail-sep" />
+      <span className={styles.sep} />
 
       <ToolbarButton
-        baseClassName="rail-btn"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
         onClick={command(() => editor!.chain().focus().toggleBulletList().run())}
         active={editor?.isActive('bulletList') ?? false}
         disabled={!editor}
@@ -123,7 +140,8 @@ export default function Rail({ editor }: RailProps) {
         <BulletIcon />
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="rail-btn"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
         onClick={command(() => editor!.chain().focus().toggleOrderedList().run())}
         active={editor?.isActive('orderedList') ?? false}
         disabled={!editor}
@@ -132,8 +150,9 @@ export default function Rail({ editor }: RailProps) {
         <NumberedIcon />
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="rail-btn"
-        className="quote"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
+        className={styles.quote}
         onClick={command(() => editor!.chain().focus().toggleBlockquote().run())}
         active={editor?.isActive('blockquote') ?? false}
         disabled={!editor}
@@ -142,8 +161,9 @@ export default function Rail({ editor }: RailProps) {
         “
       </ToolbarButton>
       <ToolbarButton
-        baseClassName="rail-btn"
-        className="code"
+        baseClassName={styles.btn}
+        stateClasses={railStateClasses}
+        className={styles.code}
         onClick={command(() => editor!.chain().focus().toggleCode().run())}
         active={editor?.isActive('code') ?? false}
         disabled={!editor}
@@ -152,10 +172,16 @@ export default function Rail({ editor }: RailProps) {
         &lt;/&gt;
       </ToolbarButton>
       {editor ? (
-        <LinkButton editor={editor} baseClassName="rail-btn" />
+        <LinkButton
+          editor={editor}
+          baseClassName={styles.btn}
+          stateClasses={railStateClasses}
+          wrapperClassName={styles.linkButtonWrap}
+        />
       ) : (
         <ToolbarButton
-          baseClassName="rail-btn"
+          baseClassName={styles.btn}
+          stateClasses={railStateClasses}
           onClick={() => undefined}
           disabled
           title="Link (Cmd+K)"
@@ -164,15 +190,15 @@ export default function Rail({ editor }: RailProps) {
         </ToolbarButton>
       )}
 
-      <span className="rail-spacer" />
+      <span className={styles.spacer} />
       <button
         type="button"
-        className="rail-btn theme-toggle"
+        className={cx(styles.btn, styles.themeToggle)}
         title={`Switch to ${theme === 'paper' ? 'Gruvbox' : 'Paper'}`}
         aria-label="Toggle theme"
         onClick={() => setTheme((current) => (current === 'paper' ? 'gruvbox' : 'paper'))}
       >
-        <span className="theme-dot" aria-hidden />
+        <span className={styles.themeDot} aria-hidden />
       </button>
     </nav>
   );

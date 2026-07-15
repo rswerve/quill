@@ -89,7 +89,7 @@ describe('UI type scale', () => {
     expect(readModuleSource('SessionPicker.module.css')).toMatch(
       /\.close\s*\{[^}]*font-size: 18px/s,
     );
-    expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
+    expect(readModuleSource('Rail.module.css')).toMatch(/\.btn\.heading\s*\{[^}]*font-size: 11px/s);
     expect(ruleBody('.topbar .seg')).toContain('font-size: 12px');
     expect(ruleBody('.footer.status')).toContain('font-size: 10px');
     expect(ruleBody('.suggestion-ai-badge')).toContain('font-size: 8.5px');

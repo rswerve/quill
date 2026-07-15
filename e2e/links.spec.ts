@@ -186,7 +186,7 @@ test.describe('Link editor', () => {
     await addLink(page, 'https://example.com');
 
     for (const theme of ['paper', 'gruvbox'] as const) {
-      if (theme === 'gruvbox') await page.locator('.rail .theme-toggle').click();
+      if (theme === 'gruvbox') await page.getByRole('button', { name: 'Toggle theme' }).click();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       await editor.locator('a').click();
       const colors = await linkEditor(page).evaluate((card) => {
