@@ -180,7 +180,7 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
       return elements
         .filter(
           (element) =>
-            !element.closest('.footer') &&
+            !element.closest('footer') &&
             // The italic/blockquote/inline-code rail buttons deliberately render
             // in serif/mono, not the UI sans — exclude them by their stable
             // titles (their module classes are hashed).
@@ -232,13 +232,20 @@ test('document typography stays pinned while both themes keep chrome vertically 
     await expectVerticallyContained(
       page.getByRole('toolbar', { name: 'Document actions' }).locator('button:visible'),
     );
-    await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
+    await expectVerticallyContained(
+      page
+        .getByRole('contentinfo', { name: 'Document status' })
+        .locator('button:visible, select:visible'),
+    );
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }
 
   await page.emulateMedia({ media: 'print' });
   await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-  await expect(page.locator('.footer')).toHaveCSS('display', 'none');
+  // Raw selector, not the contentinfo role: under print media the footer is
+  // display:none, which drops it from the accessibility tree — getByRole would
+  // find nothing. The DOM selector still reads the computed display.
+  await expect(page.locator('footer[aria-label="Document status"]')).toHaveCSS('display', 'none');
   await page.emulateMedia({ media: 'screen' });
 });
 
@@ -301,9 +308,9 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await page.locator('.add-comment-btn').click();
   await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
 
-  await expectType(page.locator('.footer-zoom-label'), '10px', { checkUiFamily: false });
+  await expectType(page.getByLabel('Zoom level'), '10px', { checkUiFamily: false });
   await expectType(page.getByLabel('Claude model'), '10px', { checkUiFamily: false });
-  await expectType(page.locator('.footer-context-binding'), '10px', {
+  await expectType(page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true }), '10px', {
     checkUiFamily: false,
   });
   await expectVisibleControlsUseUiFamily(page);
@@ -338,7 +345,7 @@ test('session picker body text and controls inherit the app font', async ({ page
       return original(cmd, args);
     };
   });
-  await page.locator('.footer-ai-binding-label').click();
+  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
 
   // SessionPicker's type scale (header/rows/preview) is asserted from
   // SessionPicker.module.css source in the unit type-scale suite (classes are

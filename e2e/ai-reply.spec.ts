@@ -224,7 +224,7 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
     { kind: 'done' },
   ]);
 
-  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+  await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
     'Model and effort used for the next Claude request',
   );
@@ -246,7 +246,7 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   });
   await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
   await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
-  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+  await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
     'Last model reported by Claude Code: claude-fable-5',
   );

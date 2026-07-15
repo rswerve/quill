@@ -11,7 +11,7 @@ const EXISTING_SESSION = {
 };
 
 async function openPicker(page: import('@playwright/test').Page) {
-  await page.locator('.footer-ai-binding-label').click();
+  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
   const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible();
   return picker;
@@ -36,7 +36,7 @@ test('a session-list failure is explicit and Cancel returns to the untouched doc
   await expect(picker.getByText('Claude session directory unavailable')).toBeVisible();
   await picker.getByRole('button', { name: 'Cancel' }).click();
   await expect(picker).toHaveCount(0);
-  await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Unlink Claude session' })).toHaveCount(0);
   await expect(page.locator('.ProseMirror')).toBeEditable();
 });
 
@@ -75,7 +75,7 @@ test('Cancel after previewing a session never binds or records it', async ({ pag
   await picker.getByRole('button', { name: 'Cancel' }).click();
 
   await expect(picker).toHaveCount(0);
-  await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Unlink Claude session' })).toHaveCount(0);
   const bindingCalls = await page.evaluate(() =>
     window.__quillCalls.filter((call) => call.cmd === 'record_session_document'),
   );

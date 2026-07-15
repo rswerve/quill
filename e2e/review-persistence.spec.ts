@@ -903,6 +903,8 @@ test.describe('desktop fallback regressions', () => {
     await page.keyboard.press('Enter');
     await page.keyboard.type('three');
 
-    await expect(page.locator('.footer')).toContainText('LN 3:6');
+    await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+      'LN 3:6',
+    );
   });
 });

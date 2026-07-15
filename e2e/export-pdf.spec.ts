@@ -47,21 +47,21 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     // On screen the rail, topbar, and status bar are visible…
     await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
     await expect(page.getByRole('toolbar', { name: 'Document actions' })).toBeVisible();
-    await expect(page.locator('.footer')).toBeVisible();
+    await expect(page.getByRole('contentinfo', { name: 'Document status' })).toBeVisible();
 
     await page.emulateMedia({ media: 'print' });
 
     // …and gone under print media.
     expect(await display(page, 'nav[aria-label="Formatting"]')).toBe('none');
     expect(await display(page, 'header[aria-label="Document actions"]')).toBe('none');
-    expect(await display(page, '.footer')).toBe('none');
+    expect(await display(page, 'footer[aria-label="Document status"]')).toBe('none');
     expect(await display(page, '.comment-layer')).toBe('none');
   });
 
   test('screen text zoom does not carry into print', async ({ page }) => {
     await setup(page);
-    await page.locator('.footer-zoom-slider').fill('2.4');
-    await expect(page.locator('.footer-zoom-label')).toHaveText('240%');
+    await page.getByRole('slider', { name: 'Zoom' }).fill('2.4');
+    await expect(page.getByLabel('Zoom level')).toHaveText('240%');
     const screenSize = await page
       .locator('.ProseMirror')
       .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));

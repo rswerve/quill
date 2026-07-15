@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { readAppStyles } from '../utils/readAppStyles';
+import { readAppStyles, readModuleSource } from '../utils/readAppStyles';
 import { join } from 'node:path';
 
 const css = readAppStyles();
@@ -233,5 +233,9 @@ describe.each(['paper', 'gruvbox'] as const)('%s annotation palette', (id) => {
 });
 
 it('renders status-bar text with the AA-safe muted foreground', () => {
-  expect(css).toMatch(/\.footer\.status\s*\{[^}]*color:\s*var\(--text-muted\)/s);
+  // The status bar is module-scoped (Footer.module.css); its `.footer` base
+  // carries the muted foreground.
+  expect(readModuleSource('Footer.module.css')).toMatch(
+    /\.footer\s*\{[^}]*color:\s*var\(--text-muted\)/s,
+  );
 });

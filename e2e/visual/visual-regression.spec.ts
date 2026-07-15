@@ -349,7 +349,7 @@ test.describe('visual regression safety net', () => {
         await expect(page.locator('.tabstrip')).toBeVisible();
         await expect(activeEditor(page)).toContainText('complete shell fixture');
         await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(2);
-        await expect(page.locator('.footer')).toBeVisible();
+        await expect(page.getByRole('contentinfo', { name: 'Document status' })).toBeVisible();
         await expect(shell).toHaveCSS(
           'background-color',
           theme === 'paper' ? 'rgb(251, 250, 247)' : 'rgb(40, 40, 40)',
@@ -561,7 +561,7 @@ test.describe('visual regression safety net', () => {
             },
           },
         });
-        await page.locator('.footer-ai-binding-label').click();
+        await page.getByRole('button', { name: 'Claude session', exact: true }).click();
         const sessionPicker = page.getByRole('dialog', { name: 'Link Claude Code session' });
         await expect(sessionPicker).toBeVisible();
         await sessionPicker.getByRole('button', { name: 'Research Notes.md' }).click();
@@ -595,8 +595,15 @@ test.describe('visual regression safety net', () => {
 
       test('status footer', async ({ page }) => {
         await openVisualDocument(page, theme, 'One two three four five.');
-        await expect(page.locator('.footer')).toContainText('5 WORDS');
-        await shot(page, theme, 'status-footer', page.locator('.footer'));
+        await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+          '5 WORDS',
+        );
+        await shot(
+          page,
+          theme,
+          'status-footer',
+          page.getByRole('contentinfo', { name: 'Document status' }),
+        );
       });
 
       test('linked document status footer', async ({ page }) => {
@@ -666,9 +673,9 @@ test.describe('visual regression safety net', () => {
           'Zoom keeps document chrome fixed while prose reflows.',
         );
         for (const zoom of [0.6, 1, 2.4]) {
-          if (zoom === 1) await page.locator('.footer-zoom-label').dblclick();
-          else await page.locator('.footer-zoom-slider').fill(String(zoom));
-          await expect(page.locator('.footer-zoom-label')).toHaveText(`${zoom * 100}%`);
+          if (zoom === 1) await page.getByLabel('Zoom level').dblclick();
+          else await page.getByRole('slider', { name: 'Zoom' }).fill(String(zoom));
+          await expect(page.getByLabel('Zoom level')).toHaveText(`${zoom * 100}%`);
           await shot(page, theme, `zoom-${zoom * 100}`, activeTabHost(page).locator('.workspace'));
         }
       });

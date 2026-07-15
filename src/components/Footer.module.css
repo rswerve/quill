@@ -1,0 +1,217 @@
+/* Footer — module-scoped status bar (hashed, private to the component). Design
+   tokens resolve from src/styles/tokens.css. This collapses the footer's
+   two-generation cascade into each element's effective computed style: the early
+   `.footer-` block (legacy color-token vocab, mostly overridden) unioned with the
+   later Studio-era `.footer.status`/`.status-` block (the newer background/text
+   token vocab, wins most conflicts). Early survivors are marked inline. The dead
+   early footer rules
+   (filename/sep/suggesting-badge/model/claude-setting singular — no renderer) go
+   with the early block; `.zoom` was vestigial (no rule, no hook) and is dropped. */
+.footer {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  height: 34px;
+  padding: 0;
+  gap: 0;
+  background: var(--bg-rail);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  flex-shrink: 0; /* early survivor */
+  user-select: none; /* early survivor */
+}
+.group {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  white-space: nowrap;
+}
+.right {
+  margin-left: auto;
+}
+.right > :first-child {
+  border-left: 1px solid var(--border);
+}
+.item {
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+}
+.item:hover {
+  color: var(--text-muted);
+}
+.zoomGroup {
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+  margin: 0;
+  gap: 8px;
+}
+.step {
+  width: 15px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+}
+.step:hover:not(:disabled),
+.step:focus-visible {
+  color: var(--text);
+}
+.step:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.sliderLabel {
+  display: flex;
+  align-items: center;
+}
+.slider {
+  -webkit-appearance: none; /* early survivor */
+  appearance: none;
+  width: 70px;
+  height: 3px;
+  border: 0;
+  border-radius: 2px;
+  outline: 0;
+  background: linear-gradient(
+    to right,
+    var(--text-faint) 0 var(--zoom-progress),
+    var(--border-strong) var(--zoom-progress) 100%
+  );
+  cursor: pointer; /* early survivor */
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; /* early survivor */
+  appearance: none;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--text-faint);
+  border-radius: 50%;
+  background: var(--bg-app);
+  cursor: pointer; /* early survivor */
+}
+.slider::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--text-faint);
+  border-radius: 50%;
+  background: var(--bg-app);
+  cursor: pointer; /* early survivor */
+}
+.zoomLabel {
+  min-width: 34px;
+  color: var(--text-muted);
+  font-size: inherit;
+  font-weight: 400;
+  cursor: default; /* early survivor */
+  user-select: none; /* early survivor */
+}
+.claudeSettings {
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 5px;
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+.claudeSettings select {
+  width: auto;
+  max-width: 78px;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: center;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+/* Binding wrappers: `.binding` is the shared status-binding∪footer-*-binding
+   base; `.context`/`.ai` carry the per-role differences; `.linked` the linked
+   state. Order matters — `.ai` after `.binding` so its color wins for unlinked
+   AI, and `.ai.linked` (0,2,0) flips back to muted (mirroring how the later
+   `.status-binding.linked` outranks `.footer-ai-binding`). */
+.binding {
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+  cursor: pointer; /* early survivor */
+}
+.binding:hover {
+  background: var(--color-chrome); /* early survivor */
+  color: var(--text-muted);
+}
+.context {
+  margin-right: 6px; /* early survivor (context-only) */
+}
+.ai {
+  color: var(--accent-text);
+}
+.binding.linked {
+  overflow: hidden; /* early survivor */
+}
+.ai.linked {
+  color: var(--text-muted);
+}
+.bindingLabel {
+  height: 33px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.bindingLabel:hover {
+  background: var(--bg-hover-rail);
+}
+.unlink {
+  height: 33px;
+  padding: 0 7px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+}
+.unlink:hover {
+  background: var(--removed-bg);
+  color: var(--removed);
+}
+.spark {
+  color: var(--accent-text);
+}
