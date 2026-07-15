@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { readAppStyles } from '../utils/readAppStyles';
 import { join } from 'node:path';
 
-const css =
-  readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8') +
-  '\n' +
-  readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
 const toolbar = readFileSync(join(process.cwd(), 'src/components/Toolbar.tsx'), 'utf8');
 
 function themeBody(id: 'paper' | 'gruvbox'): string {

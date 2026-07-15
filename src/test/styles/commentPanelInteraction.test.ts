@@ -1,11 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readAppStyles } from '../utils/readAppStyles';
 import { describe, expect, it } from 'vitest';
 
-const css =
-  readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8') +
-  '\n' +
-  readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
 
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
