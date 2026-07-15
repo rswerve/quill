@@ -618,12 +618,17 @@ test.describe('visual regression safety net', () => {
         await openVisualDocument(page, theme, 'Open the project notes for the full context.');
         await selectText(page, 'project notes');
         await page.keyboard.press('ControlOrMeta+k');
-        await expect(page.locator('.link-editor-card')).toBeVisible();
+        await expect(page.getByRole('dialog', { name: /Create link|Edit link/ })).toBeVisible();
         await page
-          .locator('.link-editor-card')
+          .getByRole('dialog', { name: /Create link|Edit link/ })
           .getByLabel('URL')
           .fill('https://example.com/project-notes');
-        await shot(page, theme, 'link-editor', page.locator('.link-editor-card'));
+        await shot(
+          page,
+          theme,
+          'link-editor',
+          page.getByRole('dialog', { name: /Create link|Edit link/ }),
+        );
       });
     });
   }

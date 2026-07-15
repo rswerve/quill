@@ -1,0 +1,99 @@
+/* LinkEditor — module-scoped popover styles (hashed, private to the component).
+   Design tokens resolve from src/styles/tokens.css. The active-anchor highlight
+   (.link-editor-anchor-active) is NOT here: it's applied imperatively by Toolbar
+   to the generated editor link DOM, so it stays a global cross-boundary hook in
+   App.css (see docs/css-modules.md). */
+.card {
+  position: fixed;
+  z-index: 120; /* above the document shell, below modal overlays (200) */
+  width: 330px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: 11px;
+  box-shadow: var(--shadow-pop);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 9px;
+}
+.row label {
+  width: 34px;
+  flex: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1;
+  letter-spacing: 0.6px;
+  text-align: right;
+  text-transform: uppercase;
+}
+.input {
+  min-width: 0;
+  flex: 1;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.25;
+}
+.urlRow .input {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+}
+.spacer {
+  flex: 1;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.remove {
+  color: var(--removed);
+  border-color: transparent;
+}
+.remove:hover:not(:disabled) {
+  background: var(--removed-bg);
+}
+.apply {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.apply:hover:not(:disabled) {
+  background: var(--accent-hover);
+}

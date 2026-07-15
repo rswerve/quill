@@ -60,10 +60,9 @@ describe('UI type scale', () => {
         '18',
       ]),
     );
-    expect(ruleBody('.link-editor-input')).toContain('font-size: 14px');
     expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
     // Component-specific sizes: read the OWNING module so a generic selector
-    // (.title/.banner) can't false-match another module.
+    // (.title/.banner/.input) can't false-match another module.
     const appModal = readModuleSource('AppModal.module.css');
     expect(appModal).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
     // .message is var(--text-meta) = 12.5px (see the token above).
@@ -72,6 +71,11 @@ describe('UI type scale', () => {
     // the link inherits it via `font: inherit`.
     const updateBanner = readModuleSource('UpdateBanner.module.css');
     expect(updateBanner).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
+    // LinkEditor: text input 14px, the URL row drops to 12.5px mono, buttons 12.5px.
+    const linkEditor = readModuleSource('LinkEditor.module.css');
+    expect(linkEditor).toMatch(/\.input\s*\{[^}]*font-size: 14px/s);
+    expect(linkEditor).toMatch(/\.urlRow \.input\s*\{[^}]*font-size: 12\.5px/s);
+    expect(linkEditor).toMatch(/\.btn\s*\{[^}]*font-size: 12\.5px/s);
     expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
     expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
     expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');

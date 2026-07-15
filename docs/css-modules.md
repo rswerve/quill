@@ -37,6 +37,33 @@ Everything else is component-scoped.
 - Global hooks (`:global(...)`) are allowed only for **genuine cross-boundary
   styling** — not for tests, and not to preserve a name out of habit.
 
+## Theme & context overrides
+
+When a rule targets a component's class from OUTSIDE it — a theme
+(`[data-theme='gruvbox'] .x`) or a layout ancestor (`.workspace .x`) — resolve
+it in this order:
+
+1. **One real context → collapse.** If the component only ever renders in that
+   context (FindBar only exists inside `.workspace`), the "override" IS its
+   canonical styling: fold the effective values into the module's base rules and
+   drop the ancestor selector.
+2. **A genuine variant React knows about → a module-local variant class**
+   (`styles.compact`), toggled in JSX — not an ancestor selector.
+3. **A global environment like theme → prefer a token** that differs per theme so
+   the component reads one value. `:global([data-theme='gruvbox']) .localClass`
+   is a narrow, documented fallback for a behavior-identical migration until a
+   token replaces it.
+4. **An unavoidable stable shell relationship → `:global(.shell) .localClass`,**
+   documented as a cross-boundary dependency. Valid only while the shell
+   container (`.workspace`, `.app`) stays a deliberately global boundary; if it
+   later hashes, the selector migrates with it — it does not survive
+   automatically.
+
+A class applied IMPERATIVELY to DOM the component doesn't own (e.g. Toolbar's
+`classList.add('link-editor-anchor-active')` on a generated editor link) stays a
+**global** class in `App.css` with a comment naming who applies it — the module
+never renders that element.
+
 ## Composition
 
 - **True primitives stay global**; a component uses them by their global class,

@@ -25,7 +25,7 @@ async function pastePlainText(editor: Locator, text: string) {
 }
 
 const linkButton = (page: Page) => page.locator('[title="Link (Cmd+K)"]');
-const linkEditor = (page: Page) => page.locator('.link-editor-card');
+const linkEditor = (page: Page) => page.getByRole('dialog', { name: /Create link|Edit link/ });
 const textInput = (page: Page) => linkEditor(page).getByLabel('Text');
 const urlInput = (page: Page) => linkEditor(page).getByLabel('URL');
 
@@ -68,7 +68,7 @@ test.describe('Link editor', () => {
     await expect(textInput(page)).toHaveValue('home page');
     await expect(urlInput(page)).toHaveValue('https://old.example.com');
     await expect(link).toHaveClass(/link-editor-anchor-active/);
-    await expect(page.locator('.link-editor-card, .formatting-inspector')).toHaveCount(1);
+    await expect(linkEditor(page).or(page.locator('.formatting-inspector'))).toHaveCount(1);
     await expect(page.getByLabel('URL')).toHaveCount(1);
     await expect(page.locator('.link-popover')).toHaveCount(0);
   });
