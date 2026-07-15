@@ -220,7 +220,7 @@
   --text-doc-base: 18px;
   --text-doc-title: 2.111111em; /* 38 / 18 */
   --text-doc-h2: 1.444444em; /* 26 / 18 */
-  --text-body: 1em;
+  --text-doc-body: 1em;
   --text-ui: 13px;
   --text-meta: 12.5px;
   --text-label: 11px;
@@ -812,7 +812,7 @@ select {
   /* Layout minimum so an empty document keeps a comfortable page-sized surface */
   min-height: 912px;
   font-family: var(--font-doc-body);
-  font-size: var(--text-body);
+  font-size: var(--text-doc-body);
   font-weight: 400;
   line-height: 1.8;
   color: var(--color-ink);
