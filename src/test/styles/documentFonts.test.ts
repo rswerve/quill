@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css =
+  readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8') +
+  '\n' +
+  readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
 const html = readFileSync(join(process.cwd(), 'index.html'), 'utf8');
 const main = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8');
 

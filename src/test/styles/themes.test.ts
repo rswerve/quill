@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css =
+  readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8') +
+  '\n' +
+  readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
 const toolbar = readFileSync(join(process.cwd(), 'src/components/Toolbar.tsx'), 'utf8');
 
 function themeBody(id: 'paper' | 'gruvbox'): string {

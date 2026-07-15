@@ -10,7 +10,10 @@ import { join } from 'node:path';
 // Read via fs (not Vite's `?raw`, which returns empty for `.css` under vitest —
 // the CSS plugin intercepts the extension first). Paths resolve from the repo
 // root (vitest runs with cwd = repo root).
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css =
+  readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8') +
+  '\n' +
+  readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
 
 /**
  * Concatenate the bodies of every CSS rule that paints the page surface itself —
