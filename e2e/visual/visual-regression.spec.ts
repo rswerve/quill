@@ -580,9 +580,7 @@ test.describe('visual regression safety net', () => {
         await expect(composer.getByRole('note')).toHaveText(
           'No Claude session linked yet — note works offline.',
         );
-        await expect(
-          composer.getByRole('button', { name: 'Link a session to ask' }),
-        ).toBeVisible();
+        await expect(composer.getByRole('button', { name: 'Link a session to ask' })).toBeVisible();
         await composerInput.fill('A new margin thought.');
         const panelList = activeTabHost(page).locator('.comment-panel-list');
         const panelScrollEnd = await panelList.evaluate((element) => {
