@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { Comment, TrackedChangeInfo } from '../types';
 import CommentCard from './CommentCard';
@@ -408,7 +408,12 @@ export default function CommentLayer({
   // must remain visibly clear until the document actually scrolls again. A
   // composer/layout update can otherwise leave the sync baseline one render
   // behind and immediately reselect the nearest annotation.
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): the generation bump must land in the commit
+  // phase, BEFORE the browser runs any pending pre-paint requestAnimationFrame,
+  // so a stale active-sync frame is guaranteed to observe the new generation and
+  // decline to reactivate. A passive effect runs after paint and could lose that
+  // race under load.
+  useLayoutEffect(() => {
     const previous = previousActivePanelCardIdRef.current;
     if (previous !== null && activePanelCardId === null) {
       lastActiveSyncScrollTopRef.current = scrollTop;
