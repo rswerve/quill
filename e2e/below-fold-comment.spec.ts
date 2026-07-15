@@ -61,7 +61,7 @@ test('a last-line comment stays reachable without extending document scroll', as
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(page.locator('.editor-bottom-spacer')).toHaveCount(0);
 
-  const panelList = page.locator('.comment-panel-list');
+  const panelList = page.locator('[data-comment-list]');
   const card = page.locator('[data-comment-card]');
   await expect(card).toBeVisible();
   await expect(
@@ -76,7 +76,7 @@ test('a last-line comment stays reachable without extending document scroll', as
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const area = document.querySelector('.comment-panel-list') as HTMLElement;
+        const area = document.querySelector('[data-comment-list]') as HTMLElement;
         const el = document.querySelector('[data-comment-card]') as HTMLElement;
         const a = area.getBoundingClientRect();
         const c = el.getBoundingClientRect();

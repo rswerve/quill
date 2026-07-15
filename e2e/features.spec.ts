@@ -93,7 +93,7 @@ test('blank document and comments panel show restrained Studio empty states', as
   await expect(documentEmpty).toContainText('Start writing… select text to comment');
   await expect(documentEmpty.locator('kbd')).toHaveText('⌘/');
 
-  const commentsEmpty = page.locator('.comments-empty-state');
+  const commentsEmpty = page.locator('[data-empty-comments]');
   await expect(commentsEmpty).toBeVisible();
   await expect(commentsEmpty).toContainText('No comments yet');
   await expect(commentsEmpty).toContainText('Select text and press + to add a note or ask Claude.');
@@ -747,7 +747,7 @@ test('submitting a comment creates a comment card', async ({ page }) => {
   await addCommentViaPlusButton(page, 'this needs work');
   await expect(page.locator('[data-comment-card]').first()).toBeVisible();
   await expect(page.locator('[data-comment-card]').first()).toContainText('this needs work');
-  await expect(page.locator('.comments-empty-state')).toHaveCount(0);
+  await expect(page.locator('[data-empty-comments]')).toHaveCount(0);
 });
 
 test('commented text is wrapped in <mark data-comment-id>', async ({ page }) => {

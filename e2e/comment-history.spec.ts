@@ -84,7 +84,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await openReviewFile(page, paragraphs, comments);
 
   const activeTab = activeTabHost(page);
-  const panelList = activeTab.locator('.comment-panel-list');
+  const panelList = activeTab.locator('[data-comment-list]');
   const editorScroll = activeTab.locator('.editor-scroll-area');
   const resolvedFilter = activeTab.getByRole('button', { name: 'Show resolved comments' });
   await expect(resolvedFilter).toHaveText('Open');
@@ -108,7 +108,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
   await resolvedFilter.click();
-  const history = activeTab.locator('.comment-history-list');
+  const history = activeTab.locator('[data-resolved-list]');
   await expect(resolvedFilter).toHaveText('Resolved');
   await expect(resolvedFilter).toHaveAttribute('aria-pressed', 'true');
   await expect(history).toBeVisible();
@@ -171,14 +171,14 @@ test('View suggestion from Resolved switches to Open before focusing the existin
 
   const activeTab = activeTabHost(page);
   await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
-  await expect(activeTab.locator('.comment-history-list')).toBeVisible();
+  await expect(activeTab.locator('[data-resolved-list]')).toBeVisible();
   await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await page.getByRole('button', { name: /suggestions?/i }).click();
 
   await expect(activeTab.getByRole('button', { name: 'Show resolved comments' })).toContainText(
     'Open',
   );
-  await expect(page.locator('.comment-history-list')).toHaveCount(0);
+  await expect(page.locator('[data-resolved-list]')).toHaveCount(0);
   await expect(page.locator('[data-active]')).toBeVisible();
 });
 

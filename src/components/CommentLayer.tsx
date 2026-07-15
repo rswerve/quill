@@ -9,6 +9,8 @@ import CommentComposerCard, { type ComposerIntent } from './CommentComposerCard'
 import AnnotationGutter from './AnnotationGutter';
 import type { SelectionInfo } from './Editor';
 import { groupSuggestionCards } from '../utils/suggestionCards';
+import { cx } from '../utils/cx';
+import styles from './CommentLayer.module.css';
 import {
   nearestGutterTick,
   panelNudgeTarget,
@@ -681,7 +683,7 @@ export default function CommentLayer({
 
   return (
     <section
-      className="comments-view panel-view"
+      className={cx(styles.view, 'panel-view')}
       hidden={hidden}
       aria-label="Comments and suggestions"
     >
@@ -695,7 +697,9 @@ export default function CommentLayer({
 
       <div
         ref={panelListRef}
-        className={`comment-panel-list${showResolved ? ' comment-history-list' : ''}`}
+        className={styles.list}
+        data-comment-list
+        data-resolved-list={showResolved || undefined}
         onScroll={handlePanelScroll}
         onWheel={markPanelUserIntent}
         onPointerDown={markPanelUserIntent}
@@ -708,8 +712,8 @@ export default function CommentLayer({
         tabIndex={0}
       >
         {listIsEmpty && (
-          <div className="comments-empty-state">
-            <span className="comments-empty-quote" aria-hidden>
+          <div className={styles.empty} data-empty-comments>
+            <span className={styles.emptyQuote} aria-hidden>
               ”
             </span>
             <strong>{showResolved ? 'No resolved comments' : 'No comments yet'}</strong>

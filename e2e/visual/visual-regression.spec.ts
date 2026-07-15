@@ -515,7 +515,7 @@ test.describe('visual regression safety net', () => {
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
         const active = activeTabHost(page);
         await active.getByRole('button', { name: 'Show resolved comments' }).click();
-        await expect(active.locator('.comment-history-list')).toBeVisible();
+        await expect(active.locator('[data-resolved-list]')).toBeVisible();
         await shot(page, theme, 'comments-resolved');
       });
 
@@ -587,7 +587,7 @@ test.describe('visual regression safety net', () => {
         );
         await expect(composer.getByRole('button', { name: 'Link a session to ask' })).toBeVisible();
         await composerInput.fill('A new margin thought.');
-        const panelList = activeTabHost(page).locator('.comment-panel-list');
+        const panelList = activeTabHost(page).locator('[data-comment-list]');
         const panelScrollEnd = await panelList.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
           return element.scrollHeight - element.clientHeight;

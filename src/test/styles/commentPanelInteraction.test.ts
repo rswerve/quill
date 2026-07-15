@@ -3,13 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 const css = readAppStyles();
 
-function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
-  if (!match) throw new Error(`${selector} is missing from App.css`);
-  return match[1];
-}
-
 describe('flat comment-panel interaction', () => {
   it('pins both-theme gutter and focus tokens to the handoff palette', () => {
     expect(css).toContain('--gutter-note: #8B8371');
@@ -23,7 +16,10 @@ describe('flat comment-panel interaction', () => {
   });
 
   it('uses one independently scrolling list with the specified density', () => {
-    const list = ruleBody('.comment-panel-list');
+    // The panel list is module-scoped (CommentLayer.module.css); `.list` is the
+    // module-local scroll container.
+    const commentLayer = readModuleSource('CommentLayer.module.css');
+    const list = commentLayer.match(/\.list\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(list).toContain('padding: 14px');
     expect(list).toContain('gap: 12px');
     expect(list).toContain('overflow-y: auto');

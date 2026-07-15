@@ -761,7 +761,7 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await expect(chip).toBeVisible();
     await chip.click();
 
-    await expect(page.locator('.comment-history-list')).toBeVisible();
+    await expect(page.locator('[data-resolved-list]')).toBeVisible();
     await expect(
       page.locator('[data-comment-card][data-card-resolved][data-active]'),
     ).toBeVisible();
