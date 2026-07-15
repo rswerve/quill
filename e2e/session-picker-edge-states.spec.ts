@@ -11,7 +11,7 @@ const EXISTING_SESSION = {
 };
 
 async function openPicker(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
   const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible();
   return picker;

@@ -561,7 +561,7 @@ test.describe('visual regression safety net', () => {
             },
           },
         });
-        await page.getByRole('button', { name: 'Claude session', exact: true }).click();
+        await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
         const sessionPicker = page.getByRole('dialog', { name: 'Link Claude Code session' });
         await expect(sessionPicker).toBeVisible();
         await sessionPicker.getByRole('button', { name: 'Research Notes.md' }).click();
@@ -623,7 +623,7 @@ test.describe('visual regression safety net', () => {
           { trustedSidecarPaths: [DOC_PATH] },
         );
 
-        const footer = page.locator('footer');
+        const footer = page.getByRole('contentinfo', { name: 'Document status' });
         await expect(
           footer.getByTitle(`Reference folder: ${contextFolder} (click to change)`),
         ).toBeVisible();
@@ -673,9 +673,17 @@ test.describe('visual regression safety net', () => {
           'Zoom keeps document chrome fixed while prose reflows.',
         );
         for (const zoom of [0.6, 1, 2.4]) {
-          if (zoom === 1) await page.getByLabel('Zoom level').dblclick();
+          if (zoom === 1)
+            await page
+              .getByRole('group', { name: 'Document zoom' })
+              .getByRole('status', { name: 'Zoom level' })
+              .dblclick();
           else await page.getByRole('slider', { name: 'Zoom' }).fill(String(zoom));
-          await expect(page.getByLabel('Zoom level')).toHaveText(`${zoom * 100}%`);
+          await expect(
+            page
+              .getByRole('group', { name: 'Document zoom' })
+              .getByRole('status', { name: 'Zoom level' }),
+          ).toHaveText(`${zoom * 100}%`);
           await shot(page, theme, `zoom-${zoom * 100}`, activeTabHost(page).locator('.workspace'));
         }
       });

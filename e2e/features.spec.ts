@@ -70,7 +70,9 @@ async function addCommentViaPlusButton(page: Page, replyText: string) {
 
 async function setZoom(page: Page, zoom: number) {
   await page.getByRole('slider', { name: 'Zoom' }).fill(String(zoom));
-  await expect(page.getByLabel('Zoom level')).toHaveText(`${Math.round(zoom * 100)}%`);
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText(`${Math.round(zoom * 100)}%`);
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
@@ -1148,7 +1150,9 @@ test('document title shows dirty bullet when modified', async ({ page }) => {
 test('zoom slider in footer is present', async ({ page }) => {
   await setup(page);
   await expect(page.getByRole('slider', { name: 'Zoom' })).toBeVisible();
-  await expect(page.getByLabel('Zoom level')).toContainText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toContainText('100%');
 });
 
 test('zoom step buttons change zoom and disable at the bounds', async ({ page }) => {
@@ -1157,9 +1161,13 @@ test('zoom step buttons change zoom and disable at the bounds', async ({ page })
   const zoomOut = page.getByRole('button', { name: 'Zoom out' });
 
   await zoomIn.click();
-  await expect(page.getByLabel('Zoom level')).toHaveText('112%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('112%');
   await zoomOut.click();
-  await expect(page.getByLabel('Zoom level')).toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
 
   await setZoom(page, 0.6);
   await expect(zoomOut).toBeDisabled();
@@ -1175,7 +1183,9 @@ test('Cmd+= zoom shortcut increases zoom', async ({ page }) => {
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('=');
   await page.keyboard.up('ControlOrMeta');
-  await expect(page.getByLabel('Zoom level')).not.toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).not.toHaveText('100%');
 });
 
 test('Cmd+- zoom shortcut decreases zoom', async ({ page }) => {
@@ -1183,7 +1193,9 @@ test('Cmd+- zoom shortcut decreases zoom', async ({ page }) => {
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('-');
   await page.keyboard.up('ControlOrMeta');
-  await expect(page.getByLabel('Zoom level')).not.toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).not.toHaveText('100%');
 });
 
 test('Cmd+0 resets zoom to 100%', async ({ page }) => {
@@ -1194,14 +1206,21 @@ test('Cmd+0 resets zoom to 100%', async ({ page }) => {
   await page.keyboard.down('ControlOrMeta');
   await page.keyboard.press('0');
   await page.keyboard.up('ControlOrMeta');
-  await expect(page.getByLabel('Zoom level')).toContainText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toContainText('100%');
 });
 
 test('double-clicking the zoom label resets to 100%', async ({ page }) => {
   await setup(page);
   await setZoom(page, 2.4);
-  await page.getByLabel('Zoom level').dblclick();
-  await expect(page.getByLabel('Zoom level')).toHaveText('100%');
+  await page
+    .getByRole('group', { name: 'Document zoom' })
+    .getByRole('status', { name: 'Zoom level' })
+    .dblclick();
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
 });
 
 test('zoom scales document text and reflows inside a fixed-width page', async ({ page }) => {

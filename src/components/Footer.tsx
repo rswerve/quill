@@ -210,7 +210,11 @@ export default function Footer({
         <span className={cx(styles.binding, styles.ai, aiSession && styles.linked)}>
           <button
             className={styles.bindingLabel}
-            aria-label="Claude session"
+            aria-label={
+              aiSession
+                ? `Change Claude session ${aiSession.sessionId.slice(0, 8).toUpperCase()}`
+                : 'Link Claude session'
+            }
             onClick={onOpenSessionPicker}
             title={
               aiSession

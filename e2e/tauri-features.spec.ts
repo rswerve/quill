@@ -271,7 +271,7 @@ test('session picker headlines prefer document name, then AI title, then untitle
   };
 
   await setupWithIPC(page, { handler });
-  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
 
   const sessionDialog = page.getByRole('dialog', { name: 'Link Claude Code session' });
   for (const title of ['Design Brief.md', 'Claude fallback title', 'untitled-805faa5a']) {
@@ -331,7 +331,7 @@ test('linking a saved document records its session name for the next picker open
       'Meeting Notes.md',
   );
 
-  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
   await expect(
     page
       .getByRole('dialog', { name: 'Link Claude Code session' })

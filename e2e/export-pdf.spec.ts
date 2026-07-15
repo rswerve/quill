@@ -61,7 +61,11 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
   test('screen text zoom does not carry into print', async ({ page }) => {
     await setup(page);
     await page.getByRole('slider', { name: 'Zoom' }).fill('2.4');
-    await expect(page.getByLabel('Zoom level')).toHaveText('240%');
+    await expect(
+      page
+        .getByRole('group', { name: 'Document zoom' })
+        .getByRole('status', { name: 'Zoom level' }),
+    ).toHaveText('240%');
     const screenSize = await page
       .locator('.ProseMirror')
       .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));

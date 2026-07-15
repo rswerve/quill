@@ -133,7 +133,9 @@ test('places the link at the end of the formatting rail and Editing in the topba
 test('persists zoom across reloads and restores the document scale', async ({ page }) => {
   const { editor } = await setup(page);
   await page.getByRole('slider', { name: 'Zoom' }).fill('1.8');
-  await expect(page.getByLabel('Zoom level')).toHaveText('180%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('180%');
   await expect(page.locator('[data-editor-zoom]')).toHaveAttribute('data-editor-zoom', '1.8');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('quill-zoom'))).toBe('1.8');
 
@@ -144,7 +146,9 @@ test('persists zoom across reloads and restores the document scale', async ({ pa
 
   await page.reload();
   await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
-  await expect(page.getByLabel('Zoom level')).toHaveText('180%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('180%');
   await expect(page.locator('[data-editor-zoom]')).toHaveAttribute('data-editor-zoom', '1.8');
   const restoredSize = await page
     .locator('.ProseMirror')

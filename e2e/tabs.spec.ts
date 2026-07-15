@@ -41,13 +41,19 @@ test('mounted tabs preserve independent text, undo, zoom, mode, comments, and su
   await page.locator('.tab-add').click();
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(page.locator('.find-bar')).toHaveCount(0);
-  await expect(page.getByLabel('Zoom level')).toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
   await page.locator('.document-tab').first().click();
   await expect(activeTabHost(page).locator('.find-bar')).toBeVisible();
   await page.getByRole('button', { name: 'Zoom in' }).click();
-  await expect(page.getByLabel('Zoom level')).toHaveText('112%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('112%');
   await page.locator('.document-tab').nth(1).click();
-  await expect(page.getByLabel('Zoom level')).toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
   await page.getByRole('button', { name: 'Suggesting' }).click();
   await activeEditor(page).fill('Second tracked words');
   await expect(activeEditor(page).locator('ins')).toHaveText('Second tracked words');
@@ -58,7 +64,9 @@ test('mounted tabs preserve independent text, undo, zoom, mode, comments, and su
   await expect(activeEditor(page)).toContainText('First document words');
   await expect(activeTabHost(page).locator('.comment-card')).toContainText('First tab comment');
   await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
-  await expect(page.getByLabel('Zoom level')).toHaveText('112%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('112%');
   await expect(page.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
     'true',

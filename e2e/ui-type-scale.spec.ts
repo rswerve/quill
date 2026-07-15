@@ -308,7 +308,11 @@ test('form controls and every review-card kind use the intended UI scale and fam
   await page.locator('.add-comment-btn').click();
   await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
 
-  await expectType(page.getByLabel('Zoom level'), '10px', { checkUiFamily: false });
+  await expectType(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+    '10px',
+    { checkUiFamily: false },
+  );
   await expectType(page.getByLabel('Claude model'), '10px', { checkUiFamily: false });
   await expectType(page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true }), '10px', {
     checkUiFamily: false,
@@ -345,7 +349,7 @@ test('session picker body text and controls inherit the app font', async ({ page
       return original(cmd, args);
     };
   });
-  await page.getByRole('button', { name: 'Claude session', exact: true }).click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
 
   // SessionPicker's type scale (header/rows/preview) is asserted from
   // SessionPicker.module.css source in the unit type-scale suite (classes are
