@@ -972,7 +972,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   // Chrome reads word/character counts and the current line/column through a
   // value snapshot rather than reaching into this tab. Selection-only
-  // transactions matter for line/column even when the document did not update.
+  // transactions matter even when the document did not update — they move the
+  // line/column and change the selected word/character counts.
   useEffect(() => {
     if (!editor) return;
     const refreshChrome = () => setChromeRevision((revision) => revision + 1);
