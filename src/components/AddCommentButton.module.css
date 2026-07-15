@@ -1,0 +1,37 @@
+/* AddCommentButton — module-scoped styles (hashed, private to the component).
+   The floating "+" affordance shown next to a text selection. It renders
+   OUTSIDE the .comments panel (a position:fixed sibling in .studio-body), so it
+   has no panel context. Design tokens resolve from src/styles/tokens.css.
+
+   The historic base `.add-comment-btn` accent-circle rule was already fully
+   overridden by `.studio-body .add-comment-btn` (the only live render context),
+   so this is the flattened effective style — base ∪ studio-body override, one
+   rule. The theme-specific shadow stays a documented narrow global fallback (the
+   shell owns the theme attribute). */
+.btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-app);
+  color: var(--accent-text);
+  font-size: 18px;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(50, 42, 25, 0.14);
+  transition:
+    background 0.1s,
+    transform 0.1s;
+  z-index: 20;
+  cursor: pointer;
+}
+:global(:root[data-theme='gruvbox']) .btn {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.36);
+}
+.btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+  transform: scale(1.05);
+}

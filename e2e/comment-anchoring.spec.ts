@@ -16,7 +16,7 @@ async function selectCurrentLine(page: Page) {
 }
 
 async function addComment(page: Page, text: string) {
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill(text);
   await textarea.press('ControlOrMeta+Shift+Enter');

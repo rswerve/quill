@@ -46,7 +46,7 @@ test('a last-line comment stays reachable without extending document scroll', as
     `Paragraph ${lines - 1} — some body text to give the document height.`,
   );
 
-  const plusBtn = page.locator('.add-comment-btn');
+  const plusBtn = page.getByRole('button', { name: 'Add comment to selection' });
   await plusBtn.click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill('last-line note');

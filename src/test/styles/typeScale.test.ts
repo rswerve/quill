@@ -84,7 +84,9 @@ describe('UI type scale', () => {
     expect(linkEditor).toMatch(/\.input\s*\{[^}]*font-size: 14px/s);
     expect(linkEditor).toMatch(/\.urlRow \.input\s*\{[^}]*font-size: 12\.5px/s);
     expect(linkEditor).toMatch(/\.btn\s*\{[^}]*font-size: 12\.5px/s);
-    expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
+    expect(readModuleSource('AddCommentButton.module.css')).toMatch(
+      /\.btn\s*\{[^}]*font-size: 18px/s,
+    );
     expect(readModuleSource('SessionPicker.module.css')).toMatch(
       /\.close\s*\{[^}]*font-size: 18px/s,
     );

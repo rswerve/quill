@@ -22,7 +22,7 @@ async function selectAll(page: Page) {
 }
 
 async function addCommentToSelection(page: Page, body: string) {
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await page.locator('.add-comment-compose textarea').fill(body);
   await page.getByRole('button', { name: 'Add note' }).click();
 }

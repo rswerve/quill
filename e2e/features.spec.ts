@@ -60,7 +60,7 @@ async function selectLastNChars(page: Page, n: number) {
 
 async function addCommentViaPlusButton(page: Page, replyText: string) {
   // The floating "+" button only appears while a selection is active.
-  const btn = page.locator('.add-comment-btn');
+  const btn = page.getByRole('button', { name: 'Add comment to selection' });
   await btn.click();
   const textarea = page.locator('.add-comment-compose textarea');
   await textarea.fill(replyText);
@@ -671,23 +671,23 @@ test('floating "+" button appears when text is selected', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await expect(page.locator('.add-comment-btn')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add comment to selection' })).toBeVisible();
 });
 
 test('floating "+" button disappears when selection collapses', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await expect(page.locator('.add-comment-btn')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add comment to selection' })).toBeVisible();
   await page.keyboard.press('End'); // collapses
-  await expect(page.locator('.add-comment-btn')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add comment to selection' })).not.toBeVisible();
 });
 
 test('clicking "+" opens compose box', async ({ page }) => {
   await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   const composer = page.locator('.comments .add-comment-compose');
   await expect(composer).toBeVisible();
   await expect(composer.locator('.comment-composer-quote')).toContainText('hello world');
@@ -698,7 +698,7 @@ test('selected range stays highlighted while composing a comment', async ({ page
   await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   // The textarea has focus (native selection is gone) — the decoration
   // stands in for it.
   await expect(page.locator('.ProseMirror .pending-comment')).toContainText('hello world');
@@ -719,7 +719,7 @@ test('pending highlight disappears when the composer is cancelled', async ({ pag
   const { editor } = await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
@@ -730,7 +730,7 @@ test('Escape in the composer also clears the pending highlight', async ({ page }
   await setup(page);
   await page.keyboard.type('hello world');
   await selectAll(page);
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
   await page.locator('.add-comment-compose textarea').press('Escape');
   await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
@@ -1272,7 +1272,7 @@ test('add-comment button stays aligned with the selection across zoom levels', a
   }
   await selectLastNChars(page, 6);
 
-  const btn = page.locator('.add-comment-btn');
+  const btn = page.getByRole('button', { name: 'Add comment to selection' });
   await expect(btn).toBeVisible();
 
   const deltaAt = async () => {

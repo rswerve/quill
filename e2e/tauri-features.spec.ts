@@ -353,7 +353,7 @@ async function fireAIReplyAndCaptureCompactionCall(
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, 'content to comment on');
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await page.locator('.add-comment-compose textarea').fill('Evaluate');
   await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
   await expect

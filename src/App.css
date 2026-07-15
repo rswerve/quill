@@ -796,29 +796,7 @@ del.track-delete {
 }
 
 /* ── Add comment button / compose ───────────────────────────────── */
-.add-comment-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-  color: #fff;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.1s,
-    transform 0.1s;
-  z-index: 20;
-}
-.add-comment-btn:hover {
-  background: var(--color-accent-dark);
-  transform: scale(1.05);
-}
-
+/* .add-comment-btn moved to components/AddCommentButton.module.css (CSS slice 13). */
 .add-comment-compose {
   width: calc(var(--comment-panel-width) - 20px);
   background: var(--color-page);
@@ -1502,21 +1480,6 @@ del.track-delete {
 /* Selection comments use the hybrid flow from Design Q4: the trigger stays
    beside the selection, while the captured quote and composer join the flat
    panel list at their document position. */
-.studio-body .add-comment-btn {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-app);
-  color: var(--accent-text);
-  box-shadow: 0 4px 14px rgba(50, 42, 25, 0.14);
-}
-:root[data-theme='gruvbox'] .studio-body .add-comment-btn {
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.36);
-}
-.studio-body .add-comment-btn:hover {
-  background: var(--bg-hover);
-  color: var(--accent-text);
-}
 .comments .add-comment-compose {
   position: relative;
   right: auto;
@@ -2071,7 +2034,6 @@ del.track-delete {
   .status,
   .comment-layer,
   .find-bar,
-  .add-comment-btn,
   .add-comment-compose {
     display: none !important;
   }

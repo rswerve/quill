@@ -249,7 +249,7 @@ test('document chat and anchored Claude replies never resume the same session co
     .click();
   await activeEditor(page).click();
   await page.keyboard.press('ControlOrMeta+a');
-  await page.locator('.add-comment-btn').click();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await page.locator('.add-comment-compose textarea').fill('Please tighten this');
   await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
 

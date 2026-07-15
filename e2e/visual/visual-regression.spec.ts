@@ -514,7 +514,7 @@ test.describe('visual regression safety net', () => {
         ];
         await openVisualDocument(page, theme, paragraphs.join('\n\n'), sidecar({ comments }));
         await selectText(page, 'New selection.');
-        await page.locator('.add-comment-btn').click();
+        await page.getByRole('button', { name: 'Add comment to selection' }).click();
         await expect(page.locator('.add-comment-compose')).toBeVisible();
         await page.locator('.add-comment-compose textarea').fill('A new margin thought.');
         const panelList = activeTabHost(page).locator('.comment-panel-list');

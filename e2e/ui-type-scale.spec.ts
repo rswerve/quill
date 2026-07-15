@@ -306,8 +306,8 @@ test('form controls and every review-card kind use the intended UI scale and fam
   // LinkEditor's type scale is asserted from its module source in the unit
   // type-scale suite (its classes are hashed).
 
-  await expect(page.locator('.add-comment-btn')).toBeVisible();
-  await page.locator('.add-comment-btn').click();
+  await expect(page.getByRole('button', { name: 'Add comment to selection' })).toBeVisible();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
 
   await expectType(
