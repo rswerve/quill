@@ -1,8 +1,9 @@
 /* PanelHeader — module-scoped styles (hashed, private to the component). The
    review panel's Comments/Chat toggle header. Design tokens resolve from
    src/styles/tokens.css. `.grow` (the flex spacer) stays global — it's shared
-   (Topbar, ChatPanel). The panel BODIES (.panel-view/.comments-view) and
-   .count-pill belong to CommentLayer/ChatPanel and stay global for now. */
+   (Topbar, ChatPanel). `.panel-view` stays global (shared with ChatPanel); the
+   CommentLayer body (`.comments-view`, the panel list, empty state) is now
+   module-scoped in CommentLayer.module.css; `.count-pill` stays global. */
 .head {
   height: var(--comment-panel-header-height);
   flex: none;

@@ -518,22 +518,6 @@ del.track-delete {
    is the primary signal, while these controls remain immediately scannable. */
 
 /* ── Comment panel ──────────────────────────────────────────────── */
-.comment-layer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: var(--comment-panel-width);
-  height: 100%;
-  background: var(--color-chrome);
-  border-left: 0.5px solid var(--color-border);
-  overflow: hidden;
-  padding-top: var(--space-md);
-}
-
-.comment-layer > .show-resolved-btn {
-  pointer-events: auto;
-}
-
 /* ── Add comment button / compose ───────────────────────────────── */
 /* .add-comment-btn moved to components/AddCommentButton.module.css (CSS slice 13). */
 /* .add-comment-compose moved to components/CommentComposerCard.module.css (CSS slice 15). */
@@ -591,29 +575,6 @@ del.track-delete {
 /* App modal (confirmations & notices) styles are module-scoped in
    src/components/AppModal.module.css. Print hiding is global via the
    [data-print-hidden] policy rule below. */
-
-/* ── Show resolved button ───────────────────────────────────────── */
-.show-resolved-btn {
-  display: block;
-  width: calc(100% - 20px);
-  margin: 0 10px var(--space-md);
-  font-size: var(--text-meta);
-  font-weight: 300;
-  color: var(--color-ink-light);
-  background: transparent;
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 4px 10px;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  text-align: center;
-}
-.show-resolved-btn:hover {
-  background: var(--color-accent-light);
-  color: var(--color-accent-dark);
-}
-
-/* ── Suggestion cards ──────────────────────────────────────────── */
 
 /* Footer / status bar is module-scoped in src/components/Footer.module.css: the
    two-generation cascade collapsed to effective values, and the old dead footer
@@ -860,7 +821,7 @@ del.track-delete {
   left: 24px;
 }
 
-.comments.comment-layer {
+.comment-layer {
   position: relative;
   inset: auto;
   width: calc(var(--comment-panel-width) + var(--annotation-gutter-width));

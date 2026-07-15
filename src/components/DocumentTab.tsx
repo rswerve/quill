@@ -1609,7 +1609,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             })()}
         </div>
 
-        <aside className="comment-layer comments" ref={commentLayerRef} aria-label="Review panel">
+        <aside className="comment-layer" ref={commentLayerRef} aria-label="Review panel">
           <PanelHeader
             mode={panelMode}
             commentCount={unresolvedCommentCount + pendingSuggestionCount}
