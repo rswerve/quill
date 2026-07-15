@@ -68,7 +68,8 @@ test.describe('Link editor', () => {
     await expect(textInput(page)).toHaveValue('home page');
     await expect(urlInput(page)).toHaveValue('https://old.example.com');
     await expect(link).toHaveClass(/link-editor-anchor-active/);
-    await expect(linkEditor(page).or(page.locator('.formatting-inspector'))).toHaveCount(1);
+    // Exactly one dialog is open, and the assertion above pins it as LinkEditor.
+    await expect(page.getByRole('dialog')).toHaveCount(1);
     await expect(page.getByLabel('URL')).toHaveCount(1);
     await expect(page.locator('.link-popover')).toHaveCount(0);
   });
