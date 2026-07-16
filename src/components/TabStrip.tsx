@@ -4,6 +4,8 @@ export interface TabStripItem {
   id: string;
   title: string;
   isDirty: boolean;
+  /** Unresolved external conflict — shown as a warning marker on the tab. */
+  conflict?: boolean;
 }
 
 interface TabStripProps {
@@ -97,6 +99,15 @@ export default function TabStrip({ tabs, activeTabId, onActivate, onClose, onNew
             }}
           >
             <span className="document-tab-title">{tab.title}</span>
+            {tab.conflict && (
+              <span
+                className="document-tab-conflict"
+                title="Changed on disk — needs attention"
+                aria-label="Changed on disk"
+              >
+                ⚠
+              </span>
+            )}
             {tab.isDirty && (
               <span className="document-tab-dirty" title="Unsaved changes" aria-label="Unsaved" />
             )}

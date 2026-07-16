@@ -127,13 +127,15 @@ export function tabsReducer(state: TabRegistryState, action: TabAction): TabRegi
           initialFilePath: null,
           title: snapshot.title,
           isDirty: snapshot.isDirty,
+          conflict: snapshot.conflict,
         };
         changed =
           changed ||
           next.filePath !== tab.filePath ||
           next.initialFilePath !== tab.initialFilePath ||
           next.title !== tab.title ||
-          next.isDirty !== tab.isDirty;
+          next.isDirty !== tab.isDirty ||
+          next.conflict !== tab.conflict;
         return next;
       });
       // Skip the publish entirely when nothing actually changed (matches the

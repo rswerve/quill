@@ -1,0 +1,73 @@
+/* ConflictBanner — module-scoped styles (hashed, private to the component). Design
+   tokens resolve from src/styles/tokens.css and are theme-aware. The track-del
+   ("attention") palette reads as "needs resolution" in both themes; the visual
+   treatment is refined with its baseline cell separately. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-lg);
+  background: var(--color-track-del-bg);
+  border-bottom: 0.5px solid var(--color-track-del-line);
+  color: var(--color-track-del-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
+  flex-shrink: 0;
+  animation: conflict-flash 0.55s ease;
+}
+
+.message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.action,
+.primary {
+  border: 0.5px solid var(--color-track-del-line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px var(--space-sm);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primary {
+  background: var(--color-track-del-line);
+  color: var(--color-page);
+}
+
+.action:hover:not(:disabled),
+.primary:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.action:disabled,
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@keyframes conflict-flash {
+  0% {
+    background: var(--color-track-del-line);
+  }
+  100% {
+    background: var(--color-track-del-bg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner {
+    animation: none;
+  }
+}

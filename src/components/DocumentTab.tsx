@@ -14,6 +14,7 @@ import {
   type SaveOutcome,
 } from '../hooks/useFileManager';
 import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
+import ConflictBanner from './ConflictBanner';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
@@ -141,6 +142,9 @@ export interface DocumentTabMetaSnapshot {
   filePath: string | null;
   title: string;
   isDirty: boolean;
+  /** This tab has an unresolved external conflict — surfaced on the tab strip so a
+   *  background tab's conflict is visible even while its in-document banner is hidden. */
+  conflict: boolean;
 }
 
 interface DocumentTabProps {
@@ -265,6 +269,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getBaselines,
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  // External-conflict state for this tab: which on-disk file changed underneath us.
+  // Persists through edits and failed/cancelled resolutions; cleared only by a
+  // successful Overwrite / Save-a-Copy / Reload, or by New / a successful Open.
+  const [saveConflict, setSaveConflict] = useState<{ which: 'doc' | 'sidecar' } | null>(null);
+  // True while a resolution job (Overwrite / Save-a-Copy / Reload) is running, so the
+  // banner disables its actions. A bump of `conflictFlash` re-announces the banner
+  // when a conflicted Cmd+S is pressed (no write happens).
+  const [resolvingConflict, setResolvingConflict] = useState(false);
+  const [conflictFlash, setConflictFlash] = useState(0);
 
   const chooseContextFolder = useCallback(
     async (permissionPath = filePath) => {
@@ -644,6 +657,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       },
       promptForSession = true,
     ) => {
+      // A successful (re)load reconciles the document with disk, resolving any
+      // pending conflict for this tab.
+      setSaveConflict(null);
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
@@ -814,11 +830,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             'to reconcile, or use Save As to write your recovered work to a new file.',
         );
       } else if (outcome.status === 'conflict') {
-        showError(
-          'File changed on disk',
-          `${outcome.path}\n\nThis file was modified outside Quill since it was opened, ` +
-            'so the save was stopped to avoid overwriting those changes.',
-        );
+        // Raise the persistent conflict banner (not a transient modal) so the user
+        // can Overwrite / Save a Copy / Reload. A conflict is sticky until resolved.
+        setSaveConflict({ which: outcome.which });
       }
     },
     [showError],
@@ -901,12 +915,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [runExclusive, performSaveAs]);
 
   const handleSave = useCallback(async () => {
+    // While conflicted, Cmd+S must not write or re-pop a modal — it re-announces the
+    // banner so the user resolves it there (Overwrite / Save a Copy / Reload).
+    if (saveConflict) {
+      setConflictFlash((flash) => flash + 1);
+      return null;
+    }
     if (!filePath) {
       return handleSaveAs();
     }
     const outcome = await requestSave();
     return outcome.status === 'saved' ? outcome.path : null;
-  }, [filePath, requestSave, handleSaveAs]);
+  }, [saveConflict, filePath, requestSave, handleSaveAs]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
   // the chrome and the track-changes/comment markup, leaving a clean copy of
@@ -959,6 +979,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     // can't complete against the old identity (epoch guard is the backstop).
     await flushSaves();
     newFile();
+    setSaveConflict(null); // a brand-new document has nothing to conflict with
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
     editorRef.current?.setContent('');
@@ -973,6 +994,85 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setLastSavedAt(null);
     setPanelMode('comments');
   }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId, flushSaves]);
+
+  // --- External-conflict resolution. Each action runs through the coordinator (never
+  // a raw save) and clears the conflict only on success; a failed/cancelled action
+  // keeps it. Actions are disabled by the banner while `resolvingConflict` is true.
+  const handleOverwriteConflict = useCallback(async () => {
+    if (!filePath || resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      // Overwrite = an explicit same-path Save As: an unconditional write that also
+      // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
+      const outcome = await runExclusive(async () => {
+        const live = getLiveReviewState();
+        return saveFile(
+          getMarkdown(),
+          live.comments,
+          live.suggestions,
+          aiSession,
+          contextFolder,
+          filePath,
+          aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+        );
+      });
+      if (outcome.status === 'saved') {
+        setSaveConflict(null);
+        rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+        rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
+        setLastSavedAt(Date.now());
+      } else {
+        notifySaveOutcome(outcome); // e.g. a protected sidecar still blocks
+      }
+    } finally {
+      setResolvingConflict(false);
+    }
+  }, [
+    filePath,
+    resolvingConflict,
+    runExclusive,
+    saveFile,
+    getLiveReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    notifySaveOutcome,
+  ]);
+
+  const handleSaveCopyConflict = useCallback(async () => {
+    if (resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      const path = await handleSaveAs(); // exclusive Save As to a NEW file
+      if (path) setSaveConflict(null); // now editing the copy — nothing to conflict with
+    } finally {
+      setResolvingConflict(false);
+    }
+  }, [resolvingConflict, handleSaveAs]);
+
+  const handleReloadConflict = useCallback(() => {
+    if (!filePath || resolvingConflict) return;
+    onNotice({
+      title: 'Discard your changes and reload?',
+      message: `${filePath}\n\nThis reloads the file from disk and discards the unsaved changes in this tab. This can't be undone.`,
+      actions: [
+        {
+          label: 'Discard and reload',
+          onClick: async () => {
+            setResolvingConflict(true);
+            try {
+              // performOpenPath flushes, re-reads, and loadFileResult clears the
+              // conflict on success. A failed reload keeps the conflict.
+              await performOpenPath(filePath, false);
+            } finally {
+              setResolvingConflict(false);
+            }
+          },
+        },
+        { label: 'Keep editing', onClick: () => {} },
+      ],
+    });
+  }, [filePath, resolvingConflict, onNotice, performOpenPath]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
@@ -1567,8 +1667,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       filePath,
       title: filePath ? basename(filePath) : 'Untitled',
       isDirty,
+      conflict: saveConflict !== null,
     });
-  }, [filePath, isDirty, onMetaChange, tabId]);
+  }, [filePath, isDirty, saveConflict, onMetaChange, tabId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -1606,6 +1707,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     <>
       <div className="studio-body">
         <div className="workspace doc-scroll" ref={scrollAreaRef}>
+          {saveConflict && (
+            <ConflictBanner
+              which={saveConflict.which}
+              flash={conflictFlash}
+              busy={resolvingConflict}
+              onOverwrite={handleOverwriteConflict}
+              onSaveCopy={handleSaveCopyConflict}
+              onReload={handleReloadConflict}
+            />
+          )}
           {suggestingModeNotice && (
             <div className="suggesting-mode-notice" role="status" aria-live="polite">
               {suggestingModeNotice}
