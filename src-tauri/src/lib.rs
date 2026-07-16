@@ -91,6 +91,13 @@ enum FileFingerprint {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+enum FingerprintedFileContents {
+    Absent,
+    Present { content: String, hash: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 enum AtomicWriteResult {
     Written { hash: String },
@@ -108,6 +115,11 @@ enum ConditionalDeleteResult {
 struct ExistingFileState {
     fingerprint: FileFingerprint,
     metadata: Option<std::fs::Metadata>,
+}
+
+struct ExistingFileContents {
+    bytes: Vec<u8>,
+    metadata: std::fs::Metadata,
 }
 
 struct TemporaryFile {
@@ -173,7 +185,7 @@ fn open_regular_file(path: &Path) -> Result<File, std::io::Error> {
     }
 }
 
-fn existing_file_state(path: &Path) -> Result<ExistingFileState, String> {
+fn read_existing_file(path: &Path) -> Result<Option<ExistingFileContents>, String> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             Err("Refusing to access a symbolic link through Quill".to_string())
@@ -187,19 +199,42 @@ fn existing_file_state(path: &Path) -> Result<ExistingFileState, String> {
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes)
                 .map_err(|error| error.to_string())?;
-            Ok(ExistingFileState {
-                fingerprint: FileFingerprint::Present {
-                    hash: sha256_hex(&bytes),
-                },
-                metadata: Some(metadata),
-            })
+            Ok(Some(ExistingFileContents { bytes, metadata }))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ExistingFileState {
-            fingerprint: FileFingerprint::Absent,
-            metadata: None,
-        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Could not inspect file path: {error}")),
     }
+}
+
+fn existing_file_state(path: &Path) -> Result<ExistingFileState, String> {
+    let Some(existing) = read_existing_file(path)? else {
+        return Ok(ExistingFileState {
+            fingerprint: FileFingerprint::Absent,
+            metadata: None,
+        });
+    };
+    Ok(ExistingFileState {
+        fingerprint: FileFingerprint::Present {
+            hash: sha256_hex(&existing.bytes),
+        },
+        metadata: Some(existing.metadata),
+    })
+}
+
+fn read_file_with_fingerprint_at(path: &Path) -> Result<FingerprintedFileContents, String> {
+    let Some(existing) = read_existing_file(path)? else {
+        return Ok(FingerprintedFileContents::Absent);
+    };
+    let hash = sha256_hex(&existing.bytes);
+    let content = String::from_utf8(existing.bytes)
+        .map_err(|error| format!("File is not valid UTF-8: {error}"))?;
+    Ok(FingerprintedFileContents::Present { content, hash })
+}
+
+#[tauri::command]
+fn read_file_with_fingerprint(path: String) -> Result<FingerprintedFileContents, String> {
+    ensure_allowed_path(&path)?;
+    read_file_with_fingerprint_at(Path::new(&path))
 }
 
 fn expected_state_matches(expected: &ExpectedFileState, actual: &FileFingerprint) -> bool {
@@ -935,6 +970,74 @@ mod tests {
         assert_eq!(result.unwrap(), "");
     }
 
+    // --- typed reads with fingerprints ---
+
+    #[test]
+    fn fingerprinted_read_contract_serializes_absent_and_present() {
+        assert_eq!(
+            serde_json::to_value(FingerprintedFileContents::Absent).unwrap(),
+            serde_json::json!({ "state": "absent" })
+        );
+        assert_eq!(
+            serde_json::to_value(FingerprintedFileContents::Present {
+                content: "# Quill".to_string(),
+                hash: "a".repeat(64),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "state": "present",
+                "content": "# Quill",
+                "hash": "a".repeat(64),
+            })
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_returns_exact_utf8_content_and_hash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unicode.md");
+        let content = "# 日本語\r\nHello 🌍";
+        fs::write(&path, content.as_bytes()).unwrap();
+
+        assert_eq!(
+            read_file_with_fingerprint(path.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Present {
+                content: content.to_string(),
+                hash: sha256_hex(content.as_bytes()),
+            }
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_distinguishes_missing_from_empty() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.comments.json");
+        let empty = dir.path().join("empty.comments.json");
+        fs::write(&empty, []).unwrap();
+
+        assert_eq!(
+            read_file_with_fingerprint(missing.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Absent
+        );
+        assert_eq!(
+            read_file_with_fingerprint(empty.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Present {
+                content: String::new(),
+                hash: sha256_hex(b""),
+            }
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_rejects_non_utf8_instead_of_reporting_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.md");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        let error = read_file_with_fingerprint(path.to_string_lossy().into_owned()).unwrap_err();
+        assert!(error.contains("not valid UTF-8"));
+    }
+
     // --- write_file ---
 
     #[test]
@@ -1536,6 +1639,7 @@ mod tests {
 
         assert!(ensure_allowed_path(link.to_str().unwrap()).is_err());
         assert!(read_file(link.to_string_lossy().into_owned()).is_err());
+        assert!(read_file_with_fingerprint(link.to_string_lossy().into_owned()).is_err());
         assert!(write_file(link.to_string_lossy().into_owned(), "overwrite".to_string()).is_err());
         assert!(write_file_atomic(
             link.to_string_lossy().into_owned(),
@@ -1562,6 +1666,7 @@ mod tests {
         // This must return immediately instead of opening the FIFO and waiting
         // forever for a writer.
         assert!(read_file(fifo.to_string_lossy().into_owned()).is_err());
+        assert!(read_file_with_fingerprint(fifo.to_string_lossy().into_owned()).is_err());
         assert!(write_file(fifo.to_string_lossy().into_owned(), "blocked".to_string()).is_err());
         assert!(write_file_atomic(
             fifo.to_string_lossy().into_owned(),
@@ -1579,6 +1684,7 @@ mod tests {
     fn confined_commands_refuse_disallowed_paths() {
         // The commands themselves enforce the policy, not just the helper.
         assert!(read_file("/etc/passwd".to_string()).is_err());
+        assert!(read_file_with_fingerprint("/etc/passwd".to_string()).is_err());
         assert!(write_file("/tmp/evil.sh".to_string(), "x".to_string()).is_err());
         assert!(delete_file("/tmp/evil.sh".to_string()).is_err());
         assert!(write_file_atomic(
@@ -3477,6 +3583,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_file,
+            read_file_with_fingerprint,
             write_file,
             write_file_atomic,
             delete_file,
