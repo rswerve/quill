@@ -249,7 +249,9 @@ export default function Footer({
             }
           >
             <option value="">
-              {lastKnownModel ? `${formatModelLabel(lastKnownModel)} · AUTO` : 'AUTO'}
+              {/* Auto mode: show the observed model family bare, or AUTO until
+                  one is observed. The tooltip notes it was auto-selected. */}
+              {formatModelLabel(lastKnownModel) ?? 'AUTO'}
             </option>
             {CLAUDE_MODEL_ALIASES.map((model) => (
               <option key={model} value={model}>
@@ -266,7 +268,9 @@ export default function Footer({
             }
           >
             <option value="">
-              {lastKnownEffort ? `${lastKnownEffort.toUpperCase()} · AUTO` : 'AUTO'}
+              {/* Auto mode: show the observed effort bare, or AUTO until one is
+                  observed. Consistent with the model chip. */}
+              {lastKnownEffort ? lastKnownEffort.toUpperCase() : 'AUTO'}
             </option>
             {CLAUDE_EFFORT_LEVELS.map((effort) => (
               <option key={effort} value={effort}>

@@ -49,22 +49,18 @@ describe('Footer Claude model/effort display', () => {
     expect(screen.queryByText('DEFAULT')).toBeNull();
   });
 
-  it('surfaces the last observed model family on the inherit option', () => {
+  it('surfaces the last observed model family, bare, on the inherit option', () => {
     renderFooterWithModel({ lastKnownModel: 'claude-opus-4-8' });
-    // Inherited-but-observed: just the family, marked "· AUTO" so it's clearly
-    // what Claude chose, not an explicit pick.
-    expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue(
-      'OPUS · AUTO',
-    );
+    // Inherited-but-observed: just the family, no "· AUTO" tag — the chip shows
+    // what Claude actually used; the tooltip carries the auto-selected nuance.
+    expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue('OPUS');
   });
 
-  it('shows only the model family (no version or tag) in label and tooltip', () => {
+  it('shows only the model family (no version, tag, or AUTO) in label and tooltip', () => {
     // The live model id carries a version + `[1m]` variant marker (e.g.
     // claude-opus-4-8[1m]); the footer chip and its tooltip show only the family.
     renderFooterWithModel({ lastKnownModel: 'claude-opus-4-8[1m]' });
-    expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue(
-      'OPUS · AUTO',
-    );
+    expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue('OPUS');
     const title =
       screen.getByRole('group', { name: 'Claude settings' }).getAttribute('title') ?? '';
     expect(title).toContain('last observed OPUS');
@@ -84,11 +80,10 @@ describe('Footer Claude model/effort display', () => {
     expect(title).not.toMatch(/Model:[^\n]*Auto/);
   });
 
-  it('surfaces the last observed effort on the inherit option', () => {
+  it('surfaces the last observed effort, bare, on the inherit option', () => {
     renderFooterWithModel({ lastKnownEffort: 'high' });
-    expect(screen.getByRole('combobox', { name: 'Claude effort' })).toHaveDisplayValue(
-      'HIGH · AUTO',
-    );
+    // Same rule as the model chip: the observed value, no "· AUTO" tag.
+    expect(screen.getByRole('combobox', { name: 'Claude effort' })).toHaveDisplayValue('HIGH');
   });
 
   it('shows an explicit effort as the chosen value with no requested-vs-effective arrow', () => {

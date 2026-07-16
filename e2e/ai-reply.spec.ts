@@ -226,7 +226,7 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
 
   await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
-    'Model and effort used for the next Claude request',
+    'Model: Auto — Claude decides\nEffort: Auto — Claude decides',
   );
 
   await addCommentWithAIReply(page, 'hello world', 'What is the answer?');
@@ -246,9 +246,12 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
   });
   await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
   await expect(aiReply.getByRole('button', { name: 'Cancel Claude reply' })).toHaveCount(0);
+  // The model chip shows the observed family bare (no "· AUTO"); the tooltip
+  // notes it was auto-selected and names the last observed model.
+  await expect(page.getByLabel('Claude model').locator('option:checked')).toHaveText('FABLE');
   await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
-    'Last model reported by Claude Code: claude-fable-5',
+    'Model: Auto — last observed FABLE\nEffort: Auto — Claude decides',
   );
 });
 
@@ -259,9 +262,9 @@ test('Claude model and effort choices persist and reach an anchored Ask-Claude s
 
   const model = page.getByLabel('Claude model');
   const effort = page.getByLabel('Claude effort');
-  await expect(model.locator('option')).toHaveText(['DEFAULT', 'FABLE', 'OPUS', 'SONNET', 'HAIKU']);
+  await expect(model.locator('option')).toHaveText(['AUTO', 'FABLE', 'OPUS', 'SONNET', 'HAIKU']);
   await expect(effort.locator('option')).toHaveText([
-    'DEFAULT',
+    'AUTO',
     'LOW',
     'MEDIUM',
     'HIGH',
