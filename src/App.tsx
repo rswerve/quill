@@ -131,6 +131,7 @@ function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
     contextFolder: null,
     lastKnownModel: null,
     stats: { words: 0, chars: 0, line: 1, column: 1 },
+    autosaveStatus: { state: 'idle' },
   };
 }
 
@@ -508,11 +509,36 @@ export default function App() {
     document.title = chrome.isDirty ? `${name} •` : name;
   }, [chrome.filePath, chrome.isDirty]);
 
-  const guardDirtyTabs = useCallback((action: () => void) => {
-    const dirtyTabIds = tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id);
-    if (dirtyTabIds.length === 0) action();
-    else setDiscardGuard({ tabIds: dirtyTabIds, run: action });
+  // Flush every open tab's pending autosave (and drain its coordinator) before a
+  // close/quit, then report which tabs are STILL dirty. flushPendingSave returns each
+  // tab's post-flush dirty state synchronously, so this doesn't race React's state
+  // propagation: a saved-path tab whose only unsaved work was a debounced edit is
+  // persisted and drops out of the guard, while Untitled or failed/blocked tabs remain.
+  const flushAllPendingSaves = useCallback(async (): Promise<string[]> => {
+    const flushed = await Promise.all(
+      Array.from(tabHandlesRef.current, ([id, handle]) =>
+        handle.flushPendingSave().then((stillDirty) => ({ id, stillDirty })),
+      ),
+    );
+    return flushed.filter((entry) => entry.stillDirty).map((entry) => entry.id);
   }, []);
+
+  const guardDirtyTabs = useCallback(
+    (action: () => void) => {
+      void (async () => {
+        try {
+          const dirtyTabIds = await flushAllPendingSaves();
+          if (dirtyTabIds.length === 0) action();
+          else setDiscardGuard({ tabIds: dirtyTabIds, run: action });
+        } catch (error) {
+          // Fail CLOSED: if the pre-quit flush errors, do NOT run the action (exit /
+          // close) — that could quit before unsaved work is persisted.
+          console.error('Quit flush failed; aborting the quit:', error);
+        }
+      })();
+    },
+    [flushAllPendingSaves],
+  );
 
   const handleSave = useCallback(
     () => activeHandle()?.save() ?? Promise.resolve(null),
@@ -627,17 +653,23 @@ export default function App() {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const win = getCurrentWindow();
         const off = await win.onCloseRequested((event) => {
-          const dirtyTabIds = tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id);
-          try {
-            event.preventDefault();
-            if (dirtyTabIds.length === 0) {
-              void writeWorkspace().finally(() => void win.destroy());
-              return;
+          // preventDefault must be synchronous; flush + decide happens right after.
+          event.preventDefault();
+          void (async () => {
+            try {
+              const dirtyTabIds = await flushAllPendingSaves();
+              if (dirtyTabIds.length === 0) {
+                void writeWorkspace().finally(() => void win.destroy());
+                return;
+              }
+              setDiscardGuard({ tabIds: dirtyTabIds, run: () => void win.destroy() });
+            } catch (error) {
+              // Fail CLOSED: a flush/guard error must NOT destroy the window — closing
+              // on an errored flush could drop unsaved work. Keep it open (preventDefault
+              // already did); the user can retry closing.
+              console.error('Close-requested flush failed; keeping the window open:', error);
             }
-            setDiscardGuard({ tabIds: dirtyTabIds, run: () => void win.destroy() });
-          } catch {
-            void win.destroy();
-          }
+          })();
         });
         if (cancelled) off();
         else unlisten = off;
@@ -649,7 +681,7 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [writeWorkspace]);
+  }, [writeWorkspace, flushAllPendingSaves]);
 
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -810,6 +842,7 @@ export default function App() {
         <Footer
           editor={chrome.editor}
           stats={chrome.stats}
+          autosaveStatus={chrome.autosaveStatus}
           zoom={chrome.zoom}
           onZoomChange={handleZoomChange}
           aiSession={chrome.aiSession}

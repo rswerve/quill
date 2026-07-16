@@ -232,7 +232,19 @@ test('an auto-bound Claude session stays owned by one document and is blocked in
   await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
     session.sessionId.slice(0, 8).toUpperCase(),
   );
-  await expect(page.locator('.document-tab.active .document-tab-dirty')).toBeVisible();
+  // Switching away from first.md deactivate-flushed its auto-bound session to disk, so
+  // the tab is now clean AND — proving real persistence, not just an absent dirty dot —
+  // the sidecar on disk carries the session binding.
+  await expect(page.locator('.document-tab.active .document-tab-dirty')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate((sessionId) => {
+        const sidecar = (window as unknown as { __quillFiles: Record<string, string> })
+          .__quillFiles['/docs/first.comments.json'];
+        return typeof sidecar === 'string' && sidecar.includes(sessionId);
+      }, session.sessionId),
+    )
+    .toBe(true);
 });
 
 for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
@@ -364,7 +376,7 @@ test('quitting with multiple dirty tabs presents one combined guard', async ({ p
     .toBe(true);
 });
 
-test('quit guard Save All: writes every dirty tab to its own path, then exits', async ({
+test('quit auto-persists the saved tab and prompts only for the Untitled tab, then exits', async ({
   page,
 }) => {
   await setupMemoryTauri(page, {
@@ -373,7 +385,8 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
     savePath: '/tmp/new-tab.md',
   });
 
-  // Tab 1: the initial Untitled document, made dirty (will save via the dialog).
+  // Tab 1: the initial Untitled document, made dirty (no path → autosave can't persist
+  // it, so it will still prompt on quit and be saved via the dialog).
   await activeEditor(page).fill('Second dirty tab');
 
   // Tab 2: open a saved document (its own path), then edit it dirty.
@@ -382,7 +395,8 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
   await activeEditor(page).click();
   await page.keyboard.type(' edited');
 
-  // Quit → combined guard → Save All.
+  // Quit → the guard flushes every eligible tab first, so the saved tab is persisted and
+  // drops out; only the still-dirty Untitled tab prompts (single-document modal).
   await page.evaluate(() => {
     (window as unknown as { __quillEmit: (event: string, value: null) => void }).__quillEmit(
       'menu-quit',
@@ -390,8 +404,8 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
     );
   });
   const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
-  await expect(modal).toContainText('2 open documents have unsaved changes');
-  await modal.getByRole('button', { name: 'Save All' }).click();
+  await expect(modal).toContainText('This document has unsaved changes');
+  await modal.getByRole('button', { name: 'Save', exact: true }).click();
 
   // Every dirty tab is written to its own destination, and the app exits only
   // after the saves — Save All is a persist-then-quit, not a quit-and-lose.
@@ -414,4 +428,41 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
       }),
     )
     .toBe(true);
+});
+
+test('quit still guards a saved tab whose autosave flush cannot persist it', async ({ page }) => {
+  await setupMemoryTauri(page, {
+    files: { '/tmp/guarded.md': 'original' },
+    openPath: '/tmp/guarded.md',
+  });
+  await openMemoryFile(page);
+  await expect(page.locator('.document-tab.active')).toContainText('guarded', { timeout: 3000 });
+  await activeEditor(page).click();
+  await page.keyboard.type(' edit');
+
+  // Change the file on disk so the quit flush hits a CONFLICT: the saved tab can't be
+  // auto-persisted, so it must stay dirty and remain in the guard — not silently dropped.
+  await page.evaluate(() => {
+    (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[
+      '/tmp/guarded.md'
+    ] = 'CHANGED EXTERNALLY';
+  });
+  await page.evaluate(() => {
+    (window as unknown as { __quillEmit: (event: string, value: null) => void }).__quillEmit(
+      'menu-quit',
+      null,
+    );
+  });
+
+  // The still-dirty saved tab is guarded, and the app has NOT exited.
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText('This document has unsaved changes');
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { __quillCalls: Array<{ cmd: string }> }).__quillCalls.some(
+        (call) => call.cmd === 'exit_app',
+      ),
+    ),
+  ).toBe(false);
 });

@@ -290,8 +290,11 @@ describe('useFileManager', () => {
       await act(async () => {
         outcome = await result.current.saveFile('content', [], [], null, null, '/docs/test.md');
       });
+      // Surfaces as a typed failed save (the caller presents it); never a false success.
       expect(outcome!.status).toBe('failed');
-      expect(onError).toHaveBeenCalledTimes(1);
+      expect((outcome! as Extract<SaveOutcome, { status: 'failed' }>).message).toContain(
+        'Permission denied',
+      );
     });
 
     it('writes sidecar JSON when there are comments', async () => {
@@ -1180,7 +1183,10 @@ describe('useFileManager', () => {
       expect(message).toContain('Permission denied');
     });
 
-    it('reports a save failure with the path and underlying error', async () => {
+    it('returns a typed failure for a failed save WITHOUT firing onError', async () => {
+      // Save failures are presented by the caller, source-aware (a modal for a manual
+      // save, quiet for autosave), so useFileManager returns the typed outcome and does
+      // not pop a modal itself — an autosave must never interrupt with one.
       mockInvoke.mockRejectedValueOnce('Disk full (os error 28)');
       const onError = vi.fn();
 
@@ -1191,11 +1197,8 @@ describe('useFileManager', () => {
       });
 
       expect(saved!.status).toBe('failed');
-      expect(onError).toHaveBeenCalledTimes(1);
-      const [title, message] = onError.mock.calls[0];
-      expect(title).toBe('Could not save file');
-      expect(message).toContain('/docs/out.md');
-      expect(message).toContain('Disk full');
+      expect((saved! as Extract<SaveOutcome, { status: 'failed' }>).message).toContain('Disk full');
+      expect(onError).not.toHaveBeenCalled();
     });
 
     it('does not report when the open dialog is simply cancelled', async () => {

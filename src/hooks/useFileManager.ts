@@ -83,14 +83,17 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 conflict-aware callers.)
  * - `cancelled` — no write happened and it was not an error: no destination path, the
  *                 Save As dialog was dismissed, or path ownership was declined.
- * - `failed`    — an I/O or permission error; `message` is the underlying reason.
+ * - `failed`    — an I/O or permission error; `message` is the underlying reason and
+ *                 `path` (when known) is the destination that failed, so a manual save's
+ *                 notice can name the file. The caller presents it — useFileManager does
+ *                 not, so an autosave failure stays quiet.
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
   | { status: 'blocked'; reason: 'sidecar-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
-  | { status: 'failed'; message: string };
+  | { status: 'failed'; message: string; path?: string };
 
 /**
  * Result of persisting the sidecar: its new on-disk fingerprint on success, or the
@@ -104,6 +107,8 @@ type SidecarSaveResult =
 interface UseFileManagerReturn {
   filePath: string | null;
   isDirty: boolean;
+  /** Synchronous read of the current dirty state (authoritative right after a save). */
+  getIsDirty: () => boolean;
   markDirty: () => void;
   openFile: () => Promise<{
     content: string;
@@ -162,9 +167,11 @@ interface UseFileManagerReturn {
 }
 
 /**
- * @param onError Called when a file operation fails so the UI can tell the
- *   user (open/save errors must not be swallowed — a failed save that looks
- *   like a successful one loses work). Errors are still logged to the console.
+ * @param onError Called when an OPEN fails so the UI can tell the user (an open
+ *   error must not be swallowed). Save failures do NOT go through here: they return
+ *   a typed `failed` outcome the caller presents source-aware — a manual save pops a
+ *   modal, autosave stays quiet — so a background write never interrupts the user.
+ *   All failures are still logged to the console.
  */
 export function useFileManager(
   onError?: (title: string, message: string) => void,
@@ -175,7 +182,15 @@ export function useFileManager(
   // commits the setState, or it could write to the old path. Kept in lockstep with
   // the render state through updateFilePath (the single writer).
   const filePathRef = useRef<string | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
+  const [isDirty, setIsDirtyState] = useState(false);
+  // Synchronous mirror of isDirty. Updated in the same tick as the state so a caller
+  // that just awaited a save (e.g. the shell's quit flush) can read the authoritative
+  // dirty state immediately, without waiting for React to re-render + propagate it.
+  const isDirtyRef = useRef(false);
+  const setIsDirty = useCallback((value: boolean) => {
+    isDirtyRef.current = value;
+    setIsDirtyState(value);
+  }, []);
   // Monotonic across document, review, and chat mutations. A save may clear
   // dirty only if nothing changed while its asynchronous writes were pending.
   const changeRevisionRef = useRef(0);
@@ -204,7 +219,7 @@ export function useFileManager(
   const markDirty = useCallback(() => {
     changeRevisionRef.current += 1;
     setIsDirty(true);
-  }, []);
+  }, [setIsDirty]);
 
   const setProtected = useCallback((value: boolean) => {
     sidecarProtectedRef.current = value;
@@ -309,7 +324,7 @@ export function useFileManager(
         return null;
       }
     },
-    [onError, updateFilePath, setProtected],
+    [onError, updateFilePath, setProtected, setIsDirty],
   );
 
   const openFile = useCallback(async () => {
@@ -496,11 +511,14 @@ export function useFileManager(
       } catch (e) {
         console.error('Failed to save file:', e);
         const message = String(e);
-        onError?.('Could not save file', `${targetPath}\n\n${message}`);
-        return { status: 'failed', message };
+        // A failed save returns its typed outcome WITHOUT presenting: the caller
+        // decides how loud to be. A manual save pops a modal; autosave stays quiet
+        // (footer status + backoff), so a background write never interrupts the user.
+        // Carry the destination so a manual notice can name the file that failed.
+        return { status: 'failed', message, path: targetPath };
       }
     },
-    [saveSidecar, onError, updateFilePath, setProtected],
+    [saveSidecar, updateFilePath, setProtected, setIsDirty],
   );
 
   const saveFileAs = useCallback(
@@ -533,11 +551,11 @@ export function useFileManager(
       } catch (e) {
         console.error('Failed to save as:', e);
         const message = String(e);
-        onError?.('Could not save file', message);
+        // Same as saveFile: return the typed failure; the caller presents it.
         return { status: 'failed', message };
       }
     },
-    [filePath, saveFile, onError],
+    [filePath, saveFile],
   );
 
   const newFile = useCallback(() => {
@@ -549,7 +567,7 @@ export function useFileManager(
     // A brand-new doc has no on-disk baseline — the first save writes unconditionally.
     expectedDocRef.current = null;
     expectedSidecarRef.current = null;
-  }, [updateFilePath, setProtected]);
+  }, [updateFilePath, setProtected, setIsDirty]);
 
   // Adopt a recovered draft: point at its file (if any) without reading disk —
   // the draft's content is newer than the file — and mark dirty so the user is
@@ -586,12 +604,13 @@ export function useFileManager(
         baselines?.sidecarProtected === true || (path !== null && restoredSidecar === null),
       );
     },
-    [updateFilePath, setProtected],
+    [updateFilePath, setProtected, setIsDirty],
   );
 
   return {
     filePath,
     isDirty,
+    getIsDirty: () => isDirtyRef.current,
     markDirty,
     openFile,
     openFilePath,

@@ -14,6 +14,7 @@ import {
   type SaveOutcome,
 } from '../hooks/useFileManager';
 import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
+import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
 import ConflictBanner from './ConflictBanner';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
@@ -112,6 +113,7 @@ export interface DocumentTabChromeSnapshot {
   contextFolder: string | null;
   lastKnownModel: string | null;
   stats: DocumentStats;
+  autosaveStatus: AutosaveStatus;
 }
 
 export interface DocumentTabHandle {
@@ -136,6 +138,12 @@ export interface DocumentTabHandle {
   linkContextFolder: () => void;
   unlinkContextFolder: () => void;
   getWorkspaceSnapshot: () => DraftSnapshot;
+  /**
+   * Flush a pending autosave and drain the coordinator; awaited by the shell on
+   * close/quit. Resolves with whether the tab is STILL dirty afterward (true = the
+   * shell must still guard it — e.g. an Untitled doc or a failed/blocked/conflicted save).
+   */
+  flushPendingSave: () => Promise<boolean>;
 }
 
 export interface DocumentTabMetaSnapshot {
@@ -258,7 +266,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const {
     filePath,
     isDirty,
-    markDirty,
+    markDirty: markFileDirty,
     openFile,
     openFilePath,
     saveFile,
@@ -267,7 +275,27 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     restoreDraft,
     getChangeRevision,
     getBaselines,
+    getIsDirty,
   } = useFileManager(showError);
+
+  // markDirty is the single change choke point — it bumps the change-revision and
+  // marks the tab dirty at every mutation site (edits, accept/reject, comments, chat).
+  // Piggyback the autosave debounce signal here so every edit path notifies through one
+  // ref (the scheduler is created below, so notifyAutosaveRef is populated after it).
+  const notifyAutosaveRef = useRef<() => void>(() => {});
+  const markDirty = useCallback(() => {
+    markFileDirty();
+    notifyAutosaveRef.current();
+  }, [markFileDirty]);
+
+  // A scheduler generation that changes on every NON-autosave baseline reconciliation
+  // (Open / Reopen / Reload / New / manual Save / Save As / Overwrite). It keys the
+  // autosave scheduler's reset so same-path reconciliation — which leaves filePath
+  // unchanged — still cancels stale timers, drops a late completion, and clears a
+  // latched conflict/block. A steady-state autosave deliberately does NOT bump it.
+  const [schedulerGen, setSchedulerGen] = useState(0);
+  const bumpSchedulerGen = useCallback(() => setSchedulerGen((generation) => generation + 1), []);
+
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   // External-conflict state for this tab: which on-disk file changed underneath us.
   // Persists through edits and failed/cancelled resolutions; cleared only by a
@@ -658,8 +686,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       promptForSession = true,
     ) => {
       // A successful (re)load reconciles the document with disk, resolving any
-      // pending conflict for this tab.
+      // pending conflict for this tab. Bump the scheduler generation so a same-path
+      // Reload/Reopen also resets autosave (clears a latch, drops a stale completion).
       setSaveConflict(null);
+      bumpSchedulerGen();
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
@@ -773,6 +803,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       onOpenSessionPicker,
       restorePersistedReviewMarks,
       tabId,
+      bumpSchedulerGen,
     ],
   );
 
@@ -807,12 +838,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // save landed, surfacing the outcomes that must not read as silent success:
   // a `blocked` sidecar (text saved, annotations withheld) and an external
   // `conflict`. `failed` already reported itself inside useFileManager; a
-  // `cancelled` outcome is a deliberate no-op. Returns the saved path, else null.
-  // Surface the save outcomes that must not read as a silent success: a `blocked`
-  // sidecar (document saved, annotations withheld) and an external `conflict`.
-  // `saved` is silent; `failed` already surfaced inside useFileManager; `cancelled`
-  // is a deliberate no-op.
-  const notifySaveOutcome = useCallback(
+  // Shared by every write (manual AND autosave, via performSave): raise the persistent
+  // conflict banner when the on-disk file changed underneath us. This is wanted for both
+  // sources — autosave detecting an external change is exactly when the banner should
+  // appear. `blocked` and `failed` are NOT presented here: a background write must never
+  // pop a modal (see presentManualSaveFailure). `saved`/`cancelled` are silent.
+  const notifySaveOutcome = useCallback((outcome: SaveOutcome) => {
+    if (outcome.status === 'conflict') {
+      // Sticky until the user resolves it (Overwrite / Save a Copy / Reload).
+      setSaveConflict({ which: outcome.which });
+    }
+  }, []);
+
+  // Present a save failure LOUDLY — only from a manual save. Autosave leaves these to
+  // the footer/tab status (blocked → 'stopped', failed → 'retrying') so a background
+  // write never interrupts the user; a manual Cmd+S promotes them to these modals.
+  const presentManualSaveFailure = useCallback(
     (outcome: SaveOutcome) => {
       if (outcome.status === 'blocked' && outcome.reason === 'sidecar-protected') {
         showError(
@@ -829,10 +870,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             "disk changed while Quill was closed, so it won't overwrite it. Reopen the file " +
             'to reconcile, or use Save As to write your recovered work to a new file.',
         );
-      } else if (outcome.status === 'conflict') {
-        // Raise the persistent conflict banner (not a transient modal) so the user
-        // can Overwrite / Save a Copy / Reload. A conflict is sticky until resolved.
-        setSaveConflict({ which: outcome.which });
+      } else if (outcome.status === 'failed') {
+        // Name the destination that failed when we know it (actionable), else just why.
+        const detail = outcome.path ? `${outcome.path}\n\n${outcome.message}` : outcome.message;
+        showError('Could not save file', detail);
       }
     },
     [showError],
@@ -866,10 +907,63 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     requestSave,
     runExclusive,
     flush: flushSaves,
+    saveAndDrain,
   } = useSaveCoordinator({
     performSave,
     getRevision: getChangeRevision,
   });
+
+  // Autosave: a debounced background save for documents with a real saved path, running
+  // only inside Tauri (there is no file I/O in the browser dev server). It drives the
+  // coordinator's saveAndDrain, so a background write is serialized with manual saves,
+  // reports the coordinator's terminal outcome, and raises the conflict banner if the
+  // file changed on disk. Ineligible while a conflict is unresolved. resetKey keys on a
+  // generation that changes on every reconciliation, so same-path Reload/Overwrite reset
+  // it too. notifyAutosaveRef is populated here, after the scheduler exists.
+  const autosaveEnabled = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const {
+    notifyChange: autosaveNotify,
+    flush: autosaveFlush,
+    status: autosaveStatus,
+  } = useAutosave({
+    enabled: autosaveEnabled && filePath !== null,
+    // Only save a saved path that is actually DIRTY and not mid-conflict. The isDirty
+    // guard is what makes flush after opening a clean document a true no-op: without it
+    // a blur/quit right after open would write despite no edit (savedRevision starts null).
+    isEligible: () => filePath !== null && saveConflict === null && isDirty,
+    performAutosave: saveAndDrain,
+    getRevision: getChangeRevision,
+    resetKey: `${filePath ?? ''}#${schedulerGen}`,
+  });
+  notifyAutosaveRef.current = autosaveNotify;
+
+  // Persist a pending autosave promptly when the user's attention leaves this document:
+  // switching tabs (isActive → false) or the window losing focus. flush joins an
+  // in-flight write and is a no-op when the tab is clean/ineligible. Both drain the
+  // coordinator too, so nothing is left half-written when focus moves on.
+  const prevActiveRef = useRef(isActive);
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    prevActiveRef.current = isActive;
+    if (wasActive && !isActive) void autosaveFlush();
+  }, [isActive, autosaveFlush]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const onBlur = () => void autosaveFlush();
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, [isActive, autosaveFlush]);
+
+  // Exposed to the shell for close/quit: flush a pending autosave AND drain the
+  // coordinator, so the tab is fully quiescent before it is torn down or the app exits.
+  // Resolves with the tab's dirty state AFTER the flush (read synchronously), so the
+  // shell's guard doesn't re-prompt for work autosave just persisted.
+  const flushPendingSave = useCallback(async (): Promise<boolean> => {
+    await autosaveFlush();
+    await flushSaves();
+    return getIsDirty();
+  }, [autosaveFlush, flushSaves, getIsDirty]);
 
   // Save As is a distinct job (it prompts and changes the target path), so it runs
   // through the coordinator's exclusive lane — waiting for any in-flight save and
@@ -911,8 +1005,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   const handleSaveAs = useCallback(async () => {
     const outcome = await runExclusive(performSaveAs);
+    // Manual save: reconcile the scheduler on success, present blocked/failed loudly.
+    if (outcome.status === 'saved') bumpSchedulerGen();
+    else presentManualSaveFailure(outcome);
     return outcome.status === 'saved' ? outcome.path : null;
-  }, [runExclusive, performSaveAs]);
+  }, [runExclusive, performSaveAs, bumpSchedulerGen, presentManualSaveFailure]);
 
   const handleSave = useCallback(async () => {
     // While conflicted, Cmd+S must not write or re-pop a modal — it re-announces the
@@ -925,8 +1022,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       return handleSaveAs();
     }
     const outcome = await requestSave();
+    if (outcome.status === 'saved') bumpSchedulerGen();
+    else presentManualSaveFailure(outcome);
     return outcome.status === 'saved' ? outcome.path : null;
-  }, [saveConflict, filePath, requestSave, handleSaveAs]);
+  }, [
+    saveConflict,
+    filePath,
+    requestSave,
+    handleSaveAs,
+    bumpSchedulerGen,
+    presentManualSaveFailure,
+  ]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
   // the chrome and the track-changes/comment markup, leaving a clean copy of
@@ -980,6 +1086,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     await flushSaves();
     newFile();
     setSaveConflict(null); // a brand-new document has nothing to conflict with
+    bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
     editorRef.current?.setContent('');
@@ -993,7 +1100,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setContextFolder(null);
     setLastSavedAt(null);
     setPanelMode('comments');
-  }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId, flushSaves]);
+  }, [
+    documentChat,
+    newFile,
+    onReleaseSession,
+    setComments,
+    setSuggestions,
+    tabId,
+    flushSaves,
+    bumpSchedulerGen,
+  ]);
 
   // --- External-conflict resolution. Each action runs through the coordinator (never
   // a raw save) and clears the conflict only on success; a failed/cancelled action
@@ -1018,11 +1134,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       });
       if (outcome.status === 'saved') {
         setSaveConflict(null);
+        bumpSchedulerGen(); // reconciled: clear the scheduler's latch, drop stale epochs
         rememberSessionPermission(window.localStorage, outcome.path, aiSession);
         rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
         setLastSavedAt(Date.now());
       } else {
-        notifySaveOutcome(outcome); // e.g. a protected sidecar still blocks
+        presentManualSaveFailure(outcome); // e.g. a protected sidecar still blocks
       }
     } finally {
       setResolvingConflict(false);
@@ -1036,7 +1153,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     aiSession,
     contextFolder,
     documentChat,
-    notifySaveOutcome,
+    presentManualSaveFailure,
+    bumpSchedulerGen,
   ]);
 
   const handleSaveCopyConflict = useCallback(async () => {
@@ -1640,9 +1758,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       linkContextFolder: handleLinkContextFolder,
       unlinkContextFolder: handleUnlinkContextFolder,
       getWorkspaceSnapshot,
+      flushPendingSave,
     }),
     [
       editor,
+      flushPendingSave,
       getWorkspaceSnapshot,
       handleAcceptAll,
       handleCloseSessionPicker,
@@ -1685,9 +1805,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       contextFolder,
       lastKnownModel,
       stats: computeDocumentStats(editor),
+      autosaveStatus,
     });
   }, [
     aiSession,
+    autosaveStatus,
     chromeRevision,
     contextFolder,
     editor,

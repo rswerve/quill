@@ -272,25 +272,44 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   ).toBeVisible();
 });
 
-test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled tabs', async ({
+// The Discard pair pins the autosave contract for crash recovery: "Discard" throws away
+// only genuinely UNPERSISTED recovery state, not autosaved work. With autosave a saved
+// tab's edit is normally already on disk, so reopening from disk keeps it; only an edit
+// autosave has NOT yet flushed is lost, along with un-persistable Untitled work.
+test('Discard keeps an autosaved saved-tab edit and drops dirty Untitled work', async ({
   page,
 }) => {
-  const savedPath = '/tmp/saved-after-discard.md';
+  const savedPath = '/tmp/survives-discard.md';
   await setupMemoryTauri(page, {
     openPath: savedPath,
-    files: {
-      [savedPath]: 'Last saved content on disk',
-      ['/tmp/saved-after-discard.comments.json']: linkedSidecar,
-    },
-    trustedSidecarPaths: [savedPath],
+    files: { [savedPath]: 'Original disk bytes' },
   });
   await openMemoryFile(page);
+  // Close the initial Untitled tab so only the saved doc (+ a deliberate dirty Untitled
+  // added below) are in play.
   await page.locator('.document-tab').first().click();
   await page.locator('.document-tab.active .document-tab-close').click();
-  await activeEditor(page).fill('Unsaved edit in the saved tab');
+  await activeEditor(page).click();
+  await page.keyboard.type(' AUTOSAVED EDIT');
+
+  // Background autosave persists the saved tab's edit to disk (the debounce elapses).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[
+              '/tmp/survives-discard.md'
+            ],
+        ),
+      { timeout: 6000 },
+    )
+    .toContain('AUTOSAVED EDIT');
+
+  // A dirty Untitled tab — no path, so genuinely unpersisted; Discard must drop it.
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('Throw this away');
-  await waitForDirtyTabCount(page, 2);
+  await waitForDirtyTabCount(page, 1); // only the Untitled is dirty; the saved tab autosaved
 
   await page.reload();
   await page
@@ -299,10 +318,51 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
     .click();
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
-  await expect(page.locator('.document-tab.active')).toContainText('saved-after-discard.md');
-  await expect(activeEditor(page)).toHaveText('Last saved content on disk');
-  await expect(activeEditor(page)).not.toContainText('Unsaved edit in the saved tab');
+  await expect(page.locator('.document-tab.active')).toContainText('survives-discard.md');
+  // The autosaved edit SURVIVES (Discard reopened disk, which holds it); Untitled is gone.
+  await expect(activeEditor(page)).toContainText('AUTOSAVED EDIT');
   await expect(activeEditor(page)).not.toContainText('Throw this away');
+});
+
+test('Discard drops a saved-tab edit that autosave has not yet flushed to disk', async ({
+  page,
+}) => {
+  const savedPath = '/tmp/deferred-discard.md';
+  // Hold the first document write, so the autosave fires but its bytes never reach disk.
+  await setupMemoryTauri(page, {
+    deferFirstWriteFile: true,
+    openPath: savedPath,
+    files: { [savedPath]: 'Old disk bytes' },
+  });
+  await openMemoryFile(page);
+  await activeEditor(page).click();
+  await page.keyboard.type(' UNFLUSHED EDIT');
+
+  // The autosave fires after the debounce, but its write is blocked (deferred), so the
+  // edit lives only in the recovery envelope — never on disk.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __quillWriteFileBlocked?: boolean }).__quillWriteFileBlocked ===
+            true,
+        ),
+      { timeout: 6000 },
+    )
+    .toBe(true);
+  await waitForDirtyTabCount(page, 1); // the saved tab is still dirty — its write never landed
+
+  await page.reload();
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Discard' })
+    .click();
+
+  await expect(page.locator('.document-tab.active')).toContainText('deferred-discard.md');
+  // Discard reopened the OLD disk bytes — the unflushed edit is genuinely destroyed.
+  await expect(activeEditor(page)).toContainText('Old disk bytes');
+  await expect(activeEditor(page)).not.toContainText('UNFLUSHED EDIT');
 });
 
 for (const [label, workspace] of [

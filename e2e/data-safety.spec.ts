@@ -298,7 +298,11 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   const modal = page.getByRole('dialog', { name: 'Could not save file' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Could not save file');
+  // A manual save names the destination that failed (actionable) and the reason.
+  // useFileManager returns the typed failure now; the caller shows it, so an autosave
+  // failure stays quiet instead of interrupting with this modal.
   await expect(modal).toContainText('/tmp/readonly.md');
+  await expect(modal).toContainText('Permission denied');
 
   await modal.locator('button:has-text("OK")').click();
   await expect(modal).toHaveCount(0);

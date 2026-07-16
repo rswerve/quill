@@ -16,7 +16,9 @@ export type AutosaveStatus =
   | { state: 'saving' }
   | { state: 'saved' }
   | { state: 'failed'; retryInMs: number }
-  | { state: 'stopped' };
+  // `conflict` means the resolution banner is up (the UI should defer to it); `blocked`
+  // means a protected sidecar / unknown baseline the user must fix — a distinct status.
+  | { state: 'stopped'; reason: 'conflict' | 'blocked' };
 
 interface Options {
   /**
@@ -139,7 +141,7 @@ export function useAutosave({
         // The user must resolve this (conflict banner / protected sidecar). Latch and
         // stop hammering it; a later edit will not re-arm until the cause clears.
         pauseReason.current = outcome.status;
-        setStatus({ state: 'stopped' });
+        setStatus({ state: 'stopped', reason: outcome.status });
         return 'break';
       }
       if (outcome.status === 'cancelled') {

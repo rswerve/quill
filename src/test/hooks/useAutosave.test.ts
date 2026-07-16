@@ -134,7 +134,7 @@ describe('useAutosave', () => {
     const { result, ctl } = setup(async () => ({ outcome: conflict(), revision: 1 }));
     act(() => result.current.notifyChange());
     await advance(IDLE_MS);
-    expect(result.current.status).toEqual({ state: 'stopped' });
+    expect(result.current.status).toEqual({ state: 'stopped', reason: 'conflict' });
     expect(ctl.perform).toHaveBeenCalledTimes(1);
 
     // Still conflicted (ineligible): another edit must NOT re-arm.
@@ -157,7 +157,7 @@ describe('useAutosave', () => {
     const { result, ctl } = setup(async () => ({ outcome: blocked(), revision: 1 }));
     act(() => result.current.notifyChange());
     await advance(IDLE_MS);
-    expect(result.current.status).toEqual({ state: 'stopped' });
+    expect(result.current.status).toEqual({ state: 'stopped', reason: 'blocked' });
 
     // A block is not a conflict: eligibility stays true, but edits must not hammer it.
     ctl.revision = 2;
@@ -187,6 +187,31 @@ describe('useAutosave', () => {
     await advance(BACKOFF_1 - IDLE_MS);
     expect(ctl.perform).toHaveBeenCalledTimes(2);
     expect(result.current.status).toEqual({ state: 'saved' });
+  });
+
+  it('retries on the exact 5s → 15s → 60s → 60s (capped) backoff schedule', async () => {
+    // Locks the whole sequence, not just the first delay — a [5,5,5] mutation must fail.
+    const { result, ctl } = setup(async () => ({ outcome: failed(), revision: ctl.revision }));
+    act(() => result.current.notifyChange());
+    await advance(IDLE_MS);
+    expect(ctl.perform).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toEqual({ state: 'failed', retryInMs: 5000 });
+
+    await advance(5000);
+    expect(ctl.perform).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toEqual({ state: 'failed', retryInMs: 15000 });
+
+    await advance(15000);
+    expect(ctl.perform).toHaveBeenCalledTimes(3);
+    expect(result.current.status).toEqual({ state: 'failed', retryInMs: 60000 });
+
+    await advance(60000);
+    expect(ctl.perform).toHaveBeenCalledTimes(4);
+    expect(result.current.status).toEqual({ state: 'failed', retryInMs: 60000 }); // capped
+
+    await advance(60000);
+    expect(ctl.perform).toHaveBeenCalledTimes(5);
+    expect(result.current.status).toEqual({ state: 'failed', retryInMs: 60000 });
   });
 
   it('treats a cancelled outcome as a no-op and never backs off', async () => {

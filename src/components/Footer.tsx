@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
+import type { AutosaveStatus } from '../hooks/useAutosave';
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
 import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 import { cx } from '../utils/cx';
@@ -11,6 +12,7 @@ import styles from './Footer.module.css';
 interface FooterProps {
   editor: Editor | null;
   stats?: DocumentStats;
+  autosaveStatus?: AutosaveStatus;
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
@@ -33,9 +35,30 @@ function formatCount(total: number, selected?: number): string {
     : `${selected.toLocaleString()}/${total.toLocaleString()}`;
 }
 
+/**
+ * The autosave indicator text, or null to show nothing. `pending`/`idle` stay quiet
+ * (a debounce running is not worth a label); a `conflict` stop has its own banner so it
+ * is not echoed here, while a `blocked` stop is otherwise silent and must be surfaced.
+ */
+function autosaveLabel(status: AutosaveStatus): string | null {
+  switch (status.state) {
+    case 'saving':
+      return 'Saving…';
+    case 'saved':
+      return 'Saved';
+    case 'failed':
+      return 'Save failed — retrying';
+    case 'stopped':
+      return status.reason === 'blocked' ? 'Autosave paused' : null;
+    default:
+      return null;
+  }
+}
+
 export default function Footer({
   editor,
   stats,
+  autosaveStatus,
   zoom = DEFAULT_ZOOM,
   onZoomChange,
   aiSession,
@@ -61,6 +84,7 @@ export default function Footer({
     );
 
   const documentStats = stats ?? computeDocumentStats(editor);
+  const autosaveText = autosaveStatus ? autosaveLabel(autosaveStatus) : null;
 
   const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
 
@@ -95,6 +119,11 @@ export default function Footer({
         <span className={styles.item}>
           LN {documentStats.line}:{documentStats.column}
         </span>
+        {autosaveText && (
+          <span className={styles.item} role="status" aria-live="polite" data-autosave-status>
+            {autosaveText}
+          </span>
+        )}
       </div>
 
       <div className={cx(styles.group, styles.right)}>
