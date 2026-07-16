@@ -100,7 +100,8 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   const assistant = page.locator('[data-chat-role="assistant"]').last();
   await expect(assistant).toContainText('I tightened the sentence.', { timeout: 3000 });
   await expect(assistant).not.toContainText('quill-edits');
-  await expect(assistant.locator('[data-chat-model]')).toHaveText('claude-sonnet');
+  // The per-message model tag was removed — a chat message shows only "Claude".
+  await expect(assistant.locator('[data-chat-model]')).toHaveCount(0);
   const jump = assistant.getByRole('button', { name: /in the doc/ });
   await expect(jump).toBeVisible();
   await expect(jump).toHaveText(/→ 1 suggestion in the doc/);

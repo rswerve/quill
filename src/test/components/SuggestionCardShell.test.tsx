@@ -88,9 +88,8 @@ describe('SuggestionCardShell', () => {
     expect(card).toHaveAttribute('data-active');
     expect(card).toHaveAttribute('data-origin-active');
     expect(screen.getByText('Claude')).toBeInTheDocument();
-    // The AI badge keeps the shared global class; its suggestion-specific 20px
-    // box is styled via `.head :global(.ai-badge)` in the module.
-    expect(screen.getByText('AI')).toHaveClass('ai-badge');
+    // The redundant "AI" chip was removed; the "Claude" author label alone marks it.
+    expect(screen.queryByText('AI')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));

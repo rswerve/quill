@@ -16,8 +16,6 @@
      from it (early block contributed only already-covered props).
    - replace-old/new carried colors already overridden by removed/added; the
      elements keep only `.removed`/`.added`.
-   The shared `.ai-badge` stays global; the suggestion-specific 20px box overrides
-   it via `.head :global(.ai-badge)` (0,2,0 beats the base 0,1,0 deterministically).
    `.annotation-card-flash` stays global (CommentLayer applies it by classList). */
 
 .card {
@@ -82,22 +80,6 @@
 }
 .headSpacer {
   flex: 1;
-}
-.head :global(.ai-badge) {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  padding: 0;
-  border-radius: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ai-badge-bg);
-  color: var(--ai-badge-text);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0;
 }
 
 .typeBadge {

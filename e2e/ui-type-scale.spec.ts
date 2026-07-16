@@ -281,9 +281,6 @@ test('form controls and every review-card kind use the intended UI scale and fam
   });
   await expectType(page.getByText('Claude', { exact: true }).first(), '12px');
   await expectType(page.locator('[data-reply-text]').first(), '12.5px');
-  await expectType(page.locator('[data-suggestion-kind] .ai-badge').first(), '8.5px', {
-    checkUiFamily: false,
-  });
   // Each type badge is the card's kind label; target it by that text.
   await expectType(page.getByText('Insertion'), '10px');
   await expectType(page.getByText('Deletion'), '10px');
