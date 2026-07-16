@@ -38,6 +38,11 @@ test('an external change surfaces the conflict banner, and Overwrite resolves it
   const overwrite = page.getByRole('button', { name: 'Overwrite' });
   await expect(overwrite).toBeVisible();
   await expect(page.getByText('changed on disk')).toBeVisible();
+  // All THREE resolution actions must be within the viewport — a full-width top
+  // strip, not a clipped editor child (regression guard for the banner layout).
+  await expect(overwrite).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Save a Copy' })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Reload' })).toBeInViewport();
 
   // Overwrite writes our version (unconditionally) and clears the conflict.
   await overwrite.click();

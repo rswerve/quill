@@ -1705,18 +1705,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   return (
     <>
+      {saveConflict && (
+        <ConflictBanner
+          which={saveConflict.which}
+          flash={conflictFlash}
+          busy={resolvingConflict}
+          onOverwrite={handleOverwriteConflict}
+          onSaveCopy={handleSaveCopyConflict}
+          onReload={handleReloadConflict}
+        />
+      )}
       <div className="studio-body">
         <div className="workspace doc-scroll" ref={scrollAreaRef}>
-          {saveConflict && (
-            <ConflictBanner
-              which={saveConflict.which}
-              flash={conflictFlash}
-              busy={resolvingConflict}
-              onOverwrite={handleOverwriteConflict}
-              onSaveCopy={handleSaveCopyConflict}
-              onReload={handleReloadConflict}
-            />
-          )}
           {suggestingModeNotice && (
             <div className="suggesting-mode-notice" role="status" aria-live="polite">
               {suggestingModeNotice}
