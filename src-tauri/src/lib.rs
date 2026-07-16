@@ -11,13 +11,15 @@
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -71,6 +73,397 @@ fn write_file(path: String, content: String) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+enum ExpectedFileState {
+    Any,
+    Absent,
+    Match { hash: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+enum FileFingerprint {
+    Absent,
+    Present { hash: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+enum FingerprintedFileContents {
+    Absent,
+    Present { content: String, hash: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum AtomicWriteResult {
+    Written { hash: String },
+    Conflict { actual: FileFingerprint },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum ConditionalDeleteResult {
+    Deleted,
+    Absent,
+    Conflict { actual: FileFingerprint },
+}
+
+struct ExistingFileState {
+    fingerprint: FileFingerprint,
+    metadata: Option<std::fs::Metadata>,
+}
+
+struct ExistingFileContents {
+    bytes: Vec<u8>,
+    metadata: std::fs::Metadata,
+}
+
+struct TemporaryFile {
+    path: Option<PathBuf>,
+    file: File,
+}
+
+impl TemporaryFile {
+    fn path(&self) -> &Path {
+        self.path
+            .as_deref()
+            .expect("temporary path remains present until rename")
+    }
+
+    fn persist(mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for TemporaryFile {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn validate_expected_state(expected: &ExpectedFileState) -> Result<(), String> {
+    let ExpectedFileState::Match { hash } = expected else {
+        return Ok(());
+    };
+    if hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err("Expected file hash must be 64 lowercase hexadecimal characters".to_string())
+    }
+}
+
+fn open_regular_file(path: &Path) -> Result<File, std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if metadata.file_type().is_file() {
+        Ok(file)
+    } else {
+        Err(std::io::Error::other(
+            "Refusing to fingerprint a non-regular file through Quill",
+        ))
+    }
+}
+
+fn read_existing_file(path: &Path) -> Result<Option<ExistingFileContents>, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("Refusing to access a symbolic link through Quill".to_string())
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            Err("Refusing to access a non-regular file through Quill".to_string())
+        }
+        Ok(_) => {
+            let mut file = open_regular_file(path).map_err(|error| error.to_string())?;
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            Ok(Some(ExistingFileContents { bytes, metadata }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Could not inspect file path: {error}")),
+    }
+}
+
+fn existing_file_state(path: &Path) -> Result<ExistingFileState, String> {
+    let Some(existing) = read_existing_file(path)? else {
+        return Ok(ExistingFileState {
+            fingerprint: FileFingerprint::Absent,
+            metadata: None,
+        });
+    };
+    Ok(ExistingFileState {
+        fingerprint: FileFingerprint::Present {
+            hash: sha256_hex(&existing.bytes),
+        },
+        metadata: Some(existing.metadata),
+    })
+}
+
+fn read_file_with_fingerprint_at(path: &Path) -> Result<FingerprintedFileContents, String> {
+    let Some(existing) = read_existing_file(path)? else {
+        return Ok(FingerprintedFileContents::Absent);
+    };
+    let hash = sha256_hex(&existing.bytes);
+    let content = String::from_utf8(existing.bytes)
+        .map_err(|error| format!("File is not valid UTF-8: {error}"))?;
+    Ok(FingerprintedFileContents::Present { content, hash })
+}
+
+#[tauri::command]
+fn read_file_with_fingerprint(path: String) -> Result<FingerprintedFileContents, String> {
+    ensure_allowed_path(&path)?;
+    read_file_with_fingerprint_at(Path::new(&path))
+}
+
+fn expected_state_matches(expected: &ExpectedFileState, actual: &FileFingerprint) -> bool {
+    match (expected, actual) {
+        (ExpectedFileState::Any, _) | (ExpectedFileState::Absent, FileFingerprint::Absent) => true,
+        (
+            ExpectedFileState::Match { hash: expected },
+            FileFingerprint::Present { hash: actual },
+        ) => expected == actual,
+        (ExpectedFileState::Absent | ExpectedFileState::Match { .. }, _) => false,
+    }
+}
+
+fn unique_temporary_file(path: &Path) -> Result<TemporaryFile, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "File path has no containing directory".to_string())?;
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| "File path has no valid filename".to_string())?;
+    for _ in 0..16 {
+        let temporary_path = parent.join(format!(".{name}.quill-{}.tmp", uuid::Uuid::new_v4()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+        {
+            Ok(file) => {
+                return Ok(TemporaryFile {
+                    path: Some(temporary_path),
+                    file,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("Could not create a unique temporary file".to_string())
+}
+
+#[cfg(unix)]
+fn preserve_replaced_file_metadata(
+    temporary: &File,
+    metadata: &std::fs::Metadata,
+) -> Result<(), String> {
+    use std::os::unix::fs::{fchown, MetadataExt};
+
+    fchown(temporary, Some(metadata.uid()), Some(metadata.gid()))
+        .map_err(|error| format!("Could not preserve file ownership: {error}"))?;
+    temporary
+        .set_permissions(metadata.permissions())
+        .map_err(|error| format!("Could not preserve file permissions: {error}"))
+}
+
+#[cfg(not(unix))]
+fn preserve_replaced_file_metadata(
+    temporary: &File,
+    metadata: &std::fs::Metadata,
+) -> Result<(), String> {
+    temporary
+        .set_permissions(metadata.permissions())
+        .map_err(|error| format!("Could not preserve file permissions: {error}"))
+}
+
+fn sync_containing_directory(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "File path has no containing directory".to_string())?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("Could not sync containing directory: {error}"))
+}
+
+fn write_file_atomic_at<F>(
+    path: &Path,
+    content: &[u8],
+    expected: &ExpectedFileState,
+    before_recheck: F,
+) -> Result<AtomicWriteResult, String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    validate_expected_state(expected)?;
+    let content_hash = sha256_hex(content);
+    let initial = existing_file_state(path)?;
+    if !expected_state_matches(expected, &initial.fingerprint) {
+        return Ok(AtomicWriteResult::Conflict {
+            actual: initial.fingerprint,
+        });
+    }
+
+    // A byte-identical save still has to honor the conditional-write contract.
+    // Recheck after the same race hook used by the replacement path; only skip the
+    // temp-file/fsync/rename when the live file remains both expectation-valid and
+    // exactly equal to the requested bytes. With `any`, a concurrent external change
+    // falls through to the normal unconditional replacement instead of being
+    // misreported as a successful no-op.
+    let mut before_recheck = Some(before_recheck);
+    if initial.fingerprint
+        == (FileFingerprint::Present {
+            hash: content_hash.clone(),
+        })
+    {
+        before_recheck.take().expect("race hook has not run")()?;
+        let no_op_state = existing_file_state(path)?;
+        if !expected_state_matches(expected, &no_op_state.fingerprint) {
+            return Ok(AtomicWriteResult::Conflict {
+                actual: no_op_state.fingerprint,
+            });
+        }
+        if no_op_state.fingerprint
+            == (FileFingerprint::Present {
+                hash: content_hash.clone(),
+            })
+        {
+            return Ok(AtomicWriteResult::Written { hash: content_hash });
+        }
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "File path has no containing directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let mut temporary = unique_temporary_file(path)?;
+    temporary
+        .file
+        .write_all(content)
+        .and_then(|()| temporary.file.sync_all())
+        .map_err(|error| error.to_string())?;
+
+    if let Some(before_recheck) = before_recheck {
+        before_recheck()?;
+    }
+    let before_rename = existing_file_state(path)?;
+    if !expected_state_matches(expected, &before_rename.fingerprint) {
+        return Ok(AtomicWriteResult::Conflict {
+            actual: before_rename.fingerprint,
+        });
+    }
+    if let Some(metadata) = &before_rename.metadata {
+        preserve_replaced_file_metadata(&temporary.file, metadata)?;
+        temporary
+            .file
+            .sync_all()
+            .map_err(|error| error.to_string())?;
+    }
+
+    // Applying metadata takes time too, so put the content check as close to
+    // the rename as portable filesystems allow. The compare and rename cannot
+    // be one kernel primitive, but both occur inside this native command.
+    let final_state = existing_file_state(path)?;
+    if !expected_state_matches(expected, &final_state.fingerprint) {
+        return Ok(AtomicWriteResult::Conflict {
+            actual: final_state.fingerprint,
+        });
+    }
+
+    std::fs::rename(temporary.path(), path).map_err(|error| error.to_string())?;
+    temporary.persist();
+    sync_containing_directory(path)?;
+    Ok(AtomicWriteResult::Written { hash: content_hash })
+}
+
+#[tauri::command]
+fn write_file_atomic(
+    path: String,
+    content: String,
+    expected: ExpectedFileState,
+) -> Result<AtomicWriteResult, String> {
+    ensure_allowed_path(&path)?;
+    write_file_atomic_at(Path::new(&path), content.as_bytes(), &expected, || Ok(()))
+}
+
+fn delete_file_if_match_at<F>(
+    path: &Path,
+    expected: &ExpectedFileState,
+    before_recheck: F,
+) -> Result<ConditionalDeleteResult, String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    validate_expected_state(expected)?;
+    let initial = existing_file_state(path)?;
+    if initial.fingerprint == FileFingerprint::Absent {
+        return match expected {
+            ExpectedFileState::Any | ExpectedFileState::Absent => {
+                Ok(ConditionalDeleteResult::Absent)
+            }
+            ExpectedFileState::Match { .. } => Ok(ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Absent,
+            }),
+        };
+    }
+    if !expected_state_matches(expected, &initial.fingerprint) {
+        return Ok(ConditionalDeleteResult::Conflict {
+            actual: initial.fingerprint,
+        });
+    }
+
+    before_recheck()?;
+    let before_delete = existing_file_state(path)?;
+    if before_delete.fingerprint == FileFingerprint::Absent {
+        return match expected {
+            ExpectedFileState::Any | ExpectedFileState::Absent => {
+                Ok(ConditionalDeleteResult::Absent)
+            }
+            ExpectedFileState::Match { .. } => Ok(ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Absent,
+            }),
+        };
+    }
+    if !expected_state_matches(expected, &before_delete.fingerprint) {
+        return Ok(ConditionalDeleteResult::Conflict {
+            actual: before_delete.fingerprint,
+        });
+    }
+    std::fs::remove_file(path).map_err(|error| error.to_string())?;
+    sync_containing_directory(path)?;
+    Ok(ConditionalDeleteResult::Deleted)
+}
+
+#[tauri::command]
+fn delete_file_if_match(
+    path: String,
+    expected: ExpectedFileState,
+) -> Result<ConditionalDeleteResult, String> {
+    ensure_allowed_path(&path)?;
+    delete_file_if_match_at(Path::new(&path), &expected, || Ok(()))
 }
 
 #[tauri::command]
@@ -302,6 +695,16 @@ mod tests {
     use tempfile::tempdir;
 
     static HOME_ENV_LOCK: TestMutex<()> = TestMutex::new(());
+
+    fn assert_no_quill_temp_files(directory: &Path) {
+        let temporary_files = fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".quill-") && name.ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert_eq!(temporary_files, Vec::<String>::new());
+    }
 
     struct HomeEnvGuard(Option<OsString>);
 
@@ -596,6 +999,74 @@ mod tests {
         assert_eq!(result.unwrap(), "");
     }
 
+    // --- typed reads with fingerprints ---
+
+    #[test]
+    fn fingerprinted_read_contract_serializes_absent_and_present() {
+        assert_eq!(
+            serde_json::to_value(FingerprintedFileContents::Absent).unwrap(),
+            serde_json::json!({ "state": "absent" })
+        );
+        assert_eq!(
+            serde_json::to_value(FingerprintedFileContents::Present {
+                content: "# Quill".to_string(),
+                hash: "a".repeat(64),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "state": "present",
+                "content": "# Quill",
+                "hash": "a".repeat(64),
+            })
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_returns_exact_utf8_content_and_hash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unicode.md");
+        let content = "# 日本語\r\nHello 🌍";
+        fs::write(&path, content.as_bytes()).unwrap();
+
+        assert_eq!(
+            read_file_with_fingerprint(path.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Present {
+                content: content.to_string(),
+                hash: sha256_hex(content.as_bytes()),
+            }
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_distinguishes_missing_from_empty() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.comments.json");
+        let empty = dir.path().join("empty.comments.json");
+        fs::write(&empty, []).unwrap();
+
+        assert_eq!(
+            read_file_with_fingerprint(missing.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Absent
+        );
+        assert_eq!(
+            read_file_with_fingerprint(empty.to_string_lossy().into_owned()).unwrap(),
+            FingerprintedFileContents::Present {
+                content: String::new(),
+                hash: sha256_hex(b""),
+            }
+        );
+    }
+
+    #[test]
+    fn fingerprinted_read_rejects_non_utf8_instead_of_reporting_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.md");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        let error = read_file_with_fingerprint(path.to_string_lossy().into_owned()).unwrap_err();
+        assert!(error.contains("not valid UTF-8"));
+    }
+
     // --- write_file ---
 
     #[test]
@@ -651,6 +1122,376 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "# 日本語\nHello 🌍");
+    }
+
+    // --- atomic fingerprinted document writes ---
+
+    #[test]
+    fn atomic_write_contract_serializes_absent_and_present_conflicts() {
+        let expected_any: ExpectedFileState =
+            serde_json::from_value(serde_json::json!({ "mode": "any" })).unwrap();
+        let expected_absent: ExpectedFileState =
+            serde_json::from_value(serde_json::json!({ "mode": "absent" })).unwrap();
+        let expected_match: ExpectedFileState = serde_json::from_value(serde_json::json!({
+            "mode": "match",
+            "hash": "a".repeat(64),
+        }))
+        .unwrap();
+        let absent = serde_json::to_value(AtomicWriteResult::Conflict {
+            actual: FileFingerprint::Absent,
+        })
+        .unwrap();
+        let present = serde_json::to_value(AtomicWriteResult::Conflict {
+            actual: FileFingerprint::Present {
+                hash: "a".repeat(64),
+            },
+        })
+        .unwrap();
+
+        assert_eq!(expected_any, ExpectedFileState::Any);
+        assert_eq!(expected_absent, ExpectedFileState::Absent);
+        assert_eq!(
+            expected_match,
+            ExpectedFileState::Match {
+                hash: "a".repeat(64),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(AtomicWriteResult::Written {
+                hash: "b".repeat(64),
+            })
+            .unwrap(),
+            serde_json::json!({ "status": "written", "hash": "b".repeat(64) })
+        );
+        assert_eq!(
+            absent,
+            serde_json::json!({ "status": "conflict", "actual": { "state": "absent" } })
+        );
+        assert_eq!(
+            present,
+            serde_json::json!({
+                "status": "conflict",
+                "actual": { "state": "present", "hash": "a".repeat(64) }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ConditionalDeleteResult::Deleted).unwrap(),
+            serde_json::json!({ "status": "deleted" })
+        );
+    }
+
+    #[test]
+    fn sha256_hashes_the_exact_utf8_bytes() {
+        assert_eq!(
+            sha256_hex("# 日本語\nHello 🌍".as_bytes()),
+            "35c039012c3e165ffdc5f7a77bf1fab41a83da542d2e209744032312ee3c0aa4"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn atomic_write_creates_absent_document_and_returns_its_hash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("new.md");
+        let content = "# Written atomically";
+
+        let result = write_file_atomic_at(
+            &path,
+            content.as_bytes(),
+            &ExpectedFileState::Absent,
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(content.as_bytes()),
+            }
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_absent_conflict_does_not_touch_existing_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("existing.md");
+        fs::write(&path, "external bytes").unwrap();
+
+        let result =
+            write_file_atomic_at(&path, b"quill bytes", &ExpectedFileState::Absent, || Ok(()))
+                .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external bytes"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_matching_hash_replaces_the_expected_version() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("matched.md");
+        fs::write(&path, "old bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"old bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"new bytes", &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(b"new bytes"),
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"new bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_identical_content_skips_replacement_after_rechecking() {
+        use std::cell::Cell;
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unchanged.md");
+        fs::write(&path, "same bytes").unwrap();
+        let inode_before = fs::metadata(&path).unwrap().ino();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"same bytes"),
+        };
+        let rechecks = Cell::new(0);
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || {
+            rechecks.set(rechecks.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(b"same bytes"),
+            }
+        );
+        assert_eq!(rechecks.get(), 1);
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode_before);
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_content_does_not_bypass_a_stale_expectation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("stale-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"older bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"same bytes"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_match_recheck_catches_an_external_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"same bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external race winner"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external race winner");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_any_replaces_a_concurrent_external_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced-unconditional-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+
+        let result = write_file_atomic_at(&path, b"same bytes", &ExpectedFileState::Any, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(b"same bytes"),
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_hash_mismatch_leaves_the_external_version_unchanged() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("changed.md");
+        fs::write(&path, "external version").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"stale quill version"),
+        };
+
+        let result =
+            write_file_atomic_at(&path, b"new quill version", &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external version"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external version");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_reports_absent_when_a_matched_file_was_deleted() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("deleted.md");
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"previous bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"new bytes", &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Absent,
+            }
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn atomic_write_recheck_catches_a_change_while_the_temp_file_is_written() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced.md");
+        fs::write(&path, "expected bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"expected bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"quill bytes", &expected, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external race winner"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external race winner");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_failure_before_rename_preserves_the_original_and_cleans_the_temp() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("failed.md");
+        fs::write(&path, "last good bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"last good bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"incomplete replacement", &expected, || {
+            Err("injected failure after temporary-file sync".to_string())
+        });
+
+        assert_eq!(
+            result.unwrap_err(),
+            "injected failure after temporary-file sync"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"last good bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_unix_permissions_and_ownership() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("metadata.md");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"old"),
+        };
+
+        write_file_atomic_at(&path, b"new", &expected, || Ok(())).unwrap();
+
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(after.permissions().mode() & 0o777, 0o640);
+        assert_eq!(after.uid(), before.uid());
+        assert_eq!(after.gid(), before.gid());
+    }
+
+    #[test]
+    fn atomic_write_rejects_invalid_expected_hash_instead_of_calling_it_a_conflict() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid-hash.md");
+        fs::write(&path, "unchanged").unwrap();
+        let result = write_file_atomic_at(
+            &path,
+            b"replacement",
+            &ExpectedFileState::Match {
+                hash: "NOT-A-SHA".to_string(),
+            },
+            || Ok(()),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"unchanged");
     }
 
     #[test]
@@ -717,6 +1558,135 @@ mod tests {
 
         assert!(!path1.exists());
         assert!(path2.exists());
+    }
+
+    // --- conditional fingerprinted deletes ---
+
+    #[test]
+    fn conditional_delete_removes_only_the_matching_version() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty.comments.json");
+        fs::write(&path, "expected sidecar").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"expected sidecar"),
+        };
+
+        assert_eq!(
+            delete_file_if_match_at(&path, &expected, || Ok(())).unwrap(),
+            ConditionalDeleteResult::Deleted
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn conditional_delete_hash_mismatch_preserves_the_external_sidecar() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("changed.comments.json");
+        fs::write(&path, "external sidecar").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"stale quill sidecar"),
+        };
+
+        let result = delete_file_if_match_at(&path, &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external sidecar"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external sidecar");
+    }
+
+    #[test]
+    fn conditional_delete_recheck_catches_a_sidecar_changed_during_the_command() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced.comments.json");
+        fs::write(&path, "expected sidecar").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"expected sidecar"),
+        };
+
+        let result = delete_file_if_match_at(&path, &expected, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external race winner"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external race winner");
+    }
+
+    #[test]
+    fn unconditional_delete_returns_absent_if_an_external_process_deletes_first() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced-missing.comments.json");
+        fs::write(&path, "present initially").unwrap();
+
+        let result = delete_file_if_match_at(&path, &ExpectedFileState::Any, || {
+            fs::remove_file(&path).unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(result, ConditionalDeleteResult::Absent);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn conditional_delete_distinguishes_absent_noop_from_deleted_conflict() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing.comments.json");
+
+        assert_eq!(
+            delete_file_if_match_at(&path, &ExpectedFileState::Any, || Ok(())).unwrap(),
+            ConditionalDeleteResult::Absent
+        );
+        assert_eq!(
+            delete_file_if_match_at(&path, &ExpectedFileState::Absent, || Ok(())).unwrap(),
+            ConditionalDeleteResult::Absent
+        );
+        assert_eq!(
+            delete_file_if_match_at(
+                &path,
+                &ExpectedFileState::Match {
+                    hash: sha256_hex(b"deleted version"),
+                },
+                || Ok(()),
+            )
+            .unwrap(),
+            ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Absent,
+            }
+        );
+    }
+
+    #[test]
+    fn conditional_delete_expected_absent_refuses_to_remove_an_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unexpected.comments.json");
+        fs::write(&path, "external").unwrap();
+
+        let result = delete_file_if_match_at(&path, &ExpectedFileState::Absent, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            ConditionalDeleteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external");
     }
 
     // --- path policy (ensure_allowed_path) ---
@@ -803,7 +1773,18 @@ mod tests {
 
         assert!(ensure_allowed_path(link.to_str().unwrap()).is_err());
         assert!(read_file(link.to_string_lossy().into_owned()).is_err());
+        assert!(read_file_with_fingerprint(link.to_string_lossy().into_owned()).is_err());
         assert!(write_file(link.to_string_lossy().into_owned(), "overwrite".to_string()).is_err());
+        assert!(write_file_atomic(
+            link.to_string_lossy().into_owned(),
+            "overwrite".to_string(),
+            ExpectedFileState::Any,
+        )
+        .is_err());
+        assert!(
+            delete_file_if_match(link.to_string_lossy().into_owned(), ExpectedFileState::Any,)
+                .is_err()
+        );
         assert_eq!(fs::read_to_string(target).unwrap(), "secret");
     }
 
@@ -819,15 +1800,34 @@ mod tests {
         // This must return immediately instead of opening the FIFO and waiting
         // forever for a writer.
         assert!(read_file(fifo.to_string_lossy().into_owned()).is_err());
+        assert!(read_file_with_fingerprint(fifo.to_string_lossy().into_owned()).is_err());
         assert!(write_file(fifo.to_string_lossy().into_owned(), "blocked".to_string()).is_err());
+        assert!(write_file_atomic(
+            fifo.to_string_lossy().into_owned(),
+            "blocked".to_string(),
+            ExpectedFileState::Any,
+        )
+        .is_err());
+        assert!(
+            delete_file_if_match(fifo.to_string_lossy().into_owned(), ExpectedFileState::Any,)
+                .is_err()
+        );
     }
 
     #[test]
     fn confined_commands_refuse_disallowed_paths() {
         // The commands themselves enforce the policy, not just the helper.
         assert!(read_file("/etc/passwd".to_string()).is_err());
+        assert!(read_file_with_fingerprint("/etc/passwd".to_string()).is_err());
         assert!(write_file("/tmp/evil.sh".to_string(), "x".to_string()).is_err());
         assert!(delete_file("/tmp/evil.sh".to_string()).is_err());
+        assert!(write_file_atomic(
+            "/tmp/evil.sh".to_string(),
+            "x".to_string(),
+            ExpectedFileState::Any,
+        )
+        .is_err());
+        assert!(delete_file_if_match("/tmp/evil.sh".to_string(), ExpectedFileState::Any,).is_err());
     }
 
     // --- deep-link target validation (parse_quill_open / validate_open_target) ---
@@ -2717,8 +3717,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_file,
+            read_file_with_fingerprint,
             write_file,
+            write_file_atomic,
             delete_file,
+            delete_file_if_match,
             show_open_dialog,
             show_save_dialog,
             show_folder_dialog,

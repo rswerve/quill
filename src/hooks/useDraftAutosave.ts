@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { DraftFile, WorkspaceFile, WorkspaceTab } from '../types';
+import type { DraftFile, WorkspaceFile, WorkspaceTab, Fingerprint } from '../types';
 import {
   sanitizeComments,
   sanitizeSuggestions,
@@ -11,6 +11,24 @@ import {
 import { normalizePersistedSuggestions } from '../utils/reviewPersistence';
 
 const AUTOSAVE_INTERVAL_MS = 5000;
+
+/**
+ * Validate a persisted on-disk fingerprint. Anything malformed (or absent) becomes
+ * `undefined` — treated downstream as UNKNOWN and failed closed — rather than
+ * discarding the whole recovery draft.
+ */
+function sanitizeFingerprint(raw: unknown): Fingerprint | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const f = raw as Record<string, unknown>;
+  if (f.state === 'absent') return { state: 'absent' };
+  // A present hash must be exactly the native SHA-256 hex (64 lowercase hex chars);
+  // anything else is malformed → unknown, so it fails closed rather than reaching
+  // the backend as an invalid `expected` and degrading into a generic save failure.
+  if (f.state === 'present' && typeof f.hash === 'string' && /^[0-9a-f]{64}$/.test(f.hash)) {
+    return { state: 'present', hash: f.hash };
+  }
+  return undefined;
+}
 
 export type DraftSnapshot = Omit<DraftFile, 'version' | 'savedAt'>;
 
@@ -50,6 +68,8 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   if (typeof d.content !== 'string') return null;
   if (d.filePath !== null && typeof d.filePath !== 'string') return null;
   const chat = sanitizeDocumentChat(d.chat);
+  const expectedDoc = sanitizeFingerprint(d.expectedDoc);
+  const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
   return {
     version: 1,
     savedAt: typeof d.savedAt === 'string' ? d.savedAt : new Date().toISOString(),
@@ -60,6 +80,9 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
     ...(chat ? { chat } : {}),
+    ...(expectedDoc ? { expectedDoc } : {}),
+    ...(expectedSidecar ? { expectedSidecar } : {}),
+    ...(typeof d.sidecarProtected === 'boolean' ? { sidecarProtected: d.sidecarProtected } : {}),
   };
 }
 

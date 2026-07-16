@@ -6,7 +6,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
-import { sanitizeWorkspace, useWorkspaceAutosave } from '../../hooks/useDraftAutosave';
+import {
+  sanitizeWorkspace,
+  sanitizeDraft,
+  useWorkspaceAutosave,
+} from '../../hooks/useDraftAutosave';
 import type { DraftSnapshot } from '../../hooks/useDraftAutosave';
 import type { DraftFile, WorkspaceFile } from '../../types';
 
@@ -292,5 +296,66 @@ describe('useWorkspaceAutosave', () => {
       expect(await result.current.quarantineWorkspace()).toBe('/app/workspace.corrupt-1.json');
       expect(quarantineCalls()).toHaveLength(1);
     });
+  });
+});
+
+describe('sanitizeDraft baselines', () => {
+  const base = {
+    version: 1,
+    savedAt: 'now',
+    filePath: '/f.md',
+    content: 'x',
+    comments: [],
+    suggestions: [],
+    aiSession: null,
+    contextFolder: null,
+  };
+
+  const HASH64 = 'a'.repeat(64);
+
+  it('round-trips valid on-disk baselines and protection', () => {
+    const out = sanitizeDraft({
+      ...base,
+      expectedDoc: { state: 'present', hash: HASH64 },
+      expectedSidecar: { state: 'absent' },
+      sidecarProtected: true,
+    });
+    expect(out).toMatchObject({
+      expectedDoc: { state: 'present', hash: HASH64 },
+      expectedSidecar: { state: 'absent' },
+      sidecarProtected: true,
+    });
+  });
+
+  it('drops a present baseline whose hash is not 64-char lowercase hex', () => {
+    const out = sanitizeDraft({
+      ...base,
+      expectedDoc: { state: 'present', hash: 'h' }, // too short
+      expectedSidecar: { state: 'present', hash: 'A'.repeat(64) }, // uppercase — not native hex
+    });
+    expect(out).not.toBeNull();
+    expect(out!.expectedDoc).toBeUndefined(); // malformed → unknown, not a bad expected
+    expect(out!.expectedSidecar).toBeUndefined();
+  });
+
+  it('drops malformed baselines to unknown rather than discarding the recovery draft', () => {
+    const out = sanitizeDraft({
+      ...base,
+      expectedDoc: { state: 'present' }, // missing hash
+      expectedSidecar: 'nope',
+      sidecarProtected: 'yes',
+    });
+    expect(out).not.toBeNull();
+    expect(out!.content).toBe('x'); // draft preserved
+    expect(out!.expectedDoc).toBeUndefined(); // unknown → fail closed downstream
+    expect(out!.expectedSidecar).toBeUndefined();
+    expect(out!.sidecarProtected).toBeUndefined();
+  });
+
+  it('omits baselines entirely for a legacy snapshot that never had them', () => {
+    const out = sanitizeDraft(base);
+    expect(out!.expectedDoc).toBeUndefined();
+    expect(out!.expectedSidecar).toBeUndefined();
+    expect(out!.sidecarProtected).toBeUndefined();
   });
 });

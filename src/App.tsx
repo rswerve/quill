@@ -56,6 +56,9 @@ interface DiscardGuard {
 
 let nextTabNumber = 1;
 
+// Max flush rounds before the quit guard fails closed (guards every dirty tab).
+const MAX_FLUSH_ROUNDS = 5;
+
 function createUntitledTab(): TabMeta {
   return {
     id: `tab-${nextTabNumber++}`,
@@ -131,6 +134,7 @@ function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
     contextFolder: null,
     lastKnownModel: null,
     stats: { words: 0, chars: 0, line: 1, column: 1 },
+    autosaveStatus: { state: 'idle' },
   };
 }
 
@@ -450,8 +454,25 @@ export default function App() {
     (tabId: string) => {
       const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      if (tab.isDirty) setCloseGuardTabId(tabId);
-      else closeTabImmediately(tabId);
+      if (!tab.isDirty) {
+        closeTabImmediately(tabId);
+        return;
+      }
+      // A dirty tab: try to autosave-flush it first (a saved tab edited inside the
+      // debounce shouldn't prompt), then close if it's now clean, else fall back to the
+      // guard. A flush error fails closed → guard rather than close-and-lose.
+      void (async () => {
+        const handle = tabHandlesRef.current.get(tabId);
+        let stillDirty = true;
+        try {
+          stillDirty = handle ? await handle.flushPendingSave() : true;
+        } catch {
+          stillDirty = true;
+        }
+        if (!tabsRef.current.some((candidate) => candidate.id === tabId)) return; // closed meanwhile
+        if (stillDirty) setCloseGuardTabId(tabId);
+        else closeTabImmediately(tabId);
+      })();
     },
     [closeTabImmediately],
   );
@@ -508,11 +529,66 @@ export default function App() {
     document.title = chrome.isDirty ? `${name} •` : name;
   }, [chrome.filePath, chrome.isDirty]);
 
-  const guardDirtyTabs = useCallback((action: () => void) => {
-    const dirtyTabIds = tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id);
-    if (dirtyTabIds.length === 0) action();
-    else setDiscardGuard({ tabIds: dirtyTabIds, run: action });
+  // Flush every open tab's pending autosave (and drain its coordinator) before a
+  // close/quit, then report which tabs are STILL dirty, from a QUIESCENT read. Because a
+  // tab can be edited AFTER its own flush resolved but BEFORE the round ends (its stale
+  // result would read clean), this loops: each round snapshots every tab's persistence
+  // revision, flushes all, then re-checks — if the tab SET changed or any revision
+  // advanced during the round, it flushes again, until the set is stable. It iterates the
+  // AUTHORITATIVE tab list (a handleless dirty tab is retained, a thrown flush is
+  // retained — fail closed). If the bound is exhausted without quiescing, it THROWS so
+  // both quit paths abort the close (a dirty-filter could be empty and let quit proceed).
+  const flushAllPendingSaves = useCallback(async (): Promise<string[]> => {
+    const revisionOf = (id: string): number | null =>
+      tabHandlesRef.current.get(id)?.getPersistenceSnapshot().revision ?? null;
+    for (let round = 0; round < MAX_FLUSH_ROUNDS; round++) {
+      const ids = tabsRef.current.map((tab) => tab.id);
+      const before = new Map(ids.map((id) => [id, revisionOf(id)]));
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const handle = tabHandlesRef.current.get(id);
+          if (!handle)
+            return { id, dirty: tabsRef.current.find((t) => t.id === id)?.isDirty ?? false };
+          try {
+            return { id, dirty: await handle.flushPendingSave() };
+          } catch {
+            return { id, dirty: true };
+          }
+        }),
+      );
+      // Quiescent iff the tab set is unchanged AND no tab's revision advanced (i.e. no
+      // edit and no handle appearing/vanishing) during the round.
+      const afterIds = tabsRef.current.map((tab) => tab.id);
+      const setChanged = afterIds.length !== ids.length || afterIds.some((id) => !before.has(id));
+      const advanced = afterIds.some((id) => before.has(id) && before.get(id) !== revisionOf(id));
+      if (!setChanged && !advanced) {
+        return [...new Set(results.filter((entry) => entry.dirty).map((entry) => entry.id))];
+      }
+    }
+    // Bound exhausted without quiescing → FAIL CLOSED by THROWING. Returning a
+    // dirty-filter here is not reliably fail-closed: it can be empty (stale React
+    // metadata, or a round that saved clean before re-dirtying), which would let quit
+    // proceed. Throwing propagates to both quit paths' catch blocks, which abort the
+    // close/exit and keep the window open.
+    throw new Error('Quit flush did not reach a stable state; aborting close to avoid data loss.');
   }, []);
+
+  const guardDirtyTabs = useCallback(
+    (action: () => void) => {
+      void (async () => {
+        try {
+          const dirtyTabIds = await flushAllPendingSaves();
+          if (dirtyTabIds.length === 0) action();
+          else setDiscardGuard({ tabIds: dirtyTabIds, run: action });
+        } catch (error) {
+          // Fail CLOSED: if the pre-quit flush errors, do NOT run the action (exit /
+          // close) — that could quit before unsaved work is persisted.
+          console.error('Quit flush failed; aborting the quit:', error);
+        }
+      })();
+    },
+    [flushAllPendingSaves],
+  );
 
   const handleSave = useCallback(
     () => activeHandle()?.save() ?? Promise.resolve(null),
@@ -627,17 +703,23 @@ export default function App() {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const win = getCurrentWindow();
         const off = await win.onCloseRequested((event) => {
-          const dirtyTabIds = tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id);
-          try {
-            event.preventDefault();
-            if (dirtyTabIds.length === 0) {
-              void writeWorkspace().finally(() => void win.destroy());
-              return;
+          // preventDefault must be synchronous; flush + decide happens right after.
+          event.preventDefault();
+          void (async () => {
+            try {
+              const dirtyTabIds = await flushAllPendingSaves();
+              if (dirtyTabIds.length === 0) {
+                void writeWorkspace().finally(() => void win.destroy());
+                return;
+              }
+              setDiscardGuard({ tabIds: dirtyTabIds, run: () => void win.destroy() });
+            } catch (error) {
+              // Fail CLOSED: a flush/guard error must NOT destroy the window — closing
+              // on an errored flush could drop unsaved work. Keep it open (preventDefault
+              // already did); the user can retry closing.
+              console.error('Close-requested flush failed; keeping the window open:', error);
             }
-            setDiscardGuard({ tabIds: dirtyTabIds, run: () => void win.destroy() });
-          } catch {
-            void win.destroy();
-          }
+          })();
         });
         if (cancelled) off();
         else unlisten = off;
@@ -649,7 +731,7 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [writeWorkspace]);
+  }, [writeWorkspace, flushAllPendingSaves]);
 
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -810,6 +892,7 @@ export default function App() {
         <Footer
           editor={chrome.editor}
           stats={chrome.stats}
+          autosaveStatus={chrome.autosaveStatus}
           zoom={chrome.zoom}
           onZoomChange={handleZoomChange}
           aiSession={chrome.aiSession}

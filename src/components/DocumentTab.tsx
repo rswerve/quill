@@ -8,7 +8,14 @@ import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
 import PanelHeader from './PanelHeader';
 import ChatPanel from './ChatPanel';
-import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
+import {
+  useFileManager,
+  stripTransientReplyState,
+  type SaveOutcome,
+} from '../hooks/useFileManager';
+import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
+import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
+import ConflictBanner from './ConflictBanner';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
@@ -106,6 +113,7 @@ export interface DocumentTabChromeSnapshot {
   contextFolder: string | null;
   lastKnownModel: string | null;
   stats: DocumentStats;
+  autosaveStatus: AutosaveStatus;
 }
 
 export interface DocumentTabHandle {
@@ -114,7 +122,7 @@ export interface DocumentTabHandle {
   saveAs: () => Promise<string | null>;
   open: () => Promise<void>;
   openPath: (path: string) => Promise<boolean>;
-  newDocument: () => void;
+  newDocument: () => Promise<void>;
   exportPdf: () => void;
   setMode: (suggesting: boolean) => void;
   setZoom: (zoom: number) => void;
@@ -130,12 +138,30 @@ export interface DocumentTabHandle {
   linkContextFolder: () => void;
   unlinkContextFolder: () => void;
   getWorkspaceSnapshot: () => DraftSnapshot;
+  /**
+   * Flush a pending autosave and drain the coordinator; awaited by the shell on
+   * close/quit. Resolves with whether the tab is STILL dirty afterward (true = the
+   * shell must still guard it — e.g. an Untitled doc or a failed/blocked/conflicted save).
+   */
+  flushPendingSave: () => Promise<boolean>;
+  /**
+   * Synchronous persistence snapshot: the monotonic change-revision and current dirty
+   * state. The shell's quit flush uses `revision` to detect a tab edited DURING a flush
+   * round (its value advances), so it can re-flush until the tab set is quiescent.
+   */
+  getPersistenceSnapshot: () => { revision: number; dirty: boolean };
 }
 
 export interface DocumentTabMetaSnapshot {
   filePath: string | null;
   title: string;
   isDirty: boolean;
+  /** This tab has an unresolved external conflict — surfaced on the tab strip so a
+   *  background tab's conflict is visible even while its in-document banner is hidden. */
+  conflict: boolean;
+  /** Latched autosave attention (a background tab's flush failed or is blocked), surfaced
+   *  on the tab strip so a background save failure is never silent. Null when healthy. */
+  autosaveAttention: 'failed' | 'blocked' | null;
 }
 
 interface DocumentTabProps {
@@ -249,15 +275,46 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const {
     filePath,
     isDirty,
-    markDirty,
+    markDirty: markFileDirty,
     openFile,
     openFilePath,
     saveFile,
     saveFileAs,
     newFile,
     restoreDraft,
+    getChangeRevision,
+    getBaselines,
+    getIsDirty,
   } = useFileManager(showError);
+
+  // markDirty is the single change choke point — it bumps the change-revision and
+  // marks the tab dirty at every mutation site (edits, accept/reject, comments, chat).
+  // Piggyback the autosave debounce signal here so every edit path notifies through one
+  // ref (the scheduler is created below, so notifyAutosaveRef is populated after it).
+  const notifyAutosaveRef = useRef<() => void>(() => {});
+  const markDirty = useCallback(() => {
+    markFileDirty();
+    notifyAutosaveRef.current();
+  }, [markFileDirty]);
+
+  // A scheduler generation that changes on every NON-autosave baseline reconciliation
+  // (Open / Reopen / Reload / New / manual Save / Save As / Overwrite). It keys the
+  // autosave scheduler's reset so same-path reconciliation — which leaves filePath
+  // unchanged — still cancels stale timers, drops a late completion, and clears a
+  // latched conflict/block. A steady-state autosave deliberately does NOT bump it.
+  const [schedulerGen, setSchedulerGen] = useState(0);
+  const bumpSchedulerGen = useCallback(() => setSchedulerGen((generation) => generation + 1), []);
+
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  // External-conflict state for this tab: which on-disk file changed underneath us.
+  // Persists through edits and failed/cancelled resolutions; cleared only by a
+  // successful Overwrite / Save-a-Copy / Reload, or by New / a successful Open.
+  const [saveConflict, setSaveConflict] = useState<{ which: 'doc' | 'sidecar' } | null>(null);
+  // True while a resolution job (Overwrite / Save-a-Copy / Reload) is running, so the
+  // banner disables its actions. A bump of `conflictFlash` re-announces the banner
+  // when a conflicted Cmd+S is pressed (no write happens).
+  const [resolvingConflict, setResolvingConflict] = useState(false);
+  const [conflictFlash, setConflictFlash] = useState(0);
 
   const chooseContextFolder = useCallback(
     async (permissionPath = filePath) => {
@@ -364,6 +421,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // the regular sidecar serializer does.
   const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
     const live = getLiveReviewState();
+    const baselines = getBaselines();
     return {
       filePath,
       content: getDocMarkdown(),
@@ -372,8 +430,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
+      // Persist the on-disk baselines + protection so a recovered dirty draft can
+      // still detect an external change on the next save (never re-hashing disk).
+      expectedDoc: baselines.expectedDoc,
+      expectedSidecar: baselines.expectedSidecar,
+      sidecarProtected: baselines.sidecarProtected,
     };
-  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
+  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder, getBaselines]);
 
   // Read the live document text for a comment's anchored range and its
   // enclosing paragraph, as plaintext (matching how Claude's `find` strings are
@@ -490,14 +553,51 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   );
 
   // Review-only mutations (replies, AI completions, resolve state) change no
-  // document text, so no editor transaction fires onUpdate for them — they
-  // must mark the document dirty themselves or quitting silently drops them.
+  // document text, so no editor transaction fires onUpdate for them — they must mark
+  // the document dirty themselves or quitting silently drops them. EVERY AI-reply
+  // lifecycle outcome (finish / fail / cancel / retry) mutates review state, so all of
+  // them mark dirty; otherwise a mid-stream autosave clears dirty and a later error /
+  // cancel state survives only in memory. A terminal outcome (finish/fail/cancel) also
+  // flushes — but via a post-commit tick (below), never synchronously here, or the
+  // flush would capture the pre-terminal React state and persist the wrong payload.
+  const [aiTerminalTick, setAiTerminalTick] = useState(0);
+  // Bump the post-commit terminal-flush tick (see the effect below). Chat wires this to
+  // its onTerminal directly (chat already marks dirty via onChanged); comment replies go
+  // through noteAITerminal, which also marks dirty because their raw handlers don't.
+  const signalTerminalFlush = useCallback(() => setAiTerminalTick((tick) => tick + 1), []);
+  const noteAITerminal = useCallback(() => {
+    markDirty();
+    signalTerminalFlush();
+  }, [markDirty, signalTerminalFlush]);
   const finishAIReplyAndDirty = useCallback(
     (commentId: string, replyId: string) => {
       finishAIReply(commentId, replyId);
+      noteAITerminal();
+    },
+    [finishAIReply, noteAITerminal],
+  );
+  const failAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string, message: string) => {
+      failAIReply(commentId, replyId, message);
+      noteAITerminal();
+    },
+    [failAIReply, noteAITerminal],
+  );
+  const cancelAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string) => {
+      cancelAIReply(commentId, replyId);
+      noteAITerminal();
+    },
+    [cancelAIReply, noteAITerminal],
+  );
+  const retryAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string) => {
+      retryAIReply(commentId, replyId);
+      // Retry restarts the stream — not a terminal outcome, so mark dirty (persist the
+      // cleared error state) but do NOT flush mid-stream.
       markDirty();
     },
-    [finishAIReply, markDirty],
+    [retryAIReply, markDirty],
   );
 
   const claudeReply = useClaudeReply({
@@ -506,9 +606,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setAIReplyModel,
     onModelObserved: setLastKnownModel,
     finishAIReply: finishAIReplyAndDirty,
-    failAIReply,
-    cancelAIReply,
-    retryAIReply,
+    failAIReply: failAIReplyAndDirty,
+    cancelAIReply: cancelAIReplyAndDirty,
+    retryAIReply: retryAIReplyAndDirty,
     linkAIReplySuggestions,
     getDocMarkdown,
     getRangeTexts,
@@ -554,6 +654,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
     onChanged: markDirty,
+    onTerminal: signalTerminalFlush,
     aiGate,
   });
   chatThreadRef.current = aiSession ? documentChat.getThread(aiSession.sessionId) : undefined;
@@ -631,6 +732,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       },
       promptForSession = true,
     ) => {
+      // A successful (re)load reconciles the document with disk, resolving any
+      // pending conflict for this tab. Bump the scheduler generation so a same-path
+      // Reload/Reopen also resets autosave (clears a latch, drops a stale completion).
+      setSaveConflict(null);
+      bumpSchedulerGen();
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
@@ -744,6 +850,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       onOpenSessionPicker,
       restorePersistedReviewMarks,
       tabId,
+      bumpSchedulerGen,
     ],
   );
 
@@ -774,9 +881,186 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return editorRef.current?.getMarkdown() ?? '';
   }
 
-  const handleSaveAs = useCallback(async () => {
+  // Reduce a typed save outcome to a path for callers that only care whether the
+  // save landed, surfacing the outcomes that must not read as silent success:
+  // a `blocked` sidecar (text saved, annotations withheld) and an external
+  // `conflict`. `failed` already reported itself inside useFileManager; a
+  // Shared by every write (manual AND autosave, via performSave): raise the persistent
+  // conflict banner when the on-disk file changed underneath us. This is wanted for both
+  // sources — autosave detecting an external change is exactly when the banner should
+  // appear. `blocked` and `failed` are NOT presented here: a background write must never
+  // pop a modal (see presentManualSaveFailure). `saved`/`cancelled` are silent.
+  const notifySaveOutcome = useCallback((outcome: SaveOutcome) => {
+    if (outcome.status === 'conflict') {
+      // Sticky until the user resolves it (Overwrite / Save a Copy / Reload).
+      setSaveConflict({ which: outcome.which });
+    }
+  }, []);
+
+  // Present a save failure LOUDLY — only from a manual save. Autosave leaves these to
+  // the footer/tab status (blocked → 'stopped', failed → 'retrying') so a background
+  // write never interrupts the user; a manual Cmd+S promotes them to these modals.
+  const presentManualSaveFailure = useCallback(
+    (outcome: SaveOutcome) => {
+      if (outcome.status === 'blocked' && outcome.reason === 'sidecar-protected') {
+        showError(
+          'Comments not saved',
+          'The document text was saved, but its comments and suggestions could not be ' +
+            "written: the existing .comments.json file is unreadable and Quill won't " +
+            'overwrite it. Recover or remove that file, then save again.',
+        );
+      } else if (outcome.status === 'blocked') {
+        // baseline-unknown: a recovered draft with no trustworthy on-disk baseline.
+        showError(
+          "Couldn't save — this file's state is unknown",
+          "Quill recovered unsaved work for this file but can't tell whether the file on " +
+            "disk changed while Quill was closed, so it won't overwrite it. Reopen the file " +
+            'to reconcile, or use Save As to write your recovered work to a new file.',
+        );
+      } else if (outcome.status === 'failed') {
+        // Name the destination that failed when we know it (actionable), else just why.
+        const detail = outcome.path ? `${outcome.path}\n\n${outcome.message}` : outcome.message;
+        showError('Could not save file', detail);
+      }
+    },
+    [showError],
+  );
+
+  // The coordinator's default-save job: capture the live payload NOW (at
+  // write-begin) and save to the current path. Post-write side effects and
+  // notices live here so they run exactly once per write, even when several
+  // coalesced requests share it.
+  const performSave = useCallback(async (): Promise<SaveOutcome> => {
     const live = getLiveReviewState();
-    const path = await saveFileAs(
+    const outcome = await saveFile(
+      getMarkdown(),
+      live.comments,
+      live.suggestions,
+      aiSession,
+      contextFolder,
+      undefined,
+      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+    );
+    if (outcome.status === 'saved') {
+      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
+      setLastSavedAt(Date.now());
+    }
+    notifySaveOutcome(outcome);
+    return outcome;
+  }, [saveFile, getLiveReviewState, aiSession, contextFolder, documentChat, notifySaveOutcome]);
+
+  const {
+    requestSave,
+    runExclusive,
+    flush: flushSaves,
+    saveAndDrain,
+  } = useSaveCoordinator({
+    performSave,
+    getRevision: getChangeRevision,
+  });
+
+  // Autosave: a debounced background save for documents with a real saved path, running
+  // only inside Tauri (there is no file I/O in the browser dev server). It drives the
+  // coordinator's saveAndDrain, so a background write is serialized with manual saves,
+  // reports the coordinator's terminal outcome, and raises the conflict banner if the
+  // file changed on disk. Ineligible while a conflict is unresolved. resetKey keys on a
+  // generation that changes on every reconciliation, so same-path Reload/Overwrite reset
+  // it too. notifyAutosaveRef is populated here, after the scheduler exists.
+  const autosaveEnabled = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const {
+    notifyChange: autosaveNotify,
+    flush: autosaveFlush,
+    status: autosaveStatus,
+  } = useAutosave({
+    enabled: autosaveEnabled && filePath !== null,
+    // Only save a saved path that is actually DIRTY and not mid-conflict. The isDirty
+    // guard is what makes flush after opening a clean document a true no-op: without it
+    // a blur/quit right after open would write despite no edit (savedRevision starts null).
+    isEligible: () => filePath !== null && saveConflict === null && isDirty,
+    performAutosave: saveAndDrain,
+    getRevision: getChangeRevision,
+    resetKey: `${filePath ?? ''}#${schedulerGen}`,
+  });
+  notifyAutosaveRef.current = autosaveNotify;
+
+  // Persist a pending autosave promptly when the user's attention leaves this document:
+  // switching tabs (isActive → false) or the window losing focus. flush joins an
+  // in-flight write and is a no-op when the tab is clean/ineligible. Both drain the
+  // coordinator too, so nothing is left half-written when focus moves on.
+  const prevActiveRef = useRef(isActive);
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    prevActiveRef.current = isActive;
+    if (wasActive && !isActive) void autosaveFlush();
+  }, [isActive, autosaveFlush]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const onBlur = () => void autosaveFlush();
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, [isActive, autosaveFlush]);
+
+  // Stream-terminal flush: an AI reply reaching finish/fail/cancel is a natural save
+  // checkpoint. This effect runs AFTER React commits the terminal mutation, so the
+  // flush captures the final review state (not the pre-terminal payload). Skip the
+  // initial mount (tick 0).
+  const aiTerminalSeenRef = useRef(0);
+  useEffect(() => {
+    if (aiTerminalTick === aiTerminalSeenRef.current) return;
+    aiTerminalSeenRef.current = aiTerminalTick;
+    if (aiTerminalTick > 0) void autosaveFlush();
+  }, [aiTerminalTick, autosaveFlush]);
+
+  // Arm autosave for a document that becomes eligible-and-dirty WITHOUT an edit — a
+  // recovered dirty draft, or an auto-bound session stamped during initial load — where
+  // markDirty's notifyChange either never fired or was cleared by the reset effect.
+  // Keyed on the reconciliation inputs; the hook's reset effect registers first, so this
+  // arms the fresh scheduler. isDirty stays true across ordinary edits, so it does not
+  // re-arm per keystroke.
+  useEffect(() => {
+    if (autosaveEnabled && filePath !== null && isDirty && saveConflict === null) {
+      autosaveNotify();
+    }
+  }, [autosaveEnabled, filePath, isDirty, saveConflict, schedulerGen, autosaveNotify]);
+
+  // Latched autosave attention for the tab strip: a background tab's flush failure/block
+  // must stay visibly flagged even though only the ACTIVE tab's footer shows live status.
+  // Latch failed/blocked (a retry's failed→saving must NOT clear it early); clear only on
+  // a successful save or a reconciliation (schedulerGen). Conflict has its own marker.
+  const [autosaveAttention, setAutosaveAttention] = useState<'failed' | 'blocked' | null>(null);
+  useEffect(() => {
+    if (autosaveStatus.state === 'failed') setAutosaveAttention('failed');
+    else if (autosaveStatus.state === 'stopped' && autosaveStatus.reason === 'blocked') {
+      setAutosaveAttention('blocked');
+    } else if (autosaveStatus.state === 'saved') setAutosaveAttention(null);
+  }, [autosaveStatus]);
+  useEffect(() => {
+    setAutosaveAttention(null); // a reconciliation (Open/Save/Reload/New/…) resets attention
+  }, [schedulerGen]);
+
+  // Exposed to the shell for close/quit: flush a pending autosave AND drain the
+  // coordinator, so the tab is fully quiescent before it is torn down or the app exits.
+  // Resolves with the tab's dirty state AFTER the flush (read synchronously), so the
+  // shell's guard doesn't re-prompt for work autosave just persisted.
+  const flushPendingSave = useCallback(async (): Promise<boolean> => {
+    await autosaveFlush();
+    await flushSaves();
+    return getIsDirty();
+  }, [autosaveFlush, flushSaves, getIsDirty]);
+
+  const getPersistenceSnapshot = useCallback(
+    () => ({ revision: getChangeRevision(), dirty: getIsDirty() }),
+    [getChangeRevision, getIsDirty],
+  );
+
+  // Save As is a distinct job (it prompts and changes the target path), so it runs
+  // through the coordinator's exclusive lane — waiting for any in-flight save and
+  // blocking new saves until it finishes — so writes never overlap the path change.
+  const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
+    const live = getLiveReviewState();
+    const outcome = await saveFileAs(
       getMarkdown(),
       live.comments,
       live.suggestions,
@@ -785,17 +1069,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
       (path) => onRequestSavePath(tabId, path),
     );
-    // The document gained (or moved) a directory — relative image paths now
-    // resolve against it for anything drawn from here on.
-    if (path) {
+    if (outcome.status === 'saved') {
+      // The document gained (or moved) a directory — relative image paths now
+      // resolve against it for anything drawn from here on.
       const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) setImageBaseDir(liveEditor, dirname(path));
-      rememberSessionPermission(window.localStorage, path, aiSession);
-      rememberContextFolderPermission(window.localStorage, path, contextFolder);
-      onRecentFile(path);
+      if (liveEditor) setImageBaseDir(liveEditor, dirname(outcome.path));
+      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
+      onRecentFile(outcome.path);
       setLastSavedAt(Date.now());
     }
-    return path;
+    notifySaveOutcome(outcome);
+    return outcome;
   }, [
     saveFileAs,
     getLiveReviewState,
@@ -805,36 +1090,38 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     onRecentFile,
     onRequestSavePath,
     tabId,
+    notifySaveOutcome,
   ]);
 
+  const handleSaveAs = useCallback(async () => {
+    const outcome = await runExclusive(performSaveAs);
+    // Manual save: reconcile the scheduler on success, present blocked/failed loudly.
+    if (outcome.status === 'saved') bumpSchedulerGen();
+    else presentManualSaveFailure(outcome);
+    return outcome.status === 'saved' ? outcome.path : null;
+  }, [runExclusive, performSaveAs, bumpSchedulerGen, presentManualSaveFailure]);
+
   const handleSave = useCallback(async () => {
+    // While conflicted, Cmd+S must not write or re-pop a modal — it re-announces the
+    // banner so the user resolves it there (Overwrite / Save a Copy / Reload).
+    if (saveConflict) {
+      setConflictFlash((flash) => flash + 1);
+      return null;
+    }
     if (!filePath) {
       return handleSaveAs();
     }
-    const live = getLiveReviewState();
-    const path = await saveFile(
-      getMarkdown(),
-      live.comments,
-      live.suggestions,
-      aiSession,
-      contextFolder,
-      undefined,
-      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-    );
-    if (path) {
-      rememberSessionPermission(window.localStorage, path, aiSession);
-      rememberContextFolderPermission(window.localStorage, path, contextFolder);
-      setLastSavedAt(Date.now());
-    }
-    return path;
+    const outcome = await requestSave();
+    if (outcome.status === 'saved') bumpSchedulerGen();
+    else presentManualSaveFailure(outcome);
+    return outcome.status === 'saved' ? outcome.path : null;
   }, [
+    saveConflict,
     filePath,
-    saveFile,
-    getLiveReviewState,
-    aiSession,
-    contextFolder,
-    documentChat,
+    requestSave,
     handleSaveAs,
+    bumpSchedulerGen,
+    presentManualSaveFailure,
   ]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
@@ -855,19 +1142,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [filePath]);
 
   const performOpen = useCallback(async () => {
+    // Drain any in-flight save BEFORE opening: openFile mutates identity (filePath,
+    // epoch, revision) inside openFilePath, and a fresh pass triggered by that
+    // revision bump could otherwise write the old editor content to the new path.
+    await flushSaves();
     const result = await openFile();
     if (!result) return;
     loadFileResult(result);
-  }, [openFile, loadFileResult]);
+  }, [openFile, loadFileResult, flushSaves]);
 
   const performOpenPath = useCallback(
     async (path: string, promptForSession = true) => {
+      await flushSaves(); // drain before openFilePath mutates identity (see performOpen)
       const result = await openFilePath(path);
       if (!result) return false;
       loadFileResult(result, promptForSession);
       return true;
     },
-    [openFilePath, loadFileResult],
+    [openFilePath, loadFileResult, flushSaves],
   );
 
   useEffect(() => {
@@ -878,8 +1170,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     );
   }, [editor, initialFilePath, onInitialFileLoaded, performOpenPath, restoredFromWorkspace, tabId]);
 
-  const performNew = useCallback(() => {
+  const performNew = useCallback(async () => {
+    // Drain any in-flight save before clearing to a new document, so a late write
+    // can't complete against the old identity (epoch guard is the backstop).
+    await flushSaves();
     newFile();
+    setSaveConflict(null); // a brand-new document has nothing to conflict with
+    bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
     editorRef.current?.setContent('');
@@ -893,14 +1190,108 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setContextFolder(null);
     setLastSavedAt(null);
     setPanelMode('comments');
-  }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId]);
+  }, [
+    documentChat,
+    newFile,
+    onReleaseSession,
+    setComments,
+    setSuggestions,
+    tabId,
+    flushSaves,
+    bumpSchedulerGen,
+  ]);
+
+  // --- External-conflict resolution. Each action runs through the coordinator (never
+  // a raw save) and clears the conflict only on success; a failed/cancelled action
+  // keeps it. Actions are disabled by the banner while `resolvingConflict` is true.
+  const handleOverwriteConflict = useCallback(async () => {
+    if (!filePath || resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      // Overwrite = an explicit same-path Save As: an unconditional write that also
+      // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
+      const outcome = await runExclusive(async () => {
+        const live = getLiveReviewState();
+        return saveFile(
+          getMarkdown(),
+          live.comments,
+          live.suggestions,
+          aiSession,
+          contextFolder,
+          filePath,
+          aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+        );
+      });
+      if (outcome.status === 'saved') {
+        setSaveConflict(null);
+        bumpSchedulerGen(); // reconciled: clear the scheduler's latch, drop stale epochs
+        rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+        rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
+        setLastSavedAt(Date.now());
+      } else {
+        presentManualSaveFailure(outcome); // e.g. a protected sidecar still blocks
+      }
+    } finally {
+      setResolvingConflict(false);
+    }
+  }, [
+    filePath,
+    resolvingConflict,
+    runExclusive,
+    saveFile,
+    getLiveReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    presentManualSaveFailure,
+    bumpSchedulerGen,
+  ]);
+
+  const handleSaveCopyConflict = useCallback(async () => {
+    if (resolvingConflict) return;
+    setResolvingConflict(true);
+    try {
+      const path = await handleSaveAs(); // exclusive Save As to a NEW file
+      if (path) setSaveConflict(null); // now editing the copy — nothing to conflict with
+    } finally {
+      setResolvingConflict(false);
+    }
+  }, [resolvingConflict, handleSaveAs]);
+
+  const handleReloadConflict = useCallback(() => {
+    if (!filePath || resolvingConflict) return;
+    onNotice({
+      title: 'Discard your changes and reload?',
+      message: `${filePath}\n\nThis reloads the file from disk and discards the unsaved changes in this tab. This can't be undone.`,
+      actions: [
+        {
+          label: 'Discard and reload',
+          onClick: async () => {
+            setResolvingConflict(true);
+            try {
+              // performOpenPath flushes, re-reads, and loadFileResult clears the
+              // conflict on success. A failed reload keeps the conflict.
+              await performOpenPath(filePath, false);
+            } finally {
+              setResolvingConflict(false);
+            }
+          },
+        },
+        { label: 'Keep editing', onClick: () => {} },
+      ],
+    });
+  }, [filePath, resolvingConflict, onNotice, performOpenPath]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
   // restored as clean browser-session state.
   const restoreWorkspaceSnapshot = useCallback(
     (draft: DraftFile, dirty: boolean) => {
-      restoreDraft(draft.filePath, dirty);
+      restoreDraft(draft.filePath, dirty, {
+        expectedDoc: draft.expectedDoc ?? null,
+        expectedSidecar: draft.expectedSidecar ?? null,
+        sidecarProtected: draft.sidecarProtected,
+      });
       setLastSavedAt(null);
       const liveEditor = editorRef.current?.getEditor();
       if (liveEditor) {
@@ -1457,9 +1848,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       linkContextFolder: handleLinkContextFolder,
       unlinkContextFolder: handleUnlinkContextFolder,
       getWorkspaceSnapshot,
+      flushPendingSave,
+      getPersistenceSnapshot,
     }),
     [
       editor,
+      flushPendingSave,
+      getPersistenceSnapshot,
       getWorkspaceSnapshot,
       handleAcceptAll,
       handleCloseSessionPicker,
@@ -1484,8 +1879,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       filePath,
       title: filePath ? basename(filePath) : 'Untitled',
       isDirty,
+      conflict: saveConflict !== null,
+      autosaveAttention,
     });
-  }, [filePath, isDirty, onMetaChange, tabId]);
+  }, [filePath, isDirty, saveConflict, autosaveAttention, onMetaChange, tabId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -1501,9 +1898,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       contextFolder,
       lastKnownModel,
       stats: computeDocumentStats(editor),
+      autosaveStatus,
     });
   }, [
     aiSession,
+    autosaveStatus,
     chromeRevision,
     contextFolder,
     editor,
@@ -1521,6 +1920,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   return (
     <>
+      {saveConflict && (
+        <ConflictBanner
+          which={saveConflict.which}
+          flash={conflictFlash}
+          busy={resolvingConflict}
+          onOverwrite={handleOverwriteConflict}
+          onSaveCopy={handleSaveCopyConflict}
+          onReload={handleReloadConflict}
+        />
+      )}
       <div className="studio-body">
         <div className="workspace doc-scroll" ref={scrollAreaRef}>
           {suggestingModeNotice && (

@@ -99,7 +99,9 @@ test('normal relaunch restores clean tab order and active tab, reloading files f
   await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
-test('an edit made while Save is pending stays dirty and remains in recovery', async ({ page }) => {
+test('an edit made while Save is pending is rescued onto the file by a fresh pass', async ({
+  page,
+}) => {
   const path = '/tmp/save-race.md';
   await setupMemoryTauri(page, {
     openPath: path,
@@ -143,22 +145,97 @@ test('an edit made while Save is pending stays dirty and remains in recovery', a
   await page.evaluate(() => {
     (window as unknown as { __quillReleaseWriteFile: () => void }).__quillReleaseWriteFile();
   });
-  await expect(page.locator('.document-tab.active .document-tab-dirty')).toBeVisible();
+
+  // The coordinator's fresh pass rescues the mid-save edit ONTO the real file: the
+  // deferred original write lands first, then exactly one fresh pass carrying the
+  // newer content — two atomic writes to the .md, no more (sidecar writes excluded).
+  await expect
+    .poll(() =>
+      page.evaluate((docPath) => {
+        const calls = (
+          window as unknown as {
+            __quillCalls: Array<{ cmd: string; args: { path?: string } }>;
+          }
+        ).__quillCalls;
+        return calls.filter((c) => c.cmd === 'write_file_atomic' && c.args.path === docPath).length;
+      }, path),
+    )
+    .toBe(2);
+
+  // The newer content is what actually reached disk — the edit was not lost.
+  expect(
+    await page.evaluate(
+      (docPath) =>
+        (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[docPath],
+      path,
+    ),
+  ).toBe('Newer content while Save was pending');
+
+  // Everything is saved, so the tab settles clean in the recovery snapshot.
   await expect
     .poll(async () => {
       const workspace = (await persistedWorkspace(page)) as {
-        tabs: Array<{
-          filePath: string | null;
-          dirty: boolean;
-          snapshot?: { content?: string };
-        }>;
+        tabs: Array<{ filePath: string | null; dirty: boolean }>;
       };
       return workspace.tabs.find((tab) => tab.filePath === path);
     })
-    .toMatchObject({
-      dirty: true,
-      snapshot: { content: 'Newer content while Save was pending' },
-    });
+    .toMatchObject({ dirty: false });
+});
+
+test('an edit during a Save As write is rescued onto the NEW path, never the old', async ({
+  page,
+}) => {
+  // Save As from Untitled with the doc write deferred; edit during the blocked
+  // write; on release the fresh pass must target the newly-chosen path (read from
+  // the synchronous filePathRef, before React commits Save As's setState), never a
+  // stale/old path.
+  const savePath = '/tmp/renamed.md';
+  await setupMemoryTauri(page, { savePath, deferFirstWriteFile: true });
+
+  await activeEditor(page).click();
+  await page.keyboard.type('first draft');
+
+  // Cmd+Shift+S — Save As. The doc write to savePath is the first write, so it blocks.
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('ControlOrMeta');
+  await page.waitForFunction(
+    () => (window as unknown as { __quillWriteFileBlocked: boolean }).__quillWriteFileBlocked,
+  );
+
+  // Edit while the Save As write is still blocked.
+  await activeEditor(page).fill('edited during save');
+
+  await page.evaluate(() => {
+    (window as unknown as { __quillReleaseWriteFile: () => void }).__quillReleaseWriteFile();
+  });
+
+  // The fresh pass rescued the edit onto the NEW path.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (docPath) =>
+          (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[docPath],
+        savePath,
+      ),
+    )
+    .toBe('edited during save');
+
+  // No document write ever targeted a path other than savePath (no stale/old target).
+  const strayTarget = await page.evaluate((docPath) => {
+    const calls = (
+      window as unknown as { __quillCalls: Array<{ cmd: string; args: { path?: string } }> }
+    ).__quillCalls;
+    return calls.some(
+      (c) =>
+        c.cmd === 'write_file_atomic' &&
+        c.args.path !== docPath &&
+        !(c.args.path ?? '').endsWith('.comments.json'),
+    );
+  }, savePath);
+  expect(strayTarget).toBe(false);
 });
 
 test('one recovery decision atomically restores every dirty tab and its annotations', async ({
@@ -195,25 +272,44 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   ).toBeVisible();
 });
 
-test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled tabs', async ({
+// The Discard pair pins the autosave contract for crash recovery: "Discard" throws away
+// only genuinely UNPERSISTED recovery state, not autosaved work. With autosave a saved
+// tab's edit is normally already on disk, so reopening from disk keeps it; only an edit
+// autosave has NOT yet flushed is lost, along with un-persistable Untitled work.
+test('Discard keeps an autosaved saved-tab edit and drops dirty Untitled work', async ({
   page,
 }) => {
-  const savedPath = '/tmp/saved-after-discard.md';
+  const savedPath = '/tmp/survives-discard.md';
   await setupMemoryTauri(page, {
     openPath: savedPath,
-    files: {
-      [savedPath]: 'Last saved content on disk',
-      ['/tmp/saved-after-discard.comments.json']: linkedSidecar,
-    },
-    trustedSidecarPaths: [savedPath],
+    files: { [savedPath]: 'Original disk bytes' },
   });
   await openMemoryFile(page);
+  // Close the initial Untitled tab so only the saved doc (+ a deliberate dirty Untitled
+  // added below) are in play.
   await page.locator('.document-tab').first().click();
   await page.locator('.document-tab.active .document-tab-close').click();
-  await activeEditor(page).fill('Unsaved edit in the saved tab');
+  await activeEditor(page).click();
+  await page.keyboard.type(' AUTOSAVED EDIT');
+
+  // Background autosave persists the saved tab's edit to disk (the debounce elapses).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[
+              '/tmp/survives-discard.md'
+            ],
+        ),
+      { timeout: 6000 },
+    )
+    .toContain('AUTOSAVED EDIT');
+
+  // A dirty Untitled tab — no path, so genuinely unpersisted; Discard must drop it.
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('Throw this away');
-  await waitForDirtyTabCount(page, 2);
+  await waitForDirtyTabCount(page, 1); // only the Untitled is dirty; the saved tab autosaved
 
   await page.reload();
   await page
@@ -222,10 +318,51 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
     .click();
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
-  await expect(page.locator('.document-tab.active')).toContainText('saved-after-discard.md');
-  await expect(activeEditor(page)).toHaveText('Last saved content on disk');
-  await expect(activeEditor(page)).not.toContainText('Unsaved edit in the saved tab');
+  await expect(page.locator('.document-tab.active')).toContainText('survives-discard.md');
+  // The autosaved edit SURVIVES (Discard reopened disk, which holds it); Untitled is gone.
+  await expect(activeEditor(page)).toContainText('AUTOSAVED EDIT');
   await expect(activeEditor(page)).not.toContainText('Throw this away');
+});
+
+test('Discard drops a saved-tab edit that autosave has not yet flushed to disk', async ({
+  page,
+}) => {
+  const savedPath = '/tmp/deferred-discard.md';
+  // Hold the first document write, so the autosave fires but its bytes never reach disk.
+  await setupMemoryTauri(page, {
+    deferFirstWriteFile: true,
+    openPath: savedPath,
+    files: { [savedPath]: 'Old disk bytes' },
+  });
+  await openMemoryFile(page);
+  await activeEditor(page).click();
+  await page.keyboard.type(' UNFLUSHED EDIT');
+
+  // The autosave fires after the debounce, but its write is blocked (deferred), so the
+  // edit lives only in the recovery envelope — never on disk.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __quillWriteFileBlocked?: boolean }).__quillWriteFileBlocked ===
+            true,
+        ),
+      { timeout: 6000 },
+    )
+    .toBe(true);
+  await waitForDirtyTabCount(page, 1); // the saved tab is still dirty — its write never landed
+
+  await page.reload();
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Discard' })
+    .click();
+
+  await expect(page.locator('.document-tab.active')).toContainText('deferred-discard.md');
+  // Discard reopened the OLD disk bytes — the unflushed edit is genuinely destroyed.
+  await expect(activeEditor(page)).toContainText('Old disk bytes');
+  await expect(activeEditor(page)).not.toContainText('UNFLUSHED EDIT');
 });
 
 for (const [label, workspace] of [

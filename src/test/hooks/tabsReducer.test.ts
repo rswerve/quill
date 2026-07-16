@@ -218,6 +218,30 @@ describe('tabsReducer', () => {
       });
       expect(next).toBe(s);
     });
+    it('propagates latched autosave attention onto the tab and re-publishes on change', () => {
+      const s = state([tab({ id: 'a', title: 'Doc', filePath: '/d.md', isDirty: true })], 'a');
+      const flagged = tabsReducer(s, {
+        type: 'applyMetaSnapshot',
+        tabId: 'a',
+        snapshot: snap({
+          filePath: '/d.md',
+          title: 'Doc',
+          isDirty: true,
+          autosaveAttention: 'blocked',
+        }),
+      });
+      expect(flagged).not.toBe(s);
+      expect(flagged.tabs[0].autosaveAttention).toBe('blocked');
+      // Clearing the attention (a successful save / reconciliation) re-publishes too.
+      const cleared = tabsReducer(flagged, {
+        type: 'applyMetaSnapshot',
+        tabId: 'a',
+        snapshot: snap({ filePath: '/d.md', title: 'Doc', isDirty: true, autosaveAttention: null }),
+      });
+      expect(cleared).not.toBe(flagged);
+      expect(cleared.tabs[0].autosaveAttention).toBeNull();
+    });
+
     it('skips the publish (same reference) when nothing actually changed', () => {
       const s = state([tab({ id: 'a', title: 'Doc', filePath: '/d.md', isDirty: false })], 'a');
       const next = tabsReducer(s, {

@@ -24,6 +24,12 @@ async function setupWithIPC(
   await page.addInitScript(
     ({ handlerSrc, captureKey }) => {
       const handler = new Function('cmd', 'args', `return (${handlerSrc})(cmd, args);`);
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
 
       const callbacks = new Map<number, (payload: unknown) => void>();
       let nextCbId = 1;
@@ -44,7 +50,25 @@ async function setupWithIPC(
           calls.push({ cmd, args });
           if (cmd === 'plugin:event|listen') return args.handler;
           if (cmd === 'plugin:event|unlisten') return null;
-          return handler(cmd, args);
+          // Derive read_file_with_fingerprint from the test's read_file handler:
+          // a not-found read (returns null / throws) is typed absence, otherwise
+          // present with the real hash.
+          if (cmd === 'read_file_with_fingerprint') {
+            // Faithful to the native contract: only a null/missing read is typed
+            // absence; a thrown read (permission/symlink/etc.) propagates as a reject.
+            const content = await handler('read_file', args);
+            if (content === null || content === undefined) return { state: 'absent' };
+            return { state: 'present', content, hash: await sha256Hex(content as string) };
+          }
+          const result = await handler(cmd, args);
+          // Legacy shim convention: a null/undefined return from a write means
+          // "succeeds silently". Supply the atomic-contract success shape so the
+          // frontend's typed save path doesn't read a bare null as a conflict.
+          if (result === null || result === undefined) {
+            if (cmd === 'write_file_atomic') return { status: 'written', hash: 'e2e-hash' };
+            if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+          }
+          return result;
         },
       };
 
@@ -163,7 +187,7 @@ test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async 
 test('dirty tab close: Save writes the file, then closes the tab', async ({ page }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/guarded.md';
-    return null; // write_file / delete_file succeed silently
+    return null; // the shim defaults writes/deletes to success
   };
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
@@ -181,7 +205,7 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
       cmd: string;
       args: { path?: string; content?: string };
     }[];
-    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/guarded.md');
+    return calls.find((c) => c.cmd === 'write_file_atomic' && c.args.path === '/tmp/guarded.md');
   });
   expect(write?.args.content).toContain('words worth keeping');
   // …and closing the last tab leaves a fresh Untitled editor.
@@ -194,7 +218,7 @@ test('Save As writes the document to the chosen path and rebinds the tab clean',
 }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/report.md';
-    return null; // write_file / delete_file succeed silently
+    return null; // the shim defaults writes/deletes to success
   };
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
@@ -220,7 +244,7 @@ test('Save As writes the document to the chosen path and rebinds the tab clean',
       cmd: string;
       args: { path?: string; content?: string };
     }[];
-    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/report.md');
+    return calls.find((c) => c.cmd === 'write_file_atomic' && c.args.path === '/tmp/report.md');
   });
   expect(write?.args.content).toContain('Quarterly summary content');
 });
@@ -230,7 +254,7 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
     if (cmd === 'show_open_dialog') return '/tmp/next.md';
     if (cmd === 'read_file') {
       if ((args.path as string) === '/tmp/next.md') return '# The next document';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;
@@ -263,7 +287,7 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
 test('failed save shows an error notice instead of failing silently', async ({ page }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/readonly.md';
-    if (cmd === 'write_file') throw new Error('Permission denied (os error 13)');
+    if (cmd === 'write_file_atomic') throw new Error('Permission denied (os error 13)');
     return null;
   };
   await setupWithIPC(page, { handler });
@@ -274,7 +298,11 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   const modal = page.getByRole('dialog', { name: 'Could not save file' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Could not save file');
+  // A manual save names the destination that failed (actionable) and the reason.
+  // useFileManager returns the typed failure now; the caller shows it, so an autosave
+  // failure stays quiet instead of interrupting with this modal.
   await expect(modal).toContainText('/tmp/readonly.md');
+  await expect(modal).toContainText('Permission denied');
 
   await modal.locator('button:has-text("OK")').click();
   await expect(modal).toHaveCount(0);

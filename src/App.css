@@ -695,6 +695,11 @@ del.track-delete {
   border-radius: 50%;
   background: var(--accent);
 }
+.document-tab-conflict {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+}
 .document-tab-close {
   width: 16px;
   height: 20px;
@@ -754,6 +759,7 @@ del.track-delete {
   min-height: 0;
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 .document-tab-host[hidden] {

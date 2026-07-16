@@ -11,11 +11,15 @@ interface MemoryTauriOptions {
   /** Raw text the mockAI spawn streams back (may include a quill-edits fence).
    *  Defaults to a plain prose reply. */
   aiReplyText?: string;
+  /** Terminal event the mockAI spawn emits after the delta. Defaults to 'done'. */
+  aiReplyOutcome?: 'done' | 'error' | 'cancelled';
   newSessionId?: string;
   /** Initial workspace payload. The shim persists later writes across reloads. */
   workspace?: string;
   /** Hold the first document write until the test calls __quillReleaseWriteFile. */
   deferFirstWriteFile?: boolean;
+  /** Paths whose write_file_atomic always throws — for autosave failure injection. */
+  failWritePaths?: string[];
   /** Session returned by the backend's markdown auto-bind scan. */
   foundSession?: unknown;
   /** Session-picker rows and previews for binding-policy tests. */
@@ -85,9 +89,11 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       folderPath,
       mockAI,
       aiReplyText,
+      aiReplyOutcome,
       newSessionId,
       workspace,
       deferFirstWriteFile,
+      failWritePaths,
       foundSession,
       claudeSessions,
       sessionPreviews,
@@ -157,6 +163,37 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           value: () => newSessionId,
         });
       }
+
+      // Faithful model of the Rust atomic-file contract (write_file_atomic /
+      // delete_file_if_match): real SHA-256 over the exact content and honest
+      // absent/present fingerprints, so conflict-detection tests exercise the true
+      // semantics rather than a placeholder that would make them vacuous.
+      type Fp = { state: 'absent' } | { state: 'present'; hash: string };
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
+      const fingerprintOf = async (path: string): Promise<Fp> =>
+        Object.prototype.hasOwnProperty.call(memoryFiles, path)
+          ? { state: 'present', hash: await sha256Hex(memoryFiles[path] as string) }
+          : { state: 'absent' };
+      // Null when `expected` is satisfied by `current`; otherwise the conflicting
+      // fingerprint. `any` always passes; `absent` requires no file; `match`
+      // requires the exact hash (a changed or deleted file conflicts).
+      const expectationConflict = (
+        expected: { mode?: string; hash?: string } | undefined,
+        current: Fp,
+      ): Fp | null => {
+        const mode = expected?.mode ?? 'any';
+        if (mode === 'absent') return current.state === 'absent' ? null : current;
+        if (mode === 'match') {
+          return current.state === 'present' && current.hash === expected?.hash ? null : current;
+        }
+        return null; // 'any'
+      };
+
       globals.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: 'main' } },
         convertFileSrc: (filePath: string, protocol = 'asset') =>
@@ -207,7 +244,18 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) return memoryFiles[path];
             throw new Error(`File not found: ${path}`);
           }
-          if (cmd === 'write_file') {
+          if (cmd === 'read_file_with_fingerprint') {
+            const path = args.path as string;
+            if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) {
+              const content = memoryFiles[path] as string;
+              return { state: 'present', content, hash: await sha256Hex(content) };
+            }
+            return { state: 'absent' };
+          }
+          if (cmd === 'write_file_atomic') {
+            if (failWritePaths?.includes(args.path as string)) {
+              throw new Error(`Injected write failure: ${args.path as string}`);
+            }
             if (deferFirstWriteFile && globals.__quillReleaseWriteFile === undefined) {
               globals.__quillWriteFileBlocked = true;
               await new Promise<void>((resolve) => {
@@ -217,12 +265,27 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
                 };
               });
             }
-            memoryFiles[args.path as string] = args.content as string;
-            return null;
+            const writePath = args.path as string;
+            const conflict = expectationConflict(
+              args.expected as { mode?: string; hash?: string } | undefined,
+              await fingerprintOf(writePath),
+            );
+            if (conflict) return { status: 'conflict', actual: conflict };
+            const content = args.content as string;
+            memoryFiles[writePath] = content;
+            return { status: 'written', hash: await sha256Hex(content) };
           }
-          if (cmd === 'delete_file') {
-            delete memoryFiles[args.path as string];
-            return null;
+          if (cmd === 'delete_file_if_match') {
+            const deletePath = args.path as string;
+            const current = await fingerprintOf(deletePath);
+            const conflict = expectationConflict(
+              args.expected as { mode?: string; hash?: string } | undefined,
+              current,
+            );
+            if (conflict) return { status: 'conflict', actual: conflict };
+            if (current.state === 'absent') return { status: 'absent' };
+            delete memoryFiles[deletePath];
+            return { status: 'deleted' };
           }
           if (cmd === 'find_session_for_markdown') return foundSession ?? null;
           return null;
@@ -236,7 +299,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             globals.__quillLastSpawnArgs = args;
             queueMicrotask(() => {
               onEvent({ kind: 'delta', text: aiReplyText });
-              onEvent({ kind: 'done' });
+              // The terminal event: 'done' (default), 'error', or 'cancelled'.
+              if (aiReplyOutcome === 'error') onEvent({ kind: 'error', message: 'mock error' });
+              else if (aiReplyOutcome === 'cancelled') onEvent({ kind: 'cancelled' });
+              else onEvent({ kind: 'done' });
             });
             return 'fixture-token';
           },
@@ -259,9 +325,11 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       folderPath: options.folderPath ?? null,
       mockAI: options.mockAI ?? false,
       aiReplyText: options.aiReplyText ?? 'Persist this answer.',
+      aiReplyOutcome: options.aiReplyOutcome ?? 'done',
       newSessionId: options.newSessionId ?? null,
       workspace: options.workspace ?? null,
       deferFirstWriteFile: options.deferFirstWriteFile ?? false,
+      failWritePaths: options.failWritePaths ?? [],
       foundSession: options.foundSession ?? null,
       claudeSessions: options.claudeSessions ?? [],
       sessionPreviews: options.sessionPreviews ?? {},

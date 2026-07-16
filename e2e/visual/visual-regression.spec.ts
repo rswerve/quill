@@ -362,6 +362,79 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'app-shell', shell);
       });
 
+      test('external-change conflict and busy resolution actions', async ({ page }) => {
+        await openVisualDocument(page, theme, RICH_MARKDOWN, sidecar(), {
+          deferFirstWriteFile: true,
+        });
+
+        await selectText(page, 'Quill keeps');
+        await page.keyboard.type('Quill preserves');
+        await page.evaluate((path) => {
+          (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[path] =
+            '# Changed by another application';
+        }, DOC_PATH);
+
+        // Hold the conflict-detecting write long enough to prove the fixture is
+        // exercising the real atomic-write path, then let its fingerprint check
+        // surface the persistent banner.
+        await page.keyboard.press('ControlOrMeta+s');
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                (window as unknown as { __quillWriteFileBlocked?: boolean })
+                  .__quillWriteFileBlocked,
+            ),
+          )
+          .toBe(true);
+        await page.evaluate(() => {
+          (
+            window as unknown as { __quillReleaseWriteFile?: () => void }
+          ).__quillReleaseWriteFile?.();
+        });
+
+        const conflict = page.getByRole('alert');
+        await expect(conflict).toContainText('This document changed on disk');
+        await expect(page.getByLabel('Changed on disk')).toBeVisible();
+
+        // Re-arm the deterministic write gate so Overwrite remains in flight.
+        // This captures the true React busy state rather than manufacturing
+        // disabled attributes in the DOM for the screenshot.
+        await page.evaluate(() => {
+          const globals = window as unknown as {
+            __quillReleaseWriteFile?: () => void;
+            __quillWriteFileBlocked?: boolean;
+          };
+          delete globals.__quillReleaseWriteFile;
+          globals.__quillWriteFileBlocked = false;
+        });
+        await conflict.getByRole('button', { name: 'Overwrite' }).click();
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                (window as unknown as { __quillWriteFileBlocked?: boolean })
+                  .__quillWriteFileBlocked,
+            ),
+          )
+          .toBe(true);
+        for (const name of ['Overwrite', 'Save a Copy', 'Reload']) {
+          const action = conflict.getByRole('button', { name });
+          await expect(action).toBeDisabled();
+          await expect(action).toBeInViewport();
+        }
+
+        await shot(page, theme, 'save-conflict', page.locator('.app'));
+
+        // Finish the write so the test leaves no unresolved coordinator job.
+        await page.evaluate(() => {
+          (
+            window as unknown as { __quillReleaseWriteFile?: () => void }
+          ).__quillReleaseWriteFile?.();
+        });
+        await expect(conflict).toHaveCount(0);
+      });
+
       test('update notification banner', async ({ page }) => {
         await page.route(
           'https://api.github.com/repos/sam-powers/quill/releases/latest',

@@ -19,6 +19,7 @@ import {
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 import { formatEditResultNotice, type EditResult } from '../utils/trackedEdits';
+import { stripTransientChatState } from '../utils/chatThread';
 
 export interface ChatCursorContext {
   selectedText: string | null;
@@ -37,6 +38,13 @@ interface UseDocumentChatOptions {
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
   onChanged: () => void;
+  /**
+   * Fired once a chat turn reaches a TERMINAL state (done / error / busy-reject /
+   * cancel — both backend and user), AFTER its final message mutation is queued. The
+   * host uses it to flush autosave immediately (a stream terminal is a save checkpoint),
+   * so a completed/errored/cancelled turn reaches disk without waiting the debounce.
+   */
+  onTerminal?: () => void;
   /** Shared with @claude margin replies for this document. */
   aiGate: DocumentAIRequestGate;
 }
@@ -126,6 +134,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           })),
         );
         opts.onChanged();
+        opts.onTerminal?.();
         return;
       }
       const releaseGate = () => opts.aiGate.release(requestId);
@@ -218,6 +227,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                 activeRef.current.delete(assistantId);
                 inputsRef.current.delete(assistantId);
                 opts.onChanged();
+                opts.onTerminal?.();
               } finally {
                 releaseGate();
               }
@@ -232,6 +242,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
               );
               activeRef.current.delete(assistantId);
               opts.onChanged();
+              opts.onTerminal?.();
               releaseGate();
             },
             onError: (error) => {
@@ -244,6 +255,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
               );
               activeRef.current.delete(assistantId);
               opts.onChanged();
+              opts.onTerminal?.();
               releaseGate();
             },
           },
@@ -260,6 +272,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           })),
         );
         opts.onChanged();
+        opts.onTerminal?.();
       }
     },
     [opts, stream],
@@ -292,6 +305,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
       activeRef.current.delete(assistantMessageId);
       opts.aiGate.release(`chat:${assistantMessageId}`);
       opts.onChanged();
+      opts.onTerminal?.();
       try {
         await stream.cancel(assistantMessageId);
       } catch (error) {
@@ -370,8 +384,15 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
     [reset],
   );
 
+  // Snapshot the thread for persistence (sidecar + workspace envelope). Strip
+  // half-streamed assistant turns here — this is the single serialization source
+  // for both on-disk paths — so a save that lands mid-stream never persists a
+  // live spinner; the live in-memory `messages` keep the real pending state.
   const getThread = useCallback(
-    (sessionId: string): DocumentChatThread => ({ sessionId, messages: messagesRef.current }),
+    (sessionId: string): DocumentChatThread => ({
+      sessionId,
+      messages: stripTransientChatState(messagesRef.current),
+    }),
     [],
   );
 

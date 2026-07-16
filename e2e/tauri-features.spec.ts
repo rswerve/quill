@@ -33,6 +33,12 @@ async function setupWithIPC(
       // Reconstruct the handler from its source so it can be serialized.
 
       const handler = new Function('cmd', 'args', 'ctx', `return (${handlerSrc})(cmd, args, ctx);`);
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
 
       type Listener = { event: string; cb: (payload: unknown) => void };
       const listeners: Listener[] = [];
@@ -66,15 +72,32 @@ async function setupWithIPC(
             return cbId;
           }
           if (cmd === 'plugin:event|unlisten') return null;
-          // Delegate everything else to the test handler.
-          return handler(cmd, args, {
+          const ctx = {
             fixtures,
             emit: (event: string, payload: unknown) => {
               for (const l of listeners) {
                 if (l.event === event) l.cb({ event, id: 0, payload });
               }
             },
-          });
+          };
+          // Derive read_file_with_fingerprint from the test's read_file handler.
+          if (cmd === 'read_file_with_fingerprint') {
+            // Faithful to the native contract: only a null/missing read is typed
+            // absence; a thrown read (permission/symlink/etc.) propagates as a reject.
+            const content = await handler('read_file', args, ctx);
+            if (content === null || content === undefined) return { state: 'absent' };
+            return { state: 'present', content, hash: await sha256Hex(content as string) };
+          }
+          // Delegate everything else to the test handler.
+          const result = await handler(cmd, args, ctx);
+          // Legacy shim convention: a null/undefined return from a write means
+          // "succeeds silently". Supply the atomic-contract success shape so the
+          // frontend's typed save path doesn't read a bare null as a conflict.
+          if (result === null || result === undefined) {
+            if (cmd === 'write_file_atomic') return { status: 'written', hash: 'e2e-hash' };
+            if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+          }
+          return result;
         },
       };
 
@@ -182,7 +205,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/stray.md') return '# Doc body that is long enough to match';
-      throw new Error('sidecar not found'); // .comments.json miss → empty sidecar
+      return null; // .comments.json miss → typed absent
     }
     if (cmd === 'find_session_for_markdown') {
       return ctx.fixtures.autoBindSession;
@@ -214,7 +237,7 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/orphan.md') return '# Doc that matches nothing';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;
@@ -287,7 +310,7 @@ test('linking a saved document records its session name for the next picker open
     if (cmd === 'show_open_dialog') return '/tmp/Meeting Notes.md';
     if (cmd === 'read_file') {
       if (args.path === '/tmp/Meeting Notes.md') return '# Saved meeting notes';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     if (cmd === 'list_claude_sessions') {
@@ -459,7 +482,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/linked.md') return '# Linked document content';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;
@@ -484,7 +507,7 @@ test('deep-link: opening a doc with no linked session forces the session picker'
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/unbound.md') return '# A document with no linked session';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     if (cmd === 'list_claude_sessions') {
@@ -572,7 +595,8 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
         }>;
         const write = calls.find(
           (call) =>
-            call.cmd === 'write_file' && (call.args.path as string).endsWith('.comments.json'),
+            call.cmd === 'write_file_atomic' &&
+            (call.args.path as string).endsWith('.comments.json'),
         );
         return write ? JSON.parse(write.args.content as string).contextFolder : null;
       }),

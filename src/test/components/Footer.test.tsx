@@ -3,6 +3,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Footer from '../../components/Footer';
+import type { AutosaveStatus } from '../../hooks/useAutosave';
 import { MAX_ZOOM, MIN_ZOOM } from '../../utils/zoomPreference';
 
 let editor: Editor | null = null;
@@ -104,6 +105,59 @@ describe('Footer selection counts', () => {
     renderForEditor(editor);
     expect(screen.getByText('1/2 WORDS')).toBeInTheDocument();
     expect(screen.getByText('3/11 CHARS')).toBeInTheDocument();
+  });
+});
+
+function renderWithAutosave(status: AutosaveStatus | undefined) {
+  editor?.destroy();
+  editor = new Editor({ extensions: [StarterKit], content: '<p>draft</p>' });
+  return render(
+    <Footer
+      editor={editor}
+      zoom={1}
+      autosaveStatus={status}
+      onZoomChange={vi.fn()}
+      aiSession={null}
+      lastKnownModel={null}
+      claudeModel={null}
+      claudeEffort={null}
+      onClaudeModelChange={vi.fn()}
+      onClaudeEffortChange={vi.fn()}
+      onOpenSessionPicker={vi.fn()}
+      onUnlinkSession={vi.fn()}
+      contextFolder={null}
+      onLinkContextFolder={vi.fn()}
+      onUnlinkContextFolder={vi.fn()}
+    />,
+  );
+}
+
+describe('Footer autosave indicator', () => {
+  it('labels the active save states', () => {
+    renderWithAutosave({ state: 'saving' });
+    expect(screen.getByText('Saving…')).toBeInTheDocument();
+
+    renderWithAutosave({ state: 'saved' });
+    expect(screen.getByText('Saved')).toBeInTheDocument();
+
+    renderWithAutosave({ state: 'failed', retryInMs: 5000 });
+    expect(screen.getByText('Save failed — retrying')).toBeInTheDocument();
+  });
+
+  it('surfaces a blocked stop but defers a conflict stop to the banner', () => {
+    renderWithAutosave({ state: 'stopped', reason: 'blocked' });
+    expect(screen.getByText('Autosave paused')).toBeInTheDocument();
+
+    // A conflict has its own persistent banner — the footer must not echo it.
+    const { container } = renderWithAutosave({ state: 'stopped', reason: 'conflict' });
+    expect(container.querySelector('[data-autosave-status]')).toBeNull();
+  });
+
+  it('stays quiet while idle, pending, or unset', () => {
+    for (const status of [{ state: 'idle' } as const, { state: 'pending' } as const, undefined]) {
+      const { container } = renderWithAutosave(status);
+      expect(container.querySelector('[data-autosave-status]')).toBeNull();
+    }
   });
 });
 

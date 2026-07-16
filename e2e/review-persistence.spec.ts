@@ -796,10 +796,12 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     page: import('@playwright/test').Page,
     resolved = false,
     mockAI = false,
+    aiReplyOutcome: 'done' | 'error' | 'cancelled' = 'done',
   ) {
     await setupMemoryTauri(page, {
       openPath: DOC_PATH,
       mockAI,
+      aiReplyOutcome,
       trustedSidecarPaths: mockAI ? [DOC_PATH] : [],
       files: {
         [DOC_PATH]: 'hello world',
@@ -839,16 +841,58 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     ).toBeVisible();
   });
 
-  test('finishing an AI reply marks the document dirty', async ({ page }) => {
+  test('finishing an AI reply autosaves it to disk (stream-terminal flush)', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, false, true);
     await page.getByRole('button', { name: /Reply to Claude/ }).click();
     await page.getByPlaceholder('Reply to Claude…').fill('Answer this');
     await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
     await expect(page.locator('[data-reply-role="ai"]')).toContainText('Persist this answer.');
-    await expect(
-      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
-    ).toBeVisible();
+    // The stream terminal marks dirty AND flushes: the finished reply is autosaved to the
+    // sidecar rather than left only in memory, so it survives a crash right after Claude
+    // answers — a stronger guarantee than merely showing an unsaved marker.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            (path) =>
+              (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[path] ??
+              '',
+            SIDECAR_PATH,
+          ),
+        { timeout: 3000 },
+      )
+      .toContain('Persist this answer.');
   });
+
+  for (const outcome of ['error', 'cancelled'] as const) {
+    const label = outcome === 'error' ? 'errors' : 'is cancelled';
+    test(`a comment-AI reply that ${label} still autosaves the user's question`, async ({
+      page,
+    }) => {
+      await openAndEstablishCleanBaseline(page, false, true, outcome);
+      await page.getByRole('button', { name: /Reply to Claude/ }).click();
+      await page.getByPlaceholder('Reply to Claude…').fill('KEEP MY QUESTION');
+      await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
+
+      // The AI reply reaches its terminal (error/cancelled) and is correctly stripped
+      // from the sidecar, but the EXCHANGE must not be lost: the terminal flush persists
+      // the user's question. Poll UNDER the 2s debounce so this is sensitive to the flush
+      // — without it the question would only reach disk on the later debounce/quit.
+      await expect
+        .poll(
+          () =>
+            page.evaluate(
+              (path) =>
+                (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[
+                  path
+                ] ?? '',
+              SIDECAR_PATH,
+            ),
+          { timeout: 1800 },
+        )
+        .toContain('KEEP MY QUESTION');
+    });
+  }
 
   test('resolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
@@ -897,7 +941,7 @@ test.describe('desktop fallback regressions', () => {
         page.evaluate(
           () =>
             window.__quillCalls.filter(
-              (call) => call.cmd === 'write_file' && call.args?.path === '/docs/menu.md',
+              (call) => call.cmd === 'write_file_atomic' && call.args?.path === '/docs/menu.md',
             ).length,
         ),
       )

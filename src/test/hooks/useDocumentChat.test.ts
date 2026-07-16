@@ -64,6 +64,7 @@ function makeOptions() {
       getRunOptions: () => ({ model: 'sonnet' as const, effort: 'high' as const }),
       onModelObserved: vi.fn(),
       onChanged: vi.fn(),
+      onTerminal: vi.fn(),
       aiGate: {
         busy: false,
         acquire: () => true,
@@ -134,6 +135,29 @@ describe('useDocumentChat', () => {
       [{ find: 'Current', replace: 'Better' }],
       assistantId,
     );
+  });
+
+  it('signals a terminal flush at done, error, and user cancel — never on a delta', async () => {
+    // The host wires onTerminal to an immediate autosave flush; it must fire once per
+    // TERMINAL outcome (after the message mutation is queued), and never mid-stream.
+    const { options } = makeOptions();
+    const onTerminal = options.onTerminal as ReturnType<typeof vi.fn>;
+    const { result } = renderHook(() => useDocumentChat(options));
+
+    await act(async () => result.current.send('one', BINDING));
+    act(() => mock.emit('chat-1', { kind: 'delta', text: 'streaming' }));
+    expect(onTerminal).not.toHaveBeenCalled(); // a delta is not terminal
+    act(() => mock.emit('chat-1', { kind: 'done' }));
+    expect(onTerminal).toHaveBeenCalledTimes(1);
+
+    await act(async () => result.current.send('two', BINDING));
+    act(() => mock.emit('chat-2', { kind: 'error', message: 'boom' }));
+    expect(onTerminal).toHaveBeenCalledTimes(2);
+
+    await act(async () => result.current.send('three', BINDING));
+    const assistantId = result.current.messages[result.current.messages.length - 1].id;
+    await act(async () => result.current.cancel(assistantId));
+    expect(onTerminal).toHaveBeenCalledTimes(3);
   });
 
   it('reports the exact skipped chat edit and reason', async () => {
@@ -237,5 +261,28 @@ describe('useDocumentChat', () => {
     await act(async () => result.current.send('Keep working', BINDING));
     unmount();
     expect(mock.cancelled).toContain('chat-1');
+  });
+
+  it('getThread snapshots a mid-stream turn as cancelled without disturbing live state', async () => {
+    // A save (manual or autosave) that lands mid-stream reads getThread. It must
+    // never persist a live pending turn — that would resurrect a spinner for a
+    // stream that no longer exists on reopen — while the on-screen thread keeps
+    // showing the real pending turn.
+    const { options } = makeOptions();
+    const { result } = renderHook(() => useDocumentChat(options));
+    await act(async () => result.current.send('Fix it', BINDING));
+    act(() => mock.emit('chat-1', { kind: 'delta', text: 'partial answer' }));
+
+    expect(result.current.messages[1]).toMatchObject({ pending: true });
+
+    const thread = result.current.getThread(BINDING.sessionId);
+    expect(thread.sessionId).toBe(BINDING.sessionId);
+    expect(thread.messages[1]).toMatchObject({
+      pending: false,
+      cancelled: true,
+      text: 'partial answer',
+    });
+    // Taking the snapshot does not mutate the live, still-streaming turn.
+    expect(result.current.messages[1]).toMatchObject({ pending: true });
   });
 });
