@@ -56,6 +56,9 @@ interface DiscardGuard {
 
 let nextTabNumber = 1;
 
+// Max flush rounds before the quit guard fails closed (guards every dirty tab).
+const MAX_FLUSH_ROUNDS = 5;
+
 function createUntitledTab(): TabMeta {
   return {
     id: `tab-${nextTabNumber++}`,
@@ -527,35 +530,43 @@ export default function App() {
   }, [chrome.filePath, chrome.isDirty]);
 
   // Flush every open tab's pending autosave (and drain its coordinator) before a
-  // close/quit, then report which tabs are STILL dirty. flushPendingSave returns each
-  // tab's post-flush dirty state synchronously, so this doesn't race React's state
-  // propagation: a saved-path tab whose only unsaved work was a debounced edit is
-  // persisted and drops out of the guard, while Untitled or failed/blocked tabs remain.
-  // Iterate the AUTHORITATIVE tab list (not the handle map): a dirty tab whose handle is
-  // momentarily absent (mid mount/unmount) must not silently escape the guard, and a
-  // flush error retains the tab (fail closed).
+  // close/quit, then report which tabs are STILL dirty, from a QUIESCENT read. Because a
+  // tab can be edited AFTER its own flush resolved but BEFORE the round ends (its stale
+  // result would read clean), this loops: each round snapshots every tab's persistence
+  // revision, flushes all, then re-checks — if the tab SET changed or any revision
+  // advanced during the round, it flushes again, until the set is stable. It iterates the
+  // AUTHORITATIVE tab list (a handleless dirty tab is retained, a thrown flush is
+  // retained — fail closed). If the bound is exhausted without quiescing, it FAILS CLOSED
+  // by guarding every currently-dirty tab rather than trusting an unstable snapshot.
   const flushAllPendingSaves = useCallback(async (): Promise<string[]> => {
-    const snapshot = tabsRef.current;
-    const results = await Promise.all(
-      snapshot.map(async (tab) => {
-        const handle = tabHandlesRef.current.get(tab.id);
-        if (!handle) return { id: tab.id, stillDirty: tab.isDirty };
-        try {
-          return { id: tab.id, stillDirty: await handle.flushPendingSave() };
-        } catch {
-          return { id: tab.id, stillDirty: true };
-        }
-      }),
-    );
-    const stillDirty = new Set(
-      results.filter((entry) => entry.stillDirty).map((entry) => entry.id),
-    );
-    // A tab added DURING the async flush wasn't flushed — retain it if it's still open
-    // and dirty so it still enters the guard.
-    for (const tab of tabsRef.current) {
-      if (tab.isDirty && !snapshot.some((prior) => prior.id === tab.id)) stillDirty.add(tab.id);
+    const revisionOf = (id: string): number | null =>
+      tabHandlesRef.current.get(id)?.getPersistenceSnapshot().revision ?? null;
+    for (let round = 0; round < MAX_FLUSH_ROUNDS; round++) {
+      const ids = tabsRef.current.map((tab) => tab.id);
+      const before = new Map(ids.map((id) => [id, revisionOf(id)]));
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const handle = tabHandlesRef.current.get(id);
+          if (!handle)
+            return { id, dirty: tabsRef.current.find((t) => t.id === id)?.isDirty ?? false };
+          try {
+            return { id, dirty: await handle.flushPendingSave() };
+          } catch {
+            return { id, dirty: true };
+          }
+        }),
+      );
+      // Quiescent iff the tab set is unchanged AND no tab's revision advanced (i.e. no
+      // edit and no handle appearing/vanishing) during the round.
+      const afterIds = tabsRef.current.map((tab) => tab.id);
+      const setChanged = afterIds.length !== ids.length || afterIds.some((id) => !before.has(id));
+      const advanced = afterIds.some((id) => before.has(id) && before.get(id) !== revisionOf(id));
+      if (!setChanged && !advanced) {
+        return [...new Set(results.filter((entry) => entry.dirty).map((entry) => entry.id))];
+      }
     }
-    return [...stillDirty];
+    // Bound exhausted without quiescing → FAIL CLOSED: guard every currently-dirty tab.
+    return [...new Set(tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id))];
   }, []);
 
   const guardDirtyTabs = useCallback(

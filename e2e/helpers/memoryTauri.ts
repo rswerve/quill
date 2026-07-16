@@ -11,11 +11,15 @@ interface MemoryTauriOptions {
   /** Raw text the mockAI spawn streams back (may include a quill-edits fence).
    *  Defaults to a plain prose reply. */
   aiReplyText?: string;
+  /** Terminal event the mockAI spawn emits after the delta. Defaults to 'done'. */
+  aiReplyOutcome?: 'done' | 'error' | 'cancelled';
   newSessionId?: string;
   /** Initial workspace payload. The shim persists later writes across reloads. */
   workspace?: string;
   /** Hold the first document write until the test calls __quillReleaseWriteFile. */
   deferFirstWriteFile?: boolean;
+  /** Paths whose write_file_atomic always throws — for autosave failure injection. */
+  failWritePaths?: string[];
   /** Session returned by the backend's markdown auto-bind scan. */
   foundSession?: unknown;
   /** Session-picker rows and previews for binding-policy tests. */
@@ -85,9 +89,11 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       folderPath,
       mockAI,
       aiReplyText,
+      aiReplyOutcome,
       newSessionId,
       workspace,
       deferFirstWriteFile,
+      failWritePaths,
       foundSession,
       claudeSessions,
       sessionPreviews,
@@ -247,6 +253,9 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             return { state: 'absent' };
           }
           if (cmd === 'write_file_atomic') {
+            if (failWritePaths?.includes(args.path as string)) {
+              throw new Error(`Injected write failure: ${args.path as string}`);
+            }
             if (deferFirstWriteFile && globals.__quillReleaseWriteFile === undefined) {
               globals.__quillWriteFileBlocked = true;
               await new Promise<void>((resolve) => {
@@ -290,7 +299,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             globals.__quillLastSpawnArgs = args;
             queueMicrotask(() => {
               onEvent({ kind: 'delta', text: aiReplyText });
-              onEvent({ kind: 'done' });
+              // The terminal event: 'done' (default), 'error', or 'cancelled'.
+              if (aiReplyOutcome === 'error') onEvent({ kind: 'error', message: 'mock error' });
+              else if (aiReplyOutcome === 'cancelled') onEvent({ kind: 'cancelled' });
+              else onEvent({ kind: 'done' });
             });
             return 'fixture-token';
           },
@@ -313,9 +325,11 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       folderPath: options.folderPath ?? null,
       mockAI: options.mockAI ?? false,
       aiReplyText: options.aiReplyText ?? 'Persist this answer.',
+      aiReplyOutcome: options.aiReplyOutcome ?? 'done',
       newSessionId: options.newSessionId ?? null,
       workspace: options.workspace ?? null,
       deferFirstWriteFile: options.deferFirstWriteFile ?? false,
+      failWritePaths: options.failWritePaths ?? [],
       foundSession: options.foundSession ?? null,
       claudeSessions: options.claudeSessions ?? [],
       sessionPreviews: options.sessionPreviews ?? {},

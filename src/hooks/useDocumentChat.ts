@@ -38,6 +38,13 @@ interface UseDocumentChatOptions {
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
   onChanged: () => void;
+  /**
+   * Fired once a chat turn reaches a TERMINAL state (done / error / busy-reject /
+   * cancel — both backend and user), AFTER its final message mutation is queued. The
+   * host uses it to flush autosave immediately (a stream terminal is a save checkpoint),
+   * so a completed/errored/cancelled turn reaches disk without waiting the debounce.
+   */
+  onTerminal?: () => void;
   /** Shared with @claude margin replies for this document. */
   aiGate: DocumentAIRequestGate;
 }
@@ -127,6 +134,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           })),
         );
         opts.onChanged();
+        opts.onTerminal?.();
         return;
       }
       const releaseGate = () => opts.aiGate.release(requestId);
@@ -219,6 +227,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                 activeRef.current.delete(assistantId);
                 inputsRef.current.delete(assistantId);
                 opts.onChanged();
+                opts.onTerminal?.();
               } finally {
                 releaseGate();
               }
@@ -233,6 +242,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
               );
               activeRef.current.delete(assistantId);
               opts.onChanged();
+              opts.onTerminal?.();
               releaseGate();
             },
             onError: (error) => {
@@ -245,6 +255,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
               );
               activeRef.current.delete(assistantId);
               opts.onChanged();
+              opts.onTerminal?.();
               releaseGate();
             },
           },
@@ -261,6 +272,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           })),
         );
         opts.onChanged();
+        opts.onTerminal?.();
       }
     },
     [opts, stream],
@@ -293,6 +305,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
       activeRef.current.delete(assistantMessageId);
       opts.aiGate.release(`chat:${assistantMessageId}`);
       opts.onChanged();
+      opts.onTerminal?.();
       try {
         await stream.cancel(assistantMessageId);
       } catch (error) {

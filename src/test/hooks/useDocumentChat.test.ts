@@ -64,6 +64,7 @@ function makeOptions() {
       getRunOptions: () => ({ model: 'sonnet' as const, effort: 'high' as const }),
       onModelObserved: vi.fn(),
       onChanged: vi.fn(),
+      onTerminal: vi.fn(),
       aiGate: {
         busy: false,
         acquire: () => true,
@@ -134,6 +135,29 @@ describe('useDocumentChat', () => {
       [{ find: 'Current', replace: 'Better' }],
       assistantId,
     );
+  });
+
+  it('signals a terminal flush at done, error, and user cancel — never on a delta', async () => {
+    // The host wires onTerminal to an immediate autosave flush; it must fire once per
+    // TERMINAL outcome (after the message mutation is queued), and never mid-stream.
+    const { options } = makeOptions();
+    const onTerminal = options.onTerminal as ReturnType<typeof vi.fn>;
+    const { result } = renderHook(() => useDocumentChat(options));
+
+    await act(async () => result.current.send('one', BINDING));
+    act(() => mock.emit('chat-1', { kind: 'delta', text: 'streaming' }));
+    expect(onTerminal).not.toHaveBeenCalled(); // a delta is not terminal
+    act(() => mock.emit('chat-1', { kind: 'done' }));
+    expect(onTerminal).toHaveBeenCalledTimes(1);
+
+    await act(async () => result.current.send('two', BINDING));
+    act(() => mock.emit('chat-2', { kind: 'error', message: 'boom' }));
+    expect(onTerminal).toHaveBeenCalledTimes(2);
+
+    await act(async () => result.current.send('three', BINDING));
+    const assistantId = result.current.messages[result.current.messages.length - 1].id;
+    await act(async () => result.current.cancel(assistantId));
+    expect(onTerminal).toHaveBeenCalledTimes(3);
   });
 
   it('reports the exact skipped chat edit and reason', async () => {

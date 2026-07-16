@@ -144,6 +144,12 @@ export interface DocumentTabHandle {
    * shell must still guard it — e.g. an Untitled doc or a failed/blocked/conflicted save).
    */
   flushPendingSave: () => Promise<boolean>;
+  /**
+   * Synchronous persistence snapshot: the monotonic change-revision and current dirty
+   * state. The shell's quit flush uses `revision` to detect a tab edited DURING a flush
+   * round (its value advances), so it can re-flush until the tab set is quiescent.
+   */
+  getPersistenceSnapshot: () => { revision: number; dirty: boolean };
 }
 
 export interface DocumentTabMetaSnapshot {
@@ -555,10 +561,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // flushes — but via a post-commit tick (below), never synchronously here, or the
   // flush would capture the pre-terminal React state and persist the wrong payload.
   const [aiTerminalTick, setAiTerminalTick] = useState(0);
+  // Bump the post-commit terminal-flush tick (see the effect below). Chat wires this to
+  // its onTerminal directly (chat already marks dirty via onChanged); comment replies go
+  // through noteAITerminal, which also marks dirty because their raw handlers don't.
+  const signalTerminalFlush = useCallback(() => setAiTerminalTick((tick) => tick + 1), []);
   const noteAITerminal = useCallback(() => {
     markDirty();
-    setAiTerminalTick((tick) => tick + 1);
-  }, [markDirty]);
+    signalTerminalFlush();
+  }, [markDirty, signalTerminalFlush]);
   const finishAIReplyAndDirty = useCallback(
     (commentId: string, replyId: string) => {
       finishAIReply(commentId, replyId);
@@ -644,6 +654,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
     onChanged: markDirty,
+    onTerminal: signalTerminalFlush,
     aiGate,
   });
   chatThreadRef.current = aiSession ? documentChat.getThread(aiSession.sessionId) : undefined;
@@ -1038,6 +1049,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     await flushSaves();
     return getIsDirty();
   }, [autosaveFlush, flushSaves, getIsDirty]);
+
+  const getPersistenceSnapshot = useCallback(
+    () => ({ revision: getChangeRevision(), dirty: getIsDirty() }),
+    [getChangeRevision, getIsDirty],
+  );
 
   // Save As is a distinct job (it prompts and changes the target path), so it runs
   // through the coordinator's exclusive lane — waiting for any in-flight save and
@@ -1833,10 +1849,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       unlinkContextFolder: handleUnlinkContextFolder,
       getWorkspaceSnapshot,
       flushPendingSave,
+      getPersistenceSnapshot,
     }),
     [
       editor,
       flushPendingSave,
+      getPersistenceSnapshot,
       getWorkspaceSnapshot,
       handleAcceptAll,
       handleCloseSessionPicker,

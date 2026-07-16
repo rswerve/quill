@@ -159,3 +159,29 @@ test('a recovered dirty saved draft autosaves after recovery, with no fresh edit
   // until the user happens to type.
   await expect.poll(() => writeFileBlocked(page), { timeout: 6000 }).toBe(true);
 });
+
+test('a background tab whose autosave fails stays visibly flagged, with no modal', async ({
+  page,
+}) => {
+  // Injected write failure for this path: every save to it throws.
+  await setupMemoryTauri(page, {
+    files: { '/tmp/failing.md': 'original' },
+    openPath: '/tmp/failing.md',
+    failWritePaths: ['/tmp/failing.md'],
+  });
+  await openMemoryFile(page);
+  await expect(page.locator('.document-tab.active')).toContainText('failing', { timeout: 3000 });
+  await activeEditor(page).click();
+  await page.keyboard.type(' EDIT');
+
+  // Switch away → the now-background failing tab deactivate-flushes → the write throws →
+  // autosave fails. The failure must be VISIBLE on the background tab (spec: a background
+  // failure is never silent) and must NOT pop a modal (autosave stays quiet).
+  await page.locator('.tab-add').click();
+  await expect(
+    page
+      .locator('.document-tab', { hasText: 'failing.md' })
+      .locator('[aria-label="Autosave failed"]'),
+  ).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Could not save file' })).toHaveCount(0);
+});
