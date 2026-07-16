@@ -128,16 +128,17 @@ Quill is a **single-user, local desktop editor**, early in its life. It is delib
 
 ## Where your data lives
 
-Quill keeps your documents as plain files and stores everything else locally on your Mac. Nothing is sent anywhere except the one case noted below.
+Quill keeps your documents as plain files and stores everything else locally on your Mac. Nothing is sent anywhere except the cases noted below.
 
 - **Next to each document:** the `<name>.comments.json` sidecar holding that document's comments, suggestions, and linked-session metadata. Deleting it discards the review data but leaves the Markdown intact.
 - **In `~/Library/Application Support/com.trussworks.quill/`:** your open-tabs/session-restore state and a small index that maps Claude sessions to recent documents.
 - **In `~/Library/Logs/com.trussworks.quill/`:** `quill.log`, a rolling app log (also reachable via **Help → Show Logs**).
 - **Preferences** (theme, zoom, recent files, chosen model/effort) live in the app's local storage.
 
-One thing leaves your Mac, on your terms:
+Two things can leave your Mac, both on your terms:
 
 - **`@claude` and chat:** these run the Claude Code tool as a normal child process under your own Claude account, sending it the prompt and document text needed to answer. Quill itself has no separate server or telemetry.
+- **Remote images in a document:** a Markdown image with an `https://` URL (`![](https://…)`) is fetched from that URL when the document renders, the same as any web page. Local and relative image paths never leave your Mac.
 
 To remove Quill completely: delete `Quill.app`, then optionally delete the two `~/Library/…/com.trussworks.quill/` folders above. Sidecar files stay next to your documents until you remove them.
 
