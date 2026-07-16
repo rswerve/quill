@@ -94,12 +94,12 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
   const runningRef = useRef(false);
   const defaultWaitersRef = useRef<DefaultWaiter[]>([]);
   const exclusiveQueueRef = useRef<ExclusiveJob[]>([]);
-  // A single "the document changed while the last write was in flight" slot. Set
-  // after a successful default write whose start-revision the current revision has
-  // already outrun, it forces exactly ONE more default pass so the on-disk state
-  // catches up to the latest edit — even with no second requestSave. Only ever set
-  // or cleared by the DEFAULT-save branch, so a cancelled exclusive job (Save As)
-  // can't erase a fresh pass that belongs to the original path.
+  // A single "the document changed while the last write was in flight" slot. It
+  // forces exactly ONE more default pass so the on-disk state catches up to the
+  // latest edit — even with no second requestSave. Re-derived from the coverage
+  // watermark after any SUCCESSFUL write (a successful Save As retires it if it
+  // covered the edit); a TERMINAL default clears it, while a cancelled/failed
+  // exclusive leaves it untouched so a fresh pass owed to the original path survives.
   const freshPassPendingRef = useRef(false);
   // The highest start-revision any SUCCESSFUL write (default or exclusive) has
   // covered. A request/edit at revision R is on disk once coveredRevision >= R.

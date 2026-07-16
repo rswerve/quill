@@ -238,6 +238,14 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) return memoryFiles[path];
             throw new Error(`File not found: ${path}`);
           }
+          if (cmd === 'read_file_with_fingerprint') {
+            const path = args.path as string;
+            if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) {
+              const content = memoryFiles[path] as string;
+              return { state: 'present', content, hash: await sha256Hex(content) };
+            }
+            return { state: 'absent' };
+          }
           if (cmd === 'write_file_atomic') {
             if (deferFirstWriteFile && globals.__quillReleaseWriteFile === undefined) {
               globals.__quillWriteFileBlocked = true;

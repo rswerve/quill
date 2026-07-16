@@ -19,20 +19,24 @@ const mockInvoke = vi.mocked(invoke);
 const HASH_DOC = 'a'.repeat(64);
 const HASH_SIDECAR = 'b'.repeat(64);
 
+/** A deterministic fake read fingerprint for a given content string. */
+const readHash = (content: string) => `read-${content.length}`;
+const fpPresent = (content: string) => ({ state: 'present', content, hash: readHash(content) });
+const fpAbsent = () => ({ state: 'absent' });
+
 /**
  * Route invoke() to the atomic-persistence contract so save tests get the shapes
  * useFileManager now expects: write_file_atomic → written{hash}, delete_file_if_match
- * → deleted, find_session_for_markdown → null. read_file resolves from `reads` (a
- * path→content map) and otherwise reports "not found". Individual tests can still
- * override with mockImplementation/mockResolvedValueOnce after calling this.
+ * → deleted, find_session_for_markdown → null, and read_file_with_fingerprint →
+ * present{content,hash} / absent from `reads` (a path→content map). Individual tests
+ * can still override with mockImplementation/mockResolvedValueOnce after calling this.
  */
 function installSaveRouter(reads: Record<string, string> = {}) {
   mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
     const path = (args as { path?: string } | undefined)?.path;
     switch (command) {
-      case 'read_file':
-        if (path && path in reads) return reads[path];
-        throw new Error('File not found');
+      case 'read_file_with_fingerprint':
+        return path && path in reads ? fpPresent(reads[path]) : fpAbsent();
       case 'write_file_atomic':
         return {
           status: 'written',
@@ -87,7 +91,9 @@ beforeEach(() => {
 describe('useFileManager', () => {
   describe('openFilePath', () => {
     it('reads the file and sidecar, returns content and parsed sidecar', async () => {
-      mockInvoke.mockResolvedValueOnce('# Hello').mockResolvedValueOnce(SAMPLE_SIDECAR);
+      mockInvoke
+        .mockResolvedValueOnce(fpPresent('# Hello'))
+        .mockResolvedValueOnce(fpPresent(SAMPLE_SIDECAR));
 
       const { result } = renderHook(() => useFileManager());
       let res: Awaited<ReturnType<typeof result.current.openFilePath>>;
@@ -103,23 +109,21 @@ describe('useFileManager', () => {
       expect(result.current.isDirty).toBe(false);
     });
 
-    it('calls sidecarPath correctly — sidecar invoke uses .comments.json path', async () => {
-      mockInvoke.mockResolvedValueOnce('content').mockResolvedValueOnce('{}');
+    it('calls sidecarPath correctly — sidecar read uses .comments.json path', async () => {
+      mockInvoke.mockResolvedValueOnce(fpPresent('content')).mockResolvedValueOnce(fpPresent('{}'));
 
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.openFilePath('/docs/file.md');
       });
 
-      expect(mockInvoke).toHaveBeenNthCalledWith(2, 'read_file', {
+      expect(mockInvoke).toHaveBeenNthCalledWith(2, 'read_file_with_fingerprint', {
         path: '/docs/file.comments.json',
       });
     });
 
-    it('falls back to empty sidecar when sidecar read fails', async () => {
-      mockInvoke
-        .mockResolvedValueOnce('# Hello')
-        .mockRejectedValueOnce(new Error('File not found'));
+    it('falls back to empty sidecar when the sidecar is absent', async () => {
+      mockInvoke.mockResolvedValueOnce(fpPresent('# Hello')).mockResolvedValueOnce(fpAbsent());
 
       const { result } = renderHook(() => useFileManager());
       let res: Awaited<ReturnType<typeof result.current.openFilePath>>;
@@ -129,9 +133,10 @@ describe('useFileManager', () => {
 
       expect(res!.sidecar.comments).toEqual([]);
       expect(res!.sidecar.suggestions).toEqual([]);
+      expect(res!.sidecarError).toBeNull();
     });
 
-    it('returns null and does not update state when main file read fails', async () => {
+    it('returns null and does not update state when the main file read fails', async () => {
       mockInvoke.mockRejectedValueOnce(new Error('Permission denied'));
 
       const { result } = renderHook(() => useFileManager());
@@ -146,8 +151,8 @@ describe('useFileManager', () => {
 
     it('flags sidecarError when the sidecar exists but is invalid JSON', async () => {
       mockInvoke
-        .mockResolvedValueOnce('# Hello') // read_file (md)
-        .mockResolvedValueOnce('{ not valid json') // read_file (sidecar) — corrupt
+        .mockResolvedValueOnce(fpPresent('# Hello')) // read_file_with_fingerprint (md)
+        .mockResolvedValueOnce(fpPresent('{ not valid json')) // sidecar — present but corrupt
         .mockResolvedValueOnce(null); // find_session_for_markdown
 
       const { result } = renderHook(() => useFileManager());
@@ -194,10 +199,11 @@ describe('useFileManager', () => {
         // Empty comments/suggestions → the sidecar is removed, so it's absent.
         sidecar: { state: 'absent' },
       });
+      // The write is gated on the fingerprint seeded when the file was opened.
       expect(mockInvoke).toHaveBeenCalledWith('write_file_atomic', {
         path: '/docs/test.md',
         content: 'updated content',
-        expected: { mode: 'any' },
+        expected: { mode: 'match', hash: readHash('content') },
       });
       expect(result.current.isDirty).toBe(false);
     });
@@ -209,8 +215,10 @@ describe('useFileManager', () => {
       });
       mockInvoke.mockImplementation(async (command, args) => {
         const path = (args as { path?: string } | undefined)?.path;
-        if (command === 'read_file' && path === '/docs/test.md') return 'saved content';
-        if (command === 'read_file') throw new Error('sidecar not found');
+        if (command === 'read_file_with_fingerprint' && path === '/docs/test.md') {
+          return fpPresent('saved content');
+        }
+        if (command === 'read_file_with_fingerprint') return fpAbsent();
         if (command === 'find_session_for_markdown') return null;
         if (command === 'write_file_atomic' && path === '/docs/test.md') {
           await writeBlocked;
@@ -400,11 +408,11 @@ describe('useFileManager', () => {
         await result.current.saveFile('updated', [], [], null, null);
       });
 
-      // The markdown is saved...
+      // The markdown is saved (gated on the fingerprint seeded at open)...
       expect(mockInvoke).toHaveBeenCalledWith('write_file_atomic', {
         path: '/docs/test.md',
         content: 'updated',
-        expected: { mode: 'any' },
+        expected: { mode: 'match', hash: readHash('# Hello') },
       });
       // ...but nothing touches the sidecar path.
       const touchedSidecar = mockInvoke.mock.calls.some(
@@ -480,8 +488,10 @@ describe('useFileManager', () => {
       });
       mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
         const path = (args as { path?: string } | undefined)?.path;
-        if (command === 'read_file' && path === '/docs/old.md') return 'old';
-        if (command === 'read_file') throw new Error('no sidecar');
+        if (command === 'read_file_with_fingerprint' && path === '/docs/old.md') {
+          return fpPresent('old');
+        }
+        if (command === 'read_file_with_fingerprint') return fpAbsent();
         if (command === 'find_session_for_markdown') return null;
         if (command === 'write_file_atomic' && path === '/docs/old.md') {
           await writeBlocked;
@@ -532,14 +542,16 @@ describe('useFileManager', () => {
     });
 
     it('round-trips contextFolder through open', async () => {
-      mockInvoke.mockResolvedValueOnce('# Hello').mockResolvedValueOnce(
-        JSON.stringify({
-          version: 2,
-          comments: [],
-          suggestions: [],
-          aiSession: { provider: 'claude-code', sessionId: 's', cwd: '/x', linkedAt: 'now' },
-          contextFolder: '/refs/research',
-        }),
+      mockInvoke.mockResolvedValueOnce(fpPresent('# Hello')).mockResolvedValueOnce(
+        fpPresent(
+          JSON.stringify({
+            version: 2,
+            comments: [],
+            suggestions: [],
+            aiSession: { provider: 'claude-code', sessionId: 's', cwd: '/x', linkedAt: 'now' },
+            contextFolder: '/refs/research',
+          }),
+        ),
       );
 
       const { result } = renderHook(() => useFileManager());
@@ -569,9 +581,11 @@ describe('useFileManager', () => {
 
       mockInvoke.mockReset();
       mockInvoke
-        .mockResolvedValueOnce('# Chat')
+        .mockResolvedValueOnce(fpPresent('# Chat'))
         .mockResolvedValueOnce(
-          JSON.stringify({ version: 2, comments: [], suggestions: [], chat: SAMPLE_CHAT }),
+          fpPresent(
+            JSON.stringify({ version: 2, comments: [], suggestions: [], chat: SAMPLE_CHAT }),
+          ),
         )
         .mockResolvedValueOnce(null);
       let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
@@ -650,6 +664,181 @@ describe('useFileManager', () => {
       expect(sidecarWrite).toBeDefined();
       const written = JSON.parse((sidecarWrite![1] as { content: string }).content);
       expect(written.comments).toHaveLength(2);
+    });
+  });
+
+  describe('conflict detection', () => {
+    type InvokeArgs = {
+      path?: string;
+      content?: string;
+      expected?: { mode: string; hash?: string };
+    };
+
+    it('returns a doc conflict when the .md changed on disk, without adopting the actual fingerprint', async () => {
+      const { result } = renderHook(() => useFileManager());
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          return a.path === '/d.md' ? fpPresent('orig') : fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (a.path === '/d.md' && a.expected?.mode === 'match') {
+            return { status: 'conflict', actual: { state: 'present', hash: 'external' } };
+          }
+          return { status: 'written', hash: HASH_DOC };
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/d.md'); // seeds expectedDoc from 'orig'
+      });
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('edited', [], [], null, null);
+      });
+      expect(outcome!).toEqual({
+        status: 'conflict',
+        path: '/d.md',
+        which: 'doc',
+        actual: { state: 'present', hash: 'external' },
+      });
+    });
+
+    it('advances the .md expectation after its write even when the sidecar conflicts (retry gates on the new .md hash)', async () => {
+      const { result } = renderHook(() => useFileManager());
+      let sidecarConflicts = true;
+      const docExpectedHashes: (string | undefined)[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          if (a.path === '/d.md') return fpPresent('doc-orig');
+          if (a.path === '/d.comments.json') return fpPresent('{}'); // valid, so not protected
+          return fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (a.path?.endsWith('.comments.json')) {
+            return sidecarConflicts
+              ? { status: 'conflict', actual: { state: 'present', hash: 'sc-external' } }
+              : { status: 'written', hash: 'sc-new' };
+          }
+          docExpectedHashes.push(a.expected?.hash);
+          return { status: 'written', hash: `doc-${a.content}` }; // content-based hash
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/d.md');
+      });
+      let first: SaveOutcome;
+      await act(async () => {
+        first = await result.current.saveFile('v1', [SAMPLE_COMMENT], [], null, null);
+      });
+      expect(first!).toMatchObject({ status: 'conflict', which: 'sidecar' });
+
+      // Retry: the sidecar is fine now. The .md write must gate on the hash written
+      // in the FIRST pass (doc-v1), not the stale open hash — proving the expectation
+      // advanced right after the .md write despite the sidecar conflict.
+      sidecarConflicts = false;
+      let second: SaveOutcome;
+      await act(async () => {
+        second = await result.current.saveFile('v2', [SAMPLE_COMMENT], [], null, null);
+      });
+      expect(docExpectedHashes).toEqual([readHash('doc-orig'), 'doc-v1']);
+      expect(second!.status).toBe('saved');
+    });
+
+    it('fails closed on an ambiguous sidecar read: opens protected, saves blocked, no sidecar write', async () => {
+      const { result } = renderHook(() => useFileManager());
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          if (a.path === '/d.md') return fpPresent('doc');
+          throw new Error('Permission denied'); // sidecar read is ambiguous
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') return { status: 'written', hash: HASH_DOC };
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+      await act(async () => {
+        opened = await result.current.openFilePath('/d.md');
+      });
+      expect(opened!.sidecarError).toBeTruthy(); // protected
+
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('edited', [SAMPLE_COMMENT], [], null, null);
+      });
+      expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
+      const touchedSidecar = mockInvoke.mock.calls.some(
+        (call) =>
+          (call[0] === 'write_file_atomic' || call[0] === 'delete_file_if_match') &&
+          (call[1] as InvokeArgs).path?.endsWith('.comments.json'),
+      );
+      expect(touchedSidecar).toBe(false);
+    });
+
+    it('replaces both baselines on re-open, and a FAILED re-open leaves the prior ones untouched', async () => {
+      const { result } = renderHook(() => useFileManager());
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          if (a.path === '/a.md') return fpPresent('a-doc');
+          if (a.path === '/b.md') throw new Error('Permission denied'); // Open B fails
+          return fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') return { status: 'written', hash: HASH_DOC };
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/a.md'); // A: expectedDoc from 'a-doc'
+      });
+      let resB: Awaited<ReturnType<typeof result.current.openFilePath>>;
+      await act(async () => {
+        resB = await result.current.openFilePath('/b.md'); // fails
+      });
+      expect(resB!).toBeNull();
+      expect(result.current.filePath).toBe('/a.md'); // still A
+
+      // A save still gates on A's baseline and targets /a.md — B's failure didn't touch it.
+      await act(async () => {
+        await result.current.saveFile('a-edited', [], [], null, null);
+      });
+      const docWrite = mockInvoke.mock.calls.find(
+        (call) => call[0] === 'write_file_atomic' && (call[1] as InvokeArgs).path === '/a.md',
+      );
+      expect((docWrite![1] as InvokeArgs).expected).toEqual({
+        mode: 'match',
+        hash: readHash('a-doc'),
+      });
+    });
+
+    it('Save As writes a new path unconditionally, then gates the next save on the new fingerprint', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.saveFile('v1', [], [], null, null, '/new.md'); // Save As, no prior baseline
+      });
+      const first = mockInvoke.mock.calls.find(
+        (call) => call[0] === 'write_file_atomic' && (call[1] as InvokeArgs).path === '/new.md',
+      );
+      expect((first![1] as InvokeArgs).expected).toEqual({ mode: 'any' });
+
+      mockInvoke.mockClear(); // keeps the router implementation
+      await act(async () => {
+        await result.current.saveFile('v2', [], [], null, null); // no forcePath → /new.md
+      });
+      const second = mockInvoke.mock.calls.find(
+        (call) => call[0] === 'write_file_atomic' && (call[1] as InvokeArgs).path === '/new.md',
+      );
+      expect((second![1] as InvokeArgs).expected).toEqual({ mode: 'match', hash: HASH_DOC });
     });
   });
 
@@ -766,8 +955,8 @@ describe('useFileManager', () => {
 
     it('does not report when the sidecar is merely missing', async () => {
       mockInvoke
-        .mockResolvedValueOnce('# Hello')
-        .mockRejectedValueOnce(new Error('File not found'))
+        .mockResolvedValueOnce(fpPresent('# Hello'))
+        .mockResolvedValueOnce(fpAbsent()) // sidecar absent — not an error
         .mockResolvedValueOnce(null); // find_session_for_markdown
       const onError = vi.fn();
 
@@ -782,7 +971,7 @@ describe('useFileManager', () => {
 
   describe('newFile', () => {
     it('clears filePath and resets isDirty', async () => {
-      mockInvoke.mockResolvedValueOnce('content').mockResolvedValueOnce('{}');
+      mockInvoke.mockResolvedValueOnce(fpPresent('content')).mockResolvedValueOnce(fpPresent('{}'));
 
       const { result } = renderHook(() => useFileManager());
       await act(async () => {

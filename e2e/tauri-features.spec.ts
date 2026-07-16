@@ -33,6 +33,12 @@ async function setupWithIPC(
       // Reconstruct the handler from its source so it can be serialized.
 
       const handler = new Function('cmd', 'args', 'ctx', `return (${handlerSrc})(cmd, args, ctx);`);
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
 
       type Listener = { event: string; cb: (payload: unknown) => void };
       const listeners: Listener[] = [];
@@ -66,15 +72,26 @@ async function setupWithIPC(
             return cbId;
           }
           if (cmd === 'plugin:event|unlisten') return null;
-          // Delegate everything else to the test handler.
-          const result = await handler(cmd, args, {
+          const ctx = {
             fixtures,
             emit: (event: string, payload: unknown) => {
               for (const l of listeners) {
                 if (l.event === event) l.cb({ event, id: 0, payload });
               }
             },
-          });
+          };
+          // Derive read_file_with_fingerprint from the test's read_file handler.
+          if (cmd === 'read_file_with_fingerprint') {
+            try {
+              const content = await handler('read_file', args, ctx);
+              if (content === null || content === undefined) return { state: 'absent' };
+              return { state: 'present', content, hash: await sha256Hex(content as string) };
+            } catch {
+              return { state: 'absent' };
+            }
+          }
+          // Delegate everything else to the test handler.
+          const result = await handler(cmd, args, ctx);
           // Legacy shim convention: a null/undefined return from a write means
           // "succeeds silently". Supply the atomic-contract success shape so the
           // frontend's typed save path doesn't read a bare null as a conflict.

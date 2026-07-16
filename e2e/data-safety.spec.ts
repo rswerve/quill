@@ -24,6 +24,12 @@ async function setupWithIPC(
   await page.addInitScript(
     ({ handlerSrc, captureKey }) => {
       const handler = new Function('cmd', 'args', `return (${handlerSrc})(cmd, args);`);
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
 
       const callbacks = new Map<number, (payload: unknown) => void>();
       let nextCbId = 1;
@@ -44,6 +50,18 @@ async function setupWithIPC(
           calls.push({ cmd, args });
           if (cmd === 'plugin:event|listen') return args.handler;
           if (cmd === 'plugin:event|unlisten') return null;
+          // Derive read_file_with_fingerprint from the test's read_file handler:
+          // a not-found read (returns null / throws) is typed absence, otherwise
+          // present with the real hash.
+          if (cmd === 'read_file_with_fingerprint') {
+            try {
+              const content = await handler('read_file', args);
+              if (content === null || content === undefined) return { state: 'absent' };
+              return { state: 'present', content, hash: await sha256Hex(content as string) };
+            } catch {
+              return { state: 'absent' };
+            }
+          }
           const result = await handler(cmd, args);
           // Legacy shim convention: a null/undefined return from a write means
           // "succeeds silently". Supply the atomic-contract success shape so the

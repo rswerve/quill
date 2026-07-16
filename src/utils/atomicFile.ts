@@ -28,6 +28,18 @@ export type Fingerprint = { state: 'absent' } | { state: 'present'; hash: string
  */
 export type Expected = { mode: 'any' } | { mode: 'absent' } | { mode: 'match'; hash: string };
 
+/**
+ * Turn a tracked on-disk fingerprint into the precondition for the next write or
+ * delete: a `present` file must still hash to the same value; an `absent` file must
+ * still not exist. Either mismatch (changed, deleted, or newly created) surfaces as
+ * a conflict.
+ */
+export function expectMatch(fingerprint: Fingerprint): Expected {
+  return fingerprint.state === 'absent'
+    ? { mode: 'absent' }
+    : { mode: 'match', hash: fingerprint.hash };
+}
+
 /** Result of `write_file_atomic`. On conflict NOTHING was written. */
 export type WriteAtomicResult =
   | { status: 'written'; hash: string }
@@ -38,6 +50,27 @@ export type DeleteResult =
   | { status: 'deleted' }
   | { status: 'absent' }
   | { status: 'conflict'; actual: Fingerprint };
+
+/**
+ * Result of `read_file_with_fingerprint`: a missing file is the ONLY non-error
+ * absence — the backend rejects invalid UTF-8, permission failures, symlinks,
+ * FIFOs, non-regular files, and disallowed paths. The content and its SHA-256 come
+ * from the same byte read, so the fingerprint exactly matches the returned content
+ * (and the write ops' hashing), giving a trustworthy on-disk baseline for conflict
+ * detection.
+ */
+export type FingerprintedRead =
+  | { state: 'absent' }
+  | { state: 'present'; content: string; hash: string };
+
+/**
+ * Read `path` and fingerprint it in one operation. Absence is a value; every unsafe
+ * or ambiguous condition rejects, so callers can seed an on-disk baseline without
+ * inferring "missing" from an arbitrary read error.
+ */
+export function readFileWithFingerprint(path: string): Promise<FingerprintedRead> {
+  return invoke<FingerprintedRead>('read_file_with_fingerprint', { path });
+}
 
 /**
  * Atomically write `content` (UTF-8) to `path`, gated on `expected`. Returns the

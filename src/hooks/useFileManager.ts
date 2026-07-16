@@ -16,7 +16,14 @@ import {
   sanitizeContextFolder,
   sanitizeDocumentChat,
 } from '../utils/annotationValidation';
-import { writeFileAtomic, deleteFileIfMatch, type Fingerprint } from '../utils/atomicFile';
+import {
+  writeFileAtomic,
+  deleteFileIfMatch,
+  readFileWithFingerprint,
+  expectMatch,
+  type Fingerprint,
+  type Expected,
+} from '../utils/atomicFile';
 import { stripTransientChatState } from '../utils/chatThread';
 
 function emptySidecar(): SidecarFile {
@@ -84,6 +91,15 @@ export type SaveOutcome =
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
   | { status: 'failed'; message: string };
+
+/**
+ * Result of persisting the sidecar: its new on-disk fingerprint on success, or the
+ * conflicting on-disk fingerprint when a fingerprint-gated write/delete found the
+ * `.comments.json` changed underneath us (so it wrote/deleted nothing).
+ */
+type SidecarSaveResult =
+  | { ok: true; fingerprint: Fingerprint }
+  | { ok: false; conflict: Fingerprint };
 
 interface UseFileManagerReturn {
   filePath: string | null;
@@ -155,6 +171,15 @@ export function useFileManager(
   // during a Save As can't stop the successfully-chosen new path from being
   // adopted (that is content churn, not an identity change).
   const documentEpochRef = useRef(0);
+  // The on-disk fingerprints we last synced for the current document's `.md` and its
+  // `.comments.json` sidecar (seeded on open, refreshed after each successful write).
+  // `null` means unknown — a brand-new/Untitled doc, or a recovered draft — so the
+  // next write is unconditional; a concrete fingerprint gates the write so an
+  // external change (git checkout, another editor, @claude) is detected instead of
+  // silently overwritten. A conflict never adopts the actual fingerprint here; the
+  // expectation is retained until Overwrite/Save-a-Copy succeeds.
+  const expectedDocRef = useRef<Fingerprint | null>(null);
+  const expectedSidecarRef = useRef<Fingerprint | null>(null);
   // True when the currently open file's sidecar exists on disk but couldn't be
   // parsed. We refuse to overwrite/delete it so the user can recover it; only
   // an explicit Save As (new path) escapes the guard.
@@ -175,28 +200,43 @@ export function useFileManager(
   const openFilePath = useCallback(
     async (path: string) => {
       try {
-        const content = await invoke<string>('read_file', { path });
+        // Read the document and fingerprint it in one operation. Absence of the .md
+        // is an open failure (nothing to edit); everything unsafe/ambiguous rejects.
+        const docRead = await readFileWithFingerprint(path);
+        if (docRead.state === 'absent') throw new Error(`File not found: ${path}`);
+        const content = docRead.content;
+        const docFingerprint: Fingerprint = { state: 'present', hash: docRead.hash };
+
         let sidecar = emptySidecar();
-        // Distinguish "no sidecar" (fine) from "sidecar exists but is unreadable
-        // / invalid JSON" (dangerous — it holds real comments we must not drop or
-        // silently overwrite). On a load error we block the next save from
+        // Distinguish "no sidecar" (fine, typed absent) from "sidecar exists but is
+        // unreadable / invalid JSON" (dangerous — it holds real comments we must not
+        // drop or silently overwrite). On a load error we block the next save from
         // clobbering the file so the user can recover it.
         let sidecarError: string | null = null;
-        let raw: string | undefined;
+        let sidecarFingerprint: Fingerprint | null = { state: 'absent' };
         try {
-          raw = await invoke<string>('read_file', { path: sidecarPath(path) });
-        } catch {
-          // read_file threw → sidecar simply doesn't exist. That's fine.
-        }
-        if (raw !== undefined) {
-          try {
-            sidecar = normalizeSidecar(JSON.parse(raw));
-          } catch (e) {
-            // The sidecar is present but corrupt. Keep an empty in-memory model
-            // but flag the error and protect the on-disk file.
-            sidecarError = e instanceof Error ? e.message : String(e);
-            console.error(`Sidecar at ${sidecarPath(path)} is unreadable:`, e);
+          const scRead = await readFileWithFingerprint(sidecarPath(path));
+          if (scRead.state === 'present') {
+            sidecarFingerprint = { state: 'present', hash: scRead.hash };
+            try {
+              sidecar = normalizeSidecar(JSON.parse(scRead.content));
+            } catch (e) {
+              // Present but corrupt JSON: keep an empty in-memory model, flag the
+              // error, and protect the on-disk file. The fingerprint still tracks it.
+              sidecarError = e instanceof Error ? e.message : String(e);
+              console.error(`Sidecar at ${sidecarPath(path)} is unreadable:`, e);
+            }
+          } else {
+            sidecarFingerprint = { state: 'absent' }; // no sidecar — that's fine
           }
+        } catch (e) {
+          // An AMBIGUOUS read failure (permission, symlink, non-regular file, invalid
+          // UTF-8) — the backend rejects only these; missing is a value. Fail CLOSED:
+          // protect the on-disk sidecar and leave the baseline UNKNOWN so we never
+          // clobber or delete it.
+          sidecarError = e instanceof Error ? e.message : String(e);
+          sidecarFingerprint = null;
+          console.error(`Sidecar at ${sidecarPath(path)} could not be read:`, e);
         }
         setSidecarProtected(sidecarError !== null);
 
@@ -219,9 +259,14 @@ export function useFileManager(
           }
         }
 
+        // Adopt the new document's identity AND its on-disk baselines together, only
+        // now that both reads have resolved. A failed .md read returned early above,
+        // so the previously-open document's baselines stay untouched.
         updateFilePath(path);
         changeRevisionRef.current += 1;
         documentEpochRef.current += 1; // opening a file is an identity change
+        expectedDocRef.current = docFingerprint;
+        expectedSidecarRef.current = sidecarFingerprint;
         // The document layer marks an accepted auto-binding dirty after the
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
@@ -255,9 +300,15 @@ export function useFileManager(
       suggestions: Suggestion[],
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
-      chat?: DocumentChatThread | null,
-    ): Promise<Fingerprint> => {
+      chat: DocumentChatThread | null | undefined,
+      expectedSidecar: Fingerprint | null,
+    ): Promise<SidecarSaveResult> => {
       const scPath = sidecarPath(path);
+      // Gate the write/delete on the sidecar's last-known on-disk state: an external
+      // change (or an externally-created sidecar) conflicts instead of being
+      // clobbered. `null` (unknown, e.g. a Save As to a new path) writes/deletes
+      // unconditionally.
+      const expected: Expected = expectedSidecar ? expectMatch(expectedSidecar) : { mode: 'any' };
       // Never persist in-flight AI state — strip transient comment replies and
       // half-streamed chat turns first, so an empty doc with only failed/pending
       // AI activity still collapses to no sidecar.
@@ -270,13 +321,13 @@ export function useFileManager(
         !contextFolder &&
         !chat
       ) {
-        // Nothing to persist — remove any empty sidecar we may have left behind.
-        // Unlike the old bare delete, `any`-mode reports "absent" instead of
-        // throwing when the file is already gone, so only a genuine I/O failure
-        // rejects — and we let it, because a swallowed delete failure can
-        // resurrect deleted annotations on the next open.
-        await deleteFileIfMatch(scPath, { mode: 'any' });
-        return { state: 'absent' };
+        // Nothing to persist — remove any empty sidecar we may have left behind, but
+        // NOT one that changed underneath us (conditional delete → conflict), and
+        // never swallow a real I/O failure (a lost delete can resurrect deleted
+        // annotations on the next open). `absent` is reported, not thrown.
+        const result = await deleteFileIfMatch(scPath, expected);
+        if (result.status === 'conflict') return { ok: false, conflict: result.actual };
+        return { ok: true, fingerprint: { state: 'absent' } };
       }
       const sidecar: SidecarFile = {
         version: 2,
@@ -286,15 +337,9 @@ export function useFileManager(
         ...(contextFolder ? { contextFolder } : {}),
         ...(cleanChat ? { chat: cleanChat } : {}),
       };
-      const result = await writeFileAtomic(scPath, JSON.stringify(sidecar, null, 2), {
-        mode: 'any',
-      });
-      if (result.status !== 'written') {
-        // An unconditional write never conflicts; guard defensively so a future
-        // conflict-aware caller can't mistake an unwritten sidecar for a saved one.
-        throw new Error(`Sidecar write did not complete (${result.status})`);
-      }
-      return { state: 'present', hash: result.hash };
+      const result = await writeFileAtomic(scPath, JSON.stringify(sidecar, null, 2), expected);
+      if (result.status === 'conflict') return { ok: false, conflict: result.actual };
+      return { ok: true, fingerprint: { state: 'present', hash: result.hash } };
     },
     [],
   );
@@ -318,31 +363,59 @@ export function useFileManager(
       }
       const saveRevision = changeRevisionRef.current;
       const saveEpoch = documentEpochRef.current;
+      // Expected fingerprints only apply to the CURRENT document's path. A Save As
+      // to a new path (forcePath) is a fresh file, so it writes unconditionally.
+      const usingExpected = targetPath === currentPath;
       // Protect a corrupt sidecar from being clobbered. Saving the markdown to
       // the same path is fine, but skip touching the sidecar so we don't destroy
       // recoverable comment data. A Save As to a different path (forcePath) is
       // a fresh file and may write its own sidecar normally.
       const skipSidecar = sidecarProtected && targetPath === currentPath;
+      const sameDocument = () => documentEpochRef.current === saveEpoch;
       try {
-        const docResult = await writeFileAtomic(targetPath, content, { mode: 'any' });
-        if (docResult.status !== 'written') {
-          // An unconditional write never conflicts; stay honest if that changes.
+        const docExpected: Expected =
+          usingExpected && expectedDocRef.current
+            ? expectMatch(expectedDocRef.current)
+            : { mode: 'any' };
+        const docResult = await writeFileAtomic(targetPath, content, docExpected);
+        if (docResult.status === 'conflict') {
+          // The .md changed underneath us; nothing was written. Keep the original
+          // expectation (do NOT adopt actual) — Overwrite/Save-a-Copy resolves it.
           return { status: 'conflict', path: targetPath, which: 'doc', actual: docResult.actual };
         }
+        // Record what we just wrote to the .md IMMEDIATELY, before the sidecar step,
+        // so a sidecar conflict below can't make the next save conflict against our
+        // own freshly-written .md. Epoch-guarded: a stale write never touches the
+        // expected state of the document now on screen.
+        if (sameDocument()) expectedDocRef.current = { state: 'present', hash: docResult.hash };
         if (skipSidecar) {
           // The markdown is saved, but a corrupt on-disk sidecar means the review
           // data is NOT persisted. Report a block and STAY dirty — never signal a
           // clean, complete save (which would also drop the recovery snapshot).
           return { status: 'blocked', reason: 'sidecar-protected' };
         }
-        const sidecar = await saveSidecar(
+        const sidecarResult = await saveSidecar(
           targetPath,
           comments,
           suggestions,
           aiSession,
           contextFolder,
           chat,
+          usingExpected ? expectedSidecarRef.current : null,
         );
+        if (!sidecarResult.ok) {
+          // The sidecar changed underneath us. The .md is already saved (and its
+          // expected fingerprint updated above), so the next save won't false-conflict
+          // on the .md; the sidecar keeps its original expectation for resolution.
+          return {
+            status: 'conflict',
+            path: targetPath,
+            which: 'sidecar',
+            actual: sidecarResult.conflict,
+          };
+        }
+        if (sameDocument()) expectedSidecarRef.current = sidecarResult.fingerprint;
+        const sidecar = sidecarResult.fingerprint;
         // Adopt post-write tab state, gated on two independent signals:
         //  - IDENTITY (documentEpoch): unchanged → this write belongs to the doc
         //    still on screen, so adopt targetPath and clear sidecar protection. An
@@ -413,6 +486,9 @@ export function useFileManager(
     updateFilePath(null);
     setIsDirty(false);
     setSidecarProtected(false);
+    // A brand-new doc has no on-disk baseline — the first save writes unconditionally.
+    expectedDocRef.current = null;
+    expectedSidecarRef.current = null;
   }, [updateFilePath]);
 
   // Adopt a recovered draft: point at its file (if any) without reading disk —
@@ -425,6 +501,12 @@ export function useFileManager(
       updateFilePath(path);
       setIsDirty(dirty);
       setSidecarProtected(false);
+      // A recovered draft's in-memory content is newer than disk and we did NOT
+      // read disk, so we have no trustworthy baseline. Leave it unknown until the
+      // persisted baselines are restored (workspace snapshot) or the next open —
+      // hashing today's disk here would bless external changes made while closed.
+      expectedDocRef.current = null;
+      expectedSidecarRef.current = null;
     },
     [updateFilePath],
   );
