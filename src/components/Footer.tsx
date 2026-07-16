@@ -2,7 +2,11 @@ import type { CSSProperties } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
 import type { AutosaveStatus } from '../hooks/useAutosave';
-import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
+import {
+  CLAUDE_EFFORT_LEVELS,
+  CLAUDE_MODEL_ALIASES,
+  formatModelLabel,
+} from '../utils/claudePreferences';
 import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
 import { cx } from '../utils/cx';
 import { computeDocumentStats } from '../utils/documentStats';
@@ -55,6 +59,16 @@ function autosaveLabel(status: AutosaveStatus): string | null {
   }
 }
 
+/**
+ * The model line of the Claude-settings tooltip: an explicit pick reads as
+ * chosen; otherwise Auto, naming the last observed model when there is one.
+ */
+function modelTooltip(claudeModel: ClaudeModelAlias | null, lastKnownModel: string | null): string {
+  if (claudeModel) return `Model: ${claudeModel.toUpperCase()} (chosen for the next request)`;
+  if (lastKnownModel) return `Model: Auto — last run used ${lastKnownModel}`;
+  return 'Model: Auto — Claude decides';
+}
+
 export default function Footer({
   editor,
   stats,
@@ -87,6 +101,16 @@ export default function Footer({
   const autosaveText = autosaveStatus ? autosaveLabel(autosaveStatus) : null;
 
   const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
+
+  // Selection-aware summary: model/effort each read as the explicit pick when
+  // one is set, otherwise as Auto (with the last observed model, when known).
+  // Keyed on the actual selections so it never calls an explicit choice "Auto".
+  const claudeSettingsTitle = [
+    modelTooltip(claudeModel, lastKnownModel),
+    claudeEffort
+      ? `Effort: ${claudeEffort.toUpperCase()} (chosen for the next request)`
+      : 'Effort: Auto — Claude decides',
+  ].join('\n');
 
   return (
     <footer
@@ -205,11 +229,7 @@ export default function Footer({
           className={styles.claudeSettings}
           role="group"
           aria-label="Claude settings"
-          title={
-            lastKnownModel
-              ? `Last model reported by Claude Code: ${lastKnownModel}`
-              : 'Model and effort used for the next Claude request'
-          }
+          title={claudeSettingsTitle}
         >
           <select
             aria-label="Claude model"
@@ -218,7 +238,9 @@ export default function Footer({
               onClaudeModelChange((event.target.value || null) as ClaudeModelAlias | null)
             }
           >
-            <option value="">DEFAULT</option>
+            <option value="">
+              {lastKnownModel ? `${formatModelLabel(lastKnownModel)} · AUTO` : 'AUTO'}
+            </option>
             {CLAUDE_MODEL_ALIASES.map((model) => (
               <option key={model} value={model}>
                 {model.toUpperCase()}
@@ -233,7 +255,7 @@ export default function Footer({
               onClaudeEffortChange((event.target.value || null) as ClaudeEffort | null)
             }
           >
-            <option value="">DEFAULT</option>
+            <option value="">AUTO</option>
             {CLAUDE_EFFORT_LEVELS.map((effort) => (
               <option key={effort} value={effort}>
                 {effort.toUpperCase()}

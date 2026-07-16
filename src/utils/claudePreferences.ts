@@ -14,6 +14,21 @@ function isEffort(value: string | null): value is ClaudeEffort {
   return value !== null && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
+/**
+ * Compact, truthful display for a model id Claude Code reports (e.g.
+ * `claude-opus-4-8` → `OPUS-4-8`). Deliberately does NOT translate to a curated
+ * friendly-name table: those go stale — the live account already runs a model
+ * newer than the published docs — so we never guess. A first-party `claude-`
+ * id has the vendor prefix stripped and is uppercased to match the alias
+ * options; any other id (custom provider, gateway, unknown) is shown verbatim
+ * rather than mangled. Returns null for an absent value.
+ */
+export function formatModelLabel(model: string | null | undefined): string | null {
+  if (!model) return null;
+  if (/^claude-/i.test(model)) return model.replace(/^claude-/i, '').toUpperCase();
+  return model;
+}
+
 export function readClaudeRunOptions(storage: Pick<Storage, 'getItem'>): ClaudeRunOptions {
   const model = storage.getItem(CLAUDE_MODEL_STORAGE_KEY);
   const effort = storage.getItem(CLAUDE_EFFORT_STORAGE_KEY);
