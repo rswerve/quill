@@ -3,10 +3,14 @@ import type { Editor } from '@tiptap/react';
 import type { AISessionBinding, ClaudeEffort, ClaudeModelAlias } from '../types';
 import { CLAUDE_EFFORT_LEVELS, CLAUDE_MODEL_ALIASES } from '../utils/claudePreferences';
 import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from '../utils/zoomPreference';
+import { cx } from '../utils/cx';
+import { computeDocumentStats } from '../utils/documentStats';
+import type { DocumentStats } from '../utils/documentStats';
+import styles from './Footer.module.css';
 
 interface FooterProps {
   editor: Editor | null;
-  stats?: { words: number; chars: number; line: number; column: number };
+  stats?: DocumentStats;
   zoom?: number;
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
@@ -22,11 +26,11 @@ interface FooterProps {
   onUnlinkContextFolder: () => void;
 }
 
-function countWords(text: string): number {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w.length > 0).length;
+/** "chosen/total" while a range is selected, otherwise just the total. */
+function formatCount(total: number, selected?: number): string {
+  return selected === undefined
+    ? total.toLocaleString()
+    : `${selected.toLocaleString()}/${total.toLocaleString()}`;
 }
 
 export default function Footer({
@@ -46,48 +50,65 @@ export default function Footer({
   onLinkContextFolder,
   onUnlinkContextFolder,
 }: FooterProps) {
-  if (!editor) return <footer className="footer status" />;
+  if (!editor)
+    return (
+      <footer
+        className={styles.footer}
+        role="contentinfo"
+        aria-label="Document status"
+        data-print-hidden
+      />
+    );
 
-  const text = editor.state.doc.textContent;
-  const { head } = editor.state.selection;
-  const resolved = editor.state.doc.resolve(head);
-  let derivedLine = 0;
-  editor.state.doc.nodesBetween(0, head, (node) => {
-    if (node.isTextblock) derivedLine += 1;
-  });
-  const documentStats =
-    stats ??
-    ({
-      words: countWords(text),
-      chars: text.length,
-      line: Math.max(1, derivedLine),
-      column: resolved.parentOffset + 1,
-    } satisfies NonNullable<FooterProps['stats']>);
+  const documentStats = stats ?? computeDocumentStats(editor);
 
   const zoomProgress = ((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100;
 
   return (
-    <footer className="footer status">
-      <div className="status-group status-left">
-        <span className="status-item">{documentStats.words.toLocaleString()} WORDS</span>
-        <span className="status-item">{documentStats.chars.toLocaleString()} CHARS</span>
-        <span className="status-item">
+    <footer
+      className={styles.footer}
+      role="contentinfo"
+      aria-label="Document status"
+      data-print-hidden
+    >
+      <div className={styles.group}>
+        <span
+          className={styles.item}
+          title={
+            documentStats.selection
+              ? `${documentStats.selection.words.toLocaleString()} of ${documentStats.words.toLocaleString()} words selected`
+              : undefined
+          }
+        >
+          {formatCount(documentStats.words, documentStats.selection?.words)} WORDS
+        </span>
+        <span
+          className={styles.item}
+          title={
+            documentStats.selection
+              ? `${documentStats.selection.chars.toLocaleString()} of ${documentStats.chars.toLocaleString()} characters selected`
+              : undefined
+          }
+        >
+          {formatCount(documentStats.chars, documentStats.selection?.chars)} CHARS
+        </span>
+        <span className={styles.item}>
           LN {documentStats.line}:{documentStats.column}
         </span>
       </div>
 
-      <div className="status-group status-right">
-        <div className="footer-zoom zoom" role="group" aria-label="Document zoom">
+      <div className={cx(styles.group, styles.right)}>
+        <div className={styles.zoomGroup} role="group" aria-label="Document zoom">
           <button
             type="button"
-            className="footer-zoom-step"
+            className={styles.step}
             aria-label="Zoom out"
             disabled={zoom <= MIN_ZOOM}
             onClick={() => onZoomChange?.(clampZoom(Math.round((zoom - 0.12) * 100) / 100))}
           >
             −
           </button>
-          <label className="footer-zoom-slider-label">
+          <label className={styles.sliderLabel}>
             <input
               aria-label="Zoom"
               type="range"
@@ -96,28 +117,33 @@ export default function Footer({
               step={0.06}
               value={zoom}
               onChange={(event) => onZoomChange?.(parseFloat(event.target.value))}
-              className="footer-zoom-slider"
+              className={styles.slider}
               style={{ '--zoom-progress': `${zoomProgress}%` } as CSSProperties}
               title="Zoom"
             />
           </label>
           <button
             type="button"
-            className="footer-zoom-step"
+            className={styles.step}
             aria-label="Zoom in"
             disabled={zoom >= MAX_ZOOM}
             onClick={() => onZoomChange?.(clampZoom(Math.round((zoom + 0.12) * 100) / 100))}
           >
             +
           </button>
-          <span className="footer-zoom-label" onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}>
+          <output
+            className={styles.zoomLabel}
+            aria-label="Zoom level"
+            aria-live="off"
+            onDoubleClick={() => onZoomChange?.(DEFAULT_ZOOM)}
+          >
             {Math.round(zoom * 100)}%
-          </span>
+          </output>
         </div>
 
-        <span className={`status-binding footer-context-binding${contextFolder ? ' linked' : ''}`}>
+        <span className={cx(styles.binding, styles.context, contextFolder && styles.linked)}>
           <button
-            className="footer-context-binding-label"
+            className={styles.bindingLabel}
             onClick={onLinkContextFolder}
             title={
               contextFolder
@@ -136,8 +162,9 @@ export default function Footer({
           </button>
           {contextFolder && (
             <button
-              className="footer-context-binding-unlink"
+              className={styles.unlink}
               onClick={onUnlinkContextFolder}
+              aria-label="Unlink reference folder"
               title="Unlink reference folder"
             >
               ×
@@ -146,7 +173,9 @@ export default function Footer({
         </span>
 
         <span
-          className="footer-claude-settings"
+          className={styles.claudeSettings}
+          role="group"
+          aria-label="Claude settings"
           title={
             lastKnownModel
               ? `Last model reported by Claude Code: ${lastKnownModel}`
@@ -184,9 +213,14 @@ export default function Footer({
           </select>
         </span>
 
-        <span className={`status-binding footer-ai-binding${aiSession ? ' linked' : ''}`}>
+        <span className={cx(styles.binding, styles.ai, aiSession && styles.linked)}>
           <button
-            className="footer-ai-binding-label"
+            className={styles.bindingLabel}
+            aria-label={
+              aiSession
+                ? `Change Claude session ${aiSession.sessionId.slice(0, 8).toUpperCase()}`
+                : 'Link Claude session'
+            }
             onClick={onOpenSessionPicker}
             title={
               aiSession
@@ -194,15 +228,16 @@ export default function Footer({
                 : 'Link this doc to a Claude Code session'
             }
           >
-            <span className="session-spark" aria-hidden>
+            <span className={styles.spark} aria-hidden>
               ✦
             </span>
             {aiSession ? aiSession.sessionId.slice(0, 8).toUpperCase() : 'LINK SESSION'}
           </button>
           {aiSession && (
             <button
-              className="footer-ai-binding-unlink"
+              className={styles.unlink}
               onClick={onUnlinkSession}
+              aria-label="Unlink Claude session"
               title="Unlink Claude session"
             >
               ×

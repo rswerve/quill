@@ -12,7 +12,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const badge = page.locator('.mode-switch');
+  const badge = page.getByRole('group', { name: 'Editing mode' });
   await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -90,7 +90,7 @@ test('suggestion card appears in the margin after typing in suggesting mode', as
   await editor.click();
   await page.keyboard.type('suggested text');
 
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   await expect(card).toBeVisible();
   await expect(card).toContainText('Insertion');
 });
@@ -111,7 +111,7 @@ test('deletion suggestion card appears after deleting committed text', async ({ 
   await expectSelectionText(page, 'delete me');
   await page.keyboard.press('Backspace');
 
-  const card = page.locator('.suggestion-card').first();
+  const card = page.locator('[data-suggestion-kind]').first();
   await expect(card).toBeVisible();
   await expect(card).toContainText('Deletion');
 });
@@ -125,7 +125,7 @@ test('accepting an insertion removes the tracked mark and keeps the text', async
   await editor.click();
   await page.keyboard.type('keep me');
 
-  const acceptBtn = page.locator('.suggestion-accept-btn').first();
+  const acceptBtn = page.getByRole('button', { name: 'Accept', exact: true }).first();
   await expect(acceptBtn).toBeVisible();
   await acceptBtn.click();
   await expectEditorHtml(editor, { contains: ['keep me'], excludes: ['<ins'] });
@@ -138,7 +138,7 @@ test('rejecting an insertion removes the tracked mark and removes the text', asy
   await editor.click();
   await page.keyboard.type('discard me');
 
-  const rejectBtn = page.locator('.suggestion-reject-btn').first();
+  const rejectBtn = page.getByRole('button', { name: 'Reject', exact: true }).first();
   await expect(rejectBtn).toBeVisible();
   await rejectBtn.click();
   await expectEditorHtml(editor, { excludes: ['<ins', 'discard me'] });
@@ -159,7 +159,7 @@ test('accepting a deletion removes the tracked mark and removes the text', async
   await expectSelectionText(page, 'remove me');
   await page.keyboard.press('Backspace');
 
-  const acceptBtn = page.locator('.suggestion-accept-btn').first();
+  const acceptBtn = page.getByRole('button', { name: 'Accept', exact: true }).first();
   await acceptBtn.click();
   await expectEditorHtml(editor, { excludes: ['<del', 'remove me'] });
 });
@@ -182,7 +182,7 @@ test('rejecting a deletion removes the tracked mark and restores the text', asyn
   await expectSelectionText(page);
   await page.keyboard.press('Backspace');
 
-  const rejectBtn = page.locator('.suggestion-reject-btn').first();
+  const rejectBtn = page.getByRole('button', { name: 'Reject', exact: true }).first();
   await rejectBtn.click();
   await expectEditorHtml(editor, { excludes: ['<del'] });
   // "me" should be restored

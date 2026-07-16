@@ -83,10 +83,10 @@ test('clean document: Cmd+N adds and focuses a new tab', async ({ page }) => {
 
   await pressShortcut(page, 'n');
 
-  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
-  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('Untitled');
 });
 
 test('dirty document: Cmd+N preserves it in a background tab without a guard', async ({ page }) => {
@@ -96,7 +96,7 @@ test('dirty document: Cmd+N preserves it in a background tab without a guard', a
   await typeIntoEditor(page, 'precious unsaved words');
   await pressShortcut(page, 'n');
 
-  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('precious unsaved words');
@@ -109,7 +109,7 @@ test('dirty tab close: Cancel keeps the tab and its document', async ({ page }) 
   await typeIntoEditor(page, 'disposable draft');
   await page.locator('.document-tab.active .document-tab-close').click();
 
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
   await expect(modal).toBeVisible({ timeout: 2000 });
   await modal.getByRole('button', { name: 'Cancel' }).click();
 
@@ -149,9 +149,12 @@ test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async 
 
   await typeIntoEditor(page, 'disposable draft');
   await page.locator('.document-tab.active .document-tab-close').click();
-  await page.locator('.app-modal').getByRole('button', { name: "Don't Save" }).click();
+  await page
+    .getByRole('dialog', { name: 'Unsaved changes' })
+    .getByRole('button', { name: "Don't Save" })
+    .click();
 
-  await expect(page.locator('.app-modal')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(activeEditor(page)).not.toContainText('disposable draft');
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
@@ -167,7 +170,7 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
   await typeIntoEditor(page, 'words worth keeping');
   await page.locator('.document-tab.active .document-tab-close').click();
 
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
   await expect(modal).toBeVisible({ timeout: 2000 });
   await modal.getByRole('button', { name: 'Save', exact: true }).click();
 
@@ -186,6 +189,42 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
   await expect(page.locator('.document-tab')).toHaveCount(1);
 });
 
+test('Save As writes the document to the chosen path and rebinds the tab clean', async ({
+  page,
+}) => {
+  const handler = (cmd: string) => {
+    if (cmd === 'show_save_dialog') return '/tmp/report.md';
+    return null; // write_file / delete_file succeed silently
+  };
+  await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
+
+  await typeIntoEditor(page, 'Quarterly summary content');
+
+  // Cmd+Shift+S — Save As always prompts for a destination path.
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('ControlOrMeta');
+
+  // The active tab rebinds to the chosen filename and goes clean.
+  await expect(page.locator('.document-tab.active')).toContainText('report', { timeout: 3000 });
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('report');
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
+
+  // The Markdown was written to exactly the chosen path, with the content.
+  const write = await page.evaluate(() => {
+    const calls = (window as unknown as Record<string, unknown>).__capturedCalls as {
+      cmd: string;
+      args: { path?: string; content?: string };
+    }[];
+    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/report.md');
+  });
+  expect(write?.args.content).toContain('Quarterly summary content');
+});
+
 test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', async ({ page }) => {
   const handler = (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'show_open_dialog') return '/tmp/next.md';
@@ -201,7 +240,9 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
   await typeIntoEditor(page, 'unsaved before open');
   await pressShortcut(page, 'o');
 
-  await expect(page.locator('.app-modal')).toHaveCount(0);
+  // Cmd+O adds a tab and must NOT raise the dirty-save guard (the session picker
+  // may appear and is dismissed below — scope this to the guard specifically).
+  await expect(page.getByRole('dialog', { name: 'Unsaved changes' })).toHaveCount(0);
   await expect(activeEditor(page)).toContainText('The next document', { timeout: 3000 });
   const opened = await page.evaluate(() => {
     const calls = (window as unknown as Record<string, unknown>).__capturedCalls as {
@@ -230,7 +271,7 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   await typeIntoEditor(page, 'doomed save');
   await pressShortcut(page, 's');
 
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog', { name: 'Could not save file' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Could not save file');
   await expect(modal).toContainText('/tmp/readonly.md');
@@ -239,7 +280,9 @@ test('failed save shows an error notice instead of failing silently', async ({ p
   await expect(modal).toHaveCount(0);
   // The document is still dirty — Untitled drops folder/meta chrome but keeps
   // the compact dirty dot after its filename.
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
   expect(await page.title()).toContain('•');
 });
 
@@ -258,7 +301,7 @@ test('corrupt sidecar on open shows a notice and the doc still loads', async ({ 
 
   await pressShortcut(page, 'o');
 
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog', { name: 'Comments file could not be read' });
   await expect(modal).toBeVisible({ timeout: 3000 });
   await expect(modal).toContainText('Comments file could not be read');
   await expect(modal).toContainText('/tmp/doc.comments.json');

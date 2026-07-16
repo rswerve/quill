@@ -1,0 +1,45 @@
+/* AppModal — module-scoped styles (hashed class names, private to the
+   component). Shared button primitives (.btn-*) stay global and are composed
+   via className; design tokens resolve from src/styles/tokens.css. Print hiding
+   is a global policy: the overlay carries data-print-hidden (see App.css). */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Above the session picker (z-index 100) so a notice raised while the
+     picker is open stays readable. */
+  z-index: 200;
+}
+.modal {
+  width: 420px;
+  max-width: 90vw;
+  background: var(--color-page);
+  border-radius: 8px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  padding: 20px;
+  font-family: var(--font-sans);
+}
+.title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.message {
+  margin: 0 0 16px;
+  font-size: var(--text-meta);
+  font-weight: 300;
+  color: var(--color-ink-mid);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

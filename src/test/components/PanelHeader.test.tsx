@@ -10,11 +10,15 @@ const binding: AISessionBinding = {
   linkedAt: 'now',
 };
 
-function renderHeader(mode: 'comments' | 'chat', aiSession: AISessionBinding | null = binding) {
-  const props: React.ComponentProps<typeof PanelHeader> = {
+function makeProps(
+  mode: 'comments' | 'chat',
+  aiSession: AISessionBinding | null = binding,
+  showResolved = false,
+): React.ComponentProps<typeof PanelHeader> {
+  return {
     mode,
     commentCount: 4,
-    showResolved: false,
+    showResolved,
     resolvedCount: 2,
     aiSession,
     onModeChange: vi.fn(),
@@ -23,6 +27,10 @@ function renderHeader(mode: 'comments' | 'chat', aiSession: AISessionBinding | n
     onStartNewSession: vi.fn(),
     onUnlinkSession: vi.fn(),
   };
+}
+
+function renderHeader(mode: 'comments' | 'chat', aiSession: AISessionBinding | null = binding) {
+  const props = makeProps(mode, aiSession);
   render(<PanelHeader {...props} />);
   return props;
 }
@@ -36,8 +44,21 @@ describe('PanelHeader', () => {
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
     expect(props.onModeChange).toHaveBeenCalledWith('chat');
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show resolved comments' }));
     expect(props.onToggleResolved).toHaveBeenCalledOnce();
+  });
+
+  it('exposes the resolved-filter state to assistive tech via aria-pressed', () => {
+    const { rerender } = render(<PanelHeader {...makeProps('comments', binding, false)} />);
+    expect(screen.getByRole('button', { name: 'Show resolved comments' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    rerender(<PanelHeader {...makeProps('comments', binding, true)} />);
+    expect(screen.getByRole('button', { name: 'Show resolved comments' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('shows the linked session and routes every session-menu action', () => {

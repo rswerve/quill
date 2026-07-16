@@ -1,0 +1,251 @@
+/* Design tokens — extracted from App.css, imported first so every var()
+   resolves against these. Theme (paper/gruvbox) + shared non-color tokens.
+   Declarations and cascade order preserved verbatim. */
+
+/* ── Design tokens ──────────────────────────────────────────────── */
+/* ---------- Design tokens ---------- */
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  --bg-app:        #FBFAF7;   /* main writing surface */
+  --bg-rail:       #F4F1E9;   /* left tool rail + status bar */
+  --bg-panel:      #FBFAF7;   /* comments panel (matches app here) */
+  --bg-card:       #FFFFFF;   /* comment card / inputs */
+  --bg-card-sub:   #F7F4EC;   /* nested Claude reply block */
+  --bg-hover:      #EFEBE0;
+  --bg-hover-rail: #EAE5D8;
+  --bg-quote:      #F1EDE2;
+
+  --border:        #E6E1D4;
+  --border-strong: #E2DCCD;
+  --border-card:   #E3DECF;
+
+  --text:          #23201B;
+  --text-body:     #33302A;
+  --text-muted:    #57503F;
+  --text-dim:      #8B8371;
+  --text-faint:    #A29A87;
+  --dot:           #C9C2AF;
+
+  --accent:        #B65C38;   /* Claude / primary */
+  --accent-hover:  #9E4B2B;
+  --accent-ink:    #FBFAF7;   /* text on accent */
+  --accent-soft:   rgba(182,92,56,0.13);
+
+  --hl-bg:         #FBEFC9;   /* text highlight (comment anchor) */
+  --hl-line:       #D79921;
+
+  --shadow-frame:  0 24px 60px rgba(50,42,25,0.10);
+  --shadow-pop:    0 32px 80px rgba(40,32,16,0.25);
+
+  /* Semantic review colors (track-changes) — all >=4.5:1 as text on --bg-card */
+  --added:      #2E7A4C;                 /* 5.3:1 on #FFFFFF */
+  --added-bg:   rgba(46,122,76,0.06);    /* Accept HOVER wash (button transparent at rest) */
+  --removed:    #BC3B2E;                 /* 5.5:1 on #FFFFFF */
+  --removed-bg: rgba(188,59,46,0.05);    /* Reject HOVER wash */
+  --sugg-replace: #B65C38;               /* Replacement badge = accent */
+  --sugg-format:  #8B8371;               /* Formatting badge = neutral */
+  --badge-format-bg: #EFEBE0;
+  --ai-badge-bg:   #E4ECF1;
+  --ai-badge-text: #4A6E88;
+  --chat-bubble-user: #B65C38;
+  --note-stripe: #B7AF9C;
+  --note-badge-bg: #EFEBE0;
+  --note-hl-underline: #A29A87;
+  --note-quote-bg: #F1EDE2;
+  --note-quote-rule: #C9C2AF;
+  --gutter-note: #8B8371;
+  --gutter-note-rest: #B0A895;
+  --gutter-thread: #B65C38;
+  --gutter-note-halo: rgba(139,131,113,0.22);
+  --gutter-thread-halo: rgba(182,92,56,0.20);
+  --gutter-guide: #EFEBE0;
+  --gutter-count-text: #8B8371;
+  --panel-scrollbar-thumb: #C9C2AF;
+  --annotation-focus-shadow: 0 10px 26px rgba(80,55,30,0.14);
+}
+
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
+  --bg-app:        #282828;
+  --bg-rail:       #1D2021;
+  --bg-panel:      #1D2021;
+  --bg-card:       #32302F;
+  --bg-card-sub:   #2C2A29;
+  --bg-hover:      #32302F;
+  --bg-hover-rail: #32302F;
+  --bg-quote:      #282828;
+
+  --border:        #3C3836;
+  --border-strong: #3C3836;
+  --border-card:   #504945;
+
+  --text:          #EBDBB2;
+  --text-body:     #D5C4A1;
+  --text-muted:    #A89984;
+  --text-dim:      #928374;
+  --text-faint:    #7C6F64;
+  --dot:           #665C54;
+
+  --accent:        #D65D0E;
+  --accent-hover:  #C4550D;
+  --accent-ink:    #FBF1C7;
+  --accent-soft:   rgba(254,128,25,0.13);
+  --accent-text:   #FE8019;   /* orange used as text/glyph in dark */
+
+  --hl-bg:         #453D20;
+  --hl-line:       #D79921;
+
+  --shadow-frame:  0 24px 60px rgba(20,18,10,0.35);
+  --shadow-pop:    0 32px 80px rgba(0,0,0,0.5);
+
+  /* Semantic review colors (track-changes) — text values clear >=4.5:1 on --bg-card #32302F */
+  --added:      #B8BB26;                 /* 6.3:1 on #32302F */
+  --added-bg:   rgba(184,187,38,0.08);   /* Accept HOVER wash (button transparent at rest) */
+  --removed:    #FB6F63;                 /* 4.7:1 on #32302F (lifted from canonical #FB4934, which is ~3.8:1 as text) */
+  --removed-bg: rgba(251,111,99,0.08);   /* Reject HOVER wash */
+  --removed-accent: #FB4934;             /* optional: stripe / strikethrough / icons only (graphical, 3:1) */
+  --sugg-replace: #FE8019;               /* Replacement badge = accent */
+  --sugg-format:  #A89984;               /* Formatting badge = neutral */
+  --badge-format-bg: #3C3836;
+  --ai-badge-bg:   #2B3A4A;
+  --ai-badge-text: #83A598;
+  --chat-bubble-user: #D65D0E;
+  --note-stripe: #665C54;
+  --note-badge-bg: #3C3836;
+  --note-hl-underline: #7C6F64;
+  --note-quote-bg: #282828;
+  --note-quote-rule: #665C54;
+  --gutter-note: #A89984;
+  --gutter-note-rest: #7C6F64;
+  --gutter-thread: #FE8019;
+  --gutter-note-halo: rgba(168,153,132,0.22);
+  --gutter-thread-halo: rgba(254,128,25,0.20);
+  --gutter-guide: #3C3836;
+  --gutter-count-text: #928374;
+  --panel-scrollbar-thumb: #504945;
+  --annotation-focus-shadow: 0 10px 26px rgba(0,0,0,0.45);
+}
+/* prettier-ignore */
+:root[data-theme="paper"]   { --accent-text: var(--accent); }
+
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  color-scheme: light;
+}
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
+  color-scheme: dark;
+}
+
+/* LEGACY SEMANTIC ALIASES — remove as review components migrate */
+/* prettier-ignore */
+:root[data-theme="paper"] {
+  --color-track-add-bg: var(--added-bg);
+  --color-track-add-text: var(--added);
+  --color-track-add-line: var(--added);
+  --color-track-del-bg: var(--removed-bg);
+  --color-track-del-text: var(--removed);
+  --color-track-del-line: var(--removed);
+  --color-action-accept-bg: transparent;
+  --color-action-accept-hover: var(--added-bg);
+  --color-action-accept-active: var(--added-bg);
+  --color-action-accept-text: var(--added);
+  --color-action-reject-bg: transparent;
+  --color-action-reject-hover: var(--removed-bg);
+  --color-action-reject-active: var(--removed-bg);
+  --color-action-reject-text: var(--removed);
+}
+
+/* prettier-ignore */
+:root[data-theme="gruvbox"] {
+  --color-track-add-bg: var(--added-bg);
+  --color-track-add-text: var(--added);
+  --color-track-add-line: var(--added);
+  --color-track-del-bg: var(--removed-bg);
+  --color-track-del-text: var(--removed);
+  --color-track-del-line: var(--removed-accent);
+  --color-action-accept-bg: transparent;
+  --color-action-accept-hover: var(--added-bg);
+  --color-action-accept-active: var(--added-bg);
+  --color-action-accept-text: var(--added);
+  --color-action-reject-bg: transparent;
+  --color-action-reject-hover: var(--removed-bg);
+  --color-action-reject-active: var(--removed-bg);
+  --color-action-reject-text: var(--removed);
+}
+
+/* LEGACY ALIASES — remove as components migrate */
+:root {
+  --color-bg: var(--bg-app);
+  --color-chrome: var(--bg-rail);
+  --color-chrome-dark: var(--bg-hover-rail);
+  --color-page: var(--bg-card);
+  --color-ink: var(--text);
+  --color-ink-mid: var(--text-muted);
+  --color-ink-light: var(--text-dim);
+  --color-ink-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-border-light: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-light: var(--accent-soft);
+  --color-accent-mid: var(--accent-text);
+  --color-accent-dark: var(--accent-hover);
+  --color-ai-bg: var(--bg-card-sub);
+  --color-ai-text: var(--accent-text);
+  --color-human-avatar-bg: var(--border-card);
+  --color-human-avatar-text: var(--text);
+  --color-highlight-bg: var(--hl-bg);
+  --color-highlight-border: var(--hl-line);
+}
+
+/* ── Non-color tokens (shared across themes) ────────────────────── */
+:root {
+  --font-serif: 'Source Serif 4 Variable', Georgia, serif;
+  --font-sans: 'Instrument Sans Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', monospace;
+  /* Fixed, opinionated document typography. Document prose and headings share
+     Source Serif 4; UI chrome stays on its own scale outside document zoom. */
+  --font-doc-body: var(--font-serif);
+  --font-doc-heading: var(--font-serif);
+
+  /* Document typography is em-based against --text-doc-base (pinned on the
+     editor scroll area) so the zoom wrapper's percentage font-size scales
+     text and reflows within the fixed page — and so UI-chrome type-scale
+     changes never rescale the page text. */
+  --text-doc-base: 18px;
+  --text-doc-title: 2.111111em; /* 38 / 18 */
+  --text-doc-h2: 1.444444em; /* 26 / 18 */
+  --text-doc-body: 1em;
+  --text-ui: 13px;
+  --text-meta: 12.5px;
+  --text-label: 11px;
+
+  --leading-tight: 1.25;
+  --leading-body: 1.85;
+  --leading-ui: 1.6;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 36px;
+  --space-3xl: 52px;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --radius-full: 50%;
+
+  --toolbar-height: 44px;
+  --statusbar-height: 34px;
+  --comment-panel-width: 320px;
+  --comment-panel-header-height: 44px;
+  --annotation-gutter-width: 22px;
+  --page-max-width: 640px;
+  /* Studio fixes the document column at 640px; print flattens this shell so
+     exported PDFs retain their independent US-Letter layout. */
+  --page-padding-x: 64px;
+  --page-padding-y: 72px;
+  --editor-scroll-gap: 40px;
+}

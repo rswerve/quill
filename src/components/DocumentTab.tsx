@@ -9,6 +9,7 @@ import FindBar from './FindBar';
 import PanelHeader from './PanelHeader';
 import ChatPanel from './ChatPanel';
 import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
+import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
@@ -43,6 +44,8 @@ import {
 } from '../utils/trackedCommentResolution';
 import { basename, dirname } from '../utils/path';
 import { sidecarPath } from '../utils/sidecarPath';
+import { computeDocumentStats } from '../utils/documentStats';
+import type { DocumentStats } from '../utils/documentStats';
 import { clampZoom } from '../utils/zoomPreference';
 import {
   authorizeSidecarAccess,
@@ -63,7 +66,6 @@ import type {
   TrackedEditOrigin,
   DocumentChatThread,
 } from '../types';
-import '../App.css';
 
 const CLAUDE_AUTHOR_ID = 'claude';
 
@@ -90,13 +92,6 @@ function lastChatModel(thread: DocumentChatThread | undefined): string | null {
     if (thread.messages[index].model) return thread.messages[index].model ?? null;
   }
   return null;
-}
-
-export interface DocumentStats {
-  words: number;
-  chars: number;
-  line: number;
-  column: number;
 }
 
 export interface DocumentTabChromeSnapshot {
@@ -169,30 +164,6 @@ interface DocumentTabProps {
     binding: AISessionBinding,
   ) => { allowed: boolean; ownerTitle?: string };
   onReleaseSession: (tabId: string) => void;
-}
-
-function countWords(text: string): number {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter((word) => word.length > 0).length;
-}
-
-function readDocumentStats(editor: TiptapEditor | null): DocumentStats {
-  if (!editor) return { words: 0, chars: 0, line: 1, column: 1 };
-  const text = editor.state.doc.textContent;
-  const { head } = editor.state.selection;
-  const resolved = editor.state.doc.resolve(head);
-  let line = 0;
-  editor.state.doc.nodesBetween(0, head, (node) => {
-    if (node.isTextblock) line += 1;
-  });
-  return {
-    words: countWords(text),
-    chars: text.length,
-    line: Math.max(1, line),
-    column: resolved.parentOffset + 1,
-  };
 }
 
 const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function DocumentTab(
@@ -1001,7 +972,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   // Chrome reads word/character counts and the current line/column through a
   // value snapshot rather than reaching into this tab. Selection-only
-  // transactions matter for line/column even when the document did not update.
+  // transactions matter even when the document did not update — they move the
+  // line/column and change the selected word/character counts.
   useEffect(() => {
     if (!editor) return;
     const refreshChrome = () => setChromeRevision((revision) => revision + 1);
@@ -1322,114 +1294,19 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [unresolveComment, editor, comments, markDirty],
   );
 
-  // The panel is an independent flat list. Directed provenance/highlight jumps
-  // reveal their card without moving the document scroll surface.
-  const scrollCardIntoView = useCallback((cardId: string) => {
-    requestAnimationFrame(() => {
-      const panel = commentLayerRef.current?.querySelector(
-        '.comment-panel-list',
-      ) as HTMLElement | null;
-      const card = commentLayerRef.current?.querySelector(
-        `[data-card-id="${CSS.escape(cardId)}"]`,
-      ) as HTMLElement | null;
-      if (!panel || !card) return;
-      const panelRect = panel.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
-      if (cardRect.top >= panelRect.top + 24 && cardRect.bottom <= panelRect.bottom - 24) return;
-      panel.scrollTo({
-        top: Math.max(0, card.offsetTop + card.offsetHeight / 2 - panel.clientHeight / 2),
-        behavior: 'smooth',
-      });
-    });
-  }, []);
-
-  const handleSyncActivate = useCallback((kind: AnnotationKind, id: string) => {
-    setActiveAnnotation((previous) =>
-      previous?.kind === kind && previous.id === id ? previous : { kind, id },
-    );
-  }, []);
-
-  const handleActivateComment = useCallback(
-    (commentId: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'comment' && prev.id === commentId
-          ? null
-          : { kind: 'comment', id: commentId },
-      );
-      // Snap the anchor into range instantly (a smooth anchor scroll would
-      // fight the card's smooth scroll on the same container), then bring the
-      // full card on-screen.
-      if (editor) {
-        const dom = editor.view.dom.querySelector(`[data-comment-id="${commentId}"]`);
-        dom?.scrollIntoView({ behavior: 'instant', block: 'center' });
-      }
-      scrollCardIntoView(commentId);
-    },
-    [editor, scrollCardIntoView],
-  );
-
-  const handleActivateHistoryComment = useCallback(
-    (commentId: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'comment' && prev.id === commentId
-          ? null
-          : { kind: 'comment', id: commentId },
-      );
-      const comment = comments.find((candidate) => candidate.id === commentId);
-      if (!editor || !comment) return;
-      const range = comment.resolved
-        ? locateDetachedCommentAnchor(editor.state.doc, comment)
-        : findAnnotationRange(editor.state.doc, 'comment', commentId);
-      if (!range) return;
-      const { node } = editor.view.domAtPos(range.from);
-      const element = node instanceof HTMLElement ? node : node.parentElement;
-      element?.scrollIntoView({ behavior: 'instant', block: 'center' });
-      scrollCardIntoView(commentId);
-    },
-    [comments, editor, scrollCardIntoView],
-  );
-
-  const handleActivateSuggestion = useCallback(
-    (id: string) => {
-      setActiveAnnotation((prev) =>
-        prev?.kind === 'suggestion' && prev.id === id ? null : { kind: 'suggestion', id },
-      );
-      if (editor) {
-        const range = findAnnotationRange(editor.state.doc, 'suggestion', id);
-        if (range) {
-          const { node } = editor.view.domAtPos(range.from);
-          const el = node instanceof HTMLElement ? node : node.parentElement;
-          el?.scrollIntoView({ behavior: 'instant', block: 'center' });
-        }
-      }
-      scrollCardIntoView(id);
-    },
-    [editor, scrollCardIntoView],
-  );
-
-  // Reply → suggestion is a directed provenance jump, so it never toggles an
-  // already-active target off. If one linked change has been resolved, advance
-  // to the first linked suggestion that is still pending.
-  const handleViewReplySuggestion = useCallback(
-    (suggestionIds: string[]) => {
-      const change = trackedChanges.find(
-        (candidate) => suggestionIds.includes(candidate.id) && candidate.status === 'pending',
-      );
-      if (!change) return;
-      const cardId = change.id;
-      setActiveAnnotation({ kind: 'suggestion', id: cardId });
-      if (editor) {
-        const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);
-        if (range) {
-          const { node } = editor.view.domAtPos(range.from);
-          const element = node instanceof HTMLElement ? node : node.parentElement;
-          element?.scrollIntoView({ behavior: 'instant', block: 'center' });
-        }
-      }
-      scrollCardIntoView(cardId);
-    },
-    [editor, scrollCardIntoView, trackedChanges],
-  );
+  const {
+    handleActivateComment,
+    handleActivateHistoryComment,
+    handleActivateSuggestion,
+    handleViewReplySuggestion,
+    handleSyncActivate,
+  } = useAnnotationNavigation({
+    editor,
+    comments,
+    trackedChanges,
+    commentLayerRef,
+    setActiveAnnotation,
+  });
 
   const openChat = useCallback(() => {
     setPanelMode('chat');
@@ -1623,7 +1500,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       lastKnownModel,
-      stats: readDocumentStats(editor),
+      stats: computeDocumentStats(editor),
     });
   }, [
     aiSession,
@@ -1704,7 +1581,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             })()}
         </div>
 
-        <aside className="comment-layer comments" ref={commentLayerRef} aria-label="Review panel">
+        <aside className="comment-layer" ref={commentLayerRef} aria-label="Review panel">
           <PanelHeader
             mode={panelMode}
             commentCount={unresolvedCommentCount + pendingSuggestionCount}

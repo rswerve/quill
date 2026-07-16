@@ -16,11 +16,11 @@ async function selectCurrentLine(page: Page) {
 }
 
 async function addComment(page: Page, text: string) {
-  await page.locator('.add-comment-btn').click();
-  const textarea = page.locator('.add-comment-compose textarea');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill(text);
   await textarea.press('ControlOrMeta+Shift+Enter');
-  await expect(page.locator('.comment-card-active')).toBeVisible();
+  await expect(page.locator('[data-active]')).toBeVisible();
 }
 
 test('off-screen anchors collapse into navigable gutter counts', async ({ page }) => {
@@ -41,15 +41,15 @@ test('off-screen anchors collapse into navigable gutter counts', async ({ page }
   await selectCurrentLine(page);
   await addComment(page, 'bottom note');
 
-  await expect(page.locator('.panel-tab-count')).toHaveText('2');
-  const above = page.locator('.annotation-gutter-count-above');
+  await expect(page.getByRole('tab', { name: 'Comments 2' })).toBeVisible();
+  const above = page.getByRole('button', { name: /annotations above the viewport/ });
   await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
   await above.click();
-  await expect(page.locator('.comment-card-active')).toContainText('top note');
-  const below = page.locator('.annotation-gutter-count-below');
+  await expect(page.locator('[data-active]')).toContainText('top note');
+  const below = page.getByRole('button', { name: /annotations below the viewport/ });
   await expect(below).toHaveAttribute('aria-label', '1 annotations below the viewport');
 
   await below.click();
-  await expect(page.locator('.comment-card-active')).toContainText('bottom note');
+  await expect(page.locator('[data-active]')).toContainText('bottom note');
   await expect(above).toHaveAttribute('aria-label', '1 annotations above the viewport');
 });

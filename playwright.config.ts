@@ -16,6 +16,7 @@ const e2eUrl = `http://localhost:${e2ePort}`;
  */
 export default defineConfig({
   testDir: 'e2e',
+  snapshotPathTemplate: '{testDir}/visual/__screenshots__/{projectName}/{arg}{ext}',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -27,11 +28,26 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: /visual\//,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'visual',
+      testMatch: /visual\/.*\.spec\.ts/,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1240, height: 800 },
+        deviceScaleFactor: 1,
+        reducedMotion: 'reduce',
+        locale: 'en-US',
+        timezoneId: 'America/Chicago',
+        colorScheme: 'light',
+        trace: 'retain-on-failure',
+      },
     },
   ],
   webServer: {
-    command: `npm run dev -- --port ${e2ePort}`,
+    command: `npx vite --config e2e/visual/vite.e2e.config.ts --port ${e2ePort}`,
     url: e2eUrl,
     // An explicitly isolated worktree run must own its server. Default local
     // runs retain the convenient reuse behavior on Quill's canonical port.

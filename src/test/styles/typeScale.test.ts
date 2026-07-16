@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readAppStyles, readComponentModules, readModuleSource } from '../utils/readAppStyles';
 
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
+const modules = readComponentModules();
 
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -25,17 +25,30 @@ describe('UI type scale', () => {
   });
 
   it('uses control size for session-preview body text', () => {
-    for (const selector of [
-      '.session-picker-hint,\n.session-picker-loading,\n.session-picker-empty',
-      '.session-picker-error',
-      '.session-preview-msg',
+    // SessionPicker is module-scoped: its header/rows/status/preview text sit at
+    // the UI scale (var(--text-ui)); row-meta drops to --text-label and the
+    // preview meta to --text-meta. Asserted from the module source.
+    const sessionPicker = readModuleSource('SessionPicker.module.css');
+    const ruleFor = (re: RegExp) => sessionPicker.match(re)?.[0] ?? '';
+    for (const re of [
+      /\.header\s*\{[^}]*/s,
+      /\.hint,\n\.loading,\n\.empty\s*\{[^}]*/s,
+      /\.error\s*\{[^}]*/s,
+      /\.rowTitle\s*\{[^}]*/s,
+      /\.previewMsg\s*\{[^}]*/s,
     ]) {
-      expect(ruleBody(selector)).toContain('font-size: var(--text-ui)');
+      expect(ruleFor(re)).toContain('font-size: var(--text-ui)');
     }
+    expect(ruleFor(/\.rowMeta\s*\{[^}]*/s)).toContain('font-size: var(--text-label)');
+    expect(ruleFor(/\.previewMeta\s*\{[^}]*/s)).toContain('font-size: var(--text-meta)');
   });
 
   it('keeps direct Studio component sizes within the handoff type scale', () => {
-    const explicit = [...css.matchAll(/font-size:\s*([\d.]+)px/g)].map((match) => match[1]);
+    // Scan the global layer AND every component module, so the scale invariant
+    // holds everywhere as components migrate to Modules.
+    const explicit = [...`${css}\n${modules}`.matchAll(/font-size:\s*([\d.]+)px/g)].map(
+      (match) => match[1],
+    );
     expect(new Set(explicit)).toEqual(
       new Set([
         '8',
@@ -56,14 +69,32 @@ describe('UI type scale', () => {
         '18',
       ]),
     );
-    expect(ruleBody('.link-editor-input')).toContain('font-size: 14px');
-    expect(ruleBody('.theme-caret')).toContain('font-size: 10px');
-    expect(ruleBody('.app-modal-title')).toContain('font-size: 15px');
-    expect(ruleBody('.add-comment-btn')).toContain('font-size: 18px');
-    expect(ruleBody('.session-picker-close')).toContain('font-size: 18px');
-    expect(ruleBody('.rail-btn.heading')).toContain('font-size: 11px');
-    expect(ruleBody('.topbar .seg')).toContain('font-size: 12px');
-    expect(ruleBody('.footer.status')).toContain('font-size: 10px');
-    expect(ruleBody('.suggestion-ai-badge')).toContain('font-size: 8.5px');
+    // Component-specific sizes: read the OWNING module so a generic selector
+    // (.title/.banner/.input) can't false-match another module.
+    const appModal = readModuleSource('AppModal.module.css');
+    expect(appModal).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
+    // .message is var(--text-meta) = 12.5px (see the token above).
+    expect(appModal).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
+    // UpdateBanner: banner text sits at the UI scale (var(--text-ui) = 13px);
+    // the link inherits it via `font: inherit`.
+    const updateBanner = readModuleSource('UpdateBanner.module.css');
+    expect(updateBanner).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
+    // LinkEditor: text input 14px, the URL row drops to 12.5px mono, buttons 12.5px.
+    const linkEditor = readModuleSource('LinkEditor.module.css');
+    expect(linkEditor).toMatch(/\.input\s*\{[^}]*font-size: 14px/s);
+    expect(linkEditor).toMatch(/\.urlRow \.input\s*\{[^}]*font-size: 12\.5px/s);
+    expect(linkEditor).toMatch(/\.btn\s*\{[^}]*font-size: 12\.5px/s);
+    expect(readModuleSource('AddCommentButton.module.css')).toMatch(
+      /\.btn\s*\{[^}]*font-size: 18px/s,
+    );
+    expect(readModuleSource('SessionPicker.module.css')).toMatch(
+      /\.close\s*\{[^}]*font-size: 18px/s,
+    );
+    expect(readModuleSource('Rail.module.css')).toMatch(/\.btn\.heading\s*\{[^}]*font-size: 11px/s);
+    expect(readModuleSource('Topbar.module.css')).toMatch(/\.seg\s*\{[^}]*font-size: 12px/s);
+    expect(readModuleSource('Footer.module.css')).toMatch(/\.footer\s*\{[^}]*font-size: 10px/s);
+    expect(readModuleSource('SuggestionCard.module.css')).toMatch(
+      /\.head :global\(\.ai-badge\)\s*\{[^}]*font-size: 8\.5px/s,
+    );
   });
 });

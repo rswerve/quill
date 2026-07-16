@@ -743,8 +743,10 @@ function editResultReason(result: EditResult): string {
       return 'the replacement link is malformed or unsafe.';
     case 'document-unavailable':
       return 'the document was not ready.';
+    case 'text-not-found':
+      return 'this text isn’t in the document.';
     default:
-      return 'text wasn’t found.';
+      return 'it couldn’t be applied.';
   }
 }
 
@@ -753,7 +755,9 @@ export function formatEditResultNotice(results: EditResult[]): string {
   const skipped = results.filter((candidate) => candidate.status !== 'applied');
   if (skipped.length === 0) return '';
   const heading =
-    skipped.length === 1 ? '1 change was skipped:' : `${skipped.length} changes were skipped:`;
+    skipped.length === 1
+      ? '1 change wasn’t applied:'
+      : `${skipped.length} changes weren’t applied:`;
   const lines = skipped.map(
     (candidate) => `• “${editFindLabel(candidate.edit)}” — ${editResultReason(candidate)}`,
   );

@@ -10,6 +10,7 @@ import {
   removeLinkTarget,
   type LinkTarget,
 } from '../utils/linkEditing';
+import { cx } from '../utils/cx';
 
 export type ThemeId = 'paper' | 'gruvbox';
 
@@ -32,6 +33,28 @@ export function applyTheme(id: ThemeId) {
   document.documentElement.dataset.theme = id;
 }
 
+/**
+ * The state class for each of a {@link ToolbarButton}'s three visual states.
+ * All three are required so a CSS-Module consumer can't supply a partial map
+ * that silently leaks a literal global state class for the state it forgot.
+ * Absent entirely (Toolbar's own buttons), the button falls back to the legacy
+ * literal strings. This only changes the state class STRING — the
+ * aria-pressed/disabled semantics are unchanged.
+ */
+export interface ToolbarButtonStateClasses {
+  active: string;
+  mixed: string;
+  disabled: string;
+}
+
+/** The literal state classes Toolbar has always emitted — the default when a
+ *  consumer doesn't supply a module-scoped map. */
+const LEGACY_STATE_CLASSES: ToolbarButtonStateClasses = {
+  active: 'active',
+  mixed: 'mixed',
+  disabled: 'disabled',
+};
+
 interface ButtonProps {
   onClick: () => void;
   active?: boolean;
@@ -40,7 +63,10 @@ interface ButtonProps {
   title: string;
   children: React.ReactNode;
   className?: string;
-  baseClassName?: string;
+  /** The button's visual owner. Required — there is no styled default; every
+   *  caller names its own base class (Rail/Topbar their module class). */
+  baseClassName: string;
+  stateClasses?: ToolbarButtonStateClasses;
 }
 
 export function ToolbarButton({
@@ -51,12 +77,14 @@ export function ToolbarButton({
   title,
   children,
   className,
-  baseClassName = 'toolbar-btn',
+  baseClassName,
+  stateClasses,
 }: ButtonProps) {
+  const state = stateClasses ?? LEGACY_STATE_CLASSES;
   const classes = [baseClassName];
-  if (active) classes.push('active');
-  if (mixed) classes.push('mixed');
-  if (disabled) classes.push('disabled');
+  if (active) classes.push(state.active);
+  if (mixed) classes.push(state.mixed);
+  if (disabled) classes.push(state.disabled);
   if (className) classes.push(className);
 
   return (
@@ -212,7 +240,19 @@ function targetLinkElement(editor: Editor, target: LinkTarget): HTMLElement | nu
   }
 }
 
-export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClassName?: string }) {
+export function LinkButton({
+  editor,
+  baseClassName,
+  stateClasses,
+  wrapperClassName,
+}: {
+  editor: Editor;
+  baseClassName: string;
+  stateClasses?: ToolbarButtonStateClasses;
+  /** Extra class on the wrapper div, composed with the global `link-button-wrap`
+   *  base. Rail passes its module class to own the wrapper's rail-context flex. */
+  wrapperClassName?: string;
+}) {
   const [target, setTarget] = useState<LinkTarget | null>(null);
   const [anchor, setAnchor] = useState<LinkEditorAnchor | null>(null);
   const activeLinkRef = useRef<HTMLElement | null>(null);
@@ -322,13 +362,14 @@ export function LinkButton({ editor, baseClassName }: { editor: Editor; baseClas
   useEffect(() => () => clearActiveLink(), [clearActiveLink]);
 
   return (
-    <div className="link-button-wrap">
+    <div className={cx('link-button-wrap', wrapperClassName)}>
       <ToolbarButton
         onClick={openFromSelection}
         active={onLink}
         disabled={!canLink}
         title="Link (Cmd+K)"
         baseClassName={baseClassName}
+        stateClasses={stateClasses}
       >
         <LinkIcon />
       </ToolbarButton>

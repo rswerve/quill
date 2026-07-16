@@ -46,9 +46,9 @@ test('a last-line comment stays reachable without extending document scroll', as
     `Paragraph ${lines - 1} — some body text to give the document height.`,
   );
 
-  const plusBtn = page.locator('.add-comment-btn');
+  const plusBtn = page.getByRole('button', { name: 'Add comment to selection' });
   await plusBtn.click();
-  const textarea = page.locator('.add-comment-compose textarea');
+  const textarea = page.locator('[data-card-id="comment-composer"] textarea');
   await textarea.fill('last-line note');
   // Submit the local note via Cmd+Shift+Enter — the compose popover's buttons can render below
   // the fold for a last-line selection, so don't depend on it being on-screen.
@@ -61,24 +61,23 @@ test('a last-line comment stays reachable without extending document scroll', as
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(page.locator('.editor-bottom-spacer')).toHaveCount(0);
 
-  const panelList = page.locator('.comment-panel-list');
-  const card = page.locator('.comment-card');
+  const panelList = page.locator('[data-comment-list]');
+  const card = page.locator('[data-comment-card]');
   await expect(card).toBeVisible();
-  await expect(page.locator('.annotation-gutter-count-below')).toHaveAttribute(
-    'aria-label',
-    '1 annotations below the viewport',
-  );
-  await page.locator('.annotation-gutter-count-below').click();
+  await expect(
+    page.getByRole('button', { name: /annotations below the viewport/ }),
+  ).toHaveAttribute('aria-label', '1 annotations below the viewport');
+  await page.getByRole('button', { name: /annotations below the viewport/ }).click();
   await expect.poll(() => scrollArea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await expect(card).toHaveClass(/comment-card-active/);
+  await expect(card).toHaveAttribute('data-active');
 
   // Its card is contained by the panel's own viewport, independent of the
   // document's scroll geometry.
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const area = document.querySelector('.comment-panel-list') as HTMLElement;
-        const el = document.querySelector('.comment-card') as HTMLElement;
+        const area = document.querySelector('[data-comment-list]') as HTMLElement;
+        const el = document.querySelector('[data-comment-card]') as HTMLElement;
         const a = area.getBoundingClientRect();
         const c = el.getBoundingClientRect();
         return c.top >= a.top && c.bottom <= a.bottom;

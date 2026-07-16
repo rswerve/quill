@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readAppStyles } from '../utils/readAppStyles';
 
 // Guard tests that read App.css directly. They lock in two deliberate end-states
 // that a later refactor could silently revert:
@@ -10,7 +9,7 @@ import { join } from 'node:path';
 // Read via fs (not Vite's `?raw`, which returns empty for `.css` under vitest —
 // the CSS plugin intercepts the extension first). Paths resolve from the repo
 // root (vitest runs with cwd = repo root).
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
 
 /**
  * Concatenate the bodies of every CSS rule that paints the page surface itself —
@@ -86,7 +85,7 @@ describe('document zoom reflows text without scaling the page box', () => {
   it('uses inherited font sizing and never CSS zoom on the page wrapper', () => {
     expect(css).toMatch(/\.editor-page-zoom-wrapper\s*{[^}]*font-size:\s*100%/s);
     expect(css).not.toMatch(/(^|[;{\s])zoom\s*:/m);
-    expect(ruleBody(css, '.ProseMirror')).toMatch(/font-size:\s*var\(--text-body\)/);
+    expect(ruleBody(css, '.ProseMirror')).toMatch(/font-size:\s*var\(--text-doc-body\)/);
   });
 
   it('resets the inherited screen scale for print', () => {

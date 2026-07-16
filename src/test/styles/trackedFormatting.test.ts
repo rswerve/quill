@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readAppStyles } from '../utils/readAppStyles';
 
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
 
 describe('tracked formatting styles', () => {
   it('uses a restrained tint rather than text decoration for the pending indicator', () => {

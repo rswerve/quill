@@ -90,11 +90,12 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
 
   const documentFont = await editor.evaluate((element) => getComputedStyle(element).fontFamily);
   const chromeFont = await page
-    .locator('.topbar .seg')
+    .getByRole('group', { name: 'Editing mode' })
+    .getByRole('button')
     .first()
     .evaluate((element) => getComputedStyle(element).fontFamily);
   const statusFont = await page
-    .locator('.footer')
+    .getByRole('contentinfo', { name: 'Document status' })
     .evaluate((element) => getComputedStyle(element).fontFamily);
   expect(documentFont).toContain('Source Serif 4 Variable');
   expect(chromeFont).toContain('Instrument Sans Variable');
@@ -107,10 +108,16 @@ test('places the link at the end of the formatting rail and Editing in the topba
 }) => {
   await setup(page);
 
-  const link = page.locator('.rail .link-button-wrap');
-  const toggle = page.locator('.topbar .mode-switch');
-  await expect(link).toBeVisible();
-  await expect(link.locator('xpath=following-sibling::*[1]')).toHaveClass(/rail-spacer/);
+  const rail = page.getByRole('navigation', { name: 'Formatting' });
+  const toggle = page.getByRole('group', { name: 'Editing mode' });
+  // The link ends the formatting controls: within the rail, the link button is
+  // visible and only the theme toggle sits after it (a role/structure check —
+  // no dependence on the global wrapper class or the hashed spacer).
+  const railButtons = rail.getByRole('button');
+  const buttonCount = await railButtons.count();
+  await expect(railButtons.nth(buttonCount - 2)).toHaveAccessibleName('Link (Cmd+K)');
+  await expect(railButtons.nth(buttonCount - 2)).toBeVisible();
+  await expect(railButtons.nth(buttonCount - 1)).toHaveAccessibleName('Toggle theme');
   await expect(toggle).toBeVisible();
   await expect(toggle.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
@@ -125,8 +132,10 @@ test('places the link at the end of the formatting rail and Editing in the topba
 
 test('persists zoom across reloads and restores the document scale', async ({ page }) => {
   const { editor } = await setup(page);
-  await page.locator('.footer-zoom-slider').fill('1.8');
-  await expect(page.locator('.footer-zoom-label')).toHaveText('180%');
+  await page.getByRole('slider', { name: 'Zoom' }).fill('1.8');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('180%');
   await expect(page.locator('[data-editor-zoom]')).toHaveAttribute('data-editor-zoom', '1.8');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('quill-zoom'))).toBe('1.8');
 
@@ -137,7 +146,9 @@ test('persists zoom across reloads and restores the document scale', async ({ pa
 
   await page.reload();
   await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
-  await expect(page.locator('.footer-zoom-label')).toHaveText('180%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('180%');
   await expect(page.locator('[data-editor-zoom]')).toHaveAttribute('data-editor-zoom', '1.8');
   const restoredSize = await page
     .locator('.ProseMirror')

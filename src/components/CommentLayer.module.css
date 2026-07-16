@@ -1,0 +1,90 @@
+/* CommentLayer — module-scoped styles (hashed, private to the component). The
+   review-panel body: the comments/suggestions view, the scrolling panel list,
+   and the empty state. Design tokens resolve from src/styles/tokens.css.
+
+   Stays GLOBAL (not here): the `.comment-layer` aside is DocumentTab's shell
+   container (panel geometry + an e2e/print scoping
+   marker); `.panel-view` is shared with ChatPanel; `.annotation-card-flash` is
+   applied by classList to card children. The `.comments` context that once
+   styled the cards is fully flattened away (each card owns its rules now).
+
+   The empty-state is always inside the panel list, so `.empty` is the flattened
+   union of the base absolute rule and its `.comment-panel-list` static override
+   (static/full-width wins; the absolute top/left/right become inert and drop). */
+
+.view {
+  display: flex;
+  flex-direction: column;
+}
+
+.list {
+  min-height: 0;
+  flex: 1;
+  padding: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  outline: none;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+.list:hover,
+.list[data-scrolling='true'] {
+  scrollbar-color: var(--panel-scrollbar-thumb) transparent;
+}
+.list::-webkit-scrollbar {
+  width: 4px;
+}
+.list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.16s ease;
+}
+.list:hover::-webkit-scrollbar-thumb,
+.list[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background: var(--panel-scrollbar-thumb);
+}
+
+.empty {
+  position: static;
+  width: 100%;
+  margin: auto 0;
+  z-index: 3;
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--text-muted);
+  text-align: center;
+  pointer-events: none;
+}
+.emptyQuote {
+  height: 35px;
+  color: var(--dot);
+  font-family: var(--font-doc-heading);
+  font-size: var(--text-doc-title);
+  line-height: 1;
+}
+.empty strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.empty p {
+  margin-top: 5px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.empty b {
+  color: var(--text-dim);
+}
+.empty code {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}

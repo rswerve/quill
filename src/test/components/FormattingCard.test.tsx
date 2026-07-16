@@ -53,7 +53,6 @@ describe('FormattingCard', () => {
         isActive={false}
         originComment={originComment}
         originActive={false}
-        top={20}
         onAccept={vi.fn()}
         onReject={vi.fn()}
         onClick={vi.fn()}
@@ -86,7 +85,6 @@ describe('FormattingCard', () => {
         isActive
         originComment={originComment}
         originActive
-        top={20}
         onAccept={onAccept}
         onReject={onReject}
         onClick={onClick}
@@ -95,7 +93,8 @@ describe('FormattingCard', () => {
     );
 
     const card = container.querySelector('[data-card-id="fmt1"]');
-    expect(card).toHaveClass('suggestion-card-format', 'suggestion-card-active');
+    expect(card).toHaveAttribute('data-suggestion-kind', 'format');
+    expect(card).toHaveAttribute('data-active');
     fireEvent.click(card!);
     fireEvent.click(screen.getByTitle('Accept formatting'));
     fireEvent.click(screen.getByTitle('Reject formatting'));

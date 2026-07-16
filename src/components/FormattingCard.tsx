@@ -1,6 +1,8 @@
 import type { Comment, FormatSegment, TrackedChangeInfo, TrackedFormatSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
+import { cx } from '../utils/cx';
+import styles from './SuggestionCard.module.css';
 
 interface FormattingCardProps {
   change: TrackedChangeInfo;
@@ -9,7 +11,6 @@ interface FormattingCardProps {
   originComment: Comment | null;
   originChatMessageId?: string;
   originActive: boolean;
-  top: number;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onClick: (id: string) => void;
@@ -50,7 +51,6 @@ export default function FormattingCard({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   onAccept,
   onReject,
   onClick,
@@ -71,7 +71,6 @@ export default function FormattingCard({
       originComment={originComment}
       originChatMessageId={originChatMessageId}
       originActive={originActive}
-      top={top}
       acceptTitle="Accept formatting"
       rejectTitle="Reject formatting"
       onAccept={() => onAccept(change.id)}
@@ -80,9 +79,9 @@ export default function FormattingCard({
       onActivateComment={onActivateComment}
       onActivateChatMessage={onActivateChatMessage}
     >
-      <div className="suggestion-preview suggestion-format-preview">
-        <div className="formatting-change-description">{description}</div>
-        {preview && <div className="suggestion-format-quote">“{preview}”</div>}
+      <div className={cx(styles.preview, styles.formatPreview)}>
+        <div className={styles.changeDescription}>{description}</div>
+        {preview && <div className={styles.formatQuote}>“{preview}”</div>}
       </div>
     </SuggestionCardShell>
   );

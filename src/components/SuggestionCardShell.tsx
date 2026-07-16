@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import type { Comment } from '../types';
 import { clip, timeAgo } from '../utils/format';
+import { cx } from '../utils/cx';
+import styles from './SuggestionCard.module.css';
 
 export type SuggestionCardKind = 'insert' | 'delete' | 'replace' | 'format';
 
@@ -14,7 +16,6 @@ interface SuggestionCardShellProps {
   originComment: Comment | null;
   originChatMessageId?: string;
   originActive: boolean;
-  top: number;
   acceptTitle: string;
   rejectTitle: string;
   onAccept: () => void;
@@ -35,7 +36,6 @@ export default function SuggestionCardShell({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   acceptTitle,
   rejectTitle,
   onAccept,
@@ -49,22 +49,29 @@ export default function SuggestionCardShell({
 
   return (
     <article
-      className={`suggestion-card suggestion-card-${kind}${isActive ? ' suggestion-card-active' : ''}${originActive ? ' card-origin-active' : ''}`}
-      style={{ top }}
+      className={cx(
+        styles.card,
+        styles[kind],
+        isActive && styles.active,
+        originActive && styles.originActive,
+      )}
       data-card-id={cardId}
+      data-suggestion-kind={kind}
+      data-active={isActive || undefined}
+      data-origin-active={originActive || undefined}
       onClick={onClick}
     >
-      <div className="suggestion-head">
-        <span className={`suggestion-type-badge ${kind}`}>{label}</span>
-        <span className="comment-author">{isClaude ? 'Claude' : authorID}</span>
-        {isClaude && <span className="ai-badge suggestion-ai-badge">AI</span>}
-        <span className="suggestion-head-spacer" />
-        <time className="comment-time">{timeAgo(createdAt)}</time>
+      <div className={styles.head}>
+        <span className={cx(styles.typeBadge, styles[kind])}>{label}</span>
+        <span className={styles.author}>{isClaude ? 'Claude' : authorID}</span>
+        {isClaude && <span className="ai-badge">AI</span>}
+        <span className={styles.headSpacer} />
+        <time className={styles.time}>{timeAgo(createdAt)}</time>
       </div>
 
       {originComment && (
         <button
-          className="suggestion-origin-chip"
+          className={styles.originChip}
           title={clip(originComment.anchorText, 80)}
           onClick={(event) => {
             event.stopPropagation();
@@ -76,7 +83,7 @@ export default function SuggestionCardShell({
       )}
       {!originComment && originChatMessageId && (
         <button
-          className="suggestion-origin-chip"
+          className={styles.originChip}
           onClick={(event) => {
             event.stopPropagation();
             onActivateChatMessage?.(originChatMessageId);
@@ -88,9 +95,9 @@ export default function SuggestionCardShell({
 
       {children}
 
-      <footer className="suggestion-actions">
+      <footer className={styles.actions}>
         <button
-          className="suggestion-accept-btn"
+          className={styles.acceptBtn}
           title={acceptTitle}
           onClick={(event) => {
             event.stopPropagation();
@@ -101,7 +108,7 @@ export default function SuggestionCardShell({
           <span>Accept</span>
         </button>
         <button
-          className="suggestion-reject-btn"
+          className={styles.rejectBtn}
           title={rejectTitle}
           onClick={(event) => {
             event.stopPropagation();

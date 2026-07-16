@@ -25,7 +25,7 @@ async function pastePlainText(editor: Locator, text: string) {
 }
 
 const linkButton = (page: Page) => page.locator('[title="Link (Cmd+K)"]');
-const linkEditor = (page: Page) => page.locator('.link-editor-card');
+const linkEditor = (page: Page) => page.getByRole('dialog', { name: /Create link|Edit link/ });
 const textInput = (page: Page) => linkEditor(page).getByLabel('Text');
 const urlInput = (page: Page) => linkEditor(page).getByLabel('URL');
 
@@ -68,7 +68,8 @@ test.describe('Link editor', () => {
     await expect(textInput(page)).toHaveValue('home page');
     await expect(urlInput(page)).toHaveValue('https://old.example.com');
     await expect(link).toHaveClass(/link-editor-anchor-active/);
-    await expect(page.locator('.link-editor-card, .formatting-inspector')).toHaveCount(1);
+    // Exactly one dialog is open, and the assertion above pins it as LinkEditor.
+    await expect(page.getByRole('dialog')).toHaveCount(1);
     await expect(page.getByLabel('URL')).toHaveCount(1);
     await expect(page.locator('.link-popover')).toHaveCount(0);
   });
@@ -146,7 +147,7 @@ test.describe('Link editor', () => {
 
     await editor.locator('a').click();
     await urlInput(page).fill('https://also-discard.example.com');
-    await page.locator('.comments-head').click();
+    await page.locator('header:has([aria-label="Review panel"])').click();
     await expect(linkEditor(page)).toHaveCount(0);
     await expect(editor.locator('a[href="https://example.com"]')).toHaveText('unchanged link');
   });
@@ -185,7 +186,7 @@ test.describe('Link editor', () => {
     await addLink(page, 'https://example.com');
 
     for (const theme of ['paper', 'gruvbox'] as const) {
-      if (theme === 'gruvbox') await page.locator('.rail .theme-toggle').click();
+      if (theme === 'gruvbox') await page.getByRole('button', { name: 'Toggle theme' }).click();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       await editor.locator('a').click();
       const colors = await linkEditor(page).evaluate((card) => {
@@ -230,7 +231,7 @@ test.describe('Link editor', () => {
     await expect(editor.locator('a[href="https://old.example.com"] del.track-delete')).toHaveText(
       'style guide',
     );
-    await expect(page.locator('.suggestion-card-replace')).toHaveCount(1);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
   });
 });
 
@@ -293,7 +294,7 @@ test.describe('Markdown link shortcuts', () => {
       await expect(editor.locator('a[href="https://www.thenalink.com"]')).toHaveText('text and');
       await expect(editor.locator('del.track-delete')).toHaveCount(0);
       await expect(editor.locator('ins.track-insert')).toHaveText('text and');
-      await expect(page.locator('.suggestion-card-insert')).toHaveCount(1);
+      await expect(page.locator('[data-suggestion-kind="insert"]')).toHaveCount(1);
     });
   }
 

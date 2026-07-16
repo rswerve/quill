@@ -278,7 +278,13 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
     expect(spies.appendAIReplyChunk).toHaveBeenCalledWith(
       'c1',
       'r0',
-      expect.stringContaining('“missing phrase” — text wasn’t found.'),
+      expect.stringContaining('“missing phrase” — this text isn’t in the document.'),
+    );
+    // Singular heading — accurate for the one skipped edit.
+    expect(spies.appendAIReplyChunk).toHaveBeenCalledWith(
+      'c1',
+      'r0',
+      expect.stringContaining('1 change wasn’t applied:'),
     );
   });
 });

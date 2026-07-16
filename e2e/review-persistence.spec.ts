@@ -17,14 +17,18 @@ function sidecar(overrides: Record<string, unknown> = {}) {
 
 async function saveNewAndReopen(page: import('@playwright/test').Page) {
   await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
   const files = await page.evaluate(
     () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
   );
   const reopened = await page.context().newPage();
   await setupMemoryTauri(reopened, { files, openPath: DOC_PATH });
   await openMemoryFile(reopened);
-  await expect(reopened.locator('.crumbs .cur')).toContainText('review-persistence.md');
+  await expect(reopened.locator('[aria-label="Document location"]')).toContainText(
+    'review-persistence.md',
+  );
   return reopened;
 }
 
@@ -124,10 +128,10 @@ async function openWithCommentedClaudeReplacement(
     },
   });
   await openMemoryFile(page);
-  await page.locator('.comment-reply-trigger').click();
-  await page.locator('.comment-reply-input').fill('Make the edit');
-  await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
-  await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+  await page.getByRole('button', { name: /Reply to Claude/ }).click();
+  await page.getByPlaceholder('Reply to Claude…').fill('Make the edit');
+  await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
+  await expect(page.locator('[data-suggestion-kind="replace"]')).toBeVisible({ timeout: 3000 });
 }
 
 test.describe('review metadata survives save and reopen', () => {
@@ -136,12 +140,14 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'old'.length);
     await page.keyboard.type('new');
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
 
     const files = await page.evaluate(() => window.__quillFiles);
     expect(files[DOC_PATH]).toBeDefined();
@@ -154,7 +160,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('base');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await page.keyboard.type(' added');
 
@@ -162,7 +168,7 @@ test.describe('review metadata survives save and reopen', () => {
     const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText(' added');
-    await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind]')).toHaveCount(1);
   });
 
   test('pending deletion remains pending after save and reopen', async ({ page }) => {
@@ -170,7 +176,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('keep remove');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'remove'.length);
     await page.keyboard.press('Backspace');
@@ -179,7 +185,7 @@ test.describe('review metadata survives save and reopen', () => {
     const reopenedEditor = activeEditor(reopened);
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('remove');
-    await expect(reopened.locator('.suggestion-card')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind]')).toHaveCount(1);
   });
 
   test('pending replacement remains paired after save and reopen', async ({ page }) => {
@@ -187,7 +193,7 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('old');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'old'.length);
     await page.keyboard.type('new');
@@ -197,7 +203,7 @@ test.describe('review metadata survives save and reopen', () => {
 
     await expect(reopenedEditor.locator('del.track-delete')).toHaveText('old');
     await expect(reopenedEditor.locator('ins.track-insert')).toHaveText('new');
-    await expect(reopened.locator('.suggestion-card-replace')).toHaveCount(1);
+    await expect(reopened.locator('[data-suggestion-kind="replace"]')).toHaveCount(1);
   });
 
   test('re-stamps a loaded unresolved comment over its stored anchor', async ({ page }) => {
@@ -234,22 +240,25 @@ test.describe('review metadata survives save and reopen', () => {
     const editor = activeEditor(page);
     await editor.click();
     await page.keyboard.type('plain text');
-    await page.locator('.mode-switch').click();
+    await page.getByRole('group', { name: 'Editing mode' }).click();
     await editor.click();
     await selectLastCharacters(page, 'text'.length);
     await page.keyboard.press('ControlOrMeta+b');
 
     await expect(editor.locator('span.track-format')).toHaveText('text');
-    await expect(page.locator('.suggestion-card-format')).toContainText('bold added');
+    await expect(page.locator('[data-suggestion-kind="format"]')).toContainText('bold added');
 
     const reopened = await saveNewAndReopen(page);
     const reopenedEditor = activeEditor(reopened);
     await expect(reopenedEditor.locator('span.track-format')).toHaveText('text');
     await expect(reopenedEditor.locator('strong')).toHaveText('text');
-    await expect(reopened.locator('.suggestion-card-format')).toContainText('bold added');
+    await expect(reopened.locator('[data-suggestion-kind="format"]')).toContainText('bold added');
 
-    await reopened.locator('.suggestion-card-format .suggestion-reject-btn').click();
-    await expect(reopened.locator('.suggestion-card-format')).toHaveCount(0);
+    await reopened
+      .locator('[data-suggestion-kind="format"]')
+      .getByRole('button', { name: 'Reject', exact: true })
+      .click();
+    await expect(reopened.locator('[data-suggestion-kind="format"]')).toHaveCount(0);
     await expect(reopenedEditor.locator('strong')).toHaveCount(0);
     await expect(reopenedEditor).toContainText('plain text');
   });
@@ -280,13 +289,13 @@ test.describe('review metadata survives save and reopen', () => {
     });
     await openMemoryFile(page);
 
-    const card = page.locator('.suggestion-card-format');
+    const card = page.locator('[data-suggestion-kind="format"]');
     await expect(card).toContainText('bold added · italic removed');
     await card.click();
     await expect(page.locator('.annotation-focus')).toHaveCount(2);
     expect(await page.locator('.annotation-focus').allTextContents()).toEqual(['one', 'two']);
 
-    await card.locator('.suggestion-reject-btn').click();
+    await card.getByRole('button', { name: 'Reject', exact: true }).click();
     const editor = activeEditor(page);
     await expect(editor.locator('strong')).toHaveCount(0);
     await expect(editor.locator('em')).toHaveText('two');
@@ -300,9 +309,9 @@ test.describe('live comment reconciliation', () => {
     await placeCaretAtDocumentStart(page);
     await page.keyboard.type('XYZ');
 
-    await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('Inspect this');
-    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
+    await page.getByRole('button', { name: /Reply to Claude/ }).click();
+    await page.getByPlaceholder('Reply to Claude…').fill('Inspect this');
+    await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
     await expect.poll(() => page.evaluate(() => Boolean(window.__quillLastSpawnArgs))).toBe(true);
 
     const prompt = await page.evaluate(
@@ -321,8 +330,8 @@ test.describe('live comment reconciliation', () => {
     await page.keyboard.press('Backspace');
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
-    await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
+    await expect(page.locator('[data-comment-card]')).toHaveCount(0);
+    await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 0' })).toBeVisible();
   });
 
   test('deleting part of an anchor keeps the comment on the surviving text', async ({ page }) => {
@@ -331,9 +340,9 @@ test.describe('live comment reconciliation', () => {
     await page.keyboard.press('Backspace');
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hel');
-    await expect(page.locator('.comment-card')).toHaveCount(1);
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hel"');
-    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('1');
+    await expect(page.locator('[data-comment-card]')).toHaveCount(1);
+    await expect(page.locator('[data-anchor-text]')).toHaveText('"hel"');
+    await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 1' })).toBeVisible();
   });
 
   test('a fully deleted anchor is not persisted or restored on reopen', async ({ page }) => {
@@ -341,7 +350,9 @@ test.describe('live comment reconciliation', () => {
     await selectCommentSlice(page, 0, 'hello'.length);
     await page.keyboard.press('Backspace');
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
 
     const files = await page.evaluate(() => window.__quillFiles);
     expect(files[SIDECAR_PATH]).toBeUndefined();
@@ -349,7 +360,7 @@ test.describe('live comment reconciliation', () => {
     const reopened = await page.context().newPage();
     await setupMemoryTauri(reopened, { files, openPath: DOC_PATH });
     await openMemoryFile(reopened);
-    await expect(reopened.locator('.comment-card')).toHaveCount(0);
+    await expect(reopened.locator('[data-comment-card]')).toHaveCount(0);
     await expect(reopened.locator('mark[data-comment-id]')).toHaveCount(0);
   });
 
@@ -359,24 +370,28 @@ test.describe('live comment reconciliation', () => {
     await page.keyboard.type('X');
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await expect(page.locator('.comment-card-resolved')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+    await expect(
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
+    ).toBeEnabled();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await expect(page.locator('[data-card-resolved]')).toBeVisible();
+    await expect(page.locator('[data-anchor-text]')).toHaveText('"hello"');
   });
 
   test('resolving a live comment does not let mark removal delete its record', async ({ page }) => {
     await openLiveComment(page);
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
 
-    await page.locator('.comment-resolve-btn').click();
+    await page.getByTitle(/^(un)?resolve$/i).click();
 
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
-    await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await expect(page.locator('.comment-card-resolved')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText('"hello"');
+    await expect(page.locator('[data-comment-card]')).toHaveCount(0);
+    await expect(
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
+    ).toBeEnabled();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await expect(page.locator('[data-card-resolved]')).toBeVisible();
+    await expect(page.locator('[data-anchor-text]')).toHaveText('"hello"');
   });
 });
 
@@ -385,12 +400,14 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     page: import('@playwright/test').Page,
     anchorText = '"hello"',
   ) {
-    await expect(page.locator('.comment-card')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
-    await expect(activeTabHost(page).locator('.comments-head .filter')).toBeEnabled();
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await expect(page.locator('.comment-card-resolved')).toBeVisible();
-    await expect(page.locator('.comment-anchor-text')).toHaveText(anchorText);
+    await expect(page.locator('[data-comment-card]')).toHaveCount(0);
+    await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 0' })).toBeVisible();
+    await expect(
+      activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }),
+    ).toBeEnabled();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await expect(page.locator('[data-card-resolved]')).toBeVisible();
+    await expect(page.locator('[data-anchor-text]')).toHaveText(anchorText);
   }
 
   async function openWithCommentedInsertion(page: import('@playwright/test').Page) {
@@ -425,10 +442,13 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'hello', 'goodbye');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('goodbye world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -440,7 +460,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Accept all suggestions"]').click();
 
     await expect(activeEditor(page)).toContainText('goodbye world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -449,7 +469,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'ell', 'ipp');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hippo world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
@@ -461,7 +484,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');
 
-    await page.locator('.suggestion-card-replace .suggestion-accept-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Accept', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hello planet');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveCount(0);
@@ -495,7 +521,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     });
     await openMemoryFile(page);
 
-    await page.locator('.suggestion-accept-btn').click();
+    await page.getByRole('button', { name: 'Accept', exact: true }).click();
 
     await expect(activeEditor(page)).toContainText('world');
     await expectOnlyResolvedComment(page);
@@ -506,12 +532,15 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedClaudeReplacement(page, 'world', 'planet');
 
-    await page.locator('.suggestion-card-replace .suggestion-reject-btn').click();
+    await page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: 'Reject', exact: true })
+      .click();
 
     await expect(activeEditor(page)).toContainText('hello world');
     await expect(page.locator('mark[data-comment-id="live-comment"]')).toHaveText('hello');
-    await expect(page.locator('.comment-card:not(.comment-card-resolved)')).toBeVisible();
-    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('1');
+    await expect(page.locator('[data-comment-card]:not([data-card-resolved])')).toBeVisible();
+    await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 1' })).toBeVisible();
   });
 
   test('rejecting an insertion that contains the whole anchor auto-resolves the comment', async ({
@@ -519,10 +548,10 @@ test.describe('comment lifecycle when suggestions resolve', () => {
   }) => {
     await openWithCommentedInsertion(page);
 
-    await page.locator('.suggestion-reject-btn').click();
+    await page.getByRole('button', { name: 'Reject', exact: true }).click();
 
     await expect(activeEditor(page)).toContainText('world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -532,7 +561,7 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Reject all suggestions"]').click();
 
     await expect(activeEditor(page)).toContainText('world');
-    await expect(page.locator('.suggestion-card')).toHaveCount(0);
+    await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
     await expectOnlyResolvedComment(page);
   });
 
@@ -586,9 +615,9 @@ test.describe('comment lifecycle when suggestions resolve', () => {
     await page.locator('[title="Accept all suggestions"]').click();
 
     await expect(page.locator('mark[data-comment-id]')).toHaveCount(0);
-    await expect(activeTabHost(page).locator('.comments-head .panel-tab-count')).toHaveText('0');
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await expect(page.locator('.comment-card-resolved')).toHaveCount(2);
+    await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 0' })).toBeVisible();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await expect(page.locator('[data-card-resolved]')).toHaveCount(2);
   });
 });
 
@@ -633,10 +662,10 @@ test.describe('suggestion cards link back to their origin comment', () => {
       },
     });
     await openMemoryFile(page);
-    await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('Replace the noun');
-    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
-    await expect(page.locator('.suggestion-card-replace')).toBeVisible({ timeout: 3000 });
+    await page.getByRole('button', { name: /Reply to Claude/ }).click();
+    await page.getByPlaceholder('Reply to Claude…').fill('Replace the noun');
+    await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toBeVisible({ timeout: 3000 });
   }
 
   test('a mocked Claude edit stamps the origin and the card chips back to the comment', async ({
@@ -644,7 +673,9 @@ test.describe('suggestion cards link back to their origin comment', () => {
   }) => {
     await openWithClaudeEdit(page);
 
-    const chip = page.locator('.suggestion-card-replace .suggestion-origin-chip');
+    const chip = page
+      .locator('[data-suggestion-kind="replace"]')
+      .getByRole('button', { name: /↳ from/ });
     await expect(chip).toBeVisible();
     await expect(chip).toHaveText('↳ from comment');
     // The chip's tooltip carries the origin comment's anchor text.
@@ -652,19 +683,29 @@ test.describe('suggestion cards link back to their origin comment', () => {
 
     // Posting the reply leaves the comment active. A provenance chip is a
     // directed jump, so clicking it must not toggle its target back off.
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
     await chip.click();
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
 
     // From a different active annotation, the chip activates the origin.
-    await page.locator('.suggestion-card-replace').click();
-    await expect(page.locator('.suggestion-card-replace')).not.toHaveClass(/card-origin-active/);
+    await page.locator('[data-suggestion-kind="replace"]').click();
+    await expect(page.locator('[data-suggestion-kind="replace"]')).not.toHaveAttribute(
+      'data-origin-active',
+    );
     await chip.click();
-    await expect(page.locator('.suggestion-card-replace')).toHaveClass(/card-origin-active/);
+    await expect(page.locator('[data-suggestion-kind="replace"]')).toHaveAttribute(
+      'data-origin-active',
+    );
 
     // Saving persists the provenance into the sidecar.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
     const suggestions = await page.evaluate(
       (path) => JSON.parse(window.__quillFiles[path]).suggestions,
       SIDECAR_PATH,
@@ -679,15 +720,17 @@ test.describe('suggestion cards link back to their origin comment', () => {
     await openWithClaudeEdit(page);
 
     const reopened = await saveNewAndReopen(page);
-    const card = reopened.locator('.suggestion-card-replace');
+    const card = reopened.locator('[data-suggestion-kind="replace"]');
     await expect(card).toBeVisible();
-    await expect(card.locator('.suggestion-origin-chip')).toHaveText('↳ from comment');
+    await expect(card.getByRole('button', { name: /↳ from/ })).toHaveText('↳ from comment');
   });
 
   test('the chip degrades away when the origin comment no longer exists', async ({ page }) => {
     await openWithClaudeEdit(page);
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
     const files = await page.evaluate(
       () => (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles,
     );
@@ -703,28 +746,28 @@ test.describe('suggestion cards link back to their origin comment', () => {
     });
     await openMemoryFile(reopened);
 
-    await expect(reopened.locator('.suggestion-card-replace')).toBeVisible();
-    await expect(reopened.locator('.suggestion-origin-chip')).toHaveCount(0);
-    await expect(reopened.locator('.card-origin-active')).toHaveCount(0);
+    await expect(reopened.locator('[data-suggestion-kind="replace"]')).toBeVisible();
+    await expect(reopened.getByRole('button', { name: /↳ from/ })).toHaveCount(0);
+    await expect(reopened.locator('[data-origin-active]')).toHaveCount(0);
   });
 
   test('the chip reveals and activates a resolved origin comment', async ({ page }) => {
     await openWithClaudeEdit(page);
-    await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.comment-card')).toHaveCount(0);
+    await page.getByTitle(/^(un)?resolve$/i).click();
+    await expect(page.locator('[data-comment-card]')).toHaveCount(0);
 
-    const card = page.locator('.suggestion-card-replace');
-    const chip = card.locator('.suggestion-origin-chip');
+    const card = page.locator('[data-suggestion-kind="replace"]');
+    const chip = card.getByRole('button', { name: /↳ from/ });
     await expect(chip).toBeVisible();
     await chip.click();
 
-    await expect(page.locator('.comment-history-list')).toBeVisible();
+    await expect(page.locator('[data-resolved-list]')).toBeVisible();
     await expect(
-      page.locator('.comment-card.comment-card-resolved.comment-card-active'),
+      page.locator('[data-comment-card][data-card-resolved][data-active]'),
     ).toBeVisible();
     await expect(card).toHaveCount(0);
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await expect(card).toHaveClass(/card-origin-active/);
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await expect(card).toHaveAttribute('data-origin-active');
   });
 });
 
@@ -770,7 +813,9 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     // Current Tiptap setContent incorrectly marks an open dirty. Saving here
     // isolates each review-only mutation so that bug cannot mask another one.
     await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
   }
 
   test('opening a clean file does not mark it dirty', async ({ page }) => {
@@ -779,44 +824,56 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
       files: { [DOC_PATH]: 'clean content', [SIDECAR_PATH]: sidecar() },
     });
     await openMemoryFile(page);
-    await expect(page.locator('.dirty-dot')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toHaveCount(0);
   });
 
   test('promoting a note marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
     await page.getByRole('button', { name: 'Ask Claude about this' }).click();
-    await expect(page.locator('.comment-card-claude')).toBeVisible();
-    await expect(page.locator('.comment-card-note')).toHaveCount(0);
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await expect(page.locator('[data-comment-card="claude"]')).toBeVisible();
+    await expect(page.locator('[data-comment-card="note"]')).toHaveCount(0);
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('finishing an AI reply marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, false, true);
-    await page.locator('.comment-reply-trigger').click();
-    await page.locator('.comment-reply-input').fill('Answer this');
-    await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
-    await expect(page.locator('.comment-reply-ai')).toContainText('Persist this answer.');
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await page.getByRole('button', { name: /Reply to Claude/ }).click();
+    await page.getByPlaceholder('Reply to Claude…').fill('Answer this');
+    await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
+    await expect(page.locator('[data-reply-role="ai"]')).toContainText('Persist this answer.');
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('resolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page);
-    await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await page.getByTitle(/^(un)?resolve$/i).click();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('unresolving a comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await page.locator('.comment-resolve-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await page.getByTitle(/^(un)?resolve$/i).click();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 
   test('deleting a resolved comment marks the document dirty', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, true);
-    await activeTabHost(page).locator('.comments-head .filter').click();
-    await page.locator('.comment-delete-btn').click();
-    await expect(page.locator('.dirty-dot')).toBeVisible();
+    await activeTabHost(page).getByRole('button', { name: 'Show resolved comments' }).click();
+    await page.getByTitle('Delete comment').click();
+    await expect(
+      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+    ).toBeVisible();
   });
 });
 
@@ -877,6 +934,8 @@ test.describe('desktop fallback regressions', () => {
     await page.keyboard.press('Enter');
     await page.keyboard.type('three');
 
-    await expect(page.locator('.footer')).toContainText('LN 3:6');
+    await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+      'LN 3:6',
+    );
   });
 });

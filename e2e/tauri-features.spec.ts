@@ -198,9 +198,12 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
   await page.keyboard.up('ControlOrMeta');
 
   // Footer should show the bound session id (Footer.tsx renders `aiSession.sessionId.slice(0,8)`).
-  await expect(page.locator('.footer-ai-binding.linked')).toContainText('FIXTURE-', {
-    timeout: 3000,
-  });
+  await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+    'FIXTURE-',
+    {
+      timeout: 3000,
+    },
+  );
   // Title should show dirty bullet because auto-bind marks the file dirty.
   await expectPageTitleToContain(page, '•');
 });
@@ -224,10 +227,12 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
   await page.keyboard.up('ControlOrMeta');
 
   await expect(activeEditor(page)).toContainText('Doc that matches nothing');
-  await expect(page.locator('.crumbs .cur')).toContainText('orphan.md');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('orphan.md');
   // No linked-session chip in the status bar (still showing its link affordance).
-  await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
-  await expect(page.locator('.footer-ai-binding').first()).toContainText('LINK SESSION');
+  await expect(page.getByRole('button', { name: 'Unlink Claude session' })).toHaveCount(0);
+  await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+    'LINK SESSION',
+  );
 });
 
 test('session picker headlines prefer document name, then AI title, then untitled id', async ({
@@ -266,13 +271,12 @@ test('session picker headlines prefer document name, then AI title, then untitle
   };
 
   await setupWithIPC(page, { handler });
-  await page.locator('.footer-ai-binding-label').click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
 
-  await expect(page.locator('.session-row-title')).toHaveText([
-    'Design Brief.md',
-    'Claude fallback title',
-    'untitled-805faa5a',
-  ]);
+  const sessionDialog = page.getByRole('dialog', { name: 'Link Claude Code session' });
+  for (const title of ['Design Brief.md', 'Claude fallback title', 'untitled-805faa5a']) {
+    await expect(sessionDialog.getByRole('button', { name: title })).toBeVisible();
+  }
 });
 
 test('linking a saved document records its session name for the next picker open', async ({
@@ -315,10 +319,10 @@ test('linking a saved document records its session name for the next picker open
   await setupWithIPC(page, { handler });
   await page.keyboard.press('ControlOrMeta+o');
 
-  const picker = page.locator('.session-picker');
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible({ timeout: 3000 });
-  await expect(picker.locator('.session-row-title')).toHaveText('untitled-saved-do');
-  await picker.locator('.session-row').click();
+  await expect(picker.getByRole('button', { name: 'untitled-saved-do' })).toBeVisible();
+  await picker.getByRole('button', { name: 'untitled-saved-do' }).click();
   await picker.getByRole('button', { name: 'Link this session' }).click();
   await expect(picker).toHaveCount(0);
   await page.waitForFunction(
@@ -327,8 +331,12 @@ test('linking a saved document records its session name for the next picker open
       'Meeting Notes.md',
   );
 
-  await page.locator('.footer-ai-binding-label').click();
-  await expect(page.locator('.session-row-title')).toHaveText('Meeting Notes.md');
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Link Claude Code session' })
+      .getByRole('button', { name: 'Meeting Notes.md' }),
+  ).toBeVisible();
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -345,8 +353,8 @@ async function fireAIReplyAndCaptureCompactionCall(
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, 'content to comment on');
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('Evaluate');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('Evaluate');
   await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
   await expect
     .poll(() =>
@@ -466,7 +474,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     timeout: 3000,
   });
   // Footer filename should reflect the opened file.
-  await expect(page.locator('.crumbs .cur')).toContainText('linked.md');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('linked.md');
 });
 
 test('deep-link: opening a doc with no linked session forces the session picker', async ({
@@ -503,13 +511,25 @@ test('deep-link: opening a doc with no linked session forces the session picker'
   // Doc loads…
   await expect(activeEditor(page)).toContainText('no linked session', { timeout: 3000 });
   // …and the picker is surfaced so the user must choose a session.
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
 
   // Picking a session binds it: pick, link, and the picker closes.
-  await page.locator('.session-row').first().click();
-  await expect(page.locator('.session-picker .btn-primary')).toBeEnabled({ timeout: 2000 });
-  await page.locator('.session-picker .btn-primary').click();
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'My session' })
+    .click();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Link Claude Code session' })
+      .getByRole('button', { name: 'Link this session' }),
+  ).toBeEnabled({ timeout: 2000 });
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'Link this session' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -527,9 +547,11 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
 
   // Link: the reference-folder status control becomes linked and retains the
   // full folder path in its tooltip while keeping the compact mono label.
-  await page.locator('.footer-context-binding').click();
-  await expect(page.locator('.footer-context-binding.linked')).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.footer-context-binding-label')).toHaveAttribute(
+  await page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unlink reference folder' })).toBeVisible({
+    timeout: 2000,
+  });
+  await expect(page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true })).toHaveAttribute(
     'title',
     'Reference folder: /refs/research (click to change)',
   );
@@ -558,10 +580,12 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
     .toBe('/refs/research');
 
   // Unlink: chip reverts to the link affordance.
-  await page.locator('.footer-context-binding-unlink').click();
-  await expect(page.locator('.footer-context-binding.linked')).toHaveCount(0);
-  await expect(page.locator('.footer-context-binding')).toContainText('REFERENCE FOLDER');
-  await expect(page.locator('.footer-context-binding-label')).toHaveAttribute(
+  await page.getByRole('button', { name: 'Unlink reference folder' }).click();
+  await expect(page.getByRole('button', { name: 'Unlink reference folder' })).toHaveCount(0);
+  await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
+    'REFERENCE FOLDER',
+  );
+  await expect(page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true })).toHaveAttribute(
     'title',
     'Link a folder of reference documents Claude can read',
   );
@@ -591,8 +615,10 @@ test('context folder: anchored Claude request passes --add-dir and a file manife
     captureKey: '__capturedCalls',
   });
 
-  await page.locator('.footer-context-binding').click();
-  await expect(page.locator('.footer-context-binding.linked')).toBeVisible({ timeout: 2000 });
+  await page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unlink reference folder' })).toBeVisible({
+    timeout: 2000,
+  });
 
   await fireAIReplyAndCaptureCompactionCall(page);
 
@@ -614,5 +640,5 @@ test('deep-link: empty payload is ignored (no crash, no file load)', async ({ pa
   await emitTauriAndWait(page, 'deep-link-open', '');
 
   // Filename stays at Untitled.
-  await expect(page.locator('.crumbs .cur')).toContainText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toContainText('Untitled');
 });

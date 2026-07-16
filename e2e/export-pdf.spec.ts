@@ -21,7 +21,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const badge = page.locator('.mode-switch');
+  const badge = page.getByRole('group', { name: 'Editing mode' });
   await expect(badge.getByRole('button', { name: 'Editing' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -45,23 +45,27 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     await setup(page);
 
     // On screen the rail, topbar, and status bar are visible…
-    await expect(page.locator('.rail')).toBeVisible();
-    await expect(page.locator('.topbar')).toBeVisible();
-    await expect(page.locator('.footer')).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Formatting' })).toBeVisible();
+    await expect(page.getByRole('toolbar', { name: 'Document actions' })).toBeVisible();
+    await expect(page.getByRole('contentinfo', { name: 'Document status' })).toBeVisible();
 
     await page.emulateMedia({ media: 'print' });
 
     // …and gone under print media.
-    expect(await display(page, '.rail')).toBe('none');
-    expect(await display(page, '.topbar')).toBe('none');
-    expect(await display(page, '.footer')).toBe('none');
+    expect(await display(page, 'nav[aria-label="Formatting"]')).toBe('none');
+    expect(await display(page, 'header[aria-label="Document actions"]')).toBe('none');
+    expect(await display(page, 'footer[aria-label="Document status"]')).toBe('none');
     expect(await display(page, '.comment-layer')).toBe('none');
   });
 
   test('screen text zoom does not carry into print', async ({ page }) => {
     await setup(page);
-    await page.locator('.footer-zoom-slider').fill('2.4');
-    await expect(page.locator('.footer-zoom-label')).toHaveText('240%');
+    await page.getByRole('slider', { name: 'Zoom' }).fill('2.4');
+    await expect(
+      page
+        .getByRole('group', { name: 'Document zoom' })
+        .getByRole('status', { name: 'Zoom level' }),
+    ).toHaveText('240%');
     const screenSize = await page
       .locator('.ProseMirror')
       .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
@@ -123,8 +127,8 @@ test.describe('Export to PDF — print stylesheet (clean copy)', () => {
     await page.keyboard.press('a');
     await page.keyboard.up('ControlOrMeta');
     await expectSelectionText(page, 'Commented text');
-    await page.locator('.add-comment-btn').click();
-    await page.locator('.add-comment-compose textarea').fill('a remark');
+    await page.getByRole('button', { name: 'Add comment to selection' }).click();
+    await page.locator('[data-card-id="comment-composer"] textarea').fill('a remark');
     await page.getByRole('button', { name: 'Add note' }).click();
     await expectEditorHtml(editor, { contains: ['comment-mark'] });
 

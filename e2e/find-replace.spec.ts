@@ -19,7 +19,7 @@ async function setup(page: Page): Promise<{ editor: Locator }> {
 }
 
 async function enableSuggesting(page: Page) {
-  const sw = page.locator('.mode-switch');
+  const sw = page.getByRole('group', { name: 'Editing mode' });
   await expect(sw).toContainText('Editing');
   await sw.click();
   await expect(sw).toContainText('Suggesting');

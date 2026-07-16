@@ -22,8 +22,8 @@ async function selectAll(page: Page) {
 }
 
 async function addCommentToSelection(page: Page, body: string) {
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(body);
   await page.getByRole('button', { name: 'Add note' }).click();
 }
 
@@ -41,31 +41,47 @@ test('mounted tabs preserve independent text, undo, zoom, mode, comments, and su
   await page.locator('.tab-add').click();
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(page.locator('.find-bar')).toHaveCount(0);
-  await expect(page.locator('.footer-zoom-label')).toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
   await page.locator('.document-tab').first().click();
   await expect(activeTabHost(page).locator('.find-bar')).toBeVisible();
   await page.getByRole('button', { name: 'Zoom in' }).click();
-  await expect(page.locator('.footer-zoom-label')).toHaveText('112%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('112%');
   await page.locator('.document-tab').nth(1).click();
-  await expect(page.locator('.footer-zoom-label')).toHaveText('100%');
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('100%');
   await page.getByRole('button', { name: 'Suggesting' }).click();
   await activeEditor(page).fill('Second tracked words');
   await expect(activeEditor(page).locator('ins')).toHaveText('Second tracked words');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(1);
-  await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(1);
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toHaveCount(0);
 
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First document words');
-  await expect(activeTabHost(page).locator('.comment-card')).toContainText('First tab comment');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
-  await expect(page.locator('.footer-zoom-label')).toHaveText('112%');
-  await expect(page.getByRole('button', { name: 'Editing' })).toHaveClass(/on/);
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toContainText(
+    'First tab comment',
+  );
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(0);
+  await expect(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+  ).toHaveText('112%');
+  await expect(page.getByRole('button', { name: 'Editing' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   await page.locator('.document-tab').nth(1).click();
   await expect(activeEditor(page)).toContainText('Second tracked words');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(activeEditor(page)).not.toContainText('Second tracked words');
-  await expect(page.getByRole('button', { name: 'Suggesting' })).toHaveClass(/on/);
+  await expect(page.getByRole('button', { name: 'Suggesting' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First document words');
@@ -78,7 +94,7 @@ test('rail formatting always targets the active mounted editor', async ({ page }
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('beta');
   await selectAll(page);
-  await page.locator('.rail-btn.bold').click();
+  await page.getByRole('button', { name: 'Bold (Cmd+B)' }).click();
   await expect(activeEditor(page).locator('strong')).toHaveText('beta');
 
   await page.locator('.document-tab').first().click();
@@ -203,17 +219,17 @@ test('an auto-bound Claude session stays owned by one document and is blocked in
   }, secondPath);
   await expect(activeEditor(page)).toHaveText('Second document');
 
-  const picker = page.locator('.session-picker');
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
   await expect(picker).toBeVisible();
-  await picker.locator('.session-row').click();
+  await picker.getByRole('button', { name: 'Shared authoring session' }).click();
   await expect(picker).toContainText('already linked to first.md');
   await expect(picker.getByRole('button', { name: 'Link this session' })).toBeDisabled();
-  await picker.locator('.session-picker-close').click();
-  await expect(page.locator('.footer-ai-binding.linked')).toHaveCount(0);
+  await picker.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('button', { name: 'Unlink Claude session' })).toHaveCount(0);
   await expect(page.locator('.document-tab.active .document-tab-dirty')).toHaveCount(0);
 
   await page.locator('.document-tab', { hasText: 'first.md' }).click();
-  await expect(page.locator('.footer-ai-binding.linked')).toContainText(
+  await expect(page.getByRole('contentinfo', { name: 'Document status' })).toContainText(
     session.sessionId.slice(0, 8).toUpperCase(),
   );
   await expect(page.locator('.document-tab.active .document-tab-dirty')).toBeVisible();
@@ -237,7 +253,7 @@ for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
     await activeEditor(page).fill('Unsaved source document');
     await page.keyboard.press('ControlOrMeta+Shift+s');
 
-    const modal = page.locator('.app-modal');
+    const modal = page.getByRole('dialog', { name: 'File already open' });
     await expect(modal).toContainText('File already open');
     await expect(page.locator('.document-tab.active')).toContainText('owned.md');
     await expect(activeEditor(page)).toHaveText('Original owned document');
@@ -302,7 +318,7 @@ test('closing the last clean tab leaves one fresh Untitled tab', async ({ page }
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('Untitled');
   await expect(activeEditor(page)).toHaveText('');
-  await expect(page.locator('.crumbs .cur')).toHaveText('Untitled');
+  await expect(page.locator('[aria-label="Document location"]')).toHaveText('Untitled');
 });
 
 test('quitting with multiple dirty tabs presents one combined guard', async ({ page }) => {
@@ -316,7 +332,7 @@ test('quitting with multiple dirty tabs presents one combined guard', async ({ p
       .__quillEmit;
     emit('menu-quit', null);
   });
-  const modal = page.locator('.app-modal');
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
   await expect(modal).toContainText('2 open documents have unsaved changes');
   await expect(modal.getByRole('button', { name: 'Save All' })).toBeVisible();
   await expect(modal.getByRole('button', { name: 'Discard All' })).toBeVisible();
@@ -343,6 +359,58 @@ test('quitting with multiple dirty tabs presents one combined guard', async ({ p
           (call) => call.cmd === 'exit_app',
         ),
       ),
+    )
+    .toBe(true);
+});
+
+test('quit guard Save All: writes every dirty tab to its own path, then exits', async ({
+  page,
+}) => {
+  await setupMemoryTauri(page, {
+    files: { '/tmp/existing.md': '# Existing doc' },
+    openPath: '/tmp/existing.md',
+    savePath: '/tmp/new-tab.md',
+  });
+
+  // Tab 1: the initial Untitled document, made dirty (will save via the dialog).
+  await activeEditor(page).fill('Second dirty tab');
+
+  // Tab 2: open a saved document (its own path), then edit it dirty.
+  await openMemoryFile(page);
+  await expect(page.locator('.document-tab.active')).toContainText('existing', { timeout: 3000 });
+  await activeEditor(page).click();
+  await page.keyboard.type(' edited');
+
+  // Quit → combined guard → Save All.
+  await page.evaluate(() => {
+    (window as unknown as { __quillEmit: (event: string, value: null) => void }).__quillEmit(
+      'menu-quit',
+      null,
+    );
+  });
+  const modal = page.getByRole('dialog', { name: 'Unsaved changes' });
+  await expect(modal).toContainText('2 open documents have unsaved changes');
+  await modal.getByRole('button', { name: 'Save All' }).click();
+
+  // Every dirty tab is written to its own destination, and the app exits only
+  // after the saves — Save All is a persist-then-quit, not a quit-and-lose.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const calls = (
+          window as unknown as {
+            __quillCalls: Array<{ cmd: string; args?: { path?: string } }>;
+          }
+        ).__quillCalls;
+        const writeIndex = (path: string) =>
+          calls.findIndex((call) => call.cmd === 'write_file' && call.args?.path === path);
+        const exitIndex = calls.findIndex((call) => call.cmd === 'exit_app');
+        const newTab = writeIndex('/tmp/new-tab.md');
+        const existing = writeIndex('/tmp/existing.md');
+        // Both saves must PRECEDE the exit: persist, then quit — never the
+        // reverse, which would exit before the writes land (data loss).
+        return newTab >= 0 && existing >= 0 && exitIndex > newTab && exitIndex > existing;
+      }),
     )
     .toBe(true);
 });

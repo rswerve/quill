@@ -96,7 +96,7 @@ test('normal relaunch restores clean tab order and active tab, reloading files f
   await expect(page.locator('.document-tab').nth(1)).toContainText('workspace-second.md');
   await expect(page.locator('.document-tab.active')).toContainText('workspace-first.md');
   await expect(activeEditor(page)).toHaveText('Updated externally before relaunch');
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
 test('an edit made while Save is pending stays dirty and remains in recovery', async ({ page }) => {
@@ -167,8 +167,8 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await setupMemoryTauri(page);
   await activeEditor(page).fill('First dirty document');
   await selectAll(page);
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('Recovered comment');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('Recovered comment');
   await page.getByRole('button', { name: 'Add note' }).click();
 
   await page.locator('.tab-add').click();
@@ -177,18 +177,22 @@ test('one recovery decision atomically restores every dirty tab and its annotati
   await waitForDirtyTabCount(page, 2);
 
   await page.reload();
-  const recovery = page.locator('.app-modal');
+  const recovery = page.getByRole('dialog', { name: 'Recover unsaved workspace?' });
   await expect(recovery).toContainText('Restore 2 unsaved documents');
   await expect(recovery).toHaveCount(1);
   await recovery.getByRole('button', { name: 'Recover' }).click();
 
   await expect(page.locator('.document-tab')).toHaveCount(2);
   await expect(activeEditor(page)).toContainText('Second dirty suggestion');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(1);
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(1);
   await page.locator('.document-tab').first().click();
   await expect(activeEditor(page)).toContainText('First dirty document');
-  await expect(activeTabHost(page).locator('.comment-card')).toContainText('Recovered comment');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toContainText(
+    'Recovered comment',
+  );
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
 });
 
 test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled tabs', async ({
@@ -212,7 +216,10 @@ test('Discard reopens dirty saved tabs from disk and drops only dirty Untitled t
   await waitForDirtyTabCount(page, 2);
 
   await page.reload();
-  await page.locator('.app-modal').getByRole('button', { name: 'Discard' }).click();
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Discard' })
+    .click();
 
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('saved-after-discard.md');
@@ -233,7 +240,7 @@ for (const [label, workspace] of [
   }) => {
     await setupMemoryTauri(page, { workspace });
 
-    const recovery = page.locator('.app-modal');
+    const recovery = page.getByRole('dialog', { name: 'Workspace recovery could not be read' });
     await expect(recovery).toContainText('Workspace recovery could not be read');
     const stateBeforeAcknowledgement = await page.evaluate(() => ({
       raw: sessionStorage.getItem('__quill_test_workspace'),
@@ -268,11 +275,18 @@ test('legacy draft.json payload migrates into a one-tab workspace recovery', asy
   };
   await setupMemoryTauri(page, { workspace: JSON.stringify(legacyDraft) });
 
-  await expect(page.locator('.app-modal')).toContainText('Restore 1 unsaved document');
-  await page.locator('.app-modal').getByRole('button', { name: 'Recover' }).click();
+  await expect(page.getByRole('dialog', { name: 'Recover unsaved workspace?' })).toContainText(
+    'Restore 1 unsaved document',
+  );
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Recover' })
+    .click();
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(activeEditor(page)).toHaveText('Legacy unsaved document');
-  await expect(page.locator('.dirty-dot')).toBeVisible();
+  await expect(
+    page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
+  ).toBeVisible();
 });
 
 test('a missing clean file is dropped without breaking the rest of the restored workspace', async ({
@@ -297,8 +311,13 @@ test('a missing clean file is dropped without breaking the rest of the restored 
     trustedSidecarPaths: [existingPath],
   });
 
-  await expect(page.locator('.app-modal')).toContainText('Could not open file');
-  await page.locator('.app-modal').getByRole('button', { name: 'OK' }).click();
+  await expect(page.getByRole('dialog', { name: 'Could not open file' })).toContainText(
+    'Could not open file',
+  );
+  await page
+    .getByRole('dialog', { name: 'Could not open file' })
+    .getByRole('button', { name: 'OK' })
+    .click();
   await expect(page.locator('.document-tab')).toHaveCount(1);
   await expect(page.locator('.document-tab.active')).toContainText('still-here.md');
   await expect(activeEditor(page)).toHaveText('The remaining clean file');

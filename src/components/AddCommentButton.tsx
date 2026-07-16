@@ -1,3 +1,5 @@
+import styles from './AddCommentButton.module.css';
+
 interface AddCommentButtonProps {
   top: number;
   left?: number;
@@ -10,10 +12,11 @@ export default function AddCommentButton({ top, left, visible, onOpen }: AddComm
 
   return (
     <button
-      className="add-comment-btn"
+      className={styles.btn}
       style={{ position: 'fixed', top, ...(left !== undefined ? { left } : {}) }}
       title="Add comment"
       aria-label="Add comment to selection"
+      data-print-hidden
       onClick={onOpen}
     >
       +

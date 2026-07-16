@@ -21,22 +21,21 @@ function renderRail(from: number, to: number) {
   return screen.getByTitle('Bold (Cmd+B)');
 }
 
+// State is asserted through aria-pressed, the behavioral contract, rather than
+// the now-hashed module state classes: mixed→"mixed", full→"true", none→"false".
 describe('Rail inline-format state', () => {
   it('shows mixed, not active, when only part of the selection is bold', () => {
     const bold = renderRail(1, 11);
-    expect(bold).toHaveClass('mixed');
-    expect(bold).not.toHaveClass('active');
+    expect(bold).toHaveAttribute('aria-pressed', 'mixed');
   });
 
   it('shows active, not mixed, when the full selection is bold', () => {
     const bold = renderRail(1, 5);
-    expect(bold).toHaveClass('active');
-    expect(bold).not.toHaveClass('mixed');
+    expect(bold).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows neither state for a plain selection', () => {
     const bold = renderRail(6, 11);
-    expect(bold).not.toHaveClass('active');
-    expect(bold).not.toHaveClass('mixed');
+    expect(bold).toHaveAttribute('aria-pressed', 'false');
   });
 });

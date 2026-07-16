@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { canonicalDocumentPath, dirname } from '../../src/utils/path';
 import { sidecarPath } from '../../src/utils/sidecarPath';
 
@@ -290,8 +290,13 @@ export function activeEditor(page: Page) {
 }
 
 export async function closeSessionPickerIfOpen(page: Page) {
-  const picker = page.locator('.session-picker');
-  if (await picker.count()) await page.locator('.session-picker-close').click();
+  const picker = page.getByRole('dialog', { name: 'Link Claude Code session' });
+  if (await picker.count()) {
+    await picker.getByRole('button', { name: 'Close' }).click();
+    // Wait for React to commit the close before callers proceed — otherwise a
+    // still-mounted modal can intercept the next interaction under load.
+    await expect(picker).toHaveCount(0);
+  }
 }
 
 export async function openMemoryFile(page: Page) {
@@ -317,9 +322,10 @@ export async function openMemoryFile(page: Page) {
       ).length > previous,
     openCallsBefore,
   );
-  await page.waitForFunction(
-    () => document.querySelector('.crumbs .cur')?.textContent?.trim() !== 'Untitled',
-  );
+  await page.waitForFunction(() => {
+    const location = document.querySelector('[aria-label="Document location"]');
+    return location !== null && location.textContent?.trim() !== 'Untitled';
+  });
   // filePath publishes before loadFileResult's session-picker state reaches
   // the DOM. Let that same open settle so the helper cannot miss a late picker
   // and leave an invisible modal intercepting the next real interaction.

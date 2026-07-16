@@ -36,7 +36,6 @@ describe('SuggestionCardShell', () => {
           isActive={false}
           originComment={null}
           originActive={false}
-          top={24}
           acceptTitle="Accept test"
           rejectTitle="Reject test"
           onAccept={vi.fn()}
@@ -48,11 +47,11 @@ describe('SuggestionCardShell', () => {
         </SuggestionCardShell>,
       );
 
-      expect(container.querySelector(`[data-card-id="${kind}-1"]`)).toHaveClass(
-        'suggestion-card',
-        `suggestion-card-${kind}`,
+      expect(container.querySelector(`[data-card-id="${kind}-1"]`)).toHaveAttribute(
+        'data-suggestion-kind',
+        kind,
       );
-      expect(screen.getByText(label)).toHaveClass('suggestion-type-badge', kind);
+      expect(screen.getByText(label)).toBeInTheDocument();
       expect(screen.getByText('Preview')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Accept' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
@@ -74,7 +73,6 @@ describe('SuggestionCardShell', () => {
         isActive
         originComment={originComment}
         originActive
-        top={24}
         acceptTitle="Accept replacement"
         rejectTitle="Reject replacement"
         onAccept={onAccept}
@@ -86,12 +84,13 @@ describe('SuggestionCardShell', () => {
       </SuggestionCardShell>,
     );
 
-    expect(container.querySelector('[data-card-id="claude-edit"]')).toHaveClass(
-      'suggestion-card-active',
-      'card-origin-active',
-    );
+    const card = container.querySelector('[data-card-id="claude-edit"]')!;
+    expect(card).toHaveAttribute('data-active');
+    expect(card).toHaveAttribute('data-origin-active');
     expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getByText('AI')).toHaveClass('suggestion-ai-badge');
+    // The AI badge keeps the shared global class; its suggestion-specific 20px
+    // box is styled via `.head :global(.ai-badge)` in the module.
+    expect(screen.getByText('AI')).toHaveClass('ai-badge');
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
@@ -119,7 +118,6 @@ describe('SuggestionCardShell', () => {
         originComment={null}
         originChatMessageId="chat-message-1"
         originActive={false}
-        top={24}
         acceptTitle="Accept insertion"
         rejectTitle="Reject insertion"
         onAccept={vi.fn()}

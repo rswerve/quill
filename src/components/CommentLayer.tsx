@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { Comment, TrackedChangeInfo } from '../types';
 import CommentCard from './CommentCard';
@@ -9,6 +9,8 @@ import CommentComposerCard, { type ComposerIntent } from './CommentComposerCard'
 import AnnotationGutter from './AnnotationGutter';
 import type { SelectionInfo } from './Editor';
 import { groupSuggestionCards } from '../utils/suggestionCards';
+import { cx } from '../utils/cx';
+import styles from './CommentLayer.module.css';
 import {
   nearestGutterTick,
   panelNudgeTarget,
@@ -193,6 +195,9 @@ export default function CommentLayer({
   const panelUserSuppressedUntilRef = useRef(0);
   const lastHighlightActivationRef = useRef(highlightActivationRevision);
   const lastActiveSyncScrollTopRef = useRef(scrollTop);
+  // Bumped on every explicit focus clear so an already-scheduled active-sync
+  // frame can detect it is stale and decline to reactivate.
+  const activeSyncGenerationRef = useRef(0);
   const previousActivePanelCardIdRef = useRef<string | null>(null);
   const lastDocumentScrollIntentAtRef = useRef(Number.NEGATIVE_INFINITY);
   const [anchorTops, setAnchorTops] = useState<Map<string, number>>(new Map());
@@ -405,10 +410,20 @@ export default function CommentLayer({
   // must remain visibly clear until the document actually scrolls again. A
   // composer/layout update can otherwise leave the sync baseline one render
   // behind and immediately reselect the nearest annotation.
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): the generation bump must land in the commit
+  // phase, BEFORE the browser runs any pending pre-paint requestAnimationFrame,
+  // so a stale active-sync frame is guaranteed to observe the new generation and
+  // decline to reactivate. A passive effect runs after paint and could lose that
+  // race under load.
+  useLayoutEffect(() => {
     const previous = previousActivePanelCardIdRef.current;
     if (previous !== null && activePanelCardId === null) {
       lastActiveSyncScrollTopRef.current = scrollTop;
+      // Invalidate any sync frame scheduled before this explicit clear so a
+      // stale frame can't reselect the nearest annotation after Escape / a
+      // plain-text click (a load-widened race the frame cleanup alone misses,
+      // because clearing the active annotation does not re-run the sync effect).
+      activeSyncGenerationRef.current += 1;
     }
     previousActivePanelCardIdRef.current = activePanelCardId;
   }, [activePanelCardId, scrollTop]);
@@ -500,7 +515,11 @@ export default function CommentLayer({
     ) {
       return;
     }
+    const generation = activeSyncGenerationRef.current;
     const frame = requestAnimationFrame(() => {
+      // An explicit clear (Escape / plain-text click) after this frame was
+      // scheduled bumps the generation; a stale frame must not reactivate.
+      if (activeSyncGenerationRef.current !== generation) return;
       const nearest = nearestGutterTick(gutterTicks, scrollTop + viewportHeight / 2);
       if (!nearest) return;
       const alreadyActive =
@@ -615,7 +634,6 @@ export default function CommentLayer({
           originComment={originComment}
           originChatMessageId={originChatMessageId}
           originActive={originActive}
-          top={0}
           onAccept={onAcceptChange}
           onReject={onRejectChange}
           onClick={onActivateSuggestion}
@@ -634,7 +652,6 @@ export default function CommentLayer({
           originComment={originComment}
           originChatMessageId={originChatMessageId}
           originActive={originActive}
-          top={0}
           onAccept={onAcceptChange}
           onReject={onRejectChange}
           onClick={onActivateSuggestion}
@@ -653,7 +670,6 @@ export default function CommentLayer({
         originComment={originComment}
         originChatMessageId={originChatMessageId}
         originActive={originActive}
-        top={0}
         onAccept={onAcceptChange}
         onReject={onRejectChange}
         onClick={onActivateSuggestion}
@@ -667,7 +683,7 @@ export default function CommentLayer({
 
   return (
     <section
-      className="comments-view panel-view"
+      className={cx(styles.view, 'panel-view')}
       hidden={hidden}
       aria-label="Comments and suggestions"
     >
@@ -681,7 +697,9 @@ export default function CommentLayer({
 
       <div
         ref={panelListRef}
-        className={`comment-panel-list${showResolved ? ' comment-history-list' : ''}`}
+        className={styles.list}
+        data-comment-list
+        data-resolved-list={showResolved || undefined}
         onScroll={handlePanelScroll}
         onWheel={markPanelUserIntent}
         onPointerDown={markPanelUserIntent}
@@ -694,8 +712,8 @@ export default function CommentLayer({
         tabIndex={0}
       >
         {listIsEmpty && (
-          <div className="comments-empty-state">
-            <span className="comments-empty-quote" aria-hidden>
+          <div className={styles.empty} data-empty-comments>
+            <span className={styles.emptyQuote} aria-hidden>
               ”
             </span>
             <strong>{showResolved ? 'No resolved comments' : 'No comments yet'}</strong>
@@ -716,7 +734,6 @@ export default function CommentLayer({
                 <CommentComposerCard
                   key={item.cardId}
                   quote={item.selection.text}
-                  top={0}
                   hasSession={hasSession}
                   onSubmit={onSubmitComment}
                   onCancel={onCancelComment}

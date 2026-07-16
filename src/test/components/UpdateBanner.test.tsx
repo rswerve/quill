@@ -13,7 +13,10 @@ const URL = 'https://github.com/sam-powers/quill/releases/tag/v0.4.0';
 describe('UpdateBanner', () => {
   it('announces the new version', () => {
     render(<UpdateBanner version="0.4.0" url={URL} onDismiss={() => {}} />);
-    expect(screen.getByRole('status')).toHaveTextContent('Quill 0.4.0 is available.');
+    const banner = screen.getByRole('status');
+    expect(banner).toHaveTextContent('Quill 0.4.0 is available.');
+    // Opts into the global print-hide policy (see printPolicy.test.ts).
+    expect(banner.hasAttribute('data-print-hidden')).toBe(true);
   });
 
   it('opens the release page via the opener plugin', async () => {

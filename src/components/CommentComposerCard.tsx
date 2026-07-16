@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
+import styles from './CommentComposerCard.module.css';
 
 /** Which action the composer fired: a private note or a request to Claude. */
 export type ComposerIntent = 'note' | 'claude';
 
 interface CommentComposerCardProps {
   quote: string;
-  top: number;
   /** Whether a Claude session is linked. Drives the primary label and the
    *  offline banner; asking with no session is still allowed (it links first,
    *  then sends — handled upstream). */
@@ -16,7 +16,6 @@ interface CommentComposerCardProps {
 
 export default function CommentComposerCard({
   quote,
-  top,
   hasSession,
   onSubmit,
   onCancel,
@@ -32,15 +31,14 @@ export default function CommentComposerCard({
 
   return (
     <section
-      className="add-comment-compose anchored-comment-composer"
+      className={styles.composer}
       data-card-id="comment-composer"
-      style={{ top }}
       aria-label="Add a note or ask Claude about the selection"
     >
-      <blockquote className="comment-composer-quote">“{quote}”</blockquote>
+      <blockquote className={styles.quote}>“{quote}”</blockquote>
       <textarea
         ref={textareaRef}
-        className="comment-reply-input"
+        className={styles.input}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -59,15 +57,15 @@ export default function CommentComposerCard({
         autoFocus
       />
       {!hasSession && (
-        <div className="composer-no-session" role="note">
+        <div className={styles.noSession} role="note">
           No Claude session linked yet —{' '}
-          <span className="composer-no-session-hint">note works offline</span>.
+          <span className={styles.noSessionHint}>note works offline</span>.
         </div>
       )}
-      <div className="comment-reply-actions comment-composer-actions">
+      <div className={styles.actions}>
         <button
           type="button"
-          className="btn-ghost composer-add-note"
+          className="btn-ghost"
           disabled={!trimmed}
           onClick={() => submit('note')}
           title="Add a private note (⌘⇧⏎)"
@@ -76,7 +74,7 @@ export default function CommentComposerCard({
         </button>
         <button
           type="button"
-          className="btn-primary composer-ask-claude"
+          className="btn-primary"
           disabled={!trimmed}
           onClick={() => submit('claude')}
           title={hasSession ? 'Ask Claude (⌘⏎)' : 'Link a Claude session, then ask (⌘⏎)'}

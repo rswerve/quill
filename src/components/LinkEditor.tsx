@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isOpenableHref, normalizeHref, type LinkTarget } from '../utils/linkEditing';
+import { cx } from '../utils/cx';
+import styles from './LinkEditor.module.css';
 
 export interface LinkEditorAnchor {
   top: number;
@@ -92,7 +94,7 @@ export default function LinkEditor({
   return createPortal(
     <div
       ref={cardRef}
-      className="link-editor-card"
+      className={styles.card}
       role="dialog"
       aria-label={target.existing ? 'Edit link' : 'Create link'}
       style={{ top: position.top, left: position.left }}
@@ -103,23 +105,23 @@ export default function LinkEditor({
         }
       }}
     >
-      <div className="link-editor-row">
+      <div className={styles.row}>
         <label htmlFor="link-editor-text">Text</label>
         <input
           id="link-editor-text"
-          className="link-editor-input"
+          className={styles.input}
           type="text"
           value={text}
           onChange={(event) => setText(event.target.value)}
           spellCheck={false}
         />
       </div>
-      <div className="link-editor-row link-editor-url-row">
+      <div className={cx(styles.row, styles.urlRow)}>
         <label htmlFor="link-editor-url">URL</label>
         <input
           ref={urlRef}
           id="link-editor-url"
-          className="link-editor-input"
+          className={styles.input}
           type="text"
           value={href}
           onChange={(event) => setHref(event.target.value)}
@@ -127,20 +129,20 @@ export default function LinkEditor({
           spellCheck={false}
         />
       </div>
-      <div className="link-editor-footer">
+      <div className={styles.footer}>
         <button
           type="button"
-          className="link-editor-btn link-editor-remove"
+          className={cx(styles.btn, styles.remove)}
           onClick={onRemove}
           disabled={!target.existing}
           title={target.existing ? 'Remove link but keep its text' : 'No link to remove yet'}
         >
           Remove
         </button>
-        <span className="link-editor-spacer" />
+        <span className={styles.spacer} />
         <button
           type="button"
-          className="link-editor-btn link-editor-open"
+          className={styles.btn}
           onClick={() => onOpen(href)}
           disabled={!canOpen}
           title={openTitle}
@@ -149,7 +151,7 @@ export default function LinkEditor({
         </button>
         <button
           type="button"
-          className="link-editor-btn link-editor-apply"
+          className={cx(styles.btn, styles.apply)}
           onClick={submit}
           disabled={!canApply}
         >

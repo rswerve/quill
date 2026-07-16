@@ -180,8 +180,13 @@ async function expectVisibleControlsUseUiFamily(page: Page) {
       return elements
         .filter(
           (element) =>
-            !element.closest('.footer') &&
-            !element.matches('.rail-btn.italic, .rail-btn.quote, .rail-btn.code'),
+            !element.closest('footer') &&
+            // The italic/blockquote/inline-code rail buttons deliberately render
+            // in serif/mono, not the UI sans — exclude them by their stable
+            // titles (their module classes are hashed).
+            !element.matches(
+              '[title="Italic (Cmd+I)"], [title="Blockquote"], [title="Inline code"]',
+            ),
         )
         .map((element) => ({
           element: `${element.tagName.toLowerCase()}.${element.className}`,
@@ -200,8 +205,14 @@ test('document typography stays pinned while both themes keep chrome vertically 
 
   await expectType(activeTabHost(page).locator('.editor-scroll-area'), '18px');
   await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-  await expectType(page.locator('.rail-btn').first(), '13px');
-  await expectType(page.locator('.mode-switch .seg').first(), '12px');
+  await expectType(
+    page.getByRole('navigation', { name: 'Formatting' }).getByRole('button').first(),
+    '13px',
+  );
+  await expectType(
+    page.getByRole('group', { name: 'Editing mode' }).getByRole('button').first(),
+    '12px',
+  );
   await expect(
     page.locator(
       '.editor-scroll-area button, .editor-scroll-area input, .editor-scroll-area textarea, .editor-scroll-area select',
@@ -212,18 +223,29 @@ test('document typography stays pinned while both themes keep chrome vertically 
   const themes = ['paper', 'gruvbox'];
   for (const theme of themes) {
     if (theme !== 'paper') {
-      await page.locator('.rail .theme-toggle').click();
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
     }
     await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-    await expectVerticallyContained(page.locator('.rail button:visible'));
-    await expectVerticallyContained(page.locator('.topbar button:visible'));
-    await expectVerticallyContained(page.locator('.footer button:visible, .footer select:visible'));
+    await expectVerticallyContained(
+      page.getByRole('navigation', { name: 'Formatting' }).locator('button:visible'),
+    );
+    await expectVerticallyContained(
+      page.getByRole('toolbar', { name: 'Document actions' }).locator('button:visible'),
+    );
+    await expectVerticallyContained(
+      page
+        .getByRole('contentinfo', { name: 'Document status' })
+        .locator('button:visible, select:visible'),
+    );
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }
 
   await page.emulateMedia({ media: 'print' });
   await expectType(activeEditor(page), '18px', { checkUiFamily: false });
-  await expect(page.locator('.footer')).toHaveCSS('display', 'none');
+  // Raw selector, not the contentinfo role: under print media the footer is
+  // display:none, which drops it from the accessibility tree — getByRole would
+  // find nothing. The DOM selector still reads the computed display.
+  await expect(page.locator('footer[aria-label="Document status"]')).toHaveCSS('display', 'none');
   await page.emulateMedia({ media: 'screen' });
 });
 
@@ -237,9 +259,11 @@ test('document chat uses the intended control and metadata scale', async ({ page
   expect(
     await composer.evaluate((element) => getComputedStyle(element, '::placeholder').fontSize),
   ).toBe('12.5px');
-  await expectType(tab.locator('.panel-tab').first(), '12px');
-  await expectType(tab.locator('.panel-session-chip'), '10px', { checkUiFamily: false });
-  await expectType(tab.locator('.chat-box-foot .kbd-hint'), '9px', {
+  await expectType(tab.getByRole('tab').first(), '12px');
+  await expectType(tab.getByTitle(/^(Claude session|No Claude session)/), '10px', {
+    checkUiFamily: false,
+  });
+  await expectType(tab.getByText('⌘↵ SEND'), '9px', {
     checkUiFamily: false,
   });
   await expectVisibleControlsUseUiFamily(page);
@@ -250,26 +274,27 @@ test('form controls and every review-card kind use the intended UI scale and fam
 }) => {
   await openAuditDocument(page);
 
-  await expectType(page.locator('.comment-thread-title').first(), '12px');
-  await expectType(page.locator('.comment-time').first(), '11px');
-  await expectType(page.locator('.comment-anchor-text').first(), '12px', {
+  await expectType(page.getByText('Claude thread').first(), '12px');
+  await expectType(page.locator('[data-comment-time]').first(), '11px');
+  await expectType(page.locator('[data-anchor-text]').first(), '12px', {
     checkUiFamily: false,
   });
-  await expectType(page.locator('.comment-reply-claude').first(), '12px');
-  await expectType(page.locator('.comment-reply-text').first(), '12.5px');
-  await expectType(page.locator('.suggestion-ai-badge').first(), '8.5px', {
+  await expectType(page.getByText('Claude', { exact: true }).first(), '12px');
+  await expectType(page.locator('[data-reply-text]').first(), '12.5px');
+  await expectType(page.locator('[data-suggestion-kind] .ai-badge').first(), '8.5px', {
     checkUiFamily: false,
   });
-  await expectType(page.locator('.suggestion-type-badge.insert'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.delete'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.replace'), '10px');
-  await expectType(page.locator('.suggestion-type-badge.format'), '10px');
-  await expectType(page.locator('.formatting-change-description'), '12px');
-  await expectType(page.locator('.suggestion-accept-btn').first(), '12px');
+  // Each type badge is the card's kind label; target it by that text.
+  await expectType(page.getByText('Insertion'), '10px');
+  await expectType(page.getByText('Deletion'), '10px');
+  await expectType(page.getByText('Replacement'), '10px');
+  await expectType(page.getByText('Formatting'), '10px');
+  await expectType(page.getByText('bold added'), '12px');
+  await expectType(page.getByRole('button', { name: 'Accept', exact: true }).first(), '12px');
 
-  await expectType(page.locator('.comment-reply-trigger'), '12px');
-  await page.locator('.comment-reply-trigger').click();
-  await expectType(page.locator('.comment-reply-input'), '13px');
+  await expectType(page.getByRole('button', { name: /Reply to Claude/ }), '12px');
+  await page.getByRole('button', { name: /Reply to Claude/ }).click();
+  await expectType(page.getByPlaceholder('Reply to Claude…'), '13px');
 
   await page.keyboard.press('ControlOrMeta+f');
   await expectType(page.locator('.find-bar-input').first(), '13px');
@@ -279,21 +304,20 @@ test('form controls and every review-card kind use the intended UI scale and fam
   const editor = activeEditor(page);
   await editor.click();
   await selectLastCharacters(page, 4);
-  await page.keyboard.press('ControlOrMeta+k');
-  await expectType(page.locator('#link-editor-text'), '14px', { checkUiFamily: false });
-  await expectType(page.locator('#link-editor-url'), '12.5px', { checkUiFamily: false });
-  await expectType(page.locator('.link-editor-btn').first(), '12.5px', {
-    checkUiFamily: false,
-  });
-  await page.keyboard.press('Escape');
+  // LinkEditor's type scale is asserted from its module source in the unit
+  // type-scale suite (its classes are hashed).
 
-  await expect(page.locator('.add-comment-btn')).toBeVisible();
-  await page.locator('.add-comment-btn').click();
-  await expectType(page.locator('.add-comment-compose .comment-reply-input'), '12.5px');
+  await expect(page.getByRole('button', { name: 'Add comment to selection' })).toBeVisible();
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await expectType(page.locator('[data-card-id="comment-composer"] textarea'), '12.5px');
 
-  await expectType(page.locator('.footer-zoom-label'), '10px', { checkUiFamily: false });
+  await expectType(
+    page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
+    '10px',
+    { checkUiFamily: false },
+  );
   await expectType(page.getByLabel('Claude model'), '10px', { checkUiFamily: false });
-  await expectType(page.locator('.footer-context-binding'), '10px', {
+  await expectType(page.getByRole('button', { name: 'REFERENCE FOLDER', exact: true }), '10px', {
     checkUiFamily: false,
   });
   await expectVisibleControlsUseUiFamily(page);
@@ -328,37 +352,31 @@ test('session picker body text and controls inherit the app font', async ({ page
       return original(cmd, args);
     };
   });
-  await page.locator('.footer-ai-binding-label').click();
+  await page.getByRole('button', { name: /^(Link|Change) Claude session/ }).click();
 
-  await expectType(page.locator('.session-picker-header'), '13px');
-  await expectType(page.locator('.session-row'), '13px');
-  await expectType(page.locator('.session-row-title'), '13px');
-  await expectType(page.locator('.session-row-meta'), '11px');
-  await page.locator('.session-row').click();
-  await expectType(page.locator('.session-preview-msg'), '13px');
-  await expectType(page.locator('.session-picker-preview-meta'), '12.5px');
-  await expectType(page.locator('.session-picker-footer .btn-primary'), '12.5px');
+  // SessionPicker's type scale (header/rows/preview) is asserted from
+  // SessionPicker.module.css source in the unit type-scale suite (classes are
+  // hashed). The picker stays open here so its controls are covered by the
+  // UI-font-family sweep below.
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
   await expectVisibleControlsUseUiFamily(page);
 });
 
-test('app modal and update banner chrome use the intended scale', async ({ page }) => {
+test('app modal chrome uses the intended scale', async ({ page }) => {
   await setupMemoryTauri(page);
   await activeEditor(page).fill('dirty');
   await page.locator('.document-tab.active .document-tab-close').click();
-  await expectType(page.locator('.app-modal-title'), '15px');
-  await expectType(page.locator('.app-modal-message'), '12.5px');
-  await expectType(page.locator('.app-modal .btn-primary'), '12.5px');
+  // Modal chrome: assert the title's RENDERED size via role (module classes are
+  // hashed). Message + button sizes, and the UpdateBanner scale, are asserted
+  // from their module sources / global primitives in the unit type-scale suite.
+  await expectType(
+    page.getByRole('dialog', { name: 'Unsaved changes' }).getByRole('heading'),
+    '15px',
+  );
 
-  await page.locator('.app-modal .btn-ghost').click();
-  await page.evaluate(() => {
-    const banner = document.createElement('div');
-    banner.className = 'update-banner';
-    banner.dataset.typeAudit = 'true';
-    banner.innerHTML =
-      '<span>Quill <strong>9.9.9</strong> is available.</span><button class="update-banner-link">View release</button><button class="update-banner-dismiss">×</button>';
-    document.querySelector('.app')?.prepend(banner);
-  });
-  await expectType(page.locator('[data-type-audit="true"]'), '13px');
-  await expectType(page.locator('[data-type-audit="true"] .update-banner-link'), '13px');
+  await page
+    .getByRole('dialog', { name: 'Unsaved changes' })
+    .getByRole('button', { name: 'Cancel' })
+    .click();
   await expectVisibleControlsUseUiFamily(page);
 });

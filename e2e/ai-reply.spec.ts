@@ -136,8 +136,8 @@ async function addCommentWithAIReply(page: Page, anchor: string, replyText: stri
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, anchor);
   // Open the anchored composer and ask Claude directly.
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(replyText);
   await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 
@@ -158,8 +158,8 @@ async function addClaudeThread(page: Page, anchor: string, body: string) {
   await page.keyboard.press('a');
   await page.keyboard.up('ControlOrMeta');
   await expectSelectionText(page, anchor);
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(body);
   await page.getByRole('button', { name: /Ask Claude|Link a session to ask/ }).click();
 }
 
@@ -167,8 +167,8 @@ async function addLocalNote(page: Page, anchor: string, body: string) {
   await page.keyboard.type(anchor);
   await page.keyboard.press('ControlOrMeta+a');
   await expectSelectionText(page, anchor);
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill(body);
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(body);
   await page.getByRole('button', { name: 'Add note' }).click();
 }
 
@@ -177,13 +177,13 @@ test('local note stays private and never starts an AI request', async ({ page })
 
   await addLocalNote(page, 'hello world', 'Remember this');
 
-  const note = page.locator('.comment-card-note');
+  const note = page.locator('[data-comment-card="note"]');
   await expect(note).toContainText('Remember this');
-  await expect(note.locator('.comment-note-badge')).toHaveText('Note');
+  await expect(note.getByText('Note', { exact: true })).toHaveText('Note');
   await expect(page.locator('mark.comment-mark[data-comment-kind="note"]')).toHaveText(
     'hello world',
   );
-  await expect(page.locator('.comment-reply-ai')).toHaveCount(0);
+  await expect(page.locator('[data-reply-role="ai"]')).toHaveCount(0);
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
@@ -199,14 +199,14 @@ test('promoting a note converts its identity and asks Claude once', async ({ pag
 
   await page.getByRole('button', { name: 'Ask Claude about this' }).click();
 
-  const thread = page.locator('.comment-card-claude');
+  const thread = page.locator('[data-comment-card="claude"]');
   await expect(thread).toContainText('Please review this');
-  await expect(thread.locator('.comment-note-badge')).toHaveCount(0);
-  await expect(page.locator('.comment-card-note')).toHaveCount(0);
+  await expect(thread.getByText('Note', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-comment-card="note"]')).toHaveCount(0);
   await expect(page.locator('mark.comment-mark[data-comment-kind="claude"]')).toHaveText(
     'hello world',
   );
-  await expect(thread.locator('.comment-reply-ai .comment-reply-text')).toContainText(
+  await expect(thread.locator('[data-reply-role="ai"] [data-reply-text]')).toContainText(
     'Promoted response.',
   );
   expect(
@@ -224,29 +224,29 @@ test('AI reply: pending → delta → done streams chunks and clears spinner', a
     { kind: 'done' },
   ]);
 
-  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+  await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
     'Model and effort used for the next Claude request',
   );
 
   await addCommentWithAIReply(page, 'hello world', 'What is the answer?');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
   // Spinner present while streaming.
-  await expect(aiReply.locator('.ai-spinner')).toBeVisible();
+  await expect(aiReply.locator('[data-ai-spinner]')).toBeVisible();
   await page.evaluate(() =>
     (
       window as unknown as { __quillReleaseMockGate: (name: string) => void }
     ).__quillReleaseMockGate('pending-visible'),
   );
   // Wait for accumulated text and spinner clearance.
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('Sure — the answer is 42.', {
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('Sure — the answer is 42.', {
     timeout: 3000,
   });
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
-  await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
-  await expect(page.locator('.footer-claude-settings')).toHaveAttribute(
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
+  await expect(aiReply.getByRole('button', { name: 'Cancel Claude reply' })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Claude settings' })).toHaveAttribute(
     'title',
     'Last model reported by Claude Code: claude-fable-5',
   );
@@ -278,7 +278,9 @@ test('Claude model and effort choices persist and reach an anchored Ask-Claude s
 
   await activeEditor(page).click();
   await addCommentWithAIReply(page, 'hello world', 'Revise this');
-  await expect(page.locator('.comment-reply-ai .ai-spinner')).toHaveCount(0, { timeout: 3000 });
+  await expect(page.locator('[data-reply-role="ai"] [data-ai-spinner]')).toHaveCount(0, {
+    timeout: 3000,
+  });
   const args = await page.evaluate(
     () => (window as unknown as { __lastSpawnArgs: unknown }).__lastSpawnArgs,
   );
@@ -294,17 +296,18 @@ test('AI reply: Ask Claude in the anchored composer triggers a reply', async ({ 
 
   await addClaudeThread(page, 'hello world', 'Please review this');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('On it — done.', {
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('On it — done.', {
     timeout: 3000,
   });
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
 
   // Thread order: the user's question must render above Claude's answer.
-  const replies = page.locator('.comment-reply');
+  const replies = page.locator('[data-reply-role]');
   await expect(replies.first()).toContainText('Please review this');
-  await expect(replies.first()).not.toHaveClass(/comment-reply-ai/);
+  await expect(replies.first()).toHaveAttribute('data-reply-role', 'user');
+  await expect(replies.nth(1)).toHaveAttribute('data-reply-role', 'ai');
 });
 
 test('AI reply: Ask Claude with no linked session preserves the request and opens the picker', async ({
@@ -312,38 +315,45 @@ test('AI reply: Ask Claude with no linked session preserves the request and open
 }) => {
   await setupWithoutSession(page);
   // Session picker must not be open yet.
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 
   await page.keyboard.type('hello world');
   await page.keyboard.press('ControlOrMeta+a');
   await expectSelectionText(page, 'hello world');
-  await page.locator('.add-comment-btn').click();
-  const composer = page.locator('.add-comment-compose');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  const composer = page.locator('[data-card-id="comment-composer"]');
   await composer.locator('textarea').fill('Take a look');
   await expect(composer.getByRole('button', { name: 'Link a session to ask' })).toBeVisible();
   await expect(composer).toContainText('No Claude session linked yet — note works offline.');
   await composer.getByRole('button', { name: 'Link a session to ask' }).click();
 
   // The request is retained in its new Claude-thread card while linking.
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.comment-card-claude')).toContainText('Take a look');
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
+  await expect(page.locator('[data-comment-card="claude"]')).toContainText('Take a look');
 });
 
 test('AI reply: a Claude-thread reply with no linked session opens the session picker', async ({
   page,
 }) => {
   await setupWithoutSession(page);
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 
   // Create a thread with an unsent request, dismiss linking, then continue that
   // same Claude thread. No magic token is involved in the reply.
   await addClaudeThread(page, 'hello world', 'Take a look');
-  await page.locator('.session-picker-close').click();
-  await page.locator('.comment-reply-trigger').click();
+  await page
+    .getByRole('dialog', { name: 'Link Claude Code session' })
+    .getByRole('button', { name: 'Close' })
+    .click();
+  await page.getByRole('button', { name: /Reply to Claude/ }).click();
   await page.getByPlaceholder('Reply to Claude…').fill('A follow-up');
-  await page.locator('.comment-reply-form').getByRole('button', { name: 'Reply' }).click();
+  await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
 
-  await expect(page.locator('.session-picker')).toBeVisible({ timeout: 2000 });
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible({
+    timeout: 2000,
+  });
 });
 
 test('Session picker: Start new session is disabled until the document is saved', async ({
@@ -352,7 +362,7 @@ test('Session picker: Start new session is disabled until the document is saved'
   await setupWithoutSession(page);
   await addClaudeThread(page, 'hello world', 'Take a look');
 
-  const startNew = page.locator('.session-picker-new');
+  const startNew = page.getByRole('button', { name: 'Start new session' });
   await expect(startNew).toBeVisible();
   await expect(startNew).toBeDisabled();
 });
@@ -372,15 +382,15 @@ test('Session picker: a saved document mints and fires a canonical Quill binding
   const editor = activeEditor(page);
   await editor.click();
   await page.keyboard.press('ControlOrMeta+a');
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('Take a look');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('Take a look');
   await page.getByRole('button', { name: 'Link a session to ask' }).click();
 
-  const startNew = page.locator('.session-picker-new');
+  const startNew = page.getByRole('button', { name: 'Start new session' });
   await expect(startNew).toBeEnabled();
   await startNew.click();
 
-  await expect(page.locator('.comment-reply-ai .comment-reply-text')).toContainText(
+  await expect(page.locator('[data-reply-role="ai"] [data-reply-text]')).toContainText(
     'Persist this answer.',
   );
   const args = await page.evaluate(
@@ -425,15 +435,15 @@ test('AI reply: a session-loss error shows Re-link primary plus a secondary Retr
 
   await addCommentWithAIReply(page, 'hello world', 'Help');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  await expect(aiReply.locator('.comment-reply-error')).toContainText('session not found', {
+  await expect(aiReply.locator('[data-reply-error]')).toContainText('session not found', {
     timeout: 3000,
   });
   await expect(aiReply.getByRole('button', { name: /Re-link session/i })).toBeVisible();
   await expect(aiReply.getByRole('button', { name: /^Retry$/i })).toBeVisible();
   await expect(aiReply.getByRole('button', { name: 'Dismiss' })).toBeVisible();
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
 });
 
 test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in place', async ({
@@ -452,9 +462,9 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
 
   await addCommentWithAIReply(page, 'hello world', 'Help');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  await expect(aiReply.locator('.comment-reply-error')).toContainText('API Error: overloaded', {
+  await expect(aiReply.locator('[data-reply-error]')).toContainText('API Error: overloaded', {
     timeout: 3000,
   });
   // Transient → Retry is the primary action; Re-link is demoted to a ghost
@@ -467,13 +477,13 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
   await retryBtn.click();
 
   // Same reply entry recovers: error clears and the second script's text lands.
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('Second time worked.', {
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('Second time worked.', {
     timeout: 3000,
   });
-  await expect(aiReply.locator('.comment-reply-error')).toHaveCount(0);
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+  await expect(aiReply.locator('[data-reply-error]')).toHaveCount(0);
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
   // Exactly one AI reply — retry reused the entry, it did not append a new one.
-  await expect(page.locator('.comment-reply-ai')).toHaveCount(1);
+  await expect(page.locator('[data-reply-role="ai"]')).toHaveCount(1);
 });
 
 // Selects the first `count` characters of the current line (from its start),
@@ -487,8 +497,8 @@ async function addCommentOnPrefix(page: Page, anchor: string, count: number, rep
   for (let i = 0; i < count; i++) await page.keyboard.press('ArrowRight');
   await page.keyboard.up('Shift');
   await expectSelectionText(page, anchor.slice(0, count));
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill(replyText);
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill(replyText);
   await page.getByRole('button', { name: 'Ask Claude' }).click();
 }
 
@@ -509,21 +519,21 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
 
   await addCommentWithAIReply(page, 'the cat are happy', 'Fix the grammar');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
 
-  const replyText = aiReply.locator('.comment-reply-text');
+  const replyText = aiReply.locator('[data-reply-text]');
   await expect(replyText).toContainText('Fixed the subject-verb agreement.', { timeout: 3000 });
   // The JSON block must never reach the user.
   await expect(replyText).not.toContainText('quill-edits');
   await expect(replyText).not.toContainText('"find"');
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
 
   // A suggestion card appears for the edit, authored by Claude.
-  const card = page.locator('.suggestion-card');
+  const card = page.locator('[data-suggestion-kind]');
   await expect(card.first()).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('.suggestion-card .comment-author').first()).toHaveText('Claude');
-  await expect(page.locator('.suggestion-card .suggestion-ai-badge').first()).toHaveText('AI');
+  await expect(card.first().getByText('Claude', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-suggestion-kind] .ai-badge').first()).toHaveText('AI');
   // The new text "cats are" shows up as a tracked insertion in the document.
   await expect(activeEditor(page)).toContainText('cats are');
 
@@ -533,7 +543,7 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   const viewSuggestion = aiReply.getByRole('button', { name: /suggestions?/i });
   await expect(viewSuggestion).toBeVisible();
   await viewSuggestion.click();
-  await expect(card.first()).toHaveClass(/suggestion-card-active/);
+  await expect(card.first()).toHaveAttribute('data-active');
   await expect(card.first().getByRole('button', { name: 'Accept' })).toBeVisible();
   await expect(card.first().getByRole('button', { name: 'Reject' })).toBeVisible();
 
@@ -542,13 +552,13 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
     .first()
     .getByRole('button', { name: /from comment/i })
     .click();
-  await expect(page.locator('.comment-card')).toHaveClass(/comment-card-active/);
+  await expect(page.locator('[data-comment-card]')).toHaveAttribute('data-active');
 
   // Dismiss removes only Claude's reply block: the thread and its linked,
   // accept/rejectable suggestion remain intact.
   await aiReply.getByRole('button', { name: 'Dismiss' }).click();
   await expect(aiReply).toHaveCount(0);
-  await expect(page.locator('.comment-card')).toHaveCount(1);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(1);
   await expect(card.first()).toBeVisible();
 });
 
@@ -568,11 +578,11 @@ test('AI edits: an edit outside the highlight applies (edits are document-scale)
 
   await addCommentOnPrefix(page, 'alpha beta gamma', 5, 'Tidy this up');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0, { timeout: 3000 });
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0, { timeout: 3000 });
   // The edit landed even though it was outside the highlight.
-  await expect(page.locator('.suggestion-card').first()).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('[data-suggestion-kind]').first()).toBeVisible({ timeout: 2000 });
   await expect(activeEditor(page)).toContainText('GAMMA');
 });
 
@@ -590,11 +600,13 @@ test('AI edits: an edit whose find is nowhere in the document is skipped and sur
 
   await addCommentOnPrefix(page, 'alpha beta gamma', 5, 'Tidy this up');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  // The unlocatable edit is reported as skipped, and the document is unchanged.
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('skipped', { timeout: 3000 });
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  // The unlocatable edit is reported as not applied, and the document is unchanged.
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('wasn’t applied', {
+    timeout: 3000,
+  });
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await expect(activeEditor(page)).not.toContainText('DELTA');
 });
 
@@ -609,32 +621,30 @@ test('AI reply: cancel resolves to a neutral Re-run, and Re-run succeeds in plac
 
   await addCommentWithAIReply(page, 'hello world', 'Handle this long task');
 
-  const aiReply = page.locator('.comment-reply-ai').first();
+  const aiReply = page.locator('[data-reply-role="ai"]').first();
   await expect(aiReply).toBeVisible({ timeout: 2000 });
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('starting...', {
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('starting...', {
     timeout: 2000,
   });
-  await expect(aiReply.locator('.btn-cancel-ai')).toBeVisible();
-  await aiReply.locator('.btn-cancel-ai').click();
+  await expect(aiReply.getByRole('button', { name: 'Cancel Claude reply' })).toBeVisible();
+  await aiReply.getByRole('button', { name: 'Cancel Claude reply' }).click();
 
   // Cancel is a neutral terminal state (not an error): spinner and Cancel go
   // away, the partial text is discarded, and a Re-run button is offered.
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0, { timeout: 2000 });
-  await expect(aiReply.locator('.btn-cancel-ai')).toHaveCount(0);
-  await expect(aiReply.locator('.comment-reply-error')).toHaveCount(0);
-  const rerun = aiReply
-    .locator('.comment-reply-cancelled')
-    .getByRole('button', { name: /Re-run/i });
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0, { timeout: 2000 });
+  await expect(aiReply.getByRole('button', { name: 'Cancel Claude reply' })).toHaveCount(0);
+  await expect(aiReply.locator('[data-reply-error]')).toHaveCount(0);
+  const rerun = aiReply.locator('[data-reply-cancelled]').getByRole('button', { name: /Re-run/i });
   await expect(rerun).toBeVisible();
 
   await rerun.click();
 
   // Same reply entry recovers: the second script's text lands, cancelled UI gone.
-  await expect(aiReply.locator('.comment-reply-text')).toContainText('Second time worked.', {
+  await expect(aiReply.locator('[data-reply-text]')).toContainText('Second time worked.', {
     timeout: 3000,
   });
-  await expect(aiReply.locator('.comment-reply-cancelled')).toHaveCount(0);
-  await expect(aiReply.locator('.ai-spinner')).toHaveCount(0);
+  await expect(aiReply.locator('[data-reply-cancelled]')).toHaveCount(0);
+  await expect(aiReply.locator('[data-ai-spinner]')).toHaveCount(0);
   // Exactly one AI reply — Re-run reused the entry, it did not append a new one.
-  await expect(page.locator('.comment-reply-ai')).toHaveCount(1);
+  await expect(page.locator('[data-reply-role="ai"]')).toHaveCount(1);
 });

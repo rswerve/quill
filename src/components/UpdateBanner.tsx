@@ -1,3 +1,5 @@
+import styles from './UpdateBanner.module.css';
+
 interface UpdateBannerProps {
   version: string;
   url: string;
@@ -21,16 +23,16 @@ export default function UpdateBanner({ version, url, onDismiss }: UpdateBannerPr
   };
 
   return (
-    <div className="update-banner" role="status">
+    <div data-print-hidden className={styles.banner} role="status">
       <span>
         Quill <strong>{version}</strong> is available.
       </span>
-      <button type="button" className="update-banner-link" onClick={handleView}>
+      <button type="button" className={styles.link} onClick={handleView}>
         View release
       </button>
       <button
         type="button"
-        className="update-banner-dismiss"
+        className={styles.dismiss}
         onClick={onDismiss}
         aria-label="Dismiss update notification"
       >

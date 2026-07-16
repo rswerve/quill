@@ -1,6 +1,7 @@
 import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
 import SuggestionCardShell from './SuggestionCardShell';
+import styles from './SuggestionCard.module.css';
 
 interface SuggestionCardProps {
   change: TrackedChangeInfo;
@@ -14,7 +15,6 @@ interface SuggestionCardProps {
   /** True while the origin comment is the active annotation — the card gets a
    *  subtle outline linking it back to its comment. */
   originActive: boolean;
-  top: number;
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onClick: (id: string) => void;
@@ -30,7 +30,6 @@ export default function SuggestionCard({
   originComment,
   originChatMessageId,
   originActive,
-  top,
   onAccept,
   onReject,
   onClick,
@@ -51,7 +50,6 @@ export default function SuggestionCard({
       originComment={originComment}
       originChatMessageId={originChatMessageId}
       originActive={originActive}
-      top={top}
       acceptTitle="Accept change"
       rejectTitle="Reject change"
       onAccept={() => onAccept(change.id)}
@@ -61,8 +59,8 @@ export default function SuggestionCard({
       onActivateChatMessage={onActivateChatMessage}
     >
       {preview && (
-        <div className="suggestion-preview">
-          <span className={isInsert ? 'suggestion-added' : 'suggestion-removed'}>“{preview}”</span>
+        <div className={styles.preview}>
+          <span className={isInsert ? styles.added : styles.removed}>“{preview}”</span>
         </div>
       )}
     </SuggestionCardShell>

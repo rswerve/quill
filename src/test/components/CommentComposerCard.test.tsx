@@ -7,7 +7,6 @@ function renderComposer(hasSession: boolean) {
   const result = render(
     <CommentComposerCard
       quote="Selected prose"
-      top={24}
       hasSession={hasSession}
       onSubmit={onSubmit}
       onCancel={vi.fn()}
@@ -29,11 +28,11 @@ describe('CommentComposerCard', () => {
   });
 
   it('keeps notes available while directing an ask through session linking', () => {
-    const { container } = renderComposer(false);
+    renderComposer(false);
 
     expect(screen.getByRole('button', { name: 'Link a session to ask' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument();
-    expect(container.querySelector('.composer-no-session')).toHaveTextContent(
+    expect(screen.getByRole('note')).toHaveTextContent(
       'No Claude session linked yet — note works offline.',
     );
   });

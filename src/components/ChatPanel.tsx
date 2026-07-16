@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage, TrackedChangeInfo } from '../types';
 import { classifyReplyError } from '../hooks/useClaudeReply';
 import { countLinkedSuggestionCards } from '../utils/suggestionCards';
+import { cx } from '../utils/cx';
+import styles from './ChatPanel.module.css';
 
 interface ChatPanelProps {
   hidden: boolean;
@@ -60,10 +62,10 @@ export default function ChatPanel({
   };
 
   return (
-    <section className="chat-view panel-view" hidden={hidden} aria-label="Document chat">
-      <div className="chat-log" ref={logRef}>
+    <section className={cx(styles.view, 'panel-view')} hidden={hidden} aria-label="Document chat">
+      <div className={styles.log} ref={logRef}>
         {messages.length === 0 && (
-          <p className="chat-empty-state">
+          <p className={styles.empty}>
             Ask anything about this document. Edits land as suggestions you review.
           </p>
         )}
@@ -71,9 +73,10 @@ export default function ChatPanel({
           if (message.role === 'user') {
             return (
               <div
-                className="chat-message chat-message-user"
+                className={cx(styles.message, styles.messageUser)}
                 key={message.id}
                 data-chat-message-id={message.id}
+                data-chat-role="user"
               >
                 {message.text}
               </div>
@@ -85,33 +88,40 @@ export default function ChatPanel({
             : 0;
           return (
             <div
-              className="chat-message chat-message-assistant"
+              className={cx(styles.message, styles.messageAssistant)}
               key={message.id}
               data-chat-message-id={message.id}
+              data-chat-role="assistant"
               tabIndex={-1}
             >
-              <div className="chat-assistant-head">
+              <div className={styles.assistantHead}>
                 <span className="ai-badge">AI</span>
-                <span className="chat-assistant-name">Claude</span>
-                {message.model && <span className="chat-assistant-model">{message.model}</span>}
+                <span className={styles.assistantName}>Claude</span>
+                {message.model && (
+                  <span className={styles.assistantModel} data-chat-model>
+                    {message.model}
+                  </span>
+                )}
               </div>
               {message.text && (
-                <div className="chat-assistant-text">
+                <div className={styles.assistantText}>
                   {message.text}
-                  {message.pending && <span className="chat-stream-caret" aria-hidden />}
+                  {message.pending && (
+                    <span className={styles.streamCaret} data-chat-caret aria-hidden />
+                  )}
                 </div>
               )}
               {message.pending && (
-                <div className="chat-streaming-state">
+                <div className={styles.streamingState}>
                   {!message.text && (
-                    <span className="chat-thinking-status" role="status" aria-live="polite">
-                      <span className="chat-thinking-dot" aria-hidden />
+                    <span className={styles.thinkingStatus} role="status" aria-live="polite">
+                      <span className={styles.thinkingDot} aria-hidden />
                       Claude is thinking…
                     </span>
                   )}
                   <button
                     type="button"
-                    className="chat-action-btn chat-stop-btn"
+                    className={cx(styles.actionBtn, styles.stopBtn)}
                     onClick={() => onCancel(message.id)}
                   >
                     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
@@ -122,12 +132,12 @@ export default function ChatPanel({
                 </div>
               )}
               {message.error && (
-                <div className="chat-terminal-state chat-error-state">
+                <div className={cx(styles.terminalState, styles.errorState)}>
                   <span>{message.error}</span>
-                  <div className="chat-terminal-actions">
+                  <div className={styles.terminalActions}>
                     <button
                       type="button"
-                      className="chat-action-btn"
+                      className={styles.actionBtn}
                       title={
                         errorClass?.kind === 'session' ? 'Retry after changing session' : 'Retry'
                       }
@@ -146,7 +156,7 @@ export default function ChatPanel({
                     </button>
                     <button
                       type="button"
-                      className="chat-action-btn"
+                      className={styles.actionBtn}
                       onClick={() => onDismiss(message.id)}
                     >
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
@@ -163,12 +173,12 @@ export default function ChatPanel({
                 </div>
               )}
               {message.cancelled && !message.error && (
-                <div className="chat-terminal-state">
+                <div className={styles.terminalState}>
                   <span>Stopped</span>
-                  <div className="chat-terminal-actions">
+                  <div className={styles.terminalActions}>
                     <button
                       type="button"
-                      className="chat-action-btn"
+                      className={styles.actionBtn}
                       onClick={() => onRetry(message.id)}
                     >
                       <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
@@ -184,7 +194,7 @@ export default function ChatPanel({
                     </button>
                     <button
                       type="button"
-                      className="chat-action-btn"
+                      className={styles.actionBtn}
                       onClick={() => onDismiss(message.id)}
                     >
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
@@ -202,7 +212,7 @@ export default function ChatPanel({
               )}
               {message.suggestionIds && suggestionCount > 0 && (
                 <button
-                  className="chat-suggestion-chip"
+                  className={styles.suggestionChip}
                   onClick={() => onViewSuggestions(message.suggestionIds!)}
                 >
                   → {suggestionCount} {suggestionCount === 1 ? 'suggestion' : 'suggestions'} in the
@@ -214,8 +224,8 @@ export default function ChatPanel({
         })}
       </div>
 
-      <div className="chat-composer">
-        <div className="chat-box">
+      <div className={styles.composer}>
+        <div className={styles.box}>
           <textarea
             ref={inputRef}
             rows={1}
@@ -233,11 +243,11 @@ export default function ChatPanel({
               }
             }}
           />
-          <div className="chat-box-foot">
-            <span className="kbd-hint">⌘↵ SEND</span>
+          <div className={styles.boxFoot}>
+            <span className={styles.kbdHint}>⌘↵ SEND</span>
             <span className="grow" />
             <button
-              className="chat-send-btn"
+              className={styles.sendBtn}
               aria-label="Send chat message"
               disabled={!draft.trim() || streaming || busy}
               title={busy && !streaming ? 'Claude is already responding in this document' : ''}

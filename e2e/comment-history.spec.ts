@@ -84,15 +84,18 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await openReviewFile(page, paragraphs, comments);
 
   const activeTab = activeTabHost(page);
-  const panelList = activeTab.locator('.comment-panel-list');
+  const panelList = activeTab.locator('[data-comment-list]');
   const editorScroll = activeTab.locator('.editor-scroll-area');
-  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Open');
+  const resolvedFilter = activeTab.getByRole('button', { name: 'Show resolved comments' });
+  await expect(resolvedFilter).toHaveText('Open');
+  // The visible label and the accessible state must agree: Open == not pressed.
+  await expect(resolvedFilter).toHaveAttribute('aria-pressed', 'false');
   await expect(panelList).toBeVisible();
-  await expect(activeTab.locator('.annotation-gutter')).toBeVisible();
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeVisible();
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
   expect(
     await page
-      .locator('.comment-card')
+      .locator('[data-comment-card]')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
   ).toEqual(['1', '3', '5', '7', '9', '11']);
 
@@ -101,19 +104,25 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await editorScroll.hover();
   await page.mouse.wheel(0, 900);
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  await expect(activeTab.locator('.comment-card-active')).toHaveCount(1);
+  await expect(activeTab.locator('[data-active]')).toHaveCount(1);
   await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
-  await activeTab.locator('.comments-head .filter').click();
-  const history = activeTab.locator('.comment-history-list');
-  await expect(activeTab.locator('.comments-head .filter')).toHaveText('Resolved');
+  await resolvedFilter.click();
+  const history = activeTab.locator('[data-resolved-list]');
+  await expect(resolvedFilter).toHaveText('Resolved');
+  await expect(resolvedFilter).toHaveAttribute('aria-pressed', 'true');
   await expect(history).toBeVisible();
-  await expect(activeTab.locator('.annotation-gutter')).toBeHidden();
-  await expect(activeTab.locator('.annotation-gutter-tick')).toHaveCount(0);
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(activeTab.locator('nav[aria-label="Document annotations"]')).toBeHidden();
+  // Raw DOM query, not getByRole: the nav is hidden, so its tick buttons are out
+  // of the accessibility tree — a role query would report 0 vacuously. This
+  // proves there are genuinely no tick elements, not merely that they're hidden.
+  await expect(
+    activeTab.locator('nav[aria-label="Document annotations"] button[aria-label^="Show "]'),
+  ).toHaveCount(0);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
   expect(
     await page
-      .locator('.comment-card')
+      .locator('[data-comment-card]')
       .evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.cardId)),
   ).toEqual(['0', '2', '4', '6', '8', '10']);
 
@@ -122,7 +131,7 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await page.mouse.wheel(0, 700);
   await expect.poll(() => history.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   expect(await editorScroll.evaluate((element) => element.scrollTop)).toBe(editorBefore);
-  await expect(page.locator('.comment-card')).toHaveCount(indexes.length / 2);
+  await expect(page.locator('[data-comment-card]')).toHaveCount(indexes.length / 2);
 });
 
 test('View suggestion from Resolved switches to Open before focusing the existing suggestion', async ({
@@ -161,14 +170,16 @@ test('View suggestion from Resolved switches to Open before focusing the existin
   await openReviewFile(page, paragraphs, [origin], [suggestion]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
-  await expect(activeTab.locator('.comment-history-list')).toBeVisible();
-  await expect(page.locator('.suggestion-card')).toHaveCount(0);
+  await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
+  await expect(activeTab.locator('[data-resolved-list]')).toBeVisible();
+  await expect(page.locator('[data-suggestion-kind]')).toHaveCount(0);
   await page.getByRole('button', { name: /suggestions?/i }).click();
 
-  await expect(activeTab.locator('.comments-head .filter')).toContainText('Open');
-  await expect(page.locator('.comment-history-list')).toHaveCount(0);
-  await expect(page.locator('.suggestion-card-active')).toBeVisible();
+  await expect(activeTab.getByRole('button', { name: 'Show resolved comments' })).toContainText(
+    'Open',
+  );
+  await expect(page.locator('[data-resolved-list]')).toHaveCount(0);
+  await expect(page.locator('[data-active]')).toBeVisible();
 });
 
 test('resolved comments jump only to safely located text and unresolve never stamps ambiguity', async ({
@@ -184,13 +195,13 @@ test('resolved comments jump only to safely located text and unresolve never sta
   await openReviewFile(page, paragraphs, [stale]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
   const editorScroll = activeTab.locator('.editor-scroll-area');
   await editorScroll.evaluate((element) => {
     element.scrollTop = 300;
   });
   const beforeClick = await editorScroll.evaluate((element) => element.scrollTop);
-  await page.locator('.comment-card').click();
+  await page.locator('[data-comment-card]').click();
   await expect
     .poll(() =>
       editorScroll.evaluate(
@@ -206,8 +217,8 @@ test('resolved comments jump only to safely located text and unresolve never sta
     .toEqual({ first: beforeClick, settled: beforeClick });
 
   await page.getByTitle('Unresolve').click();
-  await expect(page.locator('.comment-card-resolved')).toBeVisible();
-  await expect(page.locator('.comment-inline-notice')).toContainText('remains resolved');
+  await expect(page.locator('[data-card-resolved]')).toBeVisible();
+  await expect(page.locator('[data-inline-notice]')).toContainText('remains resolved');
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveCount(0);
 });
 
@@ -222,14 +233,14 @@ test('Unresolve reattaches a uniquely moved anchor instead of its stale stored o
   await openReviewFile(page, paragraphs, [stale]);
 
   const activeTab = activeTabHost(page);
-  await activeTab.locator('.comments-head .filter').click();
+  await activeTab.getByRole('button', { name: 'Show resolved comments' }).click();
   const editorScroll = activeTab.locator('.editor-scroll-area');
-  await page.locator('.comment-card').click();
+  await page.locator('[data-comment-card]').click();
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await page.getByTitle('Unresolve').click();
 
-  await expect(page.locator('.comment-card-resolved')).toHaveCount(0);
+  await expect(page.locator('[data-card-resolved]')).toHaveCount(0);
   await expect(page.locator('mark[data-comment-id="1"]')).toHaveText('unique moved anchor');
-  await expect(page.locator('.comment-inline-notice')).toHaveCount(0);
-  await expect(activeTab.locator('.comments-head .filter')).toBeEnabled();
+  await expect(page.locator('[data-inline-notice]')).toHaveCount(0);
+  await expect(activeTab.getByRole('button', { name: 'Show resolved comments' })).toBeEnabled();
 });

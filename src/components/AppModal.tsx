@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
+import styles from './AppModal.module.css';
 
 export interface AppModalButton {
   label: string;
@@ -27,6 +28,8 @@ const BUTTON_CLASS: Record<NonNullable<AppModalButton['kind']>, string> = {
  */
 export default function AppModal({ title, message, buttons }: AppModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const messageId = useId();
 
   useEffect(() => {
     const previouslyFocused =
@@ -74,19 +77,27 @@ export default function AppModal({ title, message, buttons }: AppModalProps) {
   };
 
   return (
-    <div
-      ref={dialogRef}
-      className="app-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      tabIndex={-1}
-      onKeyDown={handleKeyDown}
-    >
-      <div className="app-modal">
-        <h2 className="app-modal-title">{title}</h2>
-        <p className="app-modal-message">{message}</p>
-        <div className="app-modal-actions">
+    <div data-print-hidden className={styles.overlay}>
+      {/* The card IS the dialog: role, ARIA, focus ref, tab trap, and Escape all
+          live here so the accessibility, focus, and visual boundaries coincide.
+          The overlay is only the backdrop + the global print-hide opt-in. */}
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        className={styles.modal}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <h2 id={titleId} className={styles.title}>
+          {title}
+        </h2>
+        <p id={messageId} className={styles.message}>
+          {message}
+        </p>
+        <div className={styles.actions}>
           {buttons.map((b) => (
             <button
               key={b.label}

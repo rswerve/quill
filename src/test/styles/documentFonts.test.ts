@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { readAppStyles } from '../utils/readAppStyles';
 import { join } from 'node:path';
 
-const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+const css = readAppStyles();
 const html = readFileSync(join(process.cwd(), 'index.html'), 'utf8');
 const main = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8');
 

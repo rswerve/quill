@@ -67,7 +67,7 @@ async function setupChatScripts(page: Page, scripts: MockScriptStep[][]) {
 async function openChat(page: Page) {
   const host = activeTabHost(page);
   await host.getByRole('tab', { name: 'Chat', exact: true }).click();
-  await expect(host.locator('.chat-view')).toBeVisible();
+  await expect(host.getByRole('region', { name: 'Document chat' })).toBeVisible();
 }
 
 async function sendChat(page: Page, text: string) {
@@ -97,24 +97,24 @@ test('chat streams a suggestions-only edit with bidirectional provenance', async
   await expect(page.getByLabel('Ask Claude about this document')).toBeFocused();
   await sendChat(page, 'Make the opening concise');
 
-  const assistant = page.locator('.chat-message-assistant').last();
+  const assistant = page.locator('[data-chat-role="assistant"]').last();
   await expect(assistant).toContainText('I tightened the sentence.', { timeout: 3000 });
   await expect(assistant).not.toContainText('quill-edits');
-  await expect(assistant.locator('.chat-assistant-model')).toHaveText('claude-sonnet');
-  const jump = assistant.locator('.chat-suggestion-chip');
+  await expect(assistant.locator('[data-chat-model]')).toHaveText('claude-sonnet');
+  const jump = assistant.getByRole('button', { name: /in the doc/ });
   await expect(jump).toBeVisible();
   await expect(jump).toHaveText(/→ 1 suggestion in the doc/);
-  await expect(activeTabHost(page).locator('.panel-tab-count')).toHaveText('1');
-  await expect(page.locator('[title="Accept all suggestions"] .review-count')).toHaveText('1');
-  await expect(page.locator('[title="Reject all suggestions"] .review-count')).toHaveText('1');
+  await expect(activeTabHost(page).getByRole('tab', { name: 'Comments 1' })).toBeVisible();
+  await expect(page.locator('[title="Accept all suggestions"]')).toContainText('1');
+  await expect(page.locator('[title="Reject all suggestions"]')).toContainText('1');
   await jump.click();
 
-  const suggestion = activeTabHost(page).locator('.suggestion-card-replace');
+  const suggestion = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
   await expect(suggestion).toBeVisible();
   await expect(suggestion.getByRole('button', { name: '↳ from chat' })).toBeVisible();
-  await expect(activeTabHost(page).locator('.comment-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-comment-card]')).toHaveCount(0);
   await suggestion.getByRole('button', { name: '↳ from chat' }).click();
-  await expect(page.locator('.chat-view')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Document chat' })).toBeVisible();
   await expect(assistant).toBeFocused();
 
   const spawn = await page.evaluate(
@@ -154,12 +154,14 @@ test('chat applies a Markdown-spelled link edit as one tracked link replacement'
 
   await page.keyboard.press('ControlOrMeta+/');
   await sendChat(page, 'Can you clean up the first two test lines here?');
-  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
-  await expect(assistant.locator('.chat-suggestion-chip')).toHaveText(/→ 2 suggestions in the doc/);
-  await expect(assistant).not.toContainText('change was skipped');
-  await assistant.locator('.chat-suggestion-chip').click();
+  const assistant = activeTabHost(page).locator('[data-chat-role="assistant"]').last();
+  await expect(assistant.getByRole('button', { name: /in the doc/ })).toHaveText(
+    /→ 2 suggestions in the doc/,
+  );
+  await expect(assistant).not.toContainText('wasn’t applied');
+  await assistant.getByRole('button', { name: /in the doc/ }).click();
 
-  const replacements = activeTabHost(page).locator('.suggestion-card-replace');
+  const replacements = activeTabHost(page).locator('[data-suggestion-kind="replace"]');
   await expect(replacements).toHaveCount(2);
   const linkReplacement = replacements.filter({ hasText: 'CNN' });
   await linkReplacement.getByRole('button', { name: 'Accept' }).click();
@@ -186,10 +188,10 @@ test('chat identifies a skipped edit and its precise reason', async ({ page }) =
   await openChat(page);
   await sendChat(page, 'Fix the missing phrase');
 
-  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
-  await expect(assistant).toContainText('1 change was skipped:');
-  await expect(assistant).toContainText('“missing phrase” — text wasn’t found.');
-  await expect(assistant).not.toContainText('was already formatted as proposed');
+  const assistant = activeTabHost(page).locator('[data-chat-role="assistant"]').last();
+  await expect(assistant).toContainText('1 change wasn’t applied:');
+  await expect(assistant).toContainText('“missing phrase” — this text isn’t in the document.');
+  await expect(assistant).not.toContainText('it already matches the proposal');
 });
 
 test('chat shows a thinking indicator before the first streamed delta', async ({ page }) => {
@@ -197,11 +199,10 @@ test('chat shows a thinking indicator before the first streamed delta', async ({
   await openChat(page);
   await sendChat(page, 'Think about this draft');
 
-  const assistant = activeTabHost(page).locator('.chat-message-assistant').last();
+  const assistant = activeTabHost(page).locator('[data-chat-role="assistant"]').last();
   await expect(assistant.getByRole('status')).toHaveText('Claude is thinking…');
-  await expect(assistant.locator('.chat-thinking-dot')).toBeVisible();
-  await expect(assistant.locator('.chat-stream-caret')).toHaveCount(0);
-  await expect(assistant.getByRole('button', { name: 'Stop' })).toHaveClass(/chat-stop-btn/);
+  await expect(assistant.locator('[data-chat-caret]')).toHaveCount(0);
+  await expect(assistant.getByRole('button', { name: 'Stop' })).toBeVisible();
 });
 
 test('Stop cancels a live turn and Retry reuses the same message', async ({ page }) => {
@@ -211,21 +212,19 @@ test('Stop cancels a live turn and Retry reuses the same message', async ({ page
   ]);
   await openChat(page);
   await sendChat(page, 'Explain the draft');
-  const assistant = page.locator('.chat-message-assistant').last();
+  const assistant = page.locator('[data-chat-role="assistant"]').last();
   await expect(assistant).toContainText('Partial response');
-  await expect(assistant.locator('.chat-stream-caret')).toBeVisible();
+  await expect(assistant.locator('[data-chat-caret]')).toBeVisible();
   await expect(assistant.getByRole('status')).toHaveCount(0);
   const stop = assistant.getByRole('button', { name: 'Stop' });
-  await expect(stop).toHaveClass(/chat-action-btn/);
   await expect(stop.locator('svg')).toBeVisible();
   await stop.click();
   await expect(assistant).toContainText('Stopped');
   const retry = assistant.getByRole('button', { name: 'Retry' });
-  await expect(retry).toHaveClass(/chat-action-btn/);
-  await expect(assistant.getByRole('button', { name: 'Dismiss' })).toHaveClass(/chat-action-btn/);
+  await expect(assistant.getByRole('button', { name: 'Dismiss' })).toBeVisible();
   await retry.click();
   await expect(assistant).toContainText('Recovered response', { timeout: 3000 });
-  await expect(page.locator('.chat-message-assistant')).toHaveCount(1);
+  await expect(page.locator('[data-chat-role="assistant"]')).toHaveCount(1);
 });
 
 test('document chat and anchored Claude replies never resume the same session concurrently', async ({
@@ -238,7 +237,7 @@ test('document chat and anchored Claude replies never resume the same session co
   await activeEditor(page).fill('One document, one session');
   await openChat(page);
   await sendChat(page, 'Review the whole draft');
-  await expect(page.locator('.chat-message-assistant').last()).toContainText('Still working…');
+  await expect(page.locator('[data-chat-role="assistant"]').last()).toContainText('Still working…');
   await expect
     .poll(() =>
       page.evaluate(() => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount),
@@ -250,11 +249,11 @@ test('document chat and anchored Claude replies never resume the same session co
     .click();
   await activeEditor(page).click();
   await page.keyboard.press('ControlOrMeta+a');
-  await page.locator('.add-comment-btn').click();
-  await page.locator('.add-comment-compose textarea').fill('Please tighten this');
+  await page.getByRole('button', { name: 'Add comment to selection' }).click();
+  await page.locator('[data-card-id="comment-composer"] textarea').fill('Please tighten this');
   await page.getByRole('button', { name: 'Ask Claude', exact: true }).click();
 
-  const busyReply = activeTabHost(page).locator('.comment-reply-ai').last();
+  const busyReply = activeTabHost(page).locator('[data-reply-role="ai"]').last();
   await expect(busyReply).toContainText('already responding in this document');
   const spawnCountWhileBusy = await page.evaluate(
     () => (window as unknown as { __quillSpawnCount: number }).__quillSpawnCount,
@@ -263,7 +262,7 @@ test('document chat and anchored Claude replies never resume the same session co
 
   await activeTabHost(page).getByRole('tab', { name: 'Chat', exact: true }).click();
   await page
-    .locator('.chat-message-assistant')
+    .locator('[data-chat-role="assistant"]')
     .last()
     .getByRole('button', { name: 'Stop' })
     .click();
@@ -292,15 +291,15 @@ test('the first no-session send queues through the picker and starts after linki
   await openMemoryFile(page);
   await openChat(page);
   await sendChat(page, 'Please summarize this');
-  await expect(page.locator('.session-picker')).toBeVisible();
-  await expect(activeTabHost(page).locator('.chat-message')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
+  await expect(activeTabHost(page).locator('[data-chat-message-id]')).toHaveCount(0);
 
-  await page.locator('.session-picker-new').click();
-  await expect(page.locator('.session-picker')).toHaveCount(0);
-  await expect(activeTabHost(page).locator('.chat-message-user')).toHaveText(
+  await page.getByRole('button', { name: 'Start new session' }).click();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-chat-role="user"]')).toHaveText(
     'Please summarize this',
   );
-  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+  await expect(activeTabHost(page).locator('[data-chat-role="assistant"]')).toContainText(
     'Queued turn received.',
   );
   const spawn = await page.evaluate(
@@ -342,7 +341,7 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   });
 
   await openMemoryFile(page);
-  const permissionNotice = page.locator('.app-modal');
+  const permissionNotice = page.getByRole('dialog', { name: 'Reconnect Claude access' });
   await expect(permissionNotice).toContainText('Reconnect Claude access');
   await expect(permissionNotice.getByRole('button', { name: 'Relink session' })).toBeVisible();
   await expect(permissionNotice.getByRole('button', { name: 'Choose folder' })).toBeVisible();
@@ -352,16 +351,16 @@ test('an imported sidecar cannot silently grant Claude filesystem scope', async 
   );
   expect(spawnedBeforeConsent).toBeUndefined();
   await permissionNotice.getByRole('button', { name: 'Relink session' }).click();
-  await expect(page.locator('.session-picker')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toBeVisible();
   const stillNotSpawned = await page.evaluate(
     () => (window as unknown as { __quillLastSpawnArgs?: unknown }).__quillLastSpawnArgs,
   );
   expect(stillNotSpawned).toBeUndefined();
 
-  await page.locator('.session-picker-new').click();
+  await page.getByRole('button', { name: 'Start new session' }).click();
   await openChat(page);
   await sendChat(page, 'Review this imported document');
-  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+  await expect(activeTabHost(page).locator('[data-chat-role="assistant"]')).toContainText(
     'Safe local response.',
   );
   const spawn = await page.evaluate(
@@ -403,11 +402,11 @@ test('a Quill-created sidecar session reopens silently with a constrained cwd', 
   });
 
   await openMemoryFile(page);
-  await expect(page.locator('.app-modal')).toHaveCount(0);
-  await expect(page.locator('.session-picker')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
   await openChat(page);
   await sendChat(page, 'Continue');
-  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+  await expect(activeTabHost(page).locator('[data-chat-role="assistant"]')).toContainText(
     'Reopened safely.',
   );
   const spawn = await page.evaluate(
@@ -440,7 +439,7 @@ test('an imported context folder is confirmed for the loaded document path', asy
   });
 
   await openMemoryFile(page);
-  const notice = page.locator('.app-modal');
+  const notice = page.getByRole('dialog', { name: 'Reconnect Claude access' });
   await expect(notice).toContainText('This document had a reference folder');
   await notice.getByRole('button', { name: 'Choose folder' }).click();
   await expect
@@ -475,11 +474,13 @@ test('chat persists per document/session and a new session starts a fresh thread
   await openMemoryFile(page);
   await openChat(page);
   await sendChat(page, 'Remember this turn');
-  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+  await expect(activeTabHost(page).locator('[data-chat-role="assistant"]')).toContainText(
     'This answer should persist.',
   );
   await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.locator('.dirty-dot')).toHaveCount(0);
+  await expect(page.locator('[aria-label="Document location"] [aria-label="Unsaved"]')).toHaveCount(
+    0,
+  );
   const persisted = await page.evaluate((savedSidecarPath) => {
     const files = (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles;
     return JSON.parse(files[savedSidecarPath]);
@@ -495,16 +496,18 @@ test('chat persists per document/session and a new session starts a fresh thread
   await page.reload();
   await activeEditor(page).waitFor();
   await openChat(page);
-  await expect(activeTabHost(page).locator('.chat-message-user')).toHaveText('Remember this turn');
-  await expect(activeTabHost(page).locator('.chat-message-assistant')).toContainText(
+  await expect(activeTabHost(page).locator('[data-chat-role="user"]')).toHaveText(
+    'Remember this turn',
+  );
+  await expect(activeTabHost(page).locator('[data-chat-role="assistant"]')).toContainText(
     'This answer should persist.',
   );
 
   const active = activeTabHost(page);
   await active.getByRole('button', { name: 'Chat session menu' }).click();
   await active.getByRole('menuitem', { name: 'Start new session' }).click();
-  await expect(active.locator('.chat-message')).toHaveCount(0);
-  await expect(active.locator('.panel-session-chip')).not.toContainText(
+  await expect(active.locator('[data-chat-message-id]')).toHaveCount(0);
+  await expect(active.getByTitle(/^(Claude session|No Claude session)/)).not.toContainText(
     ipcFixtures.autoBindSession.sessionId.slice(0, 8).toUpperCase(),
   );
 });
@@ -531,14 +534,19 @@ test('a background tab finishes only its own chat suggestions', async ({ page })
   await page.locator('.tab-add').click();
   await activeEditor(page).fill('Second tab text');
   const firstTab = page.locator('.document-tab-host').first();
-  await expect(firstTab.locator('.chat-suggestion-chip')).toHaveText(/→ 1 suggestion in the doc/);
+  // firstTab is now the background (hidden) tab, so its suggestion chip is out
+  // of the accessibility tree — a role query would miss it. Assert on the sole
+  // assistant message via a raw attribute locator, which matches hidden nodes.
+  await expect(firstTab.locator('[data-chat-role="assistant"]')).toContainText(
+    /→ 1 suggestion in the doc/,
+  );
   await expect(activeEditor(page)).toHaveText('Second tab text');
-  await expect(activeTabHost(page).locator('.suggestion-card')).toHaveCount(0);
+  await expect(activeTabHost(page).locator('[data-suggestion-kind]')).toHaveCount(0);
 
   await page.locator('.document-tab').first().click();
   await activeTabHost(page)
     .getByRole('tab', { name: /Comments/ })
     .click();
-  await expect(activeTabHost(page).locator('.suggestion-card-replace')).toBeVisible();
+  await expect(activeTabHost(page).locator('[data-suggestion-kind="replace"]')).toBeVisible();
   await expect(activeEditor(page)).toContainText('First tab text');
 });
