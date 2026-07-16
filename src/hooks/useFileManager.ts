@@ -570,7 +570,12 @@ export function useFileManager(
       documentEpochRef.current += 1; // restore swaps in a different document
       updateFilePath(path);
       setIsDirty(dirty);
-      const restoredDoc = baselines?.expectedDoc ?? null;
+      const rawDoc = baselines?.expectedDoc ?? null;
+      // A saved document's `.md` cannot legitimately be absent — an `absent` doc
+      // baseline for a real path is corrupt metadata, so normalize it to UNKNOWN
+      // (fail closed on the next save) rather than treating the file as gone. The
+      // sidecar may legitimately be absent.
+      const restoredDoc = path !== null && rawDoc?.state === 'absent' ? null : rawDoc;
       const restoredSidecar = baselines?.expectedSidecar ?? null;
       expectedDocRef.current = restoredDoc;
       expectedSidecarRef.current = restoredSidecar;

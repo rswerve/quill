@@ -1046,6 +1046,20 @@ describe('useFileManager', () => {
       expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
     });
 
+    it('normalizes an absent doc baseline for a saved path to unknown (fails closed)', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      // A saved .md cannot be absent — corrupt metadata → unknown, not "file gone".
+      act(() => {
+        result.current.restoreDraft('/saved.md', true, { expectedDoc: { state: 'absent' } });
+      });
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('edited', [], [], null, null);
+      });
+      expect(outcome!).toEqual({ status: 'blocked', reason: 'baseline-unknown' });
+    });
+
     it('a same-path Save As whose sidecar fails still advances the doc baseline', async () => {
       const { result } = renderHook(() => useFileManager());
       let sidecarFails = true;

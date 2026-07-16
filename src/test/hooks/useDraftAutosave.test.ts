@@ -311,18 +311,31 @@ describe('sanitizeDraft baselines', () => {
     contextFolder: null,
   };
 
+  const HASH64 = 'a'.repeat(64);
+
   it('round-trips valid on-disk baselines and protection', () => {
     const out = sanitizeDraft({
       ...base,
-      expectedDoc: { state: 'present', hash: 'h' },
+      expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
     });
     expect(out).toMatchObject({
-      expectedDoc: { state: 'present', hash: 'h' },
+      expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
     });
+  });
+
+  it('drops a present baseline whose hash is not 64-char lowercase hex', () => {
+    const out = sanitizeDraft({
+      ...base,
+      expectedDoc: { state: 'present', hash: 'h' }, // too short
+      expectedSidecar: { state: 'present', hash: 'A'.repeat(64) }, // uppercase — not native hex
+    });
+    expect(out).not.toBeNull();
+    expect(out!.expectedDoc).toBeUndefined(); // malformed → unknown, not a bad expected
+    expect(out!.expectedSidecar).toBeUndefined();
   });
 
   it('drops malformed baselines to unknown rather than discarding the recovery draft', () => {

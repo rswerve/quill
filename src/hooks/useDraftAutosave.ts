@@ -21,8 +21,12 @@ function sanitizeFingerprint(raw: unknown): Fingerprint | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const f = raw as Record<string, unknown>;
   if (f.state === 'absent') return { state: 'absent' };
-  if (f.state === 'present' && typeof f.hash === 'string')
+  // A present hash must be exactly the native SHA-256 hex (64 lowercase hex chars);
+  // anything else is malformed → unknown, so it fails closed rather than reaching
+  // the backend as an invalid `expected` and degrading into a generic save failure.
+  if (f.state === 'present' && typeof f.hash === 'string' && /^[0-9a-f]{64}$/.test(f.hash)) {
     return { state: 'present', hash: f.hash };
+  }
   return undefined;
 }
 
