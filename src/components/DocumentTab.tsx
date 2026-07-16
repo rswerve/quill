@@ -262,6 +262,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     newFile,
     restoreDraft,
     getChangeRevision,
+    getBaselines,
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
 
@@ -370,6 +371,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // the regular sidecar serializer does.
   const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
     const live = getLiveReviewState();
+    const baselines = getBaselines();
     return {
       filePath,
       content: getDocMarkdown(),
@@ -378,8 +380,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
+      // Persist the on-disk baselines + protection so a recovered dirty draft can
+      // still detect an external change on the next save (never re-hashing disk).
+      expectedDoc: baselines.expectedDoc,
+      expectedSidecar: baselines.expectedSidecar,
+      sidecarProtected: baselines.sidecarProtected,
     };
-  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder]);
+  }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder, getBaselines]);
 
   // Read the live document text for a comment's anchored range and its
   // enclosing paragraph, as plaintext (matching how Claude's `find` strings are
@@ -791,12 +798,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // is a deliberate no-op.
   const notifySaveOutcome = useCallback(
     (outcome: SaveOutcome) => {
-      if (outcome.status === 'blocked') {
+      if (outcome.status === 'blocked' && outcome.reason === 'sidecar-protected') {
         showError(
           'Comments not saved',
           'The document text was saved, but its comments and suggestions could not be ' +
             "written: the existing .comments.json file is unreadable and Quill won't " +
             'overwrite it. Recover or remove that file, then save again.',
+        );
+      } else if (outcome.status === 'blocked') {
+        // baseline-unknown: a recovered draft with no trustworthy on-disk baseline.
+        showError(
+          "Couldn't save — this file's state is unknown",
+          "Quill recovered unsaved work for this file but can't tell whether the file on " +
+            "disk changed while Quill was closed, so it won't overwrite it. Reopen the file " +
+            'to reconcile, or use Save As to write your recovered work to a new file.',
         );
       } else if (outcome.status === 'conflict') {
         showError(
@@ -964,7 +979,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // restored as clean browser-session state.
   const restoreWorkspaceSnapshot = useCallback(
     (draft: DraftFile, dirty: boolean) => {
-      restoreDraft(draft.filePath, dirty);
+      restoreDraft(draft.filePath, dirty, {
+        expectedDoc: draft.expectedDoc ?? null,
+        expectedSidecar: draft.expectedSidecar ?? null,
+        sidecarProtected: draft.sidecarProtected,
+      });
       setLastSavedAt(null);
       const liveEditor = editorRef.current?.getEditor();
       if (liveEditor) {

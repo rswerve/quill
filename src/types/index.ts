@@ -1,3 +1,6 @@
+import type { Fingerprint } from '../utils/atomicFile';
+export type { Fingerprint };
+
 export interface Reply {
   id: string;
   author: string;
@@ -249,6 +252,17 @@ export interface DraftFile {
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   chat?: DocumentChatThread;
+  /**
+   * The on-disk baselines for the `.md` and its `.comments.json` captured when this
+   * draft was snapshotted, so a recovered dirty draft can DETECT an external change on
+   * the next save instead of silently overwriting it. Absent/null (legacy snapshots,
+   * or genuinely unknown) is treated as UNKNOWN → fail closed for a saved path. Never
+   * re-hash today's disk on restore — that would bless a change made while away.
+   */
+  expectedDoc?: Fingerprint | null;
+  expectedSidecar?: Fingerprint | null;
+  /** Whether the sidecar was protected (unreadable) when the draft was snapshotted. */
+  sidecarProtected?: boolean;
 }
 
 /**

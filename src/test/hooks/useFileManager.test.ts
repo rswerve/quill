@@ -991,6 +991,98 @@ describe('useFileManager', () => {
         { mode: 'match', hash: readHash('orig') },
       ]);
     });
+
+    it('blocks a saved-path save when its baseline is UNKNOWN (recovered without a baseline)', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      // A recovered saved-path draft with NO persisted baseline → unknown.
+      act(() => {
+        result.current.restoreDraft('/recovered.md', true);
+      });
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('edited', [], [], null, null);
+      });
+      expect(outcome!).toEqual({ status: 'blocked', reason: 'baseline-unknown' });
+      // Fail closed BEFORE any disk write.
+      expect(mockInvoke).not.toHaveBeenCalledWith('write_file_atomic', expect.anything());
+    });
+
+    it('restores baselines so a save after recovery gates on the persisted fingerprint', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      act(() => {
+        result.current.restoreDraft('/recovered.md', true, {
+          expectedDoc: { state: 'present', hash: 'persisted-doc' },
+          expectedSidecar: { state: 'absent' },
+        });
+      });
+      await act(async () => {
+        await result.current.saveFile('edited', [], [], null, null);
+      });
+      const docWrite = mockInvoke.mock.calls.find(
+        (call) =>
+          call[0] === 'write_file_atomic' && (call[1] as InvokeArgs).path === '/recovered.md',
+      );
+      expect((docWrite![1] as InvokeArgs).expected).toEqual({
+        mode: 'match',
+        hash: 'persisted-doc',
+      });
+    });
+
+    it('restoring a saved path with an UNKNOWN sidecar baseline protects the sidecar', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      act(() => {
+        result.current.restoreDraft('/recovered.md', true, {
+          expectedDoc: { state: 'present', hash: 'doc' }, // doc known → .md may write
+          expectedSidecar: null, // sidecar unknown → protect it
+        });
+      });
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('edited', [SAMPLE_COMMENT], [], null, null);
+      });
+      expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
+    });
+
+    it('a same-path Save As whose sidecar fails still advances the doc baseline', async () => {
+      const { result } = renderHook(() => useFileManager());
+      let sidecarFails = true;
+      const docWrites: { path?: string; expected?: unknown }[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          return a.path === '/a.md' ? fpPresent('a-doc') : fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (a.path?.endsWith('.comments.json')) {
+            if (sidecarFails) throw new Error('Disk full');
+            return { status: 'written', hash: 'sc' };
+          }
+          docWrites.push({ path: a.path, expected: a.expected });
+          return { status: 'written', hash: `w-${a.content}` };
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/a.md');
+      });
+      let saveAs: SaveOutcome;
+      await act(async () => {
+        saveAs = await result.current.saveFile('v1', [SAMPLE_COMMENT], [], null, null, '/a.md');
+      });
+      expect(saveAs!.status).toBe('failed'); // sidecar I/O threw
+      // The .md hit the current file, so its baseline advanced despite the failure —
+      // the next normal save gates on the hash just written (w-v1), not the open hash.
+      sidecarFails = false;
+      await act(async () => {
+        await result.current.saveFile('v2', [], [], null, null);
+      });
+      expect(docWrites[docWrites.length - 1].expected).toEqual({ mode: 'match', hash: 'w-v1' });
+    });
   });
 
   describe('saveFileAs', () => {

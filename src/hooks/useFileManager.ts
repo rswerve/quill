@@ -87,7 +87,7 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
-  | { status: 'blocked'; reason: 'sidecar-protected' }
+  | { status: 'blocked'; reason: 'sidecar-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
   | { status: 'failed'; message: string };
@@ -138,13 +138,27 @@ interface UseFileManagerReturn {
     requestPathOwnership?: (path: string) => boolean,
   ) => Promise<SaveOutcome>;
   newFile: () => void;
-  restoreDraft: (path: string | null, dirty?: boolean) => void;
+  restoreDraft: (
+    path: string | null,
+    dirty?: boolean,
+    baselines?: {
+      expectedDoc?: Fingerprint | null;
+      expectedSidecar?: Fingerprint | null;
+      sidecarProtected?: boolean;
+    },
+  ) => void;
   /**
    * The current monotonic change-revision — bumped on every document/review/chat
    * mutation (markDirty) and on open/new/restore. The save coordinator reads it to
    * decide whether a completed write covered a given save request.
    */
   getChangeRevision: () => number;
+  /** Current on-disk baselines + sidecar-protection, for the workspace snapshot. */
+  getBaselines: () => {
+    expectedDoc: Fingerprint | null;
+    expectedSidecar: Fingerprint | null;
+    sidecarProtected: boolean;
+  };
 }
 
 /**
@@ -180,15 +194,32 @@ export function useFileManager(
   // expectation is retained until Overwrite/Save-a-Copy succeeds.
   const expectedDocRef = useRef<Fingerprint | null>(null);
   const expectedSidecarRef = useRef<Fingerprint | null>(null);
-  // True when the currently open file's sidecar exists on disk but couldn't be
-  // parsed. We refuse to overwrite/delete it so the user can recover it; only
-  // an explicit Save As (new path) escapes the guard.
-  const [sidecarProtected, setSidecarProtected] = useState(false);
+  // True when the currently open file's sidecar exists on disk but couldn't be parsed
+  // (or read ambiguously). We refuse to overwrite/delete it so the user can recover
+  // it; only an explicit Save As (new path) escapes the guard. A ref, not state:
+  // saves read it synchronously (they can run before React commits) and nothing
+  // renders from it directly.
+  const sidecarProtectedRef = useRef(false);
 
   const markDirty = useCallback(() => {
     changeRevisionRef.current += 1;
     setIsDirty(true);
   }, []);
+
+  const setProtected = useCallback((value: boolean) => {
+    sidecarProtectedRef.current = value;
+  }, []);
+
+  // Snapshot the current on-disk baselines + protection for the workspace recovery
+  // envelope, read synchronously from refs so it reflects the very latest save.
+  const getBaselines = useCallback(
+    () => ({
+      expectedDoc: expectedDocRef.current,
+      expectedSidecar: expectedSidecarRef.current,
+      sidecarProtected: sidecarProtectedRef.current,
+    }),
+    [],
+  );
 
   // The single writer for the document path — keeps the synchronous ref and the
   // render state in lockstep so no caller can update one without the other.
@@ -238,7 +269,7 @@ export function useFileManager(
           sidecarFingerprint = null;
           console.error(`Sidecar at ${sidecarPath(path)} could not be read:`, e);
         }
-        setSidecarProtected(sidecarError !== null);
+        setProtected(sidecarError !== null);
 
         let autoBound = false;
         if (!sidecar.aiSession) {
@@ -278,7 +309,7 @@ export function useFileManager(
         return null;
       }
     },
-    [onError, updateFilePath],
+    [onError, updateFilePath, setProtected],
   );
 
   const openFile = useCallback(async () => {
@@ -374,8 +405,16 @@ export function useFileManager(
       const isExplicitSaveAs = forcePath !== undefined;
       const isCurrentTarget = targetPath === currentPath;
       const usingExpected = !isExplicitSaveAs;
+      // Fail CLOSED: a conditional save to an existing path whose baseline is UNKNOWN
+      // (a recovered draft with no persisted fingerprint) must NOT write — we can't
+      // tell whether the file changed on disk while we were away, and an unconditional
+      // write would silently overwrite it. Only Untitled (no path) and explicit Save As
+      // are legitimately unconditional. Block before touching disk.
+      if (usingExpected && currentPath !== null && expectedDocRef.current === null) {
+        return { status: 'blocked', reason: 'baseline-unknown' };
+      }
       // Protect a corrupt/ambiguous sidecar from being clobbered on a same-path save.
-      const skipSidecar = sidecarProtected && isCurrentTarget;
+      const skipSidecar = sidecarProtectedRef.current && isCurrentTarget;
       const sameDocument = () => documentEpochRef.current === saveEpoch;
       try {
         const docExpected: Expected =
@@ -436,7 +475,7 @@ export function useFileManager(
         //    the write, so it's safe to clear dirty. A concurrent edit keeps dirty.
         if (sameDocument()) {
           updateFilePath(targetPath);
-          setSidecarProtected(false);
+          setProtected(false);
           if (!isCurrentTarget) {
             // Different Save As target: commit the staged baselines now that the whole
             // save succeeded and the new path is adopted (current-target saves already
@@ -461,7 +500,7 @@ export function useFileManager(
         return { status: 'failed', message };
       }
     },
-    [saveSidecar, sidecarProtected, onError, updateFilePath],
+    [saveSidecar, onError, updateFilePath, setProtected],
   );
 
   const saveFileAs = useCallback(
@@ -506,30 +545,43 @@ export function useFileManager(
     documentEpochRef.current += 1; // New is an identity change
     updateFilePath(null);
     setIsDirty(false);
-    setSidecarProtected(false);
+    setProtected(false);
     // A brand-new doc has no on-disk baseline — the first save writes unconditionally.
     expectedDocRef.current = null;
     expectedSidecarRef.current = null;
-  }, [updateFilePath]);
+  }, [updateFilePath, setProtected]);
 
   // Adopt a recovered draft: point at its file (if any) without reading disk —
   // the draft's content is newer than the file — and mark dirty so the user is
-  // prompted to save the recovered work.
+  // prompted to save the recovered work. The on-disk baselines come from the
+  // snapshot (captured when the draft was made); we NEVER re-hash today's disk here,
+  // which would bless a change made while Quill was closed.
   const restoreDraft = useCallback(
-    (path: string | null, dirty = true) => {
+    (
+      path: string | null,
+      dirty = true,
+      baselines?: {
+        expectedDoc?: Fingerprint | null;
+        expectedSidecar?: Fingerprint | null;
+        sidecarProtected?: boolean;
+      },
+    ) => {
       changeRevisionRef.current += 1;
       documentEpochRef.current += 1; // restore swaps in a different document
       updateFilePath(path);
       setIsDirty(dirty);
-      setSidecarProtected(false);
-      // A recovered draft's in-memory content is newer than disk and we did NOT
-      // read disk, so we have no trustworthy baseline. Leave it unknown until the
-      // persisted baselines are restored (workspace snapshot) or the next open —
-      // hashing today's disk here would bless external changes made while closed.
-      expectedDocRef.current = null;
-      expectedSidecarRef.current = null;
+      const restoredDoc = baselines?.expectedDoc ?? null;
+      const restoredSidecar = baselines?.expectedSidecar ?? null;
+      expectedDocRef.current = restoredDoc;
+      expectedSidecarRef.current = restoredSidecar;
+      // Protect the sidecar if the snapshot recorded it protected OR its baseline is
+      // unknown for a saved path (can't verify → don't clobber). An unknown DOC
+      // baseline is handled by the fail-closed save path, not here.
+      setProtected(
+        baselines?.sidecarProtected === true || (path !== null && restoredSidecar === null),
+      );
     },
-    [updateFilePath],
+    [updateFilePath, setProtected],
   );
 
   return {
@@ -543,5 +595,6 @@ export function useFileManager(
     newFile,
     restoreDraft,
     getChangeRevision: () => changeRevisionRef.current,
+    getBaselines,
   };
 }
