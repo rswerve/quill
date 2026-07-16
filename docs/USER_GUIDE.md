@@ -4,9 +4,7 @@ Quill is **the document editor that can hold a conversation**. It reviews and re
 
 ## Getting Quill
 
-**Signed installers are on the way.** A ready-to-download Mac app is being set up; until it ships, Quill is run by building it from source, which is a developer task — the [README](../README.md#build-and-run-from-source) has the steps. Once Quill is running, everything below applies.
-
-Each time Quill starts it checks whether a newer version has been released and, if so, shows a slim banner at the top of the window: **View release** opens the download page in your browser, **×** dismisses it. Quill never updates itself or downloads anything in the background — installing a new version is always your choice.
+**Getting Quill.** Inside Truss, Quill is shared as a ready-to-run Mac app on the team's Google Drive. Copy `Quill.app` from the shared drive to your Applications folder and open it — do this in **Finder, from your synced Google Drive folder**, not from the Drive website's download button, so macOS doesn't quarantine the app. A signed, one-click installer is still on the way; until it ships, this is the way to get Quill without building it yourself. If you'd rather build from source, the [README](../README.md#build-and-run-from-source) has the developer steps. Once Quill is running, everything below applies.
 
 ## The basics
 
@@ -21,7 +19,7 @@ Each time Quill starts it checks whether a newer version has been released and, 
 
 ## Suggesting mode (tracked changes)
 
-Click **Suggesting** in the top bar to switch modes. Now your edits don't change the text directly — insertions and deletions appear marked up in the text, each with a card in the right margin where you (or a co-reviewer) can **Accept** or **Reject** it. **Formatting changes are tracked too** (bold, italic, strikethrough, inline code): the style applies right away and a "Formatting" card lets you keep or revert it. **Accept all** / **Reject all** clear the whole batch. Switch back to **Editing** to edit normally. (Links can't be changed while suggesting — switch to Editing to edit a link.)
+Click **Suggesting** in the top bar to switch modes. Now your edits don't change the text directly — insertions and deletions appear marked up in the text, each with a card in the right margin where you **Accept** or **Reject** it. **Formatting changes are tracked too** (bold, italic, strikethrough, inline code): the style applies right away and a "Formatting" card lets you keep or revert it. **Accept all** / **Reject all** clear the whole batch. Switch back to **Editing** to edit normally. (Links can't be changed while suggesting — switch to Editing to edit a link.)
 
 ## Comments
 
@@ -51,7 +49,7 @@ Then type `claude` and press Return — the first run walks you through signing 
 
 **A document you didn't write with Claude.** If someone sends you a Markdown file — or you wrote one yourself — save it, click **✦ Link session**, and choose **Start new session** to give that document its own fresh Claude conversation. (The button is grayed out until the document is saved, because the session runs in the document's folder.)
 
-**Choosing a model.** Two small dropdowns in the bottom bar set the Claude **model** and **effort** for the next request (both default to Claude Code's own default). The bar also reports which model actually answered.
+**Choosing a model.** Two small dropdowns in the bottom bar set the Claude **model** and **effort** for the next request; leave either on **AUTO** to let Claude Code decide. After a request, the same dropdowns show what Claude actually used — the model family (like `OPUS`) and the effort level — so "AUTO" becomes the real answer once you've asked something.
 
 ## Chat about the whole document
 
@@ -63,16 +61,6 @@ Chat always reads the full current document. Its edits come back as **tracked su
 
 If your document draws on source material — interview notes, research PDFs, data files — put them in a folder and click **REFERENCE FOLDER** in the bottom bar. From then on, every `@claude` request (comment or chat) lets Claude read that folder and tells it which files are inside, so you can ask _"@claude check this summary against the interview notes."_ The link is remembered with the document; click the folder name to change it or **×** to unlink.
 
-## Starting from Claude Code
-
-If you write documents _with_ Claude Code, there's a plugin that closes the loop: it adds a command that sends the document you're working on straight into Quill. Install and usage are in the [plugin README](../plugin/quill-integration/README.md); the short version is that inside a Claude Code session you run:
-
-```
-/quill-integration:open-in-quill draft.md
-```
-
-and Quill opens the file, ready for `@claude` questions and revisions. (Launch Quill at least once first, so macOS learns the `quill://` link type.)
-
 ## Tips
 
 - **Zoom** the document with Cmd +/− (Cmd+0 resets) or the slider in the bottom bar (double-click the percentage to reset).
@@ -83,4 +71,4 @@ and Quill opens the file, ready for `@claude` questions and revisions. (Launch Q
 
 - **"@claude" replies fail immediately** — make sure the Claude Code CLI is installed (`claude` in a terminal) and you're signed in. Quill searches the usual install locations even when launched from the Dock.
 - **A document opens with a warning about its comments file** — the companion `.comments.json` couldn't be read. Quill opens the text safely and refuses to overwrite the damaged file, so the comments may be recoverable from a backup.
-- For anything else, [open an issue](https://github.com/sam-powers/quill/issues) describing what happened.
+- For anything else, open an issue on the project's repository describing what happened.

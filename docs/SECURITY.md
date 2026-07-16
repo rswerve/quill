@@ -10,7 +10,7 @@ non-fix is part of the posture.
 
 If you find a security issue in Quill, please report it privately rather than
 opening a public issue, so it can be fixed before it's widely known. Email
-**sapowers16@gmail.com** with a description and, where possible, steps to
+**maz@truss.works** with a description and, where possible, steps to
 reproduce. You'll get an acknowledgement, and we'll work the fix and any
 disclosure timing with you. There is no bug-bounty program — this is a small
 open-source project — but reports are genuinely welcome and credited if you'd
@@ -136,23 +136,15 @@ so a half-formed binding can't drive a process spawn later. The white-screen-on-
 open DoS is closed: a hostile or corrupt sidecar degrades to "some annotations
 were dropped," never to a position that throws.
 
-### 3. URL schemes are allowlisted on the two paths that open a browser (#59)
+### 3. Link URL schemes are allowlisted before they open a browser (#59)
 
-Two places turn stored strings into something the user can navigate to, and both
-now refuse anything outside a known-safe set.
-
-- **Link marks** (`Toolbar.tsx`, `normalizeHref`): a link the user types is
-  persisted into the saved `.md` and is later clickable, so a `javascript:`,
-  `data:`, `vbscript:`, or `file:` href would be a stored-XSS / local-file vector
-  that survives a save/reopen. `normalizeHref` passes in-page/relative refs
-  (`^[#/.]`), accepts a scheme only if it's in
-  `['http', 'https', 'mailto', 'tel']`, gives bare domains an `https://` prefix,
-  and returns empty for everything else.
-- **The update banner** (`useUpdateCheck.ts`): "View release" opens
-  `release.html_url` _from a network response_ in the user's browser.
-  `safeReleaseUrl` accepts it only if it parses as `https://github.com/…`,
-  otherwise falls back to the hardcoded releases page. A spoofed or compromised
-  API response can't redirect the user to an arbitrary scheme or host.
+A link the user types is persisted into the saved `.md` and is later clickable,
+turning a stored string into something the user can navigate to — so a
+`javascript:`, `data:`, `vbscript:`, or `file:` href would be a stored-XSS /
+local-file vector that survives a save/reopen. `normalizeHref` (`Toolbar.tsx`)
+passes in-page/relative refs (`^[#/.]`), accepts a scheme only if it's in
+`['http', 'https', 'mailto', 'tel']`, gives bare domains an `https://` prefix,
+and returns empty for everything else.
 
 ### 4. Binary resolution only spawns a real file (#60)
 
@@ -202,7 +194,6 @@ To be honest about the boundary: Quill does not defend against an attacker who
 _already_ has code execution on the machine or write access to the user's home
 directory — at that point the deep link and sidecar are the least of the user's
 problems. It is not code-signed or notarized beyond the standard release path,
-and there is no auto-updater (the update story is a notify-only banner by
-design). The threat model is "a normal user opens documents, some of which they
+and there is no auto-updater or in-app update check. The threat model is "a normal user opens documents, some of which they
 didn't author, and visits web pages that might fire a deep link" — and within
 that model, the four fixes above close the gaps the audits found.

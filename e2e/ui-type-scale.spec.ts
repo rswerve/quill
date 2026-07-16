@@ -367,8 +367,8 @@ test('app modal chrome uses the intended scale', async ({ page }) => {
   await activeEditor(page).fill('dirty');
   await page.locator('.document-tab.active .document-tab-close').click();
   // Modal chrome: assert the title's RENDERED size via role (module classes are
-  // hashed). Message + button sizes, and the UpdateBanner scale, are asserted
-  // from their module sources / global primitives in the unit type-scale suite.
+  // hashed). Message + button sizes are asserted from their module source /
+  // global primitives in the unit type-scale suite.
   await expectType(
     page.getByRole('dialog', { name: 'Unsaved changes' }).getByRole('heading'),
     '15px',

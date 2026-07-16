@@ -67,3 +67,10 @@ the code. Grows as learnings surface new domain nouns.
 - **Provenance (origin ids)** — the `originCommentId` / `originChatMessageId`
   stamped on an AI-authored suggestion, recording which comment or chat message
   produced it so the card and its source can cross-link.
+
+- **Observed vs chosen model/effort** — the footer's model/effort selects hold
+  two distinct things: the _chosen_ value (what the next request will use, or
+  `AUTO` to let Claude Code decide) and the _observed_ value (what Claude
+  actually ran last time — the model family from the stream's init event, the
+  effort from a per-run signal), shown bare (e.g. `OPUS`) in `AUTO` mode until a
+  value has been observed.

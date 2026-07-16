@@ -36,4 +36,4 @@ A husky pre-commit hook runs lint-staged and the unit tests automatically.
 
 ## Reporting bugs
 
-[Open an issue](https://github.com/sam-powers/quill/issues) with your platform, what you did, what you expected, and what happened. For `@claude` problems, mention whether the `claude` CLI works in your terminal.
+Open an issue on the project's repository with your platform, what you did, what you expected, and what happened. For `@claude` problems, mention whether the `claude` CLI works in your terminal.
