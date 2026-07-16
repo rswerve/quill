@@ -491,4 +491,109 @@ describe('useSaveCoordinator', () => {
       second.resolve(saved());
     });
   });
+
+  describe('saveAndDrain (autosave seam)', () => {
+    it('returns the terminal outcome + covered revision of a clean save', async () => {
+      const performSave = vi.fn(async () => saved());
+      const { result } = setup(performSave); // revision 1
+
+      let drained!: { outcome: SaveOutcome; revision: number };
+      await act(async () => {
+        drained = await result.current.saveAndDrain();
+      });
+      expect(drained.outcome.status).toBe('saved');
+      expect(drained.revision).toBe(1); // covered watermark
+      expect(performSave).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a FRESH-PASS failure, never the first write’s success (Codex pinned)', async () => {
+      // Edit during pass 1 → pass 2 fails → saveAndDrain must report failed, not saved,
+      // and must not issue a pass 3.
+      const d1 = deferred<SaveOutcome>();
+      const d2 = deferred<SaveOutcome>();
+      const performSave = vi
+        .fn<() => Promise<SaveOutcome>>()
+        .mockReturnValueOnce(d1.promise)
+        .mockReturnValueOnce(d2.promise);
+      const { result, revisionRef } = setup(performSave);
+
+      let drained!: Promise<{ outcome: SaveOutcome; revision: number }>;
+      act(() => {
+        drained = result.current.saveAndDrain(); // write 1, startRevision = 1
+      });
+      revisionRef.current = 2; // edit while pass 1 is in flight
+
+      await act(async () => {
+        d1.resolve(saved()); // pass 1 saved; rev 2 > 1 → fresh pass 2 begins
+      });
+      expect(performSave).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        d2.resolve(failed()); // fresh pass 2 FAILS
+      });
+      const res = await drained;
+      expect(res.outcome.status).toBe('failed'); // terminal outcome, not the pass-1 'saved'
+      expect(performSave).toHaveBeenCalledTimes(2); // never a pass 3
+    });
+
+    it('surfaces a first-write failure directly', async () => {
+      const performSave = vi.fn(async () => failed());
+      const { result } = setup(performSave);
+      let drained!: { outcome: SaveOutcome; revision: number };
+      await act(async () => {
+        drained = await result.current.saveAndDrain();
+      });
+      expect(drained.outcome.status).toBe('failed');
+    });
+
+    it('does not return a stale outcome from an earlier drain', async () => {
+      // A first drain fails; a second drain (with the fault cleared) must report saved,
+      // not the previous failure lingering in lastOutcomeRef.
+      const performSave = vi
+        .fn<() => Promise<SaveOutcome>>()
+        .mockResolvedValueOnce(failed())
+        .mockResolvedValueOnce(saved());
+      const { result, revisionRef } = setup(performSave);
+
+      let first!: { outcome: SaveOutcome; revision: number };
+      await act(async () => {
+        first = await result.current.saveAndDrain();
+      });
+      expect(first.outcome.status).toBe('failed');
+
+      revisionRef.current = 2;
+      let second!: { outcome: SaveOutcome; revision: number };
+      await act(async () => {
+        second = await result.current.saveAndDrain();
+      });
+      expect(second.outcome.status).toBe('saved');
+      expect(second.revision).toBe(2);
+    });
+
+    it('drains a queued fresh pass and reports its (successful) terminal outcome', async () => {
+      const d1 = deferred<SaveOutcome>();
+      const d2 = deferred<SaveOutcome>();
+      const performSave = vi
+        .fn<() => Promise<SaveOutcome>>()
+        .mockReturnValueOnce(d1.promise)
+        .mockReturnValueOnce(d2.promise);
+      const { result, revisionRef } = setup(performSave);
+
+      let drained!: Promise<{ outcome: SaveOutcome; revision: number }>;
+      act(() => {
+        drained = result.current.saveAndDrain(); // startRevision 1
+      });
+      revisionRef.current = 2;
+      await act(async () => {
+        d1.resolve(saved()); // fresh pass 2 begins at revision 2
+      });
+      await act(async () => {
+        d2.resolve(saved()); // covers revision 2 → drain settles
+      });
+      const res = await drained;
+      expect(res.outcome.status).toBe('saved');
+      expect(res.revision).toBe(2); // watermark reached the latest edit
+      expect(performSave).toHaveBeenCalledTimes(2);
+    });
+  });
 });

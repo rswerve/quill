@@ -32,6 +32,16 @@ export interface SaveCoordinator {
    * new write when idle. Used to serialize open/new/close/quit against saves.
    */
   flush: () => Promise<void>;
+  /**
+   * Save the current path AND wait for the coordinator to fully quiesce, then report
+   * the FINAL write's outcome — not merely the first waiter's. If an edit made during
+   * the initial write triggers a follow-up pass, that pass's outcome is what returns,
+   * so a fresh-pass failure/conflict is never masked by an earlier "saved". `revision`
+   * is the highest change-revision now on disk (the covered watermark), used by the
+   * autosave scheduler to mark exactly what it persisted. This is the seam autosave
+   * drives, so a background save reflects the coordinator's terminal state.
+   */
+  saveAndDrain: () => Promise<{ outcome: SaveOutcome; revision: number }>;
   status: SaveStatus;
 }
 
@@ -60,6 +70,10 @@ interface ExclusiveJob {
   job: () => Promise<SaveOutcome>;
   resolve: (outcome: SaveOutcome) => void;
   reject: (error: unknown) => void;
+}
+
+interface DrainWaiter {
+  resolve: (result: { outcome: SaveOutcome; revision: number }) => void;
 }
 
 function statusFor(outcome: SaveOutcome): SaveStatus {
@@ -108,6 +122,13 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
   const coveredRevisionRef = useRef(-1);
   // Resolves when the currently-running drain loop goes idle. Replaced per loop.
   const idleRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+  // The most recent write's typed outcome, updated on EVERY terminal path (success,
+  // failure, caught exception) so saveAndDrain reports what the drain actually did.
+  const lastOutcomeRef = useRef<SaveOutcome | null>(null);
+  // Callers awaiting the coordinator's terminal (fully-quiesced) outcome. Resolved in
+  // the drain loop's `finally`, tied to that loop's own last outcome — never a stale
+  // one from a prior drain.
+  const drainWaitersRef = useRef<DrainWaiter[]>([]);
   const [status, setStatus] = useState<SaveStatus>({ state: 'idle' });
 
   const pump = useCallback(() => {
@@ -146,6 +167,7 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
             const startRevision = getRevisionRef.current();
             try {
               const outcome = await job();
+              lastOutcomeRef.current = outcome;
               setStatus(statusFor(outcome));
               if (outcome.status === 'saved') {
                 // A successful Save As put the current state on disk: advance the
@@ -161,6 +183,8 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
               // survives a cancelled Save As.
               resolve(outcome);
             } catch (error) {
+              // A thrown exclusive is a terminal failure for the drain too.
+              lastOutcomeRef.current = { status: 'failed', message: String(error) };
               setStatus({ state: 'failed', message: String(error) });
               reject(error);
             }
@@ -177,6 +201,7 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
           } catch (error) {
             outcome = { status: 'failed', message: String(error) };
           }
+          lastOutcomeRef.current = outcome;
           setStatus(statusFor(outcome));
           if (outcome.status === 'saved') {
             coveredRevisionRef.current = Math.max(coveredRevisionRef.current, startRevision);
@@ -200,6 +225,17 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
         const idle = idleRef.current;
         idleRef.current = null;
         idle?.resolve();
+        // The loop has fully quiesced: hand every drain waiter THIS loop's terminal
+        // outcome + coverage watermark. Because requestSave pushed a default waiter,
+        // at least one write ran, so lastOutcomeRef reflects this drain (the cancelled
+        // fallback only guards a loop that somehow wrote nothing).
+        const drainWaiters = drainWaitersRef.current;
+        drainWaitersRef.current = [];
+        if (drainWaiters.length > 0) {
+          const settled = lastOutcomeRef.current ?? { status: 'cancelled' as const };
+          const revision = coveredRevisionRef.current;
+          for (const waiter of drainWaiters) waiter.resolve({ outcome: settled, revision });
+        }
         // Leave a terminal outcome status in place; only clear a dangling 'saving'.
         setStatus((current) => (current.state === 'saving' ? { state: 'idle' } : current));
       }
@@ -234,5 +270,16 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
     }
   }, []);
 
-  return { requestSave, runExclusive, flush, status };
+  const saveAndDrain = useCallback((): Promise<{ outcome: SaveOutcome; revision: number }> => {
+    // Register for the drain loop's terminal outcome BEFORE triggering the save, then
+    // request a save at the current revision. requestSave both queues a covering
+    // default pass and pumps a loop; that loop resolves this waiter in its finally.
+    const promise = new Promise<{ outcome: SaveOutcome; revision: number }>((resolve) => {
+      drainWaitersRef.current.push({ resolve });
+    });
+    void requestSave();
+    return promise;
+  }, [requestSave]);
+
+  return { requestSave, runExclusive, flush, saveAndDrain, status };
 }
