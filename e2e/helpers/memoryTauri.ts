@@ -157,6 +157,37 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           value: () => newSessionId,
         });
       }
+
+      // Faithful model of the Rust atomic-file contract (write_file_atomic /
+      // delete_file_if_match): real SHA-256 over the exact content and honest
+      // absent/present fingerprints, so conflict-detection tests exercise the true
+      // semantics rather than a placeholder that would make them vacuous.
+      type Fp = { state: 'absent' } | { state: 'present'; hash: string };
+      const sha256Hex = async (content: string): Promise<string> => {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+        return Array.from(new Uint8Array(digest))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      };
+      const fingerprintOf = async (path: string): Promise<Fp> =>
+        Object.prototype.hasOwnProperty.call(memoryFiles, path)
+          ? { state: 'present', hash: await sha256Hex(memoryFiles[path] as string) }
+          : { state: 'absent' };
+      // Null when `expected` is satisfied by `current`; otherwise the conflicting
+      // fingerprint. `any` always passes; `absent` requires no file; `match`
+      // requires the exact hash (a changed or deleted file conflicts).
+      const expectationConflict = (
+        expected: { mode?: string; hash?: string } | undefined,
+        current: Fp,
+      ): Fp | null => {
+        const mode = expected?.mode ?? 'any';
+        if (mode === 'absent') return current.state === 'absent' ? null : current;
+        if (mode === 'match') {
+          return current.state === 'present' && current.hash === expected?.hash ? null : current;
+        }
+        return null; // 'any'
+      };
+
       globals.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: 'main' } },
         convertFileSrc: (filePath: string, protocol = 'asset') =>
@@ -207,7 +238,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
             if (Object.prototype.hasOwnProperty.call(memoryFiles, path)) return memoryFiles[path];
             throw new Error(`File not found: ${path}`);
           }
-          if (cmd === 'write_file') {
+          if (cmd === 'write_file_atomic') {
             if (deferFirstWriteFile && globals.__quillReleaseWriteFile === undefined) {
               globals.__quillWriteFileBlocked = true;
               await new Promise<void>((resolve) => {
@@ -217,12 +248,27 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
                 };
               });
             }
-            memoryFiles[args.path as string] = args.content as string;
-            return null;
+            const writePath = args.path as string;
+            const conflict = expectationConflict(
+              args.expected as { mode?: string; hash?: string } | undefined,
+              await fingerprintOf(writePath),
+            );
+            if (conflict) return { status: 'conflict', actual: conflict };
+            const content = args.content as string;
+            memoryFiles[writePath] = content;
+            return { status: 'written', hash: await sha256Hex(content) };
           }
-          if (cmd === 'delete_file') {
-            delete memoryFiles[args.path as string];
-            return null;
+          if (cmd === 'delete_file_if_match') {
+            const deletePath = args.path as string;
+            const current = await fingerprintOf(deletePath);
+            const conflict = expectationConflict(
+              args.expected as { mode?: string; hash?: string } | undefined,
+              current,
+            );
+            if (conflict) return { status: 'conflict', actual: conflict };
+            if (current.state === 'absent') return { status: 'absent' };
+            delete memoryFiles[deletePath];
+            return { status: 'deleted' };
           }
           if (cmd === 'find_session_for_markdown') return foundSession ?? null;
           return null;

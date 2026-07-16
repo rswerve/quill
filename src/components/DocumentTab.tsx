@@ -8,7 +8,11 @@ import AddCommentButton from './AddCommentButton';
 import FindBar from './FindBar';
 import PanelHeader from './PanelHeader';
 import ChatPanel from './ChatPanel';
-import { useFileManager, stripTransientReplyState } from '../hooks/useFileManager';
+import {
+  useFileManager,
+  stripTransientReplyState,
+  type SaveOutcome,
+} from '../hooks/useFileManager';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
@@ -774,9 +778,42 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return editorRef.current?.getMarkdown() ?? '';
   }
 
+  // Reduce a typed save outcome to a path for callers that only care whether the
+  // save landed, surfacing the outcomes that must not read as silent success:
+  // a `blocked` sidecar (text saved, annotations withheld) and an external
+  // `conflict`. `failed` already reported itself inside useFileManager; a
+  // `cancelled` outcome is a deliberate no-op. Returns the saved path, else null.
+  const resolveSaveOutcome = useCallback(
+    (outcome: SaveOutcome): string | null => {
+      switch (outcome.status) {
+        case 'saved':
+          return outcome.path;
+        case 'blocked':
+          showError(
+            'Comments not saved',
+            'The document text was saved, but its comments and suggestions could not be ' +
+              "written: the existing .comments.json file is unreadable and Quill won't " +
+              'overwrite it. Recover or remove that file, then save again.',
+          );
+          return null;
+        case 'conflict':
+          showError(
+            'File changed on disk',
+            `${outcome.path}\n\nThis file was modified outside Quill since it was opened, ` +
+              'so the save was stopped to avoid overwriting those changes.',
+          );
+          return null;
+        case 'failed':
+        case 'cancelled':
+          return null;
+      }
+    },
+    [showError],
+  );
+
   const handleSaveAs = useCallback(async () => {
     const live = getLiveReviewState();
-    const path = await saveFileAs(
+    const outcome = await saveFileAs(
       getMarkdown(),
       live.comments,
       live.suggestions,
@@ -785,6 +822,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
       (path) => onRequestSavePath(tabId, path),
     );
+    const path = resolveSaveOutcome(outcome);
     // The document gained (or moved) a directory — relative image paths now
     // resolve against it for anything drawn from here on.
     if (path) {
@@ -805,6 +843,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     onRecentFile,
     onRequestSavePath,
     tabId,
+    resolveSaveOutcome,
   ]);
 
   const handleSave = useCallback(async () => {
@@ -812,7 +851,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       return handleSaveAs();
     }
     const live = getLiveReviewState();
-    const path = await saveFile(
+    const outcome = await saveFile(
       getMarkdown(),
       live.comments,
       live.suggestions,
@@ -821,6 +860,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       undefined,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
     );
+    const path = resolveSaveOutcome(outcome);
     if (path) {
       rememberSessionPermission(window.localStorage, path, aiSession);
       rememberContextFolderPermission(window.localStorage, path, contextFolder);
@@ -835,6 +875,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     contextFolder,
     documentChat,
     handleSaveAs,
+    resolveSaveOutcome,
   ]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip

@@ -897,7 +897,7 @@ test.describe('desktop fallback regressions', () => {
         page.evaluate(
           () =>
             window.__quillCalls.filter(
-              (call) => call.cmd === 'write_file' && call.args?.path === '/docs/menu.md',
+              (call) => call.cmd === 'write_file_atomic' && call.args?.path === '/docs/menu.md',
             ).length,
         ),
       )

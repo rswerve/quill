@@ -67,7 +67,7 @@ async function setupWithIPC(
           }
           if (cmd === 'plugin:event|unlisten') return null;
           // Delegate everything else to the test handler.
-          return handler(cmd, args, {
+          const result = await handler(cmd, args, {
             fixtures,
             emit: (event: string, payload: unknown) => {
               for (const l of listeners) {
@@ -75,6 +75,14 @@ async function setupWithIPC(
               }
             },
           });
+          // Legacy shim convention: a null/undefined return from a write means
+          // "succeeds silently". Supply the atomic-contract success shape so the
+          // frontend's typed save path doesn't read a bare null as a conflict.
+          if (result === null || result === undefined) {
+            if (cmd === 'write_file_atomic') return { status: 'written', hash: 'e2e-hash' };
+            if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+          }
+          return result;
         },
       };
 
@@ -572,7 +580,8 @@ test('context folder: link via footer, persist in sidecar on save, unlink', asyn
         }>;
         const write = calls.find(
           (call) =>
-            call.cmd === 'write_file' && (call.args.path as string).endsWith('.comments.json'),
+            call.cmd === 'write_file_atomic' &&
+            (call.args.path as string).endsWith('.comments.json'),
         );
         return write ? JSON.parse(write.args.content as string).contextFolder : null;
       }),

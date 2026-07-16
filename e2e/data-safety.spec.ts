@@ -44,7 +44,15 @@ async function setupWithIPC(
           calls.push({ cmd, args });
           if (cmd === 'plugin:event|listen') return args.handler;
           if (cmd === 'plugin:event|unlisten') return null;
-          return handler(cmd, args);
+          const result = await handler(cmd, args);
+          // Legacy shim convention: a null/undefined return from a write means
+          // "succeeds silently". Supply the atomic-contract success shape so the
+          // frontend's typed save path doesn't read a bare null as a conflict.
+          if (result === null || result === undefined) {
+            if (cmd === 'write_file_atomic') return { status: 'written', hash: 'e2e-hash' };
+            if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+          }
+          return result;
         },
       };
 
@@ -163,7 +171,7 @@ test("dirty tab close: Don't Save closes it and leaves a fresh Untitled", async 
 test('dirty tab close: Save writes the file, then closes the tab', async ({ page }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/guarded.md';
-    return null; // write_file / delete_file succeed silently
+    return null; // the shim defaults writes/deletes to success
   };
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
@@ -181,7 +189,7 @@ test('dirty tab close: Save writes the file, then closes the tab', async ({ page
       cmd: string;
       args: { path?: string; content?: string };
     }[];
-    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/guarded.md');
+    return calls.find((c) => c.cmd === 'write_file_atomic' && c.args.path === '/tmp/guarded.md');
   });
   expect(write?.args.content).toContain('words worth keeping');
   // …and closing the last tab leaves a fresh Untitled editor.
@@ -194,7 +202,7 @@ test('Save As writes the document to the chosen path and rebinds the tab clean',
 }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/report.md';
-    return null; // write_file / delete_file succeed silently
+    return null; // the shim defaults writes/deletes to success
   };
   await setupWithIPC(page, { handler, captureKey: '__capturedCalls' });
 
@@ -220,7 +228,7 @@ test('Save As writes the document to the chosen path and rebinds the tab clean',
       cmd: string;
       args: { path?: string; content?: string };
     }[];
-    return calls.find((c) => c.cmd === 'write_file' && c.args.path === '/tmp/report.md');
+    return calls.find((c) => c.cmd === 'write_file_atomic' && c.args.path === '/tmp/report.md');
   });
   expect(write?.args.content).toContain('Quarterly summary content');
 });
@@ -263,7 +271,7 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
 test('failed save shows an error notice instead of failing silently', async ({ page }) => {
   const handler = (cmd: string) => {
     if (cmd === 'show_save_dialog') return '/tmp/readonly.md';
-    if (cmd === 'write_file') throw new Error('Permission denied (os error 13)');
+    if (cmd === 'write_file_atomic') throw new Error('Permission denied (os error 13)');
     return null;
   };
   await setupWithIPC(page, { handler });

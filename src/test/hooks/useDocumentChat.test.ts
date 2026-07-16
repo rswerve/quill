@@ -238,4 +238,27 @@ describe('useDocumentChat', () => {
     unmount();
     expect(mock.cancelled).toContain('chat-1');
   });
+
+  it('getThread snapshots a mid-stream turn as cancelled without disturbing live state', async () => {
+    // A save (manual or autosave) that lands mid-stream reads getThread. It must
+    // never persist a live pending turn — that would resurrect a spinner for a
+    // stream that no longer exists on reopen — while the on-screen thread keeps
+    // showing the real pending turn.
+    const { options } = makeOptions();
+    const { result } = renderHook(() => useDocumentChat(options));
+    await act(async () => result.current.send('Fix it', BINDING));
+    act(() => mock.emit('chat-1', { kind: 'delta', text: 'partial answer' }));
+
+    expect(result.current.messages[1]).toMatchObject({ pending: true });
+
+    const thread = result.current.getThread(BINDING.sessionId);
+    expect(thread.sessionId).toBe(BINDING.sessionId);
+    expect(thread.messages[1]).toMatchObject({
+      pending: false,
+      cancelled: true,
+      text: 'partial answer',
+    });
+    // Taking the snapshot does not mutate the live, still-streaming turn.
+    expect(result.current.messages[1]).toMatchObject({ pending: true });
+  });
 });

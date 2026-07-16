@@ -16,6 +16,8 @@ import {
   sanitizeContextFolder,
   sanitizeDocumentChat,
 } from '../utils/annotationValidation';
+import { writeFileAtomic, deleteFileIfMatch, type Fingerprint } from '../utils/atomicFile';
+import { stripTransientChatState } from '../utils/chatThread';
 
 function emptySidecar(): SidecarFile {
   return { version: 2, comments: [], suggestions: [] };
@@ -57,6 +59,32 @@ function normalizeSidecar(raw: unknown): SidecarFile {
   };
 }
 
+/**
+ * The typed outcome of a save. Replaces the old `string | null`, which conflated
+ * "nowhere to save", "user cancelled", "write failed", and "sidecar protected" into a
+ * single `null` — so a partial or blocked save looked identical to a clean one.
+ *
+ * - `saved`     — both the `.md` and the sidecar reached their terminal on-disk state.
+ *                 Carries the document hash and the sidecar's fingerprint (present with
+ *                 its hash, or absent when an empty sidecar was removed) so callers can
+ *                 track expected on-disk state for external-conflict detection.
+ * - `blocked`   — the document was written but the sidecar was deliberately NOT, because
+ *                 the on-disk sidecar is unreadable and we won't clobber recoverable
+ *                 data. The document stays dirty; this is not a completed save.
+ * - `conflict`  — a fingerprint-gated write found the file changed underneath us and
+ *                 wrote nothing. (Not produced by unconditional saves; reserved for
+ *                 conflict-aware callers.)
+ * - `cancelled` — no write happened and it was not an error: no destination path, the
+ *                 Save As dialog was dismissed, or path ownership was declined.
+ * - `failed`    — an I/O or permission error; `message` is the underlying reason.
+ */
+export type SaveOutcome =
+  | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
+  | { status: 'blocked'; reason: 'sidecar-protected' }
+  | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
+  | { status: 'cancelled' }
+  | { status: 'failed'; message: string };
+
 interface UseFileManagerReturn {
   filePath: string | null;
   isDirty: boolean;
@@ -83,7 +111,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     forcePath?: string,
     chat?: DocumentChatThread | null,
-  ) => Promise<string | null>;
+  ) => Promise<SaveOutcome>;
   saveFileAs: (
     content: string,
     comments: Comment[],
@@ -92,7 +120,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
     requestPathOwnership?: (path: string) => boolean,
-  ) => Promise<string | null>;
+  ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (path: string | null, dirty?: boolean) => void;
 }
@@ -203,11 +231,13 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
-    ) => {
+    ): Promise<Fingerprint> => {
       const scPath = sidecarPath(path);
-      // Never persist in-flight AI replies (pending/errored) — strip them first
-      // so an empty doc with only a failed reply still collapses to no sidecar.
+      // Never persist in-flight AI state — strip transient comment replies and
+      // half-streamed chat turns first, so an empty doc with only failed/pending
+      // AI activity still collapses to no sidecar.
       const cleanComments = stripTransientReplyState(comments);
+      const cleanChat = chat ? { ...chat, messages: stripTransientChatState(chat.messages) } : null;
       if (
         cleanComments.length === 0 &&
         suggestions.length === 0 &&
@@ -215,13 +245,13 @@ export function useFileManager(
         !contextFolder &&
         !chat
       ) {
-        // Clean up empty sidecar
-        try {
-          await invoke('delete_file', { path: scPath });
-        } catch {
-          // Ignore
-        }
-        return;
+        // Nothing to persist — remove any empty sidecar we may have left behind.
+        // Unlike the old bare delete, `any`-mode reports "absent" instead of
+        // throwing when the file is already gone, so only a genuine I/O failure
+        // rejects — and we let it, because a swallowed delete failure can
+        // resurrect deleted annotations on the next open.
+        await deleteFileIfMatch(scPath, { mode: 'any' });
+        return { state: 'absent' };
       }
       const sidecar: SidecarFile = {
         version: 2,
@@ -229,9 +259,17 @@ export function useFileManager(
         suggestions,
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
-        ...(chat ? { chat } : {}),
+        ...(cleanChat ? { chat: cleanChat } : {}),
       };
-      await invoke('write_file', { path: scPath, content: JSON.stringify(sidecar, null, 2) });
+      const result = await writeFileAtomic(scPath, JSON.stringify(sidecar, null, 2), {
+        mode: 'any',
+      });
+      if (result.status !== 'written') {
+        // An unconditional write never conflicts; guard defensively so a future
+        // conflict-aware caller can't mistake an unwritten sidecar for a saved one.
+        throw new Error(`Sidecar write did not complete (${result.status})`);
+      }
+      return { state: 'present', hash: result.hash };
     },
     [],
   );
@@ -245,10 +283,10 @@ export function useFileManager(
       contextFolder: string | null,
       forcePath?: string,
       chat?: DocumentChatThread | null,
-    ): Promise<string | null> => {
+    ): Promise<SaveOutcome> => {
       const targetPath = forcePath ?? filePath;
       if (!targetPath) {
-        return null;
+        return { status: 'cancelled' };
       }
       const saveRevision = changeRevisionRef.current;
       // Protect a corrupt sidecar from being clobbered. Saving the markdown to
@@ -257,21 +295,37 @@ export function useFileManager(
       // a fresh file and may write its own sidecar normally.
       const skipSidecar = sidecarProtected && targetPath === filePath;
       try {
-        await invoke('write_file', { path: targetPath, content });
-        if (!skipSidecar) {
-          await saveSidecar(targetPath, comments, suggestions, aiSession, contextFolder, chat);
-          // The sidecar at targetPath is now our own output. In the Save As
-          // escape (new path while protected) the protection must not follow
-          // the document, or every later save silently skips the sidecar.
-          setSidecarProtected(false);
+        const docResult = await writeFileAtomic(targetPath, content, { mode: 'any' });
+        if (docResult.status !== 'written') {
+          // An unconditional write never conflicts; stay honest if that changes.
+          return { status: 'conflict', path: targetPath, which: 'doc', actual: docResult.actual };
         }
+        if (skipSidecar) {
+          // The markdown is saved, but a corrupt on-disk sidecar means the review
+          // data is NOT persisted. Report a block and STAY dirty — never signal a
+          // clean, complete save (which would also drop the recovery snapshot).
+          return { status: 'blocked', reason: 'sidecar-protected' };
+        }
+        const sidecar = await saveSidecar(
+          targetPath,
+          comments,
+          suggestions,
+          aiSession,
+          contextFolder,
+          chat,
+        );
+        // The sidecar at targetPath is now our own output. In the Save As
+        // escape (new path while protected) the protection must not follow
+        // the document, or every later save silently skips the sidecar.
+        setSidecarProtected(false);
         setFilePath(targetPath);
         if (changeRevisionRef.current === saveRevision) setIsDirty(false);
-        return targetPath;
+        return { status: 'saved', path: targetPath, docHash: docResult.hash, sidecar };
       } catch (e) {
         console.error('Failed to save file:', e);
-        onError?.('Could not save file', `${targetPath}\n\n${String(e)}`);
-        return null;
+        const message = String(e);
+        onError?.('Could not save file', `${targetPath}\n\n${message}`);
+        return { status: 'failed', message };
       }
     },
     [filePath, saveSidecar, sidecarProtected, onError],
@@ -286,13 +340,15 @@ export function useFileManager(
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
       requestPathOwnership?: (path: string) => boolean,
-    ): Promise<string | null> => {
+    ): Promise<SaveOutcome> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';
         const path = await invoke<string | null>('show_save_dialog', { defaultName });
-        if (!path) return null;
+        if (!path) return { status: 'cancelled' };
         const resolvedPath = path.endsWith('.md') ? path : `${path}.md`;
-        if (requestPathOwnership && !requestPathOwnership(resolvedPath)) return null;
+        if (requestPathOwnership && !requestPathOwnership(resolvedPath)) {
+          return { status: 'cancelled' };
+        }
         return saveFile(
           content,
           comments,
@@ -304,8 +360,9 @@ export function useFileManager(
         );
       } catch (e) {
         console.error('Failed to save as:', e);
-        onError?.('Could not save file', String(e));
-        return null;
+        const message = String(e);
+        onError?.('Could not save file', message);
+        return { status: 'failed', message };
       }
     },
     [filePath, saveFile, onError],

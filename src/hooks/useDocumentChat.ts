@@ -19,6 +19,7 @@ import {
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 import { formatEditResultNotice, type EditResult } from '../utils/trackedEdits';
+import { stripTransientChatState } from '../utils/chatThread';
 
 export interface ChatCursorContext {
   selectedText: string | null;
@@ -370,8 +371,15 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
     [reset],
   );
 
+  // Snapshot the thread for persistence (sidecar + workspace envelope). Strip
+  // half-streamed assistant turns here — this is the single serialization source
+  // for both on-disk paths — so a save that lands mid-stream never persists a
+  // live spinner; the live in-memory `messages` keep the real pending state.
   const getThread = useCallback(
-    (sessionId: string): DocumentChatThread => ({ sessionId, messages: messagesRef.current }),
+    (sessionId: string): DocumentChatThread => ({
+      sessionId,
+      messages: stripTransientChatState(messagesRef.current),
+    }),
     [],
   );
 

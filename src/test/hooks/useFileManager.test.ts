@@ -6,10 +6,47 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
-import { useFileManager, stripTransientReplyState } from '../../hooks/useFileManager';
-import type { Comment, DocumentChatThread, Reply } from '../../types';
+import {
+  useFileManager,
+  stripTransientReplyState,
+  type SaveOutcome,
+} from '../../hooks/useFileManager';
+import type { ChatMessage, Comment, DocumentChatThread, Reply } from '../../types';
 
 const mockInvoke = vi.mocked(invoke);
+
+// Distinct fake SHA-256 hex values the atomic backend would return.
+const HASH_DOC = 'a'.repeat(64);
+const HASH_SIDECAR = 'b'.repeat(64);
+
+/**
+ * Route invoke() to the atomic-persistence contract so save tests get the shapes
+ * useFileManager now expects: write_file_atomic → written{hash}, delete_file_if_match
+ * → deleted, find_session_for_markdown → null. read_file resolves from `reads` (a
+ * path→content map) and otherwise reports "not found". Individual tests can still
+ * override with mockImplementation/mockResolvedValueOnce after calling this.
+ */
+function installSaveRouter(reads: Record<string, string> = {}) {
+  mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+    const path = (args as { path?: string } | undefined)?.path;
+    switch (command) {
+      case 'read_file':
+        if (path && path in reads) return reads[path];
+        throw new Error('File not found');
+      case 'write_file_atomic':
+        return {
+          status: 'written',
+          hash: path?.endsWith('.comments.json') ? HASH_SIDECAR : HASH_DOC,
+        };
+      case 'delete_file_if_match':
+        return { status: 'deleted' };
+      case 'find_session_for_markdown':
+        return null;
+      default:
+        return undefined;
+    }
+  });
+}
 
 const SAMPLE_COMMENT: Comment = {
   id: 'c1',
@@ -127,36 +164,40 @@ describe('useFileManager', () => {
   });
 
   describe('saveFile', () => {
-    it('returns null and does not invoke when no filePath is set', async () => {
+    it('returns cancelled and does not invoke when no filePath is set', async () => {
       const { result } = renderHook(() => useFileManager());
-      let res: string | null;
+      let res: SaveOutcome;
       await act(async () => {
         res = await result.current.saveFile('content', [], [], null, null);
       });
-      expect(res!).toBeNull();
+      expect(res!.status).toBe('cancelled');
       expect(mockInvoke).not.toHaveBeenCalled();
     });
 
-    it('writes file and sidecar, returns the path', async () => {
-      mockInvoke
-        .mockResolvedValueOnce('content')
-        .mockResolvedValueOnce('{}')
-        .mockResolvedValue(undefined);
+    it('writes file and sidecar atomically, returns saved with hashes', async () => {
+      installSaveRouter({ '/docs/test.md': 'content', '/docs/test.comments.json': '{}' });
 
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.openFilePath('/docs/test.md');
       });
 
-      let savedPath: string | null;
+      let outcome: SaveOutcome;
       await act(async () => {
-        savedPath = await result.current.saveFile('updated content', [], [], null, null);
+        outcome = await result.current.saveFile('updated content', [], [], null, null);
       });
 
-      expect(savedPath!).toBe('/docs/test.md');
-      expect(mockInvoke).toHaveBeenCalledWith('write_file', {
+      expect(outcome!).toEqual({
+        status: 'saved',
+        path: '/docs/test.md',
+        docHash: HASH_DOC,
+        // Empty comments/suggestions → the sidecar is removed, so it's absent.
+        sidecar: { state: 'absent' },
+      });
+      expect(mockInvoke).toHaveBeenCalledWith('write_file_atomic', {
         path: '/docs/test.md',
         content: 'updated content',
+        expected: { mode: 'any' },
       });
       expect(result.current.isDirty).toBe(false);
     });
@@ -171,7 +212,12 @@ describe('useFileManager', () => {
         if (command === 'read_file' && path === '/docs/test.md') return 'saved content';
         if (command === 'read_file') throw new Error('sidecar not found');
         if (command === 'find_session_for_markdown') return null;
-        if (command === 'write_file' && path === '/docs/test.md') await writeBlocked;
+        if (command === 'write_file_atomic' && path === '/docs/test.md') {
+          await writeBlocked;
+          return { status: 'written', hash: HASH_DOC };
+        }
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_SIDECAR };
+        if (command === 'delete_file_if_match') return { status: 'deleted' };
         return null;
       });
 
@@ -181,7 +227,7 @@ describe('useFileManager', () => {
         result.current.markDirty();
       });
 
-      let savePromise: Promise<string | null>;
+      let savePromise: Promise<SaveOutcome>;
       await act(async () => {
         savePromise = result.current.saveFile('older snapshot', [], [], null, null);
         await Promise.resolve();
@@ -196,46 +242,59 @@ describe('useFileManager', () => {
     });
 
     it('uses forcePath when provided, overriding stored filePath', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+      installSaveRouter();
       const { result } = renderHook(() => useFileManager());
-      let savedPath: string | null;
+      let outcome: SaveOutcome;
       await act(async () => {
-        savedPath = await result.current.saveFile(
-          'content',
-          [],
-          [],
-          null,
-          null,
-          '/override/path.md',
-        );
+        outcome = await result.current.saveFile('content', [], [], null, null, '/override/path.md');
       });
-      expect(savedPath!).toBe('/override/path.md');
-      expect(mockInvoke).toHaveBeenCalledWith('write_file', {
+      expect(outcome!).toMatchObject({ status: 'saved', path: '/override/path.md' });
+      expect(mockInvoke).toHaveBeenCalledWith('write_file_atomic', {
         path: '/override/path.md',
         content: 'content',
+        expected: { mode: 'any' },
       });
     });
 
-    it('deletes sidecar when comments and suggestions are both empty', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+    it('deletes the sidecar (conditionally) when comments and suggestions are both empty', async () => {
+      installSaveRouter();
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.saveFile('content', [], [], null, null, '/docs/test.md');
       });
-      expect(mockInvoke).toHaveBeenCalledWith('delete_file', {
+      expect(mockInvoke).toHaveBeenCalledWith('delete_file_if_match', {
         path: '/docs/test.comments.json',
+        expected: { mode: 'any' },
       });
     });
 
+    it('propagates a sidecar delete failure instead of swallowing it', async () => {
+      // A swallowed delete failure can resurrect deleted annotations on reopen, so
+      // a real I/O error must surface as a failed save (not a false success).
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_DOC };
+        if (command === 'delete_file_if_match') throw 'Permission denied (os error 13)';
+        return undefined;
+      });
+      const onError = vi.fn();
+      const { result } = renderHook(() => useFileManager(onError));
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('content', [], [], null, null, '/docs/test.md');
+      });
+      expect(outcome!.status).toBe('failed');
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+
     it('writes sidecar JSON when there are comments', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+      installSaveRouter();
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.saveFile('content', [SAMPLE_COMMENT], [], null, null, '/docs/test.md');
       });
       const sidecarCall = mockInvoke.mock.calls.find(
         (call) =>
-          call[0] === 'write_file' &&
+          call[0] === 'write_file_atomic' &&
           typeof call[1] === 'object' &&
           (call[1] as { path: string }).path.endsWith('.comments.json'),
       );
@@ -246,7 +305,7 @@ describe('useFileManager', () => {
     });
 
     it('strips transient AI replies from the written sidecar', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+      installSaveRouter();
       const commentWithReplies: Comment = {
         ...SAMPLE_COMMENT,
         replies: [
@@ -290,26 +349,46 @@ describe('useFileManager', () => {
       });
       const sidecarCall = mockInvoke.mock.calls.find(
         (call) =>
-          call[0] === 'write_file' && (call[1] as { path: string }).path.endsWith('.comments.json'),
+          call[0] === 'write_file_atomic' &&
+          (call[1] as { path: string }).path.endsWith('.comments.json'),
       );
       const written = JSON.parse((sidecarCall![1] as { content: string }).content);
       const persisted = written.comments[0].replies.map((r: Reply) => r.id);
       expect(persisted).toEqual(['u1', 'a1']); // pending a2 + errored a3 + cancelled a4 dropped
     });
 
+    it('downgrades a half-streamed chat turn to cancelled in the written sidecar', async () => {
+      // An autosave that lands mid-stream must not persist a live pending turn — it
+      // would resurrect a spinner for a stream that no longer exists on reopen.
+      installSaveRouter();
+      const midStreamChat: DocumentChatThread = {
+        sessionId: 'session-chat',
+        messages: [
+          { id: 'u1', role: 'user', text: 'Rewrite the intro', createdAt: 'now' },
+          { id: 'a1', role: 'assistant', text: 'Half a resp', createdAt: 'now', pending: true },
+        ],
+      };
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.saveFile('content', [], [], null, null, '/docs/c.md', midStreamChat);
+      });
+      const sidecarCall = mockInvoke.mock.calls.find(
+        (call) =>
+          call[0] === 'write_file_atomic' &&
+          (call[1] as { path: string }).path.endsWith('.comments.json'),
+      );
+      const written = JSON.parse((sidecarCall![1] as { content: string }).content);
+      const assistant = written.chat.messages.find((m: ChatMessage) => m.id === 'a1');
+      expect(assistant.pending).toBe(false); // downgraded, matching restore's transform
+      expect(assistant.cancelled).toBe(true);
+      expect(assistant.text).toBe('Half a resp'); // partial text is kept, retryable
+    });
+
     it('does not clobber the sidecar on same-path save when it was corrupt on open', async () => {
       // Open a file whose sidecar is present but unreadable, then save back to
       // the same path. The corrupt sidecar must be left untouched (no write, no
       // delete) so the user can recover it.
-      mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-        if (cmd === 'read_file') {
-          const path = (args as { path: string }).path;
-          if (path.endsWith('.comments.json')) return Promise.resolve('{ corrupt');
-          return Promise.resolve('# Hello');
-        }
-        if (cmd === 'find_session_for_markdown') return Promise.resolve(null);
-        return Promise.resolve(undefined);
-      });
+      installSaveRouter({ '/docs/test.md': '# Hello', '/docs/test.comments.json': '{ corrupt' });
 
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
@@ -322,22 +401,44 @@ describe('useFileManager', () => {
       });
 
       // The markdown is saved...
-      expect(mockInvoke).toHaveBeenCalledWith('write_file', {
+      expect(mockInvoke).toHaveBeenCalledWith('write_file_atomic', {
         path: '/docs/test.md',
         content: 'updated',
+        expected: { mode: 'any' },
       });
       // ...but nothing touches the sidecar path.
       const touchedSidecar = mockInvoke.mock.calls.some(
         (call) =>
-          (call[0] === 'write_file' || call[0] === 'delete_file') &&
+          (call[0] === 'write_file_atomic' || call[0] === 'delete_file_if_match') &&
           typeof call[1] === 'object' &&
           (call[1] as { path: string }).path.endsWith('.comments.json'),
       );
       expect(touchedSidecar).toBe(false);
     });
 
+    it('reports blocked and STAYS dirty when saving over a protected sidecar', async () => {
+      // The Phase-1 honesty fix: a corrupt sidecar must never let a save read as a
+      // clean success. Previously this cleared dirty and returned the path, dropping
+      // the recovery snapshot while annotations went unpersisted.
+      installSaveRouter({ '/docs/test.md': '# Hello', '/docs/test.comments.json': '{ corrupt' });
+
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.openFilePath('/docs/test.md');
+        result.current.markDirty();
+      });
+
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFile('updated', [SAMPLE_COMMENT], [], null, null);
+      });
+
+      expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
+      expect(result.current.isDirty).toBe(true);
+    });
+
     it('persists contextFolder in the sidecar and keeps the sidecar alive for it alone', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+      installSaveRouter();
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.saveFile('content', [], [], null, '/refs/folder', '/docs/test.md');
@@ -345,10 +446,11 @@ describe('useFileManager', () => {
 
       // No comments/suggestions/session, but a linked folder — the sidecar must
       // be written (not deleted) and must carry the folder.
-      expect(mockInvoke).not.toHaveBeenCalledWith('delete_file', expect.anything());
+      expect(mockInvoke).not.toHaveBeenCalledWith('delete_file_if_match', expect.anything());
       const sidecarCall = mockInvoke.mock.calls.find(
         (call) =>
-          call[0] === 'write_file' && (call[1] as { path: string }).path.endsWith('.comments.json'),
+          call[0] === 'write_file_atomic' &&
+          (call[1] as { path: string }).path.endsWith('.comments.json'),
       );
       expect(sidecarCall).toBeDefined();
       const written = JSON.parse((sidecarCall![1] as { content: string }).content);
@@ -376,14 +478,15 @@ describe('useFileManager', () => {
     });
 
     it('writes and restores a document-local chat thread through the sidecar', async () => {
-      mockInvoke.mockResolvedValue(undefined);
+      installSaveRouter();
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
         await result.current.saveFile('content', [], [], null, null, '/docs/chat.md', SAMPLE_CHAT);
       });
       const sidecarCall = mockInvoke.mock.calls.find(
         (call) =>
-          call[0] === 'write_file' && (call[1] as { path: string }).path.endsWith('.comments.json'),
+          call[0] === 'write_file_atomic' &&
+          (call[1] as { path: string }).path.endsWith('.comments.json'),
       );
       expect(sidecarCall).toBeDefined();
       expect(JSON.parse((sidecarCall![1] as { content: string }).content).chat).toEqual(
@@ -407,15 +510,7 @@ describe('useFileManager', () => {
     it('still writes the sidecar on Save As (new path) after a corrupt open', async () => {
       // A Save As to a different path is a fresh file; the corruption guard only
       // protects the original path, so the new sidecar writes normally.
-      mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-        if (cmd === 'read_file') {
-          const path = (args as { path: string }).path;
-          if (path.endsWith('.comments.json')) return Promise.resolve('{ corrupt');
-          return Promise.resolve('# Hello');
-        }
-        if (cmd === 'find_session_for_markdown') return Promise.resolve(null);
-        return Promise.resolve(undefined);
-      });
+      installSaveRouter({ '/docs/test.md': '# Hello', '/docs/test.comments.json': '{ corrupt' });
 
       const { result } = renderHook(() => useFileManager());
       await act(async () => {
@@ -436,7 +531,7 @@ describe('useFileManager', () => {
 
       const wroteNewSidecar = mockInvoke.mock.calls.some(
         (call) =>
-          call[0] === 'write_file' &&
+          call[0] === 'write_file_atomic' &&
           typeof call[1] === 'object' &&
           (call[1] as { path: string }).path === '/docs/other.comments.json',
       );
@@ -444,14 +539,9 @@ describe('useFileManager', () => {
     });
 
     it('clears corrupt-sidecar protection after Save As so later saves persist review data', async () => {
-      mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-        if (cmd === 'read_file') {
-          const path = (args as { path: string }).path;
-          if (path.endsWith('.comments.json')) return Promise.resolve('{ corrupt');
-          return Promise.resolve('# Hello');
-        }
-        if (cmd === 'find_session_for_markdown') return Promise.resolve(null);
-        return Promise.resolve(undefined);
+      installSaveRouter({
+        '/docs/original.md': '# Hello',
+        '/docs/original.comments.json': '{ corrupt',
       });
 
       const { result } = renderHook(() => useFileManager());
@@ -480,7 +570,7 @@ describe('useFileManager', () => {
 
       const sidecarWrite = mockInvoke.mock.calls.find(
         (call) =>
-          call[0] === 'write_file' &&
+          call[0] === 'write_file_atomic' &&
           (call[1] as { path: string }).path === '/docs/recovered.comments.json',
       );
       expect(sidecarWrite).toBeDefined();
@@ -491,35 +581,65 @@ describe('useFileManager', () => {
 
   describe('saveFileAs', () => {
     it('appends .md when the dialog returns a path without it', async () => {
-      mockInvoke.mockResolvedValueOnce('/docs/newfile').mockResolvedValue(undefined);
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'show_save_dialog') return '/docs/newfile';
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_DOC };
+        if (command === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
 
       const { result } = renderHook(() => useFileManager());
-      let savedPath: string | null;
+      let outcome: SaveOutcome;
       await act(async () => {
-        savedPath = await result.current.saveFileAs('content', [], [], null, null);
+        outcome = await result.current.saveFileAs('content', [], [], null, null);
       });
-      expect(savedPath!).toBe('/docs/newfile.md');
+      expect(outcome!).toMatchObject({ status: 'saved', path: '/docs/newfile.md' });
     });
 
     it('does not double-append .md when dialog already returns it', async () => {
-      mockInvoke.mockResolvedValueOnce('/docs/newfile.md').mockResolvedValue(undefined);
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'show_save_dialog') return '/docs/newfile.md';
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_DOC };
+        if (command === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
 
       const { result } = renderHook(() => useFileManager());
-      let savedPath: string | null;
+      let outcome: SaveOutcome;
       await act(async () => {
-        savedPath = await result.current.saveFileAs('content', [], [], null, null);
+        outcome = await result.current.saveFileAs('content', [], [], null, null);
       });
-      expect(savedPath!).toBe('/docs/newfile.md');
+      expect(outcome!).toMatchObject({ status: 'saved', path: '/docs/newfile.md' });
     });
 
-    it('returns null when the save dialog is cancelled', async () => {
+    it('returns cancelled when the save dialog is cancelled', async () => {
       mockInvoke.mockResolvedValueOnce(null);
       const { result } = renderHook(() => useFileManager());
-      let savedPath: string | null;
+      let outcome: SaveOutcome;
       await act(async () => {
-        savedPath = await result.current.saveFileAs('content', [], [], null, null);
+        outcome = await result.current.saveFileAs('content', [], [], null, null);
       });
-      expect(savedPath!).toBeNull();
+      expect(outcome!.status).toBe('cancelled');
+    });
+
+    it('returns cancelled when path ownership is declined', async () => {
+      mockInvoke.mockResolvedValueOnce('/docs/taken.md');
+      const { result } = renderHook(() => useFileManager());
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await result.current.saveFileAs(
+          'content',
+          [],
+          [],
+          null,
+          null,
+          undefined,
+          () => false,
+        );
+      });
+      expect(outcome!.status).toBe('cancelled');
+      // No write happens when ownership is refused.
+      expect(mockInvoke).not.toHaveBeenCalledWith('write_file_atomic', expect.anything());
     });
   });
 
@@ -545,12 +665,12 @@ describe('useFileManager', () => {
       const onError = vi.fn();
 
       const { result } = renderHook(() => useFileManager(onError));
-      let saved: string | null = null;
+      let saved: SaveOutcome | null = null;
       await act(async () => {
         saved = await result.current.saveFile('content', [], [], null, null, '/docs/out.md');
       });
 
-      expect(saved).toBeNull();
+      expect(saved!.status).toBe('failed');
       expect(onError).toHaveBeenCalledTimes(1);
       const [title, message] = onError.mock.calls[0];
       expect(title).toBe('Could not save file');

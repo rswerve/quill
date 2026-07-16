@@ -269,7 +269,8 @@ for (const targetPath of ['/tmp/owned.md', '/TMP/folder/../OWNED.md']) {
           __quillCalls: Array<{ cmd: string; args: Record<string, unknown> }>;
         }
       ).__quillCalls;
-      return calls.filter((call) => call.cmd === 'write_file' && call.args.path === path).length;
+      return calls.filter((call) => call.cmd === 'write_file_atomic' && call.args.path === path)
+        .length;
     }, targetPath);
     expect(writesToTarget).toBe(0);
   });
@@ -403,7 +404,7 @@ test('quit guard Save All: writes every dirty tab to its own path, then exits', 
           }
         ).__quillCalls;
         const writeIndex = (path: string) =>
-          calls.findIndex((call) => call.cmd === 'write_file' && call.args?.path === path);
+          calls.findIndex((call) => call.cmd === 'write_file_atomic' && call.args?.path === path);
         const exitIndex = calls.findIndex((call) => call.cmd === 'exit_app');
         const newTab = writeIndex('/tmp/new-tab.md');
         const existing = writeIndex('/tmp/existing.md');

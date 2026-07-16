@@ -110,7 +110,7 @@ test('a native menu owns file accelerators while editor-only shortcuts remain in
   expect(
     await page.evaluate(() => ({
       nativeCalls: window.__quillCalls.filter((call) =>
-        ['show_open_dialog', 'show_save_dialog', 'write_file'].includes(call.cmd),
+        ['show_open_dialog', 'show_save_dialog', 'write_file_atomic'].includes(call.cmd),
       ),
       prints: window.__quillPrintCalls ?? 0,
     })),
