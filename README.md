@@ -36,7 +36,7 @@ Editing, tracked changes, and comments work entirely on their own. The `@claude`
 
 A signed, notarized `.dmg` — the permanent, download-and-go installer — is still in progress. Until it ships, the Google Drive copy above is the way to get Quill without building it, and **[building from source](#build-and-run-from-source)** is the developer path.
 
-> **If you built the app yourself, or opened a copy that macOS quarantined,** the first launch is blocked because the app isn't yet Apple-notarized. Open **System Settings → Privacy & Security**, scroll to the message about Quill, and click **Open Anyway** (once per build). On macOS Sequoia and later the old right-click → Open shortcut no longer works; a build that arrived from another Mac may also need its quarantine flag cleared — see [Troubleshooting](#macos-wont-open-a-build-you-made).
+> **If macOS blocks the app on first launch** — which happens when the copy is _quarantined_ (a download from the Drive _website_ typically is; a copy from another Mac may be) and Quill isn't Apple-notarized — open **System Settings → Privacy & Security**, scroll to the message about Quill, and click **Open Anyway**. On macOS Sequoia and later the old right-click → Open shortcut no longer works; a quarantined copy may also need its quarantine flag cleared — see [Troubleshooting](#macos-wont-open-a-build-you-made). A build you compiled locally, or the Drive copy opened from your synced Finder folder, isn't quarantined and opens directly.
 
 Once Quill is running, everything below applies.
 
@@ -46,9 +46,11 @@ This section assumes no programming knowledge. For a longer walkthrough, see the
 
 ### Open, save, and tabs
 
-Open a Markdown file with **File → Open…** (Cmd+O) and save with Cmd+S. **File → Open Recent** lists your last ten documents. Each open document is a **tab** across the top of the window; start another with **File → New** (Cmd+N) or the **+** at the end of the tab strip. Your open tabs — including any unsaved ones — come back the next time you launch Quill.
+Open a Markdown file with **File → Open…** (Cmd+O) and save with Cmd+S. **File → Open Recent** lists your last ten documents. Each open document is a **tab** across the top of the window; start another with **File → New** (Cmd+N) or the **+** at the end of the tab strip. Your saved tabs reopen automatically the next time you launch Quill, and if you'd left unsaved work, Quill offers to **Recover** it (or **Discard** and start clean).
 
-Your document stays a plain `.md` file. Quill keeps its review data (comments, suggestions, and the linked Claude session) in a small companion file next to it, named `<your file>.comments.json`. If you move or share the document, keep the two files together; if you only need the text, the `.md` alone is enough.
+Your document stays a plain `.md` file. Quill keeps its review data — comments, suggestions, the document chat, and the linked Claude session and reference folder — in a small companion file next to it, named `<your file>.comments.json`. If you move or share the document, keep the two files together; if you only need the text, the `.md` alone is enough.
+
+Saved documents **autosave** — a couple of seconds after you stop typing, and whenever you switch tabs or the window loses focus — so you rarely need to press Cmd+S. Untitled documents stay manual until their first save. If a file changes on disk outside Quill (another app, or a sync), the next save pauses and offers **Overwrite**, **Save a Copy**, or **Reload**, so nothing is lost silently.
 
 ### Suggesting mode (tracked changes)
 
@@ -78,7 +80,7 @@ Then type `claude` and press Return; the first run walks you through signing in 
 
 **Ask a question.** Write a comment (or reply to one) that mentions **@claude** — for example, _"@claude is this paragraph still accurate?"_ Claude's answer streams into the comment thread.
 
-**Ask for edits.** Say _"@claude tighten this section"_ and the revisions come back as ordinary tracked changes attributed to Claude, which you review with the same Accept / Reject cards as anyone else's. By default Claude edits around the text you commented on; say "the whole document" to widen the scope.
+**Ask for edits.** Say _"@claude tighten this section"_ and the revisions come back as ordinary tracked changes attributed to Claude, which you review with the same Accept / Reject cards as anyone else's. The highlighted text frames what you're asking about, but Claude always sees the whole document and can edit wherever the request calls for — not only the highlighted span.
 
 ### Chat about the whole document
 
@@ -95,7 +97,7 @@ If your document draws on source material — interview notes, research PDFs, da
 ### Everyday tools
 
 - **Find & replace** (Cmd+F): type to highlight matches, step through with Enter / Shift+Enter, and use **Replace** / **All**. In Suggesting mode a replacement is recorded as a tracked change like any other edit.
-- **Links** (Cmd+K): select text and enter a URL — a bare domain like `example.com` gets `https://` added for you. Click inside an existing link and press Cmd+K again to change or remove it.
+- **Links** (Cmd+K): select text and enter a URL — a bare domain like `example.com` gets `https://` added for you. Click inside an existing link and press Cmd+K again to change or remove it. Links can only be changed in **Editing** mode — in Suggesting mode, switch to Editing first.
 - **Export to PDF** (Cmd+P): produces a clean copy to share with someone who does not have Quill. Pending suggestions appear as accepted, and comment and track-changes marks are left out. Choose **Save as PDF** in the print dialog.
 - **Zoom** the document with Cmd + / Cmd − (Cmd 0 resets), or the slider in the bottom bar.
 - **Themes:** the button at the bottom of the left rail toggles between the **Paper** and **Gruvbox** color schemes; your choice is remembered.
@@ -124,7 +126,7 @@ Quill is a **single-user, local desktop editor**, early in its life. It is delib
 - **macOS only.** The `@claude` features locate the Claude command-line tool and read its session history through Unix file paths, so Windows and Linux are not supported. This is a decision, not a temporary gap.
 - **Not a collaboration server.** Quill is single-user: no cloud, no account, no live multi-cursor editing. It is built for one person reviewing and revising a document — with Claude as the collaborator in the margin — not for many people in one file at once. If you need that, Google Docs is the better tool.
 - **Not a word processor.** Quill edits Markdown. Tracked changes, comments, and formatting are Markdown-native; it does not open or save `.docx`, and Markdown cannot represent every Word feature.
-- **Not yet notarized.** There is no one-click signed installer today; inside Truss the app is shared as a bundle over Google Drive (see [Installing Quill](#installing-quill)), and a build you make yourself trips Gatekeeper on first launch.
+- **Not yet notarized.** The app is ad-hoc code-signed but not Apple-notarized, so there's no one-click installer today; inside Truss it's shared as a bundle over Google Drive (see [Installing Quill](#installing-quill)). A _quarantined_ copy — a browser download typically, a copy from another Mac sometimes — needs a one-time Gatekeeper approval on first launch.
 
 ## Where your data lives
 
@@ -135,7 +137,7 @@ Quill keeps your documents as plain files and stores everything else locally on 
 - **In `~/Library/Logs/com.trussworks.quill/`:** `quill.log`, a rolling app log (also reachable via **Help → Show Logs**).
 - **Preferences** (theme, zoom, recent files, chosen model/effort) live in the app's local storage.
 
-Two things can leave your Mac, both on your terms:
+Two things can leave your Mac:
 
 - **`@claude` and chat:** these run the Claude Code tool as a normal child process under your own Claude account, sending it the prompt and document text needed to answer. Quill itself has no separate server or telemetry.
 - **Remote images in a document:** a Markdown image with an `https://` URL (`![](https://…)`) is fetched from that URL when the document renders, the same as any web page. Local and relative image paths never leave your Mac.
@@ -187,7 +189,7 @@ The first build compiles the Rust backend and can take several minutes; later bu
     Bundling Quill.app (/path/to/quill/src-tauri/target/release/bundle/macos/Quill.app)
 ```
 
-The paths and timing vary by machine. The artifact you want is **`src-tauri/target/release/bundle/macos/Quill.app`** — a standard macOS app bundle (identifier `com.trussworks.quill`) you can drag into `/Applications` and launch. Its first launch trips Gatekeeper; see the note under [Installing Quill](#installing-quill).
+The paths and timing vary by machine. The artifact you want is **`src-tauri/target/release/bundle/macos/Quill.app`** — a standard macOS app bundle (identifier `com.trussworks.quill`) you can drag into `/Applications` and launch. A locally built app isn't quarantined, so it opens directly; a copy that arrives quarantined needs the one-time approval described under [Installing Quill](#installing-quill).
 
 > On a normal interactive Mac, `npm run tauri build` also assembles a `.dmg` next to the `.app`. That final disk-image step drives Finder and can fail in a non-interactive shell — see [Troubleshooting](#the-dmg-step-of-npm-run-tauri-build-fails). The `.app` above is produced either way and is all you need to run Quill.
 
@@ -224,13 +226,13 @@ For orientation:
 
 ### macOS won't open a build you made
 
-**Symptom:** macOS says Quill "is damaged and can't be opened" or "cannot be opened because Apple cannot check it for malicious software." **Cause:** the app is not code-signed, so Gatekeeper blocks it — and a build copied from another Mac is also quarantined in transit. **Fix:** if you built it on this Mac, open **System Settings → Privacy & Security**, find the message about Quill, and click **Open Anyway** (a one-time step per build). If the app came from another Mac, first clear the quarantine flag in Terminal:
+**Symptom:** macOS says Quill "is damaged and can't be opened" or "cannot be opened because Apple cannot check it for malicious software." **Cause:** the app is ad-hoc code-signed but not Apple-notarized, so a _quarantined_ copy is blocked by Gatekeeper (a browser download is typically quarantined; a copy from another Mac may be). (An app you built and run on the same Mac, or the Drive copy opened from your synced Finder folder, isn't quarantined and opens directly.) **Fix:** clear the quarantine flag in Terminal:
 
 ```
 xattr -dr com.apple.quarantine /Applications/Quill.app
 ```
 
-Adjust the path if Quill.app is not in your Applications folder, then use **Open Anyway** as above.
+Adjust the path if Quill.app is not in your Applications folder, then open it — if macOS still prompts, use **Open Anyway** in **System Settings → Privacy & Security**.
 
 ### The DMG step of `npm run tauri build` fails
 
