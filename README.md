@@ -124,7 +124,6 @@ Quill is a **single-user, local desktop editor**, early in its life. It is delib
 - **macOS only.** The `@claude` features locate the Claude command-line tool and read its session history through Unix file paths, so Windows and Linux are not supported. This is a decision, not a temporary gap.
 - **Not a collaboration server.** Quill is single-user: no cloud, no account, no live multi-cursor editing. It is built for one person reviewing and revising a document — with Claude as the collaborator in the margin — not for many people in one file at once. If you need that, Google Docs is the better tool.
 - **Not a word processor.** Quill edits Markdown. Tracked changes, comments, and formatting are Markdown-native; it does not open or save `.docx`, and Markdown cannot represent every Word feature.
-- **Not an auto-updater.** Quill tells you when a new version exists but never installs it for you.
 - **Not yet notarized.** There is no one-click signed installer today; inside Truss the app is shared as a bundle over Google Drive (see [Installing Quill](#installing-quill)), and a build you make yourself trips Gatekeeper on first launch.
 
 ## Where your data lives

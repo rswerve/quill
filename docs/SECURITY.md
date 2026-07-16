@@ -194,7 +194,6 @@ To be honest about the boundary: Quill does not defend against an attacker who
 _already_ has code execution on the machine or write access to the user's home
 directory — at that point the deep link and sidecar are the least of the user's
 problems. It is not code-signed or notarized beyond the standard release path,
-and there is no auto-updater (the update story is a notify-only banner by
-design). The threat model is "a normal user opens documents, some of which they
+and there is no auto-updater or in-app update check. The threat model is "a normal user opens documents, some of which they
 didn't author, and visits web pages that might fire a deep link" — and within
 that model, the four fixes above close the gaps the audits found.
