@@ -536,8 +536,8 @@ export default function App() {
   // revision, flushes all, then re-checks — if the tab SET changed or any revision
   // advanced during the round, it flushes again, until the set is stable. It iterates the
   // AUTHORITATIVE tab list (a handleless dirty tab is retained, a thrown flush is
-  // retained — fail closed). If the bound is exhausted without quiescing, it FAILS CLOSED
-  // by guarding every currently-dirty tab rather than trusting an unstable snapshot.
+  // retained — fail closed). If the bound is exhausted without quiescing, it THROWS so
+  // both quit paths abort the close (a dirty-filter could be empty and let quit proceed).
   const flushAllPendingSaves = useCallback(async (): Promise<string[]> => {
     const revisionOf = (id: string): number | null =>
       tabHandlesRef.current.get(id)?.getPersistenceSnapshot().revision ?? null;
@@ -565,8 +565,12 @@ export default function App() {
         return [...new Set(results.filter((entry) => entry.dirty).map((entry) => entry.id))];
       }
     }
-    // Bound exhausted without quiescing → FAIL CLOSED: guard every currently-dirty tab.
-    return [...new Set(tabsRef.current.filter((tab) => tab.isDirty).map((tab) => tab.id))];
+    // Bound exhausted without quiescing → FAIL CLOSED by THROWING. Returning a
+    // dirty-filter here is not reliably fail-closed: it can be empty (stale React
+    // metadata, or a round that saved clean before re-dirtying), which would let quit
+    // proceed. Throwing propagates to both quit paths' catch blocks, which abort the
+    // close/exit and keep the window open.
+    throw new Error('Quit flush did not reach a stable state; aborting close to avoid data loss.');
   }, []);
 
   const guardDirtyTabs = useCallback(
