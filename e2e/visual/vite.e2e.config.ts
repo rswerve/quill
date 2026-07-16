@@ -2,7 +2,6 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig, searchForWorkspaceRoot } from 'vite';
-import pkg from '../../package.json';
 
 const projectRoot = path.resolve(import.meta.dirname, '../..');
 
@@ -15,9 +14,6 @@ const projectRoot = path.resolve(import.meta.dirname, '../..');
 export default defineConfig({
   root: projectRoot,
   plugins: [react()],
-  define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
-  },
   server: {
     strictPort: true,
     fs: {

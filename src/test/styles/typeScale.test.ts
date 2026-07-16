@@ -75,10 +75,6 @@ describe('UI type scale', () => {
     expect(appModal).toMatch(/\.title\s*\{[^}]*font-size: 15px/s);
     // .message is var(--text-meta) = 12.5px (see the token above).
     expect(appModal).toMatch(/\.message\s*\{[^}]*font-size: var\(--text-meta\)/s);
-    // UpdateBanner: banner text sits at the UI scale (var(--text-ui) = 13px);
-    // the link inherits it via `font: inherit`.
-    const updateBanner = readModuleSource('UpdateBanner.module.css');
-    expect(updateBanner).toMatch(/\.banner\s*\{[^}]*font-size: var\(--text-ui\)/s);
     // LinkEditor: text input 14px, the URL row drops to 12.5px mono, buttons 12.5px.
     const linkEditor = readModuleSource('LinkEditor.module.css');
     expect(linkEditor).toMatch(/\.input\s*\{[^}]*font-size: 14px/s);

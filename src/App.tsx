@@ -11,10 +11,8 @@ import Rail from './components/Rail';
 import SessionPicker from './components/SessionPicker';
 import TabStrip from './components/TabStrip';
 import Topbar from './components/Topbar';
-import UpdateBanner from './components/UpdateBanner';
 import { useWorkspaceAutosave } from './hooks/useDraftAutosave';
 import type { WorkspaceReadResult } from './hooks/useDraftAutosave';
-import { useUpdateCheck } from './hooks/useUpdateCheck';
 import { useTabRegistry } from './hooks/useTabRegistry';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
 import { useSessionClaimRegistry } from './hooks/useSessionClaimRegistry';
@@ -186,7 +184,6 @@ export default function App() {
   const [claudeEffort, setClaudeEffort] = useState<ClaudeEffort | null>(
     () => readClaudeRunOptions(window.localStorage).effort,
   );
-  const updateCheck = useUpdateCheck({ currentVersion: __APP_VERSION__ });
 
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -828,14 +825,6 @@ export default function App() {
       <Rail editor={chrome.editor} />
 
       <main className="studio-main">
-        {updateCheck.update && (
-          <UpdateBanner
-            version={updateCheck.update.version}
-            url={updateCheck.update.url}
-            onDismiss={updateCheck.dismiss}
-          />
-        )}
-
         <Topbar
           editor={chrome.editor}
           filePath={chrome.filePath}

@@ -135,23 +135,6 @@ async function setupVisual(
   await settleVisual(page);
 }
 
-async function mountUpdateBannerHarness(page: Page): Promise<Locator> {
-  await page.evaluate(async () => {
-    let host = document.querySelector<HTMLElement>('[data-update-visual-host]');
-    if (!host) {
-      host = document.createElement('div');
-      host.dataset.updateVisualHost = 'true';
-      // Match UpdateBanner's real placement inside .studio-main without adding
-      // a wrapper box that changes its width or vertical rhythm.
-      host.style.display = 'contents';
-      document.querySelector('.studio-main')?.prepend(host);
-    }
-    const module = await import('/e2e/helpers/updateNotificationHarness.tsx');
-    module.mountUpdateNotificationHarness(host);
-  });
-  return page.locator('[data-update-visual-host]').getByRole('status');
-}
-
 async function openVisualDocument(
   page: Page,
   theme: Theme,
@@ -433,30 +416,6 @@ test.describe('visual regression safety net', () => {
           ).__quillReleaseWriteFile?.();
         });
         await expect(conflict).toHaveCount(0);
-      });
-
-      test('update notification banner', async ({ page }) => {
-        await page.route(
-          'https://api.github.com/repos/sam-powers/quill/releases/latest',
-          async (route) =>
-            route.fulfill({
-              status: 200,
-              contentType: 'application/json',
-              body: JSON.stringify({
-                tag_name: 'v9.9.9',
-                html_url: 'https://github.com/sam-powers/quill/releases/tag/v9.9.9',
-              }),
-            }),
-        );
-        await setupVisual(page, theme);
-        const banner = await mountUpdateBannerHarness(page);
-        await expect(banner).toBeVisible();
-        await expect(banner).toContainText('Quill 9.9.9 is available.');
-        await expect(banner.getByRole('button', { name: 'View release' })).toBeVisible();
-        await expect(
-          banner.getByRole('button', { name: 'Dismiss update notification' }),
-        ).toBeVisible();
-        await shot(page, theme, 'update-banner', banner);
       });
 
       test('suggesting mode with insertion, deletion, replacement, and format cards', async ({

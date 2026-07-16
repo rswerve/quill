@@ -70,10 +70,6 @@ select {
   border-radius: 2px;
 }
 
-/* Update banner styles are module-scoped in
-   src/components/UpdateBanner.module.css. Print hiding is global via the
-   [data-print-hidden] policy rule. */
-
 /* ── Workspace ──────────────────────────────────────────────────── */
 .workspace {
   display: flex;
