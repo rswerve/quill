@@ -182,6 +182,62 @@ test('an edit made while Save is pending is rescued onto the file by a fresh pas
     .toMatchObject({ dirty: false });
 });
 
+test('an edit during a Save As write is rescued onto the NEW path, never the old', async ({
+  page,
+}) => {
+  // Save As from Untitled with the doc write deferred; edit during the blocked
+  // write; on release the fresh pass must target the newly-chosen path (read from
+  // the synchronous filePathRef, before React commits Save As's setState), never a
+  // stale/old path.
+  const savePath = '/tmp/renamed.md';
+  await setupMemoryTauri(page, { savePath, deferFirstWriteFile: true });
+
+  await activeEditor(page).click();
+  await page.keyboard.type('first draft');
+
+  // Cmd+Shift+S — Save As. The doc write to savePath is the first write, so it blocks.
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('KeyS');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('ControlOrMeta');
+  await page.waitForFunction(
+    () => (window as unknown as { __quillWriteFileBlocked: boolean }).__quillWriteFileBlocked,
+  );
+
+  // Edit while the Save As write is still blocked.
+  await activeEditor(page).fill('edited during save');
+
+  await page.evaluate(() => {
+    (window as unknown as { __quillReleaseWriteFile: () => void }).__quillReleaseWriteFile();
+  });
+
+  // The fresh pass rescued the edit onto the NEW path.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (docPath) =>
+          (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[docPath],
+        savePath,
+      ),
+    )
+    .toBe('edited during save');
+
+  // No document write ever targeted a path other than savePath (no stale/old target).
+  const strayTarget = await page.evaluate((docPath) => {
+    const calls = (
+      window as unknown as { __quillCalls: Array<{ cmd: string; args: { path?: string } }> }
+    ).__quillCalls;
+    return calls.some(
+      (c) =>
+        c.cmd === 'write_file_atomic' &&
+        c.args.path !== docPath &&
+        !(c.args.path ?? '').endsWith('.comments.json'),
+    );
+  }, savePath);
+  expect(strayTarget).toBe(false);
+});
+
 test('one recovery decision atomically restores every dirty tab and its annotations', async ({
   page,
 }) => {

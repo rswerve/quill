@@ -140,6 +140,11 @@ export function useFileManager(
   onError?: (title: string, message: string) => void,
 ): UseFileManagerReturn {
   const [filePath, setFilePath] = useState<string | null>(null);
+  // Mirror of filePath readable SYNCHRONOUSLY. A save — especially a fresh pass
+  // fired right after a Save As — must target the CURRENT path even before React
+  // commits the setState, or it could write to the old path. Kept in lockstep with
+  // the render state through updateFilePath (the single writer).
+  const filePathRef = useRef<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   // Monotonic across document, review, and chat mutations. A save may clear
   // dirty only if nothing changed while its asynchronous writes were pending.
@@ -158,6 +163,13 @@ export function useFileManager(
   const markDirty = useCallback(() => {
     changeRevisionRef.current += 1;
     setIsDirty(true);
+  }, []);
+
+  // The single writer for the document path — keeps the synchronous ref and the
+  // render state in lockstep so no caller can update one without the other.
+  const updateFilePath = useCallback((path: string | null) => {
+    filePathRef.current = path;
+    setFilePath(path);
   }, []);
 
   const openFilePath = useCallback(
@@ -207,7 +219,7 @@ export function useFileManager(
           }
         }
 
-        setFilePath(path);
+        updateFilePath(path);
         changeRevisionRef.current += 1;
         documentEpochRef.current += 1; // opening a file is an identity change
         // The document layer marks an accepted auto-binding dirty after the
@@ -221,7 +233,7 @@ export function useFileManager(
         return null;
       }
     },
-    [onError],
+    [onError, updateFilePath],
   );
 
   const openFile = useCallback(async () => {
@@ -297,7 +309,10 @@ export function useFileManager(
       forcePath?: string,
       chat?: DocumentChatThread | null,
     ): Promise<SaveOutcome> => {
-      const targetPath = forcePath ?? filePath;
+      // Read the path from the ref, not state: a fresh pass right after a Save As
+      // runs before React commits the new filePath, and must target it.
+      const currentPath = filePathRef.current;
+      const targetPath = forcePath ?? currentPath;
       if (!targetPath) {
         return { status: 'cancelled' };
       }
@@ -307,7 +322,7 @@ export function useFileManager(
       // the same path is fine, but skip touching the sidecar so we don't destroy
       // recoverable comment data. A Save As to a different path (forcePath) is
       // a fresh file and may write its own sidecar normally.
-      const skipSidecar = sidecarProtected && targetPath === filePath;
+      const skipSidecar = sidecarProtected && targetPath === currentPath;
       try {
         const docResult = await writeFileAtomic(targetPath, content, { mode: 'any' });
         if (docResult.status !== 'written') {
@@ -338,7 +353,7 @@ export function useFileManager(
         //  - CONTENT (changeRevision): also unchanged → nothing was edited during
         //    the write, so it's safe to clear dirty. A concurrent edit keeps dirty.
         if (documentEpochRef.current === saveEpoch) {
-          setFilePath(targetPath);
+          updateFilePath(targetPath);
           setSidecarProtected(false);
           if (changeRevisionRef.current === saveRevision) {
             setIsDirty(false);
@@ -352,7 +367,7 @@ export function useFileManager(
         return { status: 'failed', message };
       }
     },
-    [filePath, saveSidecar, sidecarProtected, onError],
+    [saveSidecar, sidecarProtected, onError, updateFilePath],
   );
 
   const saveFileAs = useCallback(
@@ -395,21 +410,24 @@ export function useFileManager(
   const newFile = useCallback(() => {
     changeRevisionRef.current += 1;
     documentEpochRef.current += 1; // New is an identity change
-    setFilePath(null);
+    updateFilePath(null);
     setIsDirty(false);
     setSidecarProtected(false);
-  }, []);
+  }, [updateFilePath]);
 
   // Adopt a recovered draft: point at its file (if any) without reading disk —
   // the draft's content is newer than the file — and mark dirty so the user is
   // prompted to save the recovered work.
-  const restoreDraft = useCallback((path: string | null, dirty = true) => {
-    changeRevisionRef.current += 1;
-    documentEpochRef.current += 1; // restore swaps in a different document
-    setFilePath(path);
-    setIsDirty(dirty);
-    setSidecarProtected(false);
-  }, []);
+  const restoreDraft = useCallback(
+    (path: string | null, dirty = true) => {
+      changeRevisionRef.current += 1;
+      documentEpochRef.current += 1; // restore swaps in a different document
+      updateFilePath(path);
+      setIsDirty(dirty);
+      setSidecarProtected(false);
+    },
+    [updateFilePath],
+  );
 
   return {
     filePath,

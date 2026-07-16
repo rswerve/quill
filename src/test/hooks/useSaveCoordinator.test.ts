@@ -371,25 +371,63 @@ describe('useSaveCoordinator', () => {
     expect(flushed).toBe(true);
   });
 
-  it('holds a default save requested during an exclusive job until it finishes', async () => {
+  it('lets a successful exclusive cover a same-revision default request (no redundant write)', async () => {
+    // Behaviour (a): default save pending → Save As at the same revision covers it,
+    // so the default never runs a redundant write and resolves with the Save As
+    // outcome.
     const exclusive = deferred<SaveOutcome>();
     const exclusiveJob = vi.fn(() => exclusive.promise);
     const performSave = vi.fn(async () => saved());
-    const { result } = setup(performSave);
+    const { result } = setup(performSave); // revision stays 1
 
     act(() => {
       result.current.runExclusive(exclusiveJob);
     });
+    let defaultResult!: Promise<SaveOutcome>;
     act(() => {
-      result.current.requestSave(); // queued behind the exclusive job
+      defaultResult = result.current.requestSave(); // same revision, no intervening edit
+    });
+    expect(performSave).not.toHaveBeenCalled();
+
+    const exclusiveOutcome: SaveOutcome = {
+      status: 'saved',
+      path: '/saved-as.md',
+      docHash: 'hb',
+      sidecar: { state: 'absent' },
+    };
+    await act(async () => {
+      exclusive.resolve(exclusiveOutcome);
+    });
+    await act(async () => {});
+
+    expect(performSave).not.toHaveBeenCalled(); // covered → no redundant default write
+    expect(await defaultResult).toMatchObject({ status: 'saved', path: '/saved-as.md' });
+  });
+
+  it('runs a default pass after an exclusive when a newer edit is not covered', async () => {
+    // Behaviour (b): an edit during the Save As write leaves the latest revision
+    // uncovered, so exactly one fresh default pass runs afterwards.
+    const exclusive = deferred<SaveOutcome>();
+    const exclusiveJob = vi.fn(() => exclusive.promise);
+    const performSave = vi.fn(async () => saved());
+    const { result, revisionRef } = setup(performSave); // exclusive startRevision = 1
+
+    act(() => {
+      result.current.runExclusive(exclusiveJob);
+    });
+    revisionRef.current = 2; // edit during the exclusive write
+    let defaultResult!: Promise<SaveOutcome>;
+    act(() => {
+      defaultResult = result.current.requestSave(); // minRevision 2, uncovered by cov=1
     });
     expect(performSave).not.toHaveBeenCalled();
 
     await act(async () => {
-      exclusive.resolve(saved());
+      exclusive.resolve(saved()); // covers rev 1; rev 2 > 1 → one default pass
     });
     await act(async () => {});
     expect(performSave).toHaveBeenCalledTimes(1);
+    expect((await defaultResult).status).toBe('saved');
   });
 
   it('a cancelled exclusive job does not erase a queued default fresh pass', async () => {

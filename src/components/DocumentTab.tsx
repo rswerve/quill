@@ -911,20 +911,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [filePath]);
 
   const performOpen = useCallback(async () => {
+    // Drain any in-flight save BEFORE opening: openFile mutates identity (filePath,
+    // epoch, revision) inside openFilePath, and a fresh pass triggered by that
+    // revision bump could otherwise write the old editor content to the new path.
+    await flushSaves();
     const result = await openFile();
     if (!result) return;
-    // Serialize against any in-flight save before swapping the document identity,
-    // so a late-completing write can't race the change (the epoch guard in
-    // useFileManager is the correctness backstop; this avoids the wasted write).
-    await flushSaves();
     loadFileResult(result);
   }, [openFile, loadFileResult, flushSaves]);
 
   const performOpenPath = useCallback(
     async (path: string, promptForSession = true) => {
+      await flushSaves(); // drain before openFilePath mutates identity (see performOpen)
       const result = await openFilePath(path);
       if (!result) return false;
-      await flushSaves();
       loadFileResult(result, promptForSession);
       return true;
     },

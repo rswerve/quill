@@ -101,6 +101,11 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
   // or cleared by the DEFAULT-save branch, so a cancelled exclusive job (Save As)
   // can't erase a fresh pass that belongs to the original path.
   const freshPassPendingRef = useRef(false);
+  // The highest start-revision any SUCCESSFUL write (default or exclusive) has
+  // covered. A request/edit at revision R is on disk once coveredRevision >= R.
+  // A successful Save As advances this too, so it resolves default waiters it
+  // covered and retires a now-redundant fresh pass. Starts below revision 0.
+  const coveredRevisionRef = useRef(-1);
   // Resolves when the currently-running drain loop goes idle. Replaced per loop.
   const idleRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
   const [status, setStatus] = useState<SaveStatus>({ state: 'idle' });
@@ -116,6 +121,16 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
       resolve: () => resolveIdle(),
     };
     void (async () => {
+      // Resolve every default waiter the coverage watermark now satisfies (its
+      // requested edit is on disk), leaving newer waiters to a later pass.
+      const resolveCoveredWaiters = (outcome: SaveOutcome) => {
+        const covered = coveredRevisionRef.current;
+        const resolved = defaultWaitersRef.current.filter((w) => w.minRevision <= covered);
+        defaultWaitersRef.current = defaultWaitersRef.current.filter(
+          (w) => w.minRevision > covered,
+        );
+        for (const waiter of resolved) waiter.resolve(outcome);
+      };
       try {
         while (
           exclusiveQueueRef.current.length > 0 ||
@@ -123,14 +138,27 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
           freshPassPendingRef.current
         ) {
           setStatus({ state: 'saving' }); // every pass/job re-enters the saving state
-          // Exclusive jobs (Save As) drain first and run entirely alone. They never
-          // touch the fresh-pass slot, so cancelling one can't erase a default
-          // fresh pass that belongs to the original path.
+          // Exclusive jobs (Save As) drain first and run entirely alone. The dialog
+          // is modal, so the revision captured here still reflects the content the
+          // job snapshots after it.
           if (exclusiveQueueRef.current.length > 0) {
             const { job, resolve, reject } = exclusiveQueueRef.current.shift()!;
+            const startRevision = getRevisionRef.current();
             try {
               const outcome = await job();
               setStatus(statusFor(outcome));
+              if (outcome.status === 'saved') {
+                // A successful Save As put the current state on disk: advance the
+                // watermark, resolve the default waiters it covered, and re-derive
+                // the fresh-pass need — retiring a now-redundant pass, or keeping
+                // one only for edits made during its write.
+                coveredRevisionRef.current = Math.max(coveredRevisionRef.current, startRevision);
+                resolveCoveredWaiters(outcome);
+                freshPassPendingRef.current = getRevisionRef.current() > coveredRevisionRef.current;
+              }
+              // A terminal exclusive (cancelled / failed) touches neither coverage
+              // nor the fresh-pass slot, so a fresh pass owed to the original path
+              // survives a cancelled Save As.
               resolve(outcome);
             } catch (error) {
               setStatus({ state: 'failed', message: String(error) });
@@ -151,18 +179,12 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
           }
           setStatus(statusFor(outcome));
           if (outcome.status === 'saved') {
-            // Resolve every waiter this write covered (its edit is now persisted).
-            // Waiters requested DURING the write (minRevision > startRevision) stay
-            // and are covered by a later pass.
-            const covered = defaultWaitersRef.current.filter((w) => w.minRevision <= startRevision);
-            defaultWaitersRef.current = defaultWaitersRef.current.filter(
-              (w) => w.minRevision > startRevision,
-            );
-            for (const waiter of covered) waiter.resolve(outcome);
-            // If the document moved on during this write, schedule exactly one more
+            coveredRevisionRef.current = Math.max(coveredRevisionRef.current, startRevision);
+            resolveCoveredWaiters(outcome);
+            // If the document moved on past the watermark, schedule exactly one more
             // pass so the on-disk state reaches the latest edit — even with no
             // second requestSave.
-            if (getRevisionRef.current() > startRevision) freshPassPendingRef.current = true;
+            freshPassPendingRef.current = getRevisionRef.current() > coveredRevisionRef.current;
           } else {
             // Terminal (failed / blocked / conflict / cancelled): resolve ALL pending
             // default waiters with this outcome and STOP. The slot stays cleared, so
