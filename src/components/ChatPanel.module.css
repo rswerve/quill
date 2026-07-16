@@ -1,9 +1,7 @@
 /* ChatPanel — module-scoped styles (hashed, private to the component). The
    whole-document chat panel. Design tokens resolve from src/styles/tokens.css.
-   Self-contained `.chat-*` namespace, moved verbatim. `.ai-badge` is a shared
-   global (chat + suggestion cards) — the assistant-head override reaches it via
-   :global(). Keyframes are module-local; the animation references resolve within
-   the module. */
+   Self-contained `.chat-*` namespace, moved verbatim. Keyframes are module-local;
+   the animation references resolve within the module. */
 .view {
   display: flex;
   flex-direction: column;
@@ -59,33 +57,10 @@
   align-items: center;
   gap: 5px;
 }
-.assistantHead :global(.ai-badge) {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  padding: 0;
-  border-radius: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--ai-badge-bg);
-  color: var(--ai-badge-text);
-  font-family: var(--font-mono);
-  font-size: 8px;
-  font-weight: 600;
-}
 .assistantName {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
-}
-.assistantModel {
-  overflow: hidden;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .assistantText {
   white-space: pre-wrap;

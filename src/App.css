@@ -583,19 +583,6 @@ del.track-delete {
    rules (filename, sep, suggesting-badge, model, claude-setting singular) went
    with it. Print-hide rides on data-print-hidden on the contentinfo footer. */
 
-/* Shared AI badge remains in use by chat and suggestion cards. */
-.ai-badge {
-  display: inline-block;
-  background: var(--color-accent);
-  color: var(--color-page);
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-size: var(--text-label);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  margin-right: 4px;
-}
-
 /* ── Session picker modal ──────────────────────────────────────── */
 /* SessionPicker styles are module-scoped in
    src/components/SessionPicker.module.css. */

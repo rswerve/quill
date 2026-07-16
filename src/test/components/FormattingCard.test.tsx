@@ -62,7 +62,7 @@ describe('FormattingCard', () => {
 
     expect(screen.getByText('Formatting')).toBeInTheDocument();
     expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getByText('AI')).toBeInTheDocument();
+    expect(screen.queryByText('AI')).toBeNull();
     expect(
       screen.getByText('bold added · italic added · strikethrough removed'),
     ).toBeInTheDocument();

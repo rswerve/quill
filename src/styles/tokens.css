@@ -45,8 +45,6 @@
   --sugg-replace: #B65C38;               /* Replacement badge = accent */
   --sugg-format:  #8B8371;               /* Formatting badge = neutral */
   --badge-format-bg: #EFEBE0;
-  --ai-badge-bg:   #E4ECF1;
-  --ai-badge-text: #4A6E88;
   --chat-bubble-user: #B65C38;
   --note-stripe: #B7AF9C;
   --note-badge-bg: #EFEBE0;
@@ -107,8 +105,6 @@
   --sugg-replace: #FE8019;               /* Replacement badge = accent */
   --sugg-format:  #A89984;               /* Formatting badge = neutral */
   --badge-format-bg: #3C3836;
-  --ai-badge-bg:   #2B3A4A;
-  --ai-badge-text: #83A598;
   --chat-bubble-user: #D65D0E;
   --note-stripe: #665C54;
   --note-badge-bg: #3C3836;

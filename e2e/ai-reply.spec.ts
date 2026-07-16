@@ -536,7 +536,8 @@ test('AI edits: prose + quill-edits block (fence split across deltas) becomes a 
   const card = page.locator('[data-suggestion-kind]');
   await expect(card.first()).toBeVisible({ timeout: 2000 });
   await expect(card.first().getByText('Claude', { exact: true })).toBeVisible();
-  await expect(page.locator('[data-suggestion-kind] .ai-badge').first()).toHaveText('AI');
+  // The redundant "AI" chip was removed; the "Claude" author label alone marks it.
+  await expect(page.locator('[data-suggestion-kind] .ai-badge')).toHaveCount(0);
   // The new text "cats are" shows up as a tracked insertion in the document.
   await expect(activeEditor(page)).toContainText('cats are');
 

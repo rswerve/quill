@@ -95,13 +95,7 @@ export default function ChatPanel({
               tabIndex={-1}
             >
               <div className={styles.assistantHead}>
-                <span className="ai-badge">AI</span>
                 <span className={styles.assistantName}>Claude</span>
-                {message.model && (
-                  <span className={styles.assistantModel} data-chat-model>
-                    {message.model}
-                  </span>
-                )}
               </div>
               {message.text && (
                 <div className={styles.assistantText}>

@@ -51,7 +51,6 @@ describe('UI type scale', () => {
     );
     expect(new Set(explicit)).toEqual(
       new Set([
-        '8',
         '8.5',
         '9',
         '9.5',
@@ -89,8 +88,5 @@ describe('UI type scale', () => {
     expect(readModuleSource('Rail.module.css')).toMatch(/\.btn\.heading\s*\{[^}]*font-size: 11px/s);
     expect(readModuleSource('Topbar.module.css')).toMatch(/\.seg\s*\{[^}]*font-size: 12px/s);
     expect(readModuleSource('Footer.module.css')).toMatch(/\.footer\s*\{[^}]*font-size: 10px/s);
-    expect(readModuleSource('SuggestionCard.module.css')).toMatch(
-      /\.head :global\(\.ai-badge\)\s*\{[^}]*font-size: 8\.5px/s,
-    );
   });
 });

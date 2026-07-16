@@ -64,7 +64,6 @@ export default function SuggestionCardShell({
       <div className={styles.head}>
         <span className={cx(styles.typeBadge, styles[kind])}>{label}</span>
         <span className={styles.author}>{isClaude ? 'Claude' : authorID}</span>
-        {isClaude && <span className="ai-badge">AI</span>}
         <span className={styles.headSpacer} />
         <time className={styles.time}>{timeAgo(createdAt)}</time>
       </div>

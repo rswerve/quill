@@ -51,8 +51,11 @@ describe('ChatPanel', () => {
     const props = renderPanel();
     expect(screen.getByText('Tighten the opening')).toHaveAttribute('data-chat-role', 'user');
     expect(screen.getByText('I tightened it.')).toBeInTheDocument();
-    expect(screen.getByText('AI')).toBeInTheDocument();
-    expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
+    // A chat message shows only "Claude" — the "AI" chip and the per-message
+    // model tag were removed.
+    expect(screen.getByText('Claude', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('AI')).toBeNull();
+    expect(screen.queryByText('claude-sonnet')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /1 suggestion in the doc/ }));
     expect(props.onViewSuggestions).toHaveBeenCalledWith(['replacement']);
