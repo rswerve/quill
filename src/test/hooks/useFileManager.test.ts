@@ -840,6 +840,157 @@ describe('useFileManager', () => {
       );
       expect((second![1] as InvokeArgs).expected).toEqual({ mode: 'match', hash: HASH_DOC });
     });
+
+    it('a FAILED Save As (sidecar I/O error) leaves the current document baseline untouched', async () => {
+      const { result } = renderHook(() => useFileManager());
+      const docWrites: { path?: string; expected?: unknown }[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          return a.path === '/a.md' ? fpPresent('a-doc') : fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (a.path === '/b.comments.json') throw new Error('Disk full'); // Save As sidecar I/O
+          if (!a.path?.endsWith('.comments.json'))
+            docWrites.push({ path: a.path, expected: a.expected });
+          return { status: 'written', hash: `w-${a.content}` };
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/a.md'); // baseline = readHash('a-doc')
+      });
+      let saveAs: SaveOutcome;
+      await act(async () => {
+        saveAs = await result.current.saveFile(
+          'a-edited',
+          [SAMPLE_COMMENT],
+          [],
+          null,
+          null,
+          '/b.md',
+        );
+      });
+      expect(saveAs!.status).toBe('failed');
+      expect(result.current.filePath).toBe('/a.md'); // B not adopted
+
+      // A normal save now still gates on A's ORIGINAL hash, not B's write hash.
+      await act(async () => {
+        await result.current.saveFile('a-edited-2', [], [], null, null);
+      });
+      const aWrite = [...docWrites].reverse().find((w) => w.path === '/a.md');
+      expect(aWrite!.expected).toEqual({ mode: 'match', hash: readHash('a-doc') });
+    });
+
+    it('a same-path Save As advances the current baseline immediately (no self-conflict on the next save)', async () => {
+      const { result } = renderHook(() => useFileManager());
+      const docWrites: { path?: string; expected?: unknown }[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          return a.path === '/a.md' ? fpPresent('a-doc') : fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (!a.path?.endsWith('.comments.json'))
+            docWrites.push({ path: a.path, expected: a.expected });
+          return { status: 'written', hash: `w-${a.content}` };
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/a.md');
+      });
+      await act(async () => {
+        await result.current.saveFile('v1', [], [], null, null, '/a.md'); // Save As to the SAME path
+      });
+      expect(docWrites[0].expected).toEqual({ mode: 'any' }); // unconditional write
+      await act(async () => {
+        await result.current.saveFile('v2', [], [], null, null); // normal save
+      });
+      // The normal save gates on the hash the same-path Save As wrote (w-v1), not the stale open hash.
+      expect(docWrites[docWrites.length - 1].expected).toEqual({ mode: 'match', hash: 'w-v1' });
+    });
+
+    it('a successful re-open adopts the new file baselines (subsequent ops gate on B)', async () => {
+      const { result } = renderHook(() => useFileManager());
+      const ops: { path?: string; expected?: unknown }[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          if (a.path === '/a.md') return fpPresent('a-doc');
+          if (a.path === '/b.md') return fpPresent('b-doc');
+          if (a.path === '/b.comments.json') return fpPresent('{}');
+          return fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          ops.push({ path: a.path, expected: a.expected });
+          return { status: 'written', hash: 'w' };
+        }
+        if (cmd === 'delete_file_if_match') {
+          ops.push({ path: a.path, expected: a.expected });
+          return { status: 'deleted' };
+        }
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/a.md');
+      });
+      await act(async () => {
+        await result.current.openFilePath('/b.md'); // successful re-open
+      });
+      expect(result.current.filePath).toBe('/b.md');
+      await act(async () => {
+        await result.current.saveFile('b-edited', [], [], null, null); // empty → sidecar delete
+      });
+      expect(ops.find((o) => o.path === '/b.md')!.expected).toEqual({
+        mode: 'match',
+        hash: readHash('b-doc'),
+      });
+      expect(ops.find((o) => o.path === '/b.comments.json')!.expected).toEqual({
+        mode: 'match',
+        hash: readHash('{}'),
+      });
+    });
+
+    it('a doc conflict keeps the original expectation across a retry (never adopts actual)', async () => {
+      const { result } = renderHook(() => useFileManager());
+      const docExpecteds: unknown[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+        const a = (args ?? {}) as InvokeArgs;
+        if (cmd === 'read_file_with_fingerprint') {
+          return a.path === '/d.md' ? fpPresent('orig') : fpAbsent();
+        }
+        if (cmd === 'find_session_for_markdown') return null;
+        if (cmd === 'write_file_atomic') {
+          if (a.path === '/d.md') {
+            docExpecteds.push(a.expected);
+            return { status: 'conflict', actual: { state: 'present', hash: 'external' } };
+          }
+          return { status: 'written', hash: 'w' };
+        }
+        if (cmd === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+      await act(async () => {
+        await result.current.openFilePath('/d.md');
+      });
+      await act(async () => {
+        await result.current.saveFile('e1', [], [], null, null);
+      });
+      await act(async () => {
+        await result.current.saveFile('e2', [], [], null, null);
+      });
+      // Both attempts gate on the ORIGINAL open hash — the conflict never adopts 'external'.
+      expect(docExpecteds).toEqual([
+        { mode: 'match', hash: readHash('orig') },
+        { mode: 'match', hash: readHash('orig') },
+      ]);
+    });
   });
 
   describe('saveFileAs', () => {

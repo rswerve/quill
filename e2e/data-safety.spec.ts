@@ -54,13 +54,11 @@ async function setupWithIPC(
           // a not-found read (returns null / throws) is typed absence, otherwise
           // present with the real hash.
           if (cmd === 'read_file_with_fingerprint') {
-            try {
-              const content = await handler('read_file', args);
-              if (content === null || content === undefined) return { state: 'absent' };
-              return { state: 'present', content, hash: await sha256Hex(content as string) };
-            } catch {
-              return { state: 'absent' };
-            }
+            // Faithful to the native contract: only a null/missing read is typed
+            // absence; a thrown read (permission/symlink/etc.) propagates as a reject.
+            const content = await handler('read_file', args);
+            if (content === null || content === undefined) return { state: 'absent' };
+            return { state: 'present', content, hash: await sha256Hex(content as string) };
           }
           const result = await handler(cmd, args);
           // Legacy shim convention: a null/undefined return from a write means
@@ -256,7 +254,7 @@ test('dirty document: Cmd+O opens in a new tab and preserves the dirty tab', asy
     if (cmd === 'show_open_dialog') return '/tmp/next.md';
     if (cmd === 'read_file') {
       if ((args.path as string) === '/tmp/next.md') return '# The next document';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;

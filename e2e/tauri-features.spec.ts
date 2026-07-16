@@ -82,13 +82,11 @@ async function setupWithIPC(
           };
           // Derive read_file_with_fingerprint from the test's read_file handler.
           if (cmd === 'read_file_with_fingerprint') {
-            try {
-              const content = await handler('read_file', args, ctx);
-              if (content === null || content === undefined) return { state: 'absent' };
-              return { state: 'present', content, hash: await sha256Hex(content as string) };
-            } catch {
-              return { state: 'absent' };
-            }
+            // Faithful to the native contract: only a null/missing read is typed
+            // absence; a thrown read (permission/symlink/etc.) propagates as a reject.
+            const content = await handler('read_file', args, ctx);
+            if (content === null || content === undefined) return { state: 'absent' };
+            return { state: 'present', content, hash: await sha256Hex(content as string) };
           }
           // Delegate everything else to the test handler.
           const result = await handler(cmd, args, ctx);
@@ -207,7 +205,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/stray.md') return '# Doc body that is long enough to match';
-      throw new Error('sidecar not found'); // .comments.json miss → empty sidecar
+      return null; // .comments.json miss → typed absent
     }
     if (cmd === 'find_session_for_markdown') {
       return ctx.fixtures.autoBindSession;
@@ -239,7 +237,7 @@ test('auto-bind: no match leaves session unbound (no false link)', async ({ page
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/orphan.md') return '# Doc that matches nothing';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;
@@ -312,7 +310,7 @@ test('linking a saved document records its session name for the next picker open
     if (cmd === 'show_open_dialog') return '/tmp/Meeting Notes.md';
     if (cmd === 'read_file') {
       if (args.path === '/tmp/Meeting Notes.md') return '# Saved meeting notes';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     if (cmd === 'list_claude_sessions') {
@@ -484,7 +482,7 @@ test('deep-link: deep-link-open event opens the file at the payload path', async
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/linked.md') return '# Linked document content';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     return null;
@@ -509,7 +507,7 @@ test('deep-link: opening a doc with no linked session forces the session picker'
     if (cmd === 'read_file') {
       const path = args.path as string;
       if (path === '/tmp/unbound.md') return '# A document with no linked session';
-      throw new Error('sidecar not found');
+      return null; // sidecar missing → typed absent
     }
     if (cmd === 'find_session_for_markdown') return null;
     if (cmd === 'list_claude_sessions') {

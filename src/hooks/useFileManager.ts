@@ -363,14 +363,19 @@ export function useFileManager(
       }
       const saveRevision = changeRevisionRef.current;
       const saveEpoch = documentEpochRef.current;
-      // Expected fingerprints only apply to the CURRENT document's path. A Save As
-      // to a new path (forcePath) is a fresh file, so it writes unconditionally.
-      const usingExpected = targetPath === currentPath;
-      // Protect a corrupt sidecar from being clobbered. Saving the markdown to
-      // the same path is fine, but skip touching the sidecar so we don't destroy
-      // recoverable comment data. A Save As to a different path (forcePath) is
-      // a fresh file and may write its own sidecar normally.
-      const skipSidecar = sidecarProtected && targetPath === currentPath;
+      // Two independent axes:
+      //  - WRITE PRECONDITION: an EXPLICIT Save As (forcePath given) writes
+      //    unconditionally — the user chose to write that path — even to the same
+      //    path. A normal Cmd+S / autosave gates on the current document's baselines.
+      //  - FINGERPRINT OWNERSHIP: a write to the CURRENT path touches the current
+      //    document's real file, so its baseline advances immediately (partial-success)
+      //    even when it's an explicit same-path Save As; a write to a DIFFERENT Save As
+      //    target is staged and adopted only once the whole save succeeds.
+      const isExplicitSaveAs = forcePath !== undefined;
+      const isCurrentTarget = targetPath === currentPath;
+      const usingExpected = !isExplicitSaveAs;
+      // Protect a corrupt/ambiguous sidecar from being clobbered on a same-path save.
+      const skipSidecar = sidecarProtected && isCurrentTarget;
       const sameDocument = () => documentEpochRef.current === saveEpoch;
       try {
         const docExpected: Expected =
@@ -383,11 +388,13 @@ export function useFileManager(
           // expectation (do NOT adopt actual) — Overwrite/Save-a-Copy resolves it.
           return { status: 'conflict', path: targetPath, which: 'doc', actual: docResult.actual };
         }
-        // Record what we just wrote to the .md IMMEDIATELY, before the sidecar step,
-        // so a sidecar conflict below can't make the next save conflict against our
-        // own freshly-written .md. Epoch-guarded: a stale write never touches the
-        // expected state of the document now on screen.
-        if (sameDocument()) expectedDocRef.current = { state: 'present', hash: docResult.hash };
+        const newDocFingerprint: Fingerprint = { state: 'present', hash: docResult.hash };
+        // Current target → this write hit the current document's real file, so advance
+        // its baseline IMMEDIATELY (partial-success), so a later sidecar conflict can't
+        // make the next save false-conflict on our own freshly-written .md. A DIFFERENT
+        // Save As target is staged and committed only on full success + adoption
+        // (below); until then the current document's baselines stay untouched.
+        if (isCurrentTarget && sameDocument()) expectedDocRef.current = newDocFingerprint;
         if (skipSidecar) {
           // The markdown is saved, but a corrupt on-disk sidecar means the review
           // data is NOT persisted. Report a block and STAY dirty — never signal a
@@ -404,9 +411,10 @@ export function useFileManager(
           usingExpected ? expectedSidecarRef.current : null,
         );
         if (!sidecarResult.ok) {
-          // The sidecar changed underneath us. The .md is already saved (and its
-          // expected fingerprint updated above), so the next save won't false-conflict
-          // on the .md; the sidecar keeps its original expectation for resolution.
+          // The sidecar changed underneath us. For a current-path save the .md is
+          // already saved (and its baseline advanced above); for a Save As the current
+          // document's baselines are untouched. Either way keep the sidecar's original
+          // expectation for resolution.
           return {
             status: 'conflict',
             path: targetPath,
@@ -414,25 +422,38 @@ export function useFileManager(
             actual: sidecarResult.conflict,
           };
         }
-        if (sameDocument()) expectedSidecarRef.current = sidecarResult.fingerprint;
-        const sidecar = sidecarResult.fingerprint;
+        const newSidecarFingerprint = sidecarResult.fingerprint;
+        if (isCurrentTarget && sameDocument()) expectedSidecarRef.current = newSidecarFingerprint;
         // Adopt post-write tab state, gated on two independent signals:
         //  - IDENTITY (documentEpoch): unchanged → this write belongs to the doc
-        //    still on screen, so adopt targetPath and clear sidecar protection. An
-        //    Open/New/restore during the write bumps the epoch → apply NO tab state
-        //    (the write's bytes still landed at targetPath, reported in the outcome).
-        //    A plain edit does NOT bump the epoch, so a Save As whose new path was
-        //    chosen still adopts it even if the user typed during the write.
+        //    still on screen, so adopt targetPath, clear sidecar protection, and (for
+        //    a Save As) commit the new baselines — only now that the WHOLE save
+        //    succeeded. An Open/New/restore during the write bumps the epoch → apply
+        //    NO tab state (the bytes still landed at targetPath, reported in the
+        //    outcome). A plain edit does NOT bump the epoch, so a Save As still adopts
+        //    its new path even if the user typed during the write.
         //  - CONTENT (changeRevision): also unchanged → nothing was edited during
         //    the write, so it's safe to clear dirty. A concurrent edit keeps dirty.
-        if (documentEpochRef.current === saveEpoch) {
+        if (sameDocument()) {
           updateFilePath(targetPath);
           setSidecarProtected(false);
+          if (!isCurrentTarget) {
+            // Different Save As target: commit the staged baselines now that the whole
+            // save succeeded and the new path is adopted (current-target saves already
+            // advanced them incrementally above).
+            expectedDocRef.current = newDocFingerprint;
+            expectedSidecarRef.current = newSidecarFingerprint;
+          }
           if (changeRevisionRef.current === saveRevision) {
             setIsDirty(false);
           }
         }
-        return { status: 'saved', path: targetPath, docHash: docResult.hash, sidecar };
+        return {
+          status: 'saved',
+          path: targetPath,
+          docHash: docResult.hash,
+          sidecar: newSidecarFingerprint,
+        };
       } catch (e) {
         console.error('Failed to save file:', e);
         const message = String(e);
