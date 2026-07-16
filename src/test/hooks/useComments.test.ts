@@ -256,7 +256,7 @@ describe('useComments', () => {
       expect(result.current.comments[0].replies[0].model).toBe('claude-fable-5');
     });
 
-    it('clears the old model before a retry can report a different one', () => {
+    it('preserves the last observed model/effort and their timestamps across a retry', () => {
       const { result } = renderHook(() => useComments());
       let commentId = '';
       let replyId = '';
@@ -266,12 +266,24 @@ describe('useComments', () => {
       act(() => {
         replyId = result.current.startAIReply(commentId);
         result.current.setAIReplyModel(commentId, replyId, 'claude-fable-5');
+        result.current.setAIReplyEffort(commentId, replyId, 'high');
       });
+      const observed = result.current.comments[0].replies[0];
+      expect(observed.modelObservedAt).toBeTruthy();
+      expect(observed.effortObservedAt).toBeTruthy();
+
       act(() => {
         result.current.retryAIReply(commentId, replyId);
       });
-
-      expect(result.current.comments[0].replies[0].model).toBeUndefined();
+      // A new observation overwrites immediately; a failed retry keeps the prior
+      // model/effort AND their observation timestamps, so "last observed" (which
+      // ranks by those timestamps) is never misdated.
+      const retried = result.current.comments[0].replies[0];
+      expect(retried.pending).toBe(true);
+      expect(retried.model).toBe('claude-fable-5');
+      expect(retried.effort).toBe('high');
+      expect(retried.modelObservedAt).toBe(observed.modelObservedAt);
+      expect(retried.effortObservedAt).toBe(observed.effortObservedAt);
     });
   });
 

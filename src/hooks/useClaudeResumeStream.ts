@@ -4,6 +4,7 @@ import type { AISessionBinding, ClaudeRunOptions } from '../types';
 
 export type ChunkEvent =
   | { kind: 'model'; model: string }
+  | { kind: 'effort'; effort: string }
   | { kind: 'delta'; text: string }
   | { kind: 'done' }
   | { kind: 'error'; message: string }
@@ -23,6 +24,7 @@ export interface ClaudeSpawnArgs {
 
 export interface ClaudeStreamHandlers {
   onModel?: (model: string) => void;
+  onEffort?: (effort: string) => void;
   onVisibleChunk: (chunk: string) => void;
   onDone: (rawText: string, visibleText: string) => void;
   onError: (message: string) => void;
@@ -146,6 +148,8 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
         }
         if (event.kind === 'model') {
           handlers.onModel?.(event.model);
+        } else if (event.kind === 'effort') {
+          handlers.onEffort?.(event.effort);
         } else if (event.kind === 'delta') {
           rawText += event.text;
           emitVisible(false);

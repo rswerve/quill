@@ -3,7 +3,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Footer from '../../components/Footer';
-import type { ClaudeModelAlias } from '../../types';
+import type { ClaudeEffort, ClaudeModelAlias } from '../../types';
 
 let editor: Editor | null = null;
 afterEach(() => {
@@ -12,8 +12,10 @@ afterEach(() => {
 });
 
 function renderFooterWithModel(opts: {
-  lastKnownModel: string | null;
+  lastKnownModel?: string | null;
+  lastKnownEffort?: string | null;
   claudeModel?: ClaudeModelAlias | null;
+  claudeEffort?: ClaudeEffort | null;
 }) {
   editor = new Editor({ extensions: [StarterKit], content: '<p>draft</p>' });
   render(
@@ -22,9 +24,10 @@ function renderFooterWithModel(opts: {
       zoom={1}
       onZoomChange={vi.fn()}
       aiSession={null}
-      lastKnownModel={opts.lastKnownModel}
+      lastKnownModel={opts.lastKnownModel ?? null}
+      lastKnownEffort={opts.lastKnownEffort ?? null}
       claudeModel={opts.claudeModel ?? null}
-      claudeEffort={null}
+      claudeEffort={opts.claudeEffort ?? null}
       onClaudeModelChange={vi.fn()}
       onClaudeEffortChange={vi.fn()}
       onOpenSessionPicker={vi.fn()}
@@ -64,5 +67,23 @@ describe('Footer Claude model/effort display', () => {
       screen.getByRole('group', { name: 'Claude settings' }).getAttribute('title') ?? '';
     expect(title).toContain('SONNET (chosen');
     expect(title).not.toMatch(/Model:[^\n]*Auto/);
+  });
+
+  it('surfaces the last observed effort on the inherit option', () => {
+    renderFooterWithModel({ lastKnownEffort: 'high' });
+    expect(screen.getByRole('combobox', { name: 'Claude effort' })).toHaveDisplayValue(
+      'HIGH · AUTO',
+    );
+  });
+
+  it('shows an explicit effort as the chosen value with no requested-vs-effective arrow', () => {
+    // Even when the last observed effort differs from the pick, no arrow — the
+    // downgrade comparison was deliberately dropped.
+    renderFooterWithModel({ claudeEffort: 'high', lastKnownEffort: 'xhigh' });
+    expect(screen.getByRole('combobox', { name: 'Claude effort' })).toHaveDisplayValue('HIGH');
+    const title =
+      screen.getByRole('group', { name: 'Claude settings' }).getAttribute('title') ?? '';
+    expect(title).toContain('Effort: HIGH (chosen');
+    expect(title).not.toContain('→');
   });
 });

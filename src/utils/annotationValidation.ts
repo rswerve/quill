@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   DocumentChatThread,
 } from '../types';
+import { isEffort } from './claudePreferences';
 
 /**
  * Validation for deserialized annotation data (sidecar + recovery draft).
@@ -43,6 +44,36 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0;
 }
 
+/**
+ * The stream-observed `model` / `effort` for an AI reply or assistant message,
+ * plus each value's observation timestamp. Shared by the reply and chat
+ * sanitizers so both round-trips reopen with the same "last observed" state the
+ * footer showed live. `model` is stored raw (custom provider/gateway ids are
+ * legitimate — see `formatModelLabel`); `effort` must be a known level. A
+ * timestamp is carried only alongside a surviving value: an orphan timestamp is
+ * never read (the restore scan skips records with no value) but shouldn't linger.
+ */
+function sanitizeObservations(raw: Record<string, unknown>) {
+  return {
+    ...(isNonEmptyString(raw.model)
+      ? {
+          model: raw.model,
+          ...(isNonEmptyString(raw.modelObservedAt)
+            ? { modelObservedAt: raw.modelObservedAt }
+            : {}),
+        }
+      : {}),
+    ...(typeof raw.effort === 'string' && isEffort(raw.effort)
+      ? {
+          effort: raw.effort,
+          ...(isNonEmptyString(raw.effortObservedAt)
+            ? { effortObservedAt: raw.effortObservedAt }
+            : {}),
+        }
+      : {}),
+  };
+}
+
 function sanitizeReply(raw: unknown): Reply | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id)) return null;
@@ -52,7 +83,7 @@ function sanitizeReply(raw: unknown): Reply | null {
     text: typeof raw.text === 'string' ? raw.text : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     ...(raw.authorKind === 'user' || raw.authorKind === 'ai' ? { authorKind: raw.authorKind } : {}),
-    ...(isNonEmptyString(raw.model) ? { model: raw.model } : {}),
+    ...sanitizeObservations(raw),
     ...(typeof raw.pending === 'boolean' ? { pending: raw.pending } : {}),
     ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
     ...(Array.isArray(raw.suggestionIds)
@@ -265,7 +296,7 @@ function sanitizeChatMessage(raw: unknown): ChatMessage | null {
     role: raw.role,
     text: typeof raw.text === 'string' ? raw.text : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
-    ...(isNonEmptyString(raw.model) ? { model: raw.model } : {}),
+    ...sanitizeObservations(raw),
     ...(raw.pending === true ? { pending: true } : {}),
     ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
     ...(raw.cancelled === true ? { cancelled: true } : {}),

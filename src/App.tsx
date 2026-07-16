@@ -133,6 +133,7 @@ function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
     aiSession: null,
     contextFolder: null,
     lastKnownModel: null,
+    lastKnownEffort: null,
     stats: { words: 0, chars: 0, line: 1, column: 1 },
     autosaveStatus: { state: 'idle' },
   };
@@ -897,6 +898,7 @@ export default function App() {
           onZoomChange={handleZoomChange}
           aiSession={chrome.aiSession}
           lastKnownModel={chrome.lastKnownModel}
+          lastKnownEffort={chrome.lastKnownEffort}
           claudeModel={claudeModel}
           claudeEffort={claudeEffort}
           onClaudeModelChange={handleClaudeModelChange}

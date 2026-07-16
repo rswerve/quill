@@ -9,6 +9,14 @@ export interface Reply {
   authorKind?: 'user' | 'ai';
   /** Model reported by Claude Code's stream init event for this exact reply. */
   model?: string;
+  /** When `model` was observed — stamped on each (re)observation so a retry that
+   * reuses `createdAt` still ranks by when the value was actually seen. */
+  modelObservedAt?: string;
+  /** Effective effort reported by Claude Code's Stop hook for this exact reply
+   * (post any downgrade). Absent when the hook produced no reading. */
+  effort?: string;
+  /** When `effort` was observed (see `modelObservedAt`). */
+  effortObservedAt?: string;
   pending?: boolean;
   error?: string;
   /** User stopped this @claude reply before it finished — a neutral, retryable
@@ -41,6 +49,10 @@ export interface ChatMessage {
   text: string;
   createdAt: string;
   model?: string;
+  modelObservedAt?: string;
+  /** Effective effort reported by Claude Code's Stop hook for this message. */
+  effort?: string;
+  effortObservedAt?: string;
   pending?: boolean;
   error?: string;
   cancelled?: boolean;

@@ -140,6 +140,60 @@ describe('sanitizeComments', () => {
     expect(c.replies[0].model).toBe('claude-fable-5');
   });
 
+  it('preserves a persisted AI reply effort and both observation timestamps', () => {
+    const [c] = sanitizeComments([
+      {
+        ...validComment,
+        replies: [
+          {
+            id: 'r-obs',
+            author: 'Claude',
+            text: 'Reply',
+            createdAt: '2026-07-11T18:00:00Z',
+            authorKind: 'ai',
+            model: 'claude-opus-4-8',
+            modelObservedAt: '2026-07-11T18:00:05Z',
+            effort: 'high',
+            effortObservedAt: '2026-07-11T18:00:06Z',
+          },
+        ],
+      },
+    ]);
+
+    expect(c.replies[0]).toMatchObject({
+      model: 'claude-opus-4-8',
+      modelObservedAt: '2026-07-11T18:00:05Z',
+      effort: 'high',
+      effortObservedAt: '2026-07-11T18:00:06Z',
+    });
+  });
+
+  it('drops an unknown effort level and an observation timestamp with no surviving value', () => {
+    const [c] = sanitizeComments([
+      {
+        ...validComment,
+        replies: [
+          {
+            id: 'r-bad',
+            author: 'Claude',
+            text: 'Reply',
+            createdAt: '2026-07-11T18:00:00Z',
+            authorKind: 'ai',
+            effort: 'ultra', // not a real effort level → dropped
+            effortObservedAt: '2026-07-11T18:00:06Z', // orphaned by the drop
+            modelObservedAt: '2026-07-11T18:00:05Z', // no model at all → orphan
+          },
+        ],
+      },
+    ]);
+
+    const reply = c.replies[0];
+    expect(reply.effort).toBeUndefined();
+    expect(reply.effortObservedAt).toBeUndefined();
+    expect(reply.model).toBeUndefined();
+    expect(reply.modelObservedAt).toBeUndefined();
+  });
+
   it('preserves safe reply provenance and dismissed state', () => {
     const [comment] = sanitizeComments([
       {
@@ -359,6 +413,31 @@ describe('sanitizeDocumentChat', () => {
           suggestionIds: ['s1', 's2'],
         },
       ],
+    });
+  });
+
+  it('preserves an assistant message effort and both observation timestamps', () => {
+    const thread = sanitizeDocumentChat({
+      sessionId: 'session-1',
+      messages: [
+        {
+          id: 'a1',
+          role: 'assistant',
+          text: 'Done',
+          createdAt: 'later',
+          model: 'claude-opus-4-8',
+          modelObservedAt: '2026-07-11T18:00:05Z',
+          effort: 'max',
+          effortObservedAt: '2026-07-11T18:00:06Z',
+        },
+      ],
+    });
+
+    expect(thread?.messages[0]).toMatchObject({
+      model: 'claude-opus-4-8',
+      modelObservedAt: '2026-07-11T18:00:05Z',
+      effort: 'max',
+      effortObservedAt: '2026-07-11T18:00:06Z',
     });
   });
 

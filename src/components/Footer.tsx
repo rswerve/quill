@@ -21,6 +21,7 @@ interface FooterProps {
   onZoomChange?: (z: number) => void;
   aiSession: AISessionBinding | null;
   lastKnownModel: string | null;
+  lastKnownEffort: string | null;
   claudeModel: ClaudeModelAlias | null;
   claudeEffort: ClaudeEffort | null;
   onClaudeModelChange: (model: ClaudeModelAlias | null) => void;
@@ -65,8 +66,18 @@ function autosaveLabel(status: AutosaveStatus): string | null {
  */
 function modelTooltip(claudeModel: ClaudeModelAlias | null, lastKnownModel: string | null): string {
   if (claudeModel) return `Model: ${claudeModel.toUpperCase()} (chosen for the next request)`;
-  if (lastKnownModel) return `Model: Auto — last run used ${lastKnownModel}`;
+  if (lastKnownModel) return `Model: Auto — last observed ${lastKnownModel}`;
   return 'Model: Auto — Claude decides';
+}
+
+/**
+ * The effort line of the Claude-settings tooltip: the explicit pick when set,
+ * otherwise Auto, naming the last observed effort when there is one.
+ */
+function effortTooltip(claudeEffort: ClaudeEffort | null, lastKnownEffort: string | null): string {
+  if (claudeEffort) return `Effort: ${claudeEffort.toUpperCase()} (chosen for the next request)`;
+  if (lastKnownEffort) return `Effort: Auto — last observed ${lastKnownEffort.toUpperCase()}`;
+  return 'Effort: Auto — Claude decides';
 }
 
 export default function Footer({
@@ -77,6 +88,7 @@ export default function Footer({
   onZoomChange,
   aiSession,
   lastKnownModel,
+  lastKnownEffort,
   claudeModel,
   claudeEffort,
   onClaudeModelChange,
@@ -107,9 +119,7 @@ export default function Footer({
   // Keyed on the actual selections so it never calls an explicit choice "Auto".
   const claudeSettingsTitle = [
     modelTooltip(claudeModel, lastKnownModel),
-    claudeEffort
-      ? `Effort: ${claudeEffort.toUpperCase()} (chosen for the next request)`
-      : 'Effort: Auto — Claude decides',
+    effortTooltip(claudeEffort, lastKnownEffort),
   ].join('\n');
 
   return (
@@ -255,7 +265,9 @@ export default function Footer({
               onClaudeEffortChange((event.target.value || null) as ClaudeEffort | null)
             }
           >
-            <option value="">AUTO</option>
+            <option value="">
+              {lastKnownEffort ? `${lastKnownEffort.toUpperCase()} · AUTO` : 'AUTO'}
+            </option>
             {CLAUDE_EFFORT_LEVELS.map((effort) => (
               <option key={effort} value={effort}>
                 {effort.toUpperCase()}

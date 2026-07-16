@@ -23,6 +23,7 @@ function renderFooter(zoom: number) {
       onZoomChange={onZoomChange}
       aiSession={null}
       lastKnownModel={null}
+      lastKnownEffort={null}
       claudeModel={null}
       claudeEffort={null}
       onClaudeModelChange={vi.fn()}
@@ -78,6 +79,7 @@ function renderForEditor(ed: Editor) {
       onZoomChange={vi.fn()}
       aiSession={null}
       lastKnownModel={null}
+      lastKnownEffort={null}
       claudeModel={null}
       claudeEffort={null}
       onClaudeModelChange={vi.fn()}
@@ -119,6 +121,7 @@ function renderWithAutosave(status: AutosaveStatus | undefined) {
       onZoomChange={vi.fn()}
       aiSession={null}
       lastKnownModel={null}
+      lastKnownEffort={null}
       claudeModel={null}
       claudeEffort={null}
       onClaudeModelChange={vi.fn()}
@@ -171,6 +174,7 @@ function renderWithZoom(zoom: number) {
       onZoomChange={vi.fn()}
       aiSession={null}
       lastKnownModel={null}
+      lastKnownEffort={null}
       claudeModel={null}
       claudeEffort={null}
       onClaudeModelChange={vi.fn()}

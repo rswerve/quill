@@ -31,7 +31,9 @@ interface UseClaudeReplyOptions {
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
   setAIReplyModel?: (commentId: string, replyId: string, model: string) => void;
+  setAIReplyEffort?: (commentId: string, replyId: string, effort: string) => void;
   onModelObserved?: (model: string) => void;
+  onEffortObserved?: (effort: string) => void;
   finishAIReply: (commentId: string, replyId: string) => void;
   failAIReply: (commentId: string, replyId: string, message: string) => void;
   cancelAIReply: (commentId: string, replyId: string) => void;
@@ -445,6 +447,10 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             onModel: (model) => {
               opts.setAIReplyModel?.(comment.id, replyId, model);
               opts.onModelObserved?.(model);
+            },
+            onEffort: (effort) => {
+              opts.setAIReplyEffort?.(comment.id, replyId, effort);
+              opts.onEffortObserved?.(effort);
             },
             onVisibleChunk: (chunk) => opts.appendAIReplyChunk(comment.id, replyId, chunk),
             onDone: (rawText, visibleText) => {

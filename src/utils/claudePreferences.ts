@@ -10,8 +10,8 @@ function isModelAlias(value: string | null): value is ClaudeModelAlias {
   return value !== null && (CLAUDE_MODEL_ALIASES as readonly string[]).includes(value);
 }
 
-function isEffort(value: string | null): value is ClaudeEffort {
-  return value !== null && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(value);
+export function isEffort(value: string | null | undefined): value is ClaudeEffort {
+  return value != null && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
 /**

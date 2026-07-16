@@ -31,6 +31,7 @@ import {
 import type { TrackingBlockedInfo } from '../extensions/TrackChanges';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
+import { isEffort } from '../utils/claudePreferences';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
@@ -81,25 +82,68 @@ const AUTHOR = 'Anonymous';
 // Breathing room (px) left above/below a card when it's scrolled into view, and
 // the extra scroll range the bottom spacer adds past the lowest card's bottom.
 
-function lastReplyModel(comments: Comment[]): string | null {
-  for (let commentIndex = comments.length - 1; commentIndex >= 0; commentIndex--) {
-    const replies = comments[commentIndex].replies;
-    for (let replyIndex = replies.length - 1; replyIndex >= 0; replyIndex--) {
-      if (replies[replyIndex].authorKind === 'ai' && replies[replyIndex].model) {
-        return replies[replyIndex].model ?? null;
-      }
+/**
+ * The newest observed value of a field across every AI reply and assistant chat
+ * message, ranked by that field's observation time (`modelObservedAt` /
+ * `effortObservedAt`, falling back to `createdAt` for records that predate the
+ * timestamps) — so a retry that reuses `createdAt` still ranks by when the value
+ * was actually seen. "Last observed" is genuinely the most recent, not comment
+ * order and not chat-before-replies. Each field is scanned independently: a
+ * newer run that lacked an effort reading does not erase the last effort we did
+ * observe, which keeps reopen consistent with the live "last observed" state.
+ */
+type ObservationRecord = {
+  createdAt: string;
+  model?: string;
+  effort?: string;
+  modelObservedAt?: string;
+  effortObservedAt?: string;
+};
+
+function newestObserved(
+  comments: Comment[],
+  thread: DocumentChatThread | undefined,
+  pick: (record: ObservationRecord) => string | null | undefined,
+  at: (record: ObservationRecord) => string,
+): string | null {
+  const observed: { at: string; value: string }[] = [];
+  const collect = (record: ObservationRecord) => {
+    const value = pick(record);
+    if (value) observed.push({ at: at(record), value });
+  };
+  for (const comment of comments) {
+    for (const reply of comment.replies) {
+      if (reply.authorKind === 'ai') collect(reply);
     }
   }
-  return null;
+  for (const message of thread?.messages ?? []) {
+    if (message.role === 'assistant') collect(message);
+  }
+  // Newest by observation time; a strict `>` keeps the first-seen at equal times.
+  return (
+    observed.reduce<{ at: string; value: string } | null>(
+      (best, record) => (!best || record.at > best.at ? record : best),
+      null,
+    )?.value ?? null
+  );
 }
 
-function lastChatModel(thread: DocumentChatThread | undefined): string | null {
-  if (!thread) return null;
-  for (let index = thread.messages.length - 1; index >= 0; index--) {
-    if (thread.messages[index].model) return thread.messages[index].model ?? null;
-  }
-  return null;
-}
+export const newestObservedModel = (comments: Comment[], thread: DocumentChatThread | undefined) =>
+  newestObserved(
+    comments,
+    thread,
+    (record) => record.model,
+    (record) => record.modelObservedAt ?? record.createdAt,
+  );
+
+export const newestObservedEffort = (comments: Comment[], thread: DocumentChatThread | undefined) =>
+  newestObserved(
+    comments,
+    thread,
+    // Validate against the effort enum so a malformed sidecar value is ignored.
+    (record) => (isEffort(record.effort) ? record.effort : null),
+    (record) => record.effortObservedAt ?? record.createdAt,
+  );
 
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
@@ -112,6 +156,7 @@ export interface DocumentTabChromeSnapshot {
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   lastKnownModel: string | null;
+  lastKnownEffort: string | null;
   stats: DocumentStats;
   autosaveStatus: AutosaveStatus;
 }
@@ -250,6 +295,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const aiGate = useDocumentAIGate();
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
+  const [lastKnownEffort, setLastKnownEffort] = useState<string | null>(null);
   // Folder of reference documents linked to this doc (persisted in the
   // sidecar). Claude gets read access to it plus a file manifest per ask.
   const [contextFolder, setContextFolder] = useState<string | null>(null);
@@ -391,6 +437,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     startAIReply,
     appendAIReplyChunk,
     setAIReplyModel,
+    setAIReplyEffort,
     finishAIReply,
     failAIReply,
     cancelAIReply,
@@ -604,7 +651,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     startAIReply,
     appendAIReplyChunk,
     setAIReplyModel,
+    setAIReplyEffort,
     onModelObserved: setLastKnownModel,
+    onEffortObserved: setLastKnownEffort,
     finishAIReply: finishAIReplyAndDirty,
     failAIReply: failAIReplyAndDirty,
     cancelAIReply: cancelAIReplyAndDirty,
@@ -653,6 +702,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     ),
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
+    onEffortObserved: setLastKnownEffort,
     onChanged: markDirty,
     onTerminal: signalTerminalFlush,
     aiGate,
@@ -789,7 +839,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           });
         }
       }
-      setLastKnownModel(lastChatModel(result.sidecar.chat) ?? lastReplyModel(loadedComments));
+      setLastKnownModel(newestObservedModel(loadedComments, result.sidecar.chat));
+      setLastKnownEffort(newestObservedEffort(loadedComments, result.sidecar.chat));
       setContextFolder(access.contextFolder);
       if (result.autoBound && session) {
         rememberSessionPermission(window.localStorage, result.filePath, session);
@@ -1187,6 +1238,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setAISession(null);
     documentChat.reset();
     setLastKnownModel(null);
+    setLastKnownEffort(null);
     setContextFolder(null);
     setLastSavedAt(null);
     setPanelMode('comments');
@@ -1301,7 +1353,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const draftComments = draft.comments ?? [];
       const draftSuggestions = draft.suggestions ?? [];
       setComments(draftComments);
-      setLastKnownModel(lastChatModel(draft.chat) ?? lastReplyModel(draftComments));
+      setLastKnownModel(newestObservedModel(draftComments, draft.chat));
+      setLastKnownEffort(newestObservedEffort(draftComments, draft.chat));
       setSuggestions(draftSuggestions);
       // The draft's annotations need their marks stamped back just like a file
       // load — the snapshot's content is serialized Markdown, which drops them
@@ -1897,6 +1950,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       aiSession,
       contextFolder,
       lastKnownModel,
+      lastKnownEffort,
       stats: computeDocumentStats(editor),
       autosaveStatus,
     });
@@ -1911,6 +1965,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     isDirty,
     isSuggesting,
     lastKnownModel,
+    lastKnownEffort,
     lastSavedAt,
     onChromeChange,
     pendingSuggestionCount,

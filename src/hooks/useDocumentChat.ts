@@ -37,6 +37,7 @@ interface UseDocumentChatOptions {
   getPendingSuggestions: () => TrackedChangeInfo[];
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
+  onEffortObserved?: (effort: string) => void;
   onChanged: () => void;
   /**
    * Fired once a chat turn reaches a TERMINAL state (done / error / busy-reject /
@@ -181,9 +182,23 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           {
             onModel: (model) => {
               setMessages((current) =>
-                updateMessage(current, assistantId, (message) => ({ ...message, model })),
+                updateMessage(current, assistantId, (message) => ({
+                  ...message,
+                  model,
+                  modelObservedAt: new Date().toISOString(),
+                })),
               );
               opts.onModelObserved?.(model);
+            },
+            onEffort: (effort) => {
+              setMessages((current) =>
+                updateMessage(current, assistantId, (message) => ({
+                  ...message,
+                  effort,
+                  effortObservedAt: new Date().toISOString(),
+                })),
+              );
+              opts.onEffortObserved?.(effort);
             },
             onVisibleChunk: (chunk) => {
               setMessages((current) =>

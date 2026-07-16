@@ -19,6 +19,7 @@ interface UseCommentsReturn {
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
   setAIReplyModel: (commentId: string, replyId: string, model: string) => void;
+  setAIReplyEffort: (commentId: string, replyId: string, effort: string) => void;
   finishAIReply: (commentId: string, replyId: string) => void;
   failAIReply: (commentId: string, replyId: string, message: string) => void;
   cancelAIReply: (commentId: string, replyId: string) => void;
@@ -124,7 +125,24 @@ export function useComments(): UseCommentsReturn {
         c.id === commentId
           ? {
               ...c,
-              replies: c.replies.map((r) => (r.id === replyId ? { ...r, model } : r)),
+              replies: c.replies.map((r) =>
+                r.id === replyId ? { ...r, model, modelObservedAt: new Date().toISOString() } : r,
+              ),
+            }
+          : c,
+      ),
+    );
+  }, []);
+
+  const setAIReplyEffort = useCallback((commentId: string, replyId: string, effort: string) => {
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === commentId
+          ? {
+              ...c,
+              replies: c.replies.map((r) =>
+                r.id === replyId ? { ...r, effort, effortObservedAt: new Date().toISOString() } : r,
+              ),
             }
           : c,
       ),
@@ -197,7 +215,6 @@ export function useComments(): UseCommentsReturn {
                       error: undefined,
                       cancelled: undefined,
                       text: '',
-                      model: undefined,
                     }
                   : r,
               ),
@@ -251,6 +268,7 @@ export function useComments(): UseCommentsReturn {
     startAIReply,
     appendAIReplyChunk,
     setAIReplyModel,
+    setAIReplyEffort,
     finishAIReply,
     failAIReply,
     cancelAIReply,

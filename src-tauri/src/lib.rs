@@ -1751,6 +1751,91 @@ mod tests {
     }
 
     #[test]
+    fn effort_from_hook_record_reads_the_effective_level_from_our_marker() {
+        let marker = "__QUILL_EFFORT_abc123__=";
+        let record = serde_json::json!({
+            "type": "system",
+            "subtype": "hook_response",
+            "hook_event": "Stop",
+            "exit_code": 0,
+            "outcome": "success",
+            "stdout": format!("{marker}xhigh\n"),
+            // The CLI duplicates the marker into `output`; reading `stdout` only
+            // is what keeps one hook to one observation.
+            "output": format!("{marker}xhigh\n"),
+        });
+        assert_eq!(effort_from_hook_record(&record, marker), Some("xhigh"));
+        assert_eq!(
+            serde_json::to_value(ChunkEvent::Effort {
+                effort: "xhigh".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "effort", "effort": "xhigh" })
+        );
+    }
+
+    #[test]
+    fn effort_from_hook_record_ignores_foreign_and_malformed_responses() {
+        let marker = "__QUILL_EFFORT_abc123__=";
+        let good = |stdout: &str| {
+            serde_json::json!({
+                "type": "system", "subtype": "hook_response", "hook_event": "Stop",
+                "exit_code": 0, "outcome": "success", "stdout": stdout,
+            })
+        };
+        // A different hook's output (no matching marker) is ignored.
+        assert_eq!(effort_from_hook_record(&good("cleaned up\n"), marker), None);
+        // Marker present but the payload is not an exact effort enum → rejected.
+        assert_eq!(
+            effort_from_hook_record(&good(&format!("{marker}xhigh-ish\n")), marker),
+            None
+        );
+        // More than one trailing newline is outside the observer's contract → rejected.
+        assert_eq!(
+            effort_from_hook_record(&good(&format!("{marker}xhigh\n\n")), marker),
+            None
+        );
+        // A single \r\n is still accepted (the contract allows an optional \r).
+        assert_eq!(
+            effort_from_hook_record(&good(&format!("{marker}high\r\n")), marker),
+            Some("high")
+        );
+        // A valid marker on the wrong event / a failed hook is rejected.
+        let valid = format!("{marker}high\n");
+        for (key, val) in [
+            ("hook_event", serde_json::json!("PreToolUse")),
+            ("exit_code", serde_json::json!(1)),
+            ("outcome", serde_json::json!("blocked")),
+        ] {
+            let mut record = good(&valid);
+            record[key] = val;
+            assert_eq!(
+                effort_from_hook_record(&record, marker),
+                None,
+                "{key} should reject"
+            );
+        }
+    }
+
+    #[test]
+    fn with_effort_hook_inserts_the_observer_before_the_prompt_terminator() {
+        let args = with_effort_hook(
+            vec![
+                "--print".to_string(),
+                "--".to_string(),
+                "prompt".to_string(),
+            ],
+            "{\"hooks\":{}}".to_string(),
+        );
+        let term = args.iter().position(|a| a == "--").unwrap();
+        // The observer flags land in the options section, before `--`.
+        assert_eq!(args[term - 3], "--include-hook-events");
+        assert_eq!(args[term - 2], "--settings");
+        assert_eq!(args[term - 1], "{\"hooks\":{}}");
+        assert_eq!(&args[term..], ["--", "prompt"]);
+    }
+
+    #[test]
     fn disallowed_paths_are_rejected() {
         assert!(ensure_allowed_path("/etc/passwd").is_err());
         assert!(ensure_allowed_path("/Users/me/.ssh/id_rsa").is_err());
@@ -2413,6 +2498,7 @@ fi
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum ChunkEvent {
     Model { model: String },
+    Effort { effort: String },
     Delta { text: String },
     Done,
     Error { message: String },
@@ -2433,6 +2519,35 @@ fn model_from_stream_record(record: &serde_json::Value) -> Option<&str> {
         .get("model")
         .and_then(|v| v.as_str())
         .filter(|model| !model.is_empty())
+}
+
+/// Effort is never in the model stream or the session transcript, so Quill
+/// injects an inline `--settings` Stop hook that prints `<marker><effort>` to
+/// stdout; with `--include-hook-events` the CLI surfaces it as a
+/// `system`/`hook_response` record. This reads the *effective* effort — post any
+/// downgrade — from that record. Only our own per-spawn marker on a *successful*
+/// Stop hook's `stdout` is accepted (the CLI duplicates it into `output`, which
+/// we ignore so one hook yields one observation), every other hook response (the
+/// user's own hooks) is skipped, and only the exact effort enum is returned.
+fn effort_from_hook_record<'a>(record: &'a serde_json::Value, marker: &str) -> Option<&'a str> {
+    if record.get("type").and_then(|v| v.as_str()) != Some("system")
+        || record.get("subtype").and_then(|v| v.as_str()) != Some("hook_response")
+        || record.get("hook_event").and_then(|v| v.as_str()) != Some("Stop")
+        || record.get("exit_code").and_then(serde_json::Value::as_i64) != Some(0)
+        || record.get("outcome").and_then(|v| v.as_str()) != Some("success")
+    {
+        return None;
+    }
+    let payload = record
+        .get("stdout")
+        .and_then(|v| v.as_str())?
+        .strip_prefix(marker)?;
+    // The observer prints exactly one trailing "\n" (printf format). Accept an
+    // optional single "\r\n" / "\n" and nothing more, so `xhigh\n\n` is rejected.
+    let effort = payload
+        .strip_suffix('\n')
+        .map_or(payload, |s| s.strip_suffix('\r').unwrap_or(s));
+    matches!(effort, "low" | "medium" | "high" | "xhigh" | "max").then_some(effort)
 }
 
 struct ChildHandle {
@@ -3384,6 +3499,27 @@ fn claude_resume_args(
     Ok(args)
 }
 
+/// Splices the effort-observer flags (`--include-hook-events --settings <json>`)
+/// in just before the `--` prompt terminator so they stay in the options
+/// section. Option order before `--` is irrelevant to the CLI, so this composes
+/// cleanly with `--resume`/`--model`/`--effort`/`--add-dir` without threading
+/// the hook through (and re-testing) the arg builder.
+fn with_effort_hook(mut args: Vec<String>, settings: String) -> Vec<String> {
+    let terminator = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    args.splice(
+        terminator..terminator,
+        [
+            "--include-hook-events".to_string(),
+            "--settings".to_string(),
+            settings,
+        ],
+    );
+    args
+}
+
 #[tauri::command]
 // Tauri exposes these as named IPC fields. Keeping the flat command contract
 // makes the mock seam and production invocation identical; grouping only to
@@ -3404,15 +3540,34 @@ fn spawn_claude_resume(
     // Quill-minted bindings create their transcript on first contact, then
     // automatically take the ordinary resume path once the jsonl exists.
     // Unknown non-Quill sessions still fail loudly via --resume.
+    // Effort has no stream/transcript source, so inject a per-spawn Stop hook
+    // that prints `<marker><effort>` to stdout; `--include-hook-events` surfaces
+    // it and `effort_from_hook_record` reads the effective level. The alnum nonce
+    // needs no shell escaping inside the single-quoted printf format, and
+    // serde_json does the JSON escaping. `sh -c` runs the command (no `args`).
+    let effort_nonce = uuid::Uuid::new_v4().as_simple().to_string();
+    let effort_marker = format!("__QUILL_EFFORT_{effort_nonce}__=");
+    let effort_hook_settings = serde_json::json!({
+        "hooks": { "Stop": [{ "hooks": [{
+            "type": "command",
+            "command": format!(
+                "/usr/bin/printf '__QUILL_EFFORT_{effort_nonce}__=%s\\n' \"$CLAUDE_EFFORT\""
+            ),
+        }] }] }
+    })
+    .to_string();
     let mut cmd = Command::new(&claude_bin);
-    cmd.args(claude_resume_args(
-        &session_id,
-        &prompt,
-        add_dir.as_deref(),
-        allow_create,
-        model.as_deref(),
-        effort.as_deref(),
-    )?);
+    cmd.args(with_effort_hook(
+        claude_resume_args(
+            &session_id,
+            &prompt,
+            add_dir.as_deref(),
+            allow_create,
+            model.as_deref(),
+            effort.as_deref(),
+        )?,
+        effort_hook_settings,
+    ));
     // A packaged .app launched from Finder inherits launchd's minimal PATH,
     // which lacks Node — and `claude` is a node script, so it would die with
     // `env: node: No such file or directory`. Give the child a PATH that
@@ -3482,6 +3637,12 @@ fn spawn_claude_resume(
             if let Some(model) = model_from_stream_record(&parsed) {
                 let _ = on_event.send(ChunkEvent::Model {
                     model: model.to_string(),
+                });
+                return;
+            }
+            if let Some(effort) = effort_from_hook_record(&parsed, &effort_marker) {
+                let _ = on_event.send(ChunkEvent::Effort {
+                    effort: effort.to_string(),
                 });
                 return;
             }
