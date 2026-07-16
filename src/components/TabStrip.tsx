@@ -6,6 +6,9 @@ export interface TabStripItem {
   isDirty: boolean;
   /** Unresolved external conflict — shown as a warning marker on the tab. */
   conflict?: boolean;
+  /** Latched autosave attention (this tab's background flush failed or is blocked) —
+   *  shown as a warning marker so a background save failure is never silent. */
+  autosaveAttention?: 'failed' | 'blocked' | null;
 }
 
 interface TabStripProps {
@@ -104,6 +107,21 @@ export default function TabStrip({ tabs, activeTabId, onActivate, onClose, onNew
                 className="document-tab-conflict"
                 title="Changed on disk — needs attention"
                 aria-label="Changed on disk"
+              >
+                ⚠
+              </span>
+            )}
+            {!tab.conflict && tab.autosaveAttention && (
+              <span
+                className="document-tab-conflict"
+                title={
+                  tab.autosaveAttention === 'blocked'
+                    ? 'Autosave paused — needs attention'
+                    : 'Autosave failed — retrying'
+                }
+                aria-label={
+                  tab.autosaveAttention === 'blocked' ? 'Autosave paused' : 'Autosave failed'
+                }
               >
                 ⚠
               </span>

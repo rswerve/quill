@@ -839,15 +839,27 @@ test.describe('review-only mutations participate in dirty-state safety', () => {
     ).toBeVisible();
   });
 
-  test('finishing an AI reply marks the document dirty', async ({ page }) => {
+  test('finishing an AI reply autosaves it to disk (stream-terminal flush)', async ({ page }) => {
     await openAndEstablishCleanBaseline(page, false, true);
     await page.getByRole('button', { name: /Reply to Claude/ }).click();
     await page.getByPlaceholder('Reply to Claude…').fill('Answer this');
     await page.locator('[data-reply-form]').getByRole('button', { name: 'Reply' }).click();
     await expect(page.locator('[data-reply-role="ai"]')).toContainText('Persist this answer.');
-    await expect(
-      page.locator('[aria-label="Document location"] [aria-label="Unsaved"]'),
-    ).toBeVisible();
+    // The stream terminal marks dirty AND flushes: the finished reply is autosaved to the
+    // sidecar rather than left only in memory, so it survives a crash right after Claude
+    // answers — a stronger guarantee than merely showing an unsaved marker.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            (path) =>
+              (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[path] ??
+              '',
+            SIDECAR_PATH,
+          ),
+        { timeout: 3000 },
+      )
+      .toContain('Persist this answer.');
   });
 
   test('resolving a comment marks the document dirty', async ({ page }) => {

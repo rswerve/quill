@@ -451,8 +451,25 @@ export default function App() {
     (tabId: string) => {
       const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      if (tab.isDirty) setCloseGuardTabId(tabId);
-      else closeTabImmediately(tabId);
+      if (!tab.isDirty) {
+        closeTabImmediately(tabId);
+        return;
+      }
+      // A dirty tab: try to autosave-flush it first (a saved tab edited inside the
+      // debounce shouldn't prompt), then close if it's now clean, else fall back to the
+      // guard. A flush error fails closed → guard rather than close-and-lose.
+      void (async () => {
+        const handle = tabHandlesRef.current.get(tabId);
+        let stillDirty = true;
+        try {
+          stillDirty = handle ? await handle.flushPendingSave() : true;
+        } catch {
+          stillDirty = true;
+        }
+        if (!tabsRef.current.some((candidate) => candidate.id === tabId)) return; // closed meanwhile
+        if (stillDirty) setCloseGuardTabId(tabId);
+        else closeTabImmediately(tabId);
+      })();
     },
     [closeTabImmediately],
   );
@@ -514,13 +531,31 @@ export default function App() {
   // tab's post-flush dirty state synchronously, so this doesn't race React's state
   // propagation: a saved-path tab whose only unsaved work was a debounced edit is
   // persisted and drops out of the guard, while Untitled or failed/blocked tabs remain.
+  // Iterate the AUTHORITATIVE tab list (not the handle map): a dirty tab whose handle is
+  // momentarily absent (mid mount/unmount) must not silently escape the guard, and a
+  // flush error retains the tab (fail closed).
   const flushAllPendingSaves = useCallback(async (): Promise<string[]> => {
-    const flushed = await Promise.all(
-      Array.from(tabHandlesRef.current, ([id, handle]) =>
-        handle.flushPendingSave().then((stillDirty) => ({ id, stillDirty })),
-      ),
+    const snapshot = tabsRef.current;
+    const results = await Promise.all(
+      snapshot.map(async (tab) => {
+        const handle = tabHandlesRef.current.get(tab.id);
+        if (!handle) return { id: tab.id, stillDirty: tab.isDirty };
+        try {
+          return { id: tab.id, stillDirty: await handle.flushPendingSave() };
+        } catch {
+          return { id: tab.id, stillDirty: true };
+        }
+      }),
     );
-    return flushed.filter((entry) => entry.stillDirty).map((entry) => entry.id);
+    const stillDirty = new Set(
+      results.filter((entry) => entry.stillDirty).map((entry) => entry.id),
+    );
+    // A tab added DURING the async flush wasn't flushed — retain it if it's still open
+    // and dirty so it still enters the guard.
+    for (const tab of tabsRef.current) {
+      if (tab.isDirty && !snapshot.some((prior) => prior.id === tab.id)) stillDirty.add(tab.id);
+    }
+    return [...stillDirty];
   }, []);
 
   const guardDirtyTabs = useCallback(

@@ -85,3 +85,77 @@ test('blurring after an edit flushes the autosave without waiting the full debou
   );
   expect(onDisk).toContain('FLUSHED');
 });
+
+test('closing a saved tab within the debounce autosaves it instead of prompting', async ({
+  page,
+}) => {
+  await openSavedDoc(page, 'original');
+  await activeEditor(page).click();
+  await page.keyboard.type(' CLOSED EDIT');
+  const before = await writeCount(page, '/tmp/doc.md');
+
+  // Close the active (saved, dirty) tab immediately, inside the 2s debounce. The close
+  // flushes first, so it autosaves and closes WITHOUT the unsaved-changes prompt.
+  await page.locator('.document-tab.active .document-tab-close').click();
+  await expect
+    .poll(() => writeCount(page, '/tmp/doc.md'), { timeout: 2000 })
+    .toBeGreaterThan(before);
+  await expect(page.getByRole('dialog', { name: 'Unsaved changes' })).toHaveCount(0);
+  const onDisk = await page.evaluate(
+    () =>
+      (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles['/tmp/doc.md'],
+  );
+  expect(onDisk).toContain('CLOSED EDIT');
+});
+
+test('closing a saved tab whose flush conflicts still prompts to save', async ({ page }) => {
+  await openSavedDoc(page, 'original');
+  await activeEditor(page).click();
+  await page.keyboard.type(' edit');
+  // The file changed on disk, so the close flush hits a conflict — the tab can't be
+  // auto-persisted and must stay guarded, not silently closed.
+  await page.evaluate(() => {
+    (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles['/tmp/doc.md'] =
+      'CHANGED EXTERNALLY';
+  });
+  await page.locator('.document-tab.active .document-tab-close').click();
+  await expect(page.getByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+});
+
+function writeFileBlocked(page: import('@playwright/test').Page): Promise<boolean> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __quillWriteFileBlocked?: boolean }).__quillWriteFileBlocked === true,
+  );
+}
+
+test('a recovered dirty saved draft autosaves after recovery, with no fresh edit', async ({
+  page,
+}) => {
+  // Hold the first document write so the edit stays dirty in the recovery envelope
+  // (never reaching disk) across the reload — a saved draft that crashed mid-debounce.
+  await setupMemoryTauri(page, {
+    deferFirstWriteFile: true,
+    openPath: '/tmp/recovered.md',
+    files: { '/tmp/recovered.md': 'disk bytes' },
+  });
+  await openMemoryFile(page);
+  await page.locator('.document-tab').first().click();
+  await page.locator('.document-tab.active .document-tab-close').click();
+  await activeEditor(page).click();
+  await page.keyboard.type(' UNSAVED');
+  await expect.poll(() => writeFileBlocked(page), { timeout: 6000 }).toBe(true);
+
+  // Relaunch with the edit still only in the workspace snapshot, and Recover it.
+  await page.reload();
+  await page
+    .getByRole('dialog', { name: 'Recover unsaved workspace?' })
+    .getByRole('button', { name: 'Recover' })
+    .click();
+  await expect(page.locator('.document-tab.active')).toContainText('recovered.md');
+
+  // Without any new edit, the recovered dirty saved draft ARMS autosave and its write
+  // fires (blocked again by the harness) — proving recovered work is not left unsaved
+  // until the user happens to type.
+  await expect.poll(() => writeFileBlocked(page), { timeout: 6000 }).toBe(true);
+});

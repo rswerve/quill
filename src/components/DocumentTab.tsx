@@ -153,6 +153,9 @@ export interface DocumentTabMetaSnapshot {
   /** This tab has an unresolved external conflict — surfaced on the tab strip so a
    *  background tab's conflict is visible even while its in-document banner is hidden. */
   conflict: boolean;
+  /** Latched autosave attention (a background tab's flush failed or is blocked), surfaced
+   *  on the tab strip so a background save failure is never silent. Null when healthy. */
+  autosaveAttention: 'failed' | 'blocked' | null;
 }
 
 interface DocumentTabProps {
@@ -544,14 +547,47 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   );
 
   // Review-only mutations (replies, AI completions, resolve state) change no
-  // document text, so no editor transaction fires onUpdate for them — they
-  // must mark the document dirty themselves or quitting silently drops them.
+  // document text, so no editor transaction fires onUpdate for them — they must mark
+  // the document dirty themselves or quitting silently drops them. EVERY AI-reply
+  // lifecycle outcome (finish / fail / cancel / retry) mutates review state, so all of
+  // them mark dirty; otherwise a mid-stream autosave clears dirty and a later error /
+  // cancel state survives only in memory. A terminal outcome (finish/fail/cancel) also
+  // flushes — but via a post-commit tick (below), never synchronously here, or the
+  // flush would capture the pre-terminal React state and persist the wrong payload.
+  const [aiTerminalTick, setAiTerminalTick] = useState(0);
+  const noteAITerminal = useCallback(() => {
+    markDirty();
+    setAiTerminalTick((tick) => tick + 1);
+  }, [markDirty]);
   const finishAIReplyAndDirty = useCallback(
     (commentId: string, replyId: string) => {
       finishAIReply(commentId, replyId);
+      noteAITerminal();
+    },
+    [finishAIReply, noteAITerminal],
+  );
+  const failAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string, message: string) => {
+      failAIReply(commentId, replyId, message);
+      noteAITerminal();
+    },
+    [failAIReply, noteAITerminal],
+  );
+  const cancelAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string) => {
+      cancelAIReply(commentId, replyId);
+      noteAITerminal();
+    },
+    [cancelAIReply, noteAITerminal],
+  );
+  const retryAIReplyAndDirty = useCallback(
+    (commentId: string, replyId: string) => {
+      retryAIReply(commentId, replyId);
+      // Retry restarts the stream — not a terminal outcome, so mark dirty (persist the
+      // cleared error state) but do NOT flush mid-stream.
       markDirty();
     },
-    [finishAIReply, markDirty],
+    [retryAIReply, markDirty],
   );
 
   const claudeReply = useClaudeReply({
@@ -560,9 +596,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setAIReplyModel,
     onModelObserved: setLastKnownModel,
     finishAIReply: finishAIReplyAndDirty,
-    failAIReply,
-    cancelAIReply,
-    retryAIReply,
+    failAIReply: failAIReplyAndDirty,
+    cancelAIReply: cancelAIReplyAndDirty,
+    retryAIReply: retryAIReplyAndDirty,
     linkAIReplySuggestions,
     getDocMarkdown,
     getRangeTexts,
@@ -954,6 +990,44 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     window.addEventListener('blur', onBlur);
     return () => window.removeEventListener('blur', onBlur);
   }, [isActive, autosaveFlush]);
+
+  // Stream-terminal flush: an AI reply reaching finish/fail/cancel is a natural save
+  // checkpoint. This effect runs AFTER React commits the terminal mutation, so the
+  // flush captures the final review state (not the pre-terminal payload). Skip the
+  // initial mount (tick 0).
+  const aiTerminalSeenRef = useRef(0);
+  useEffect(() => {
+    if (aiTerminalTick === aiTerminalSeenRef.current) return;
+    aiTerminalSeenRef.current = aiTerminalTick;
+    if (aiTerminalTick > 0) void autosaveFlush();
+  }, [aiTerminalTick, autosaveFlush]);
+
+  // Arm autosave for a document that becomes eligible-and-dirty WITHOUT an edit — a
+  // recovered dirty draft, or an auto-bound session stamped during initial load — where
+  // markDirty's notifyChange either never fired or was cleared by the reset effect.
+  // Keyed on the reconciliation inputs; the hook's reset effect registers first, so this
+  // arms the fresh scheduler. isDirty stays true across ordinary edits, so it does not
+  // re-arm per keystroke.
+  useEffect(() => {
+    if (autosaveEnabled && filePath !== null && isDirty && saveConflict === null) {
+      autosaveNotify();
+    }
+  }, [autosaveEnabled, filePath, isDirty, saveConflict, schedulerGen, autosaveNotify]);
+
+  // Latched autosave attention for the tab strip: a background tab's flush failure/block
+  // must stay visibly flagged even though only the ACTIVE tab's footer shows live status.
+  // Latch failed/blocked (a retry's failed→saving must NOT clear it early); clear only on
+  // a successful save or a reconciliation (schedulerGen). Conflict has its own marker.
+  const [autosaveAttention, setAutosaveAttention] = useState<'failed' | 'blocked' | null>(null);
+  useEffect(() => {
+    if (autosaveStatus.state === 'failed') setAutosaveAttention('failed');
+    else if (autosaveStatus.state === 'stopped' && autosaveStatus.reason === 'blocked') {
+      setAutosaveAttention('blocked');
+    } else if (autosaveStatus.state === 'saved') setAutosaveAttention(null);
+  }, [autosaveStatus]);
+  useEffect(() => {
+    setAutosaveAttention(null); // a reconciliation (Open/Save/Reload/New/…) resets attention
+  }, [schedulerGen]);
 
   // Exposed to the shell for close/quit: flush a pending autosave AND drain the
   // coordinator, so the tab is fully quiescent before it is torn down or the app exits.
@@ -1788,8 +1862,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       title: filePath ? basename(filePath) : 'Untitled',
       isDirty,
       conflict: saveConflict !== null,
+      autosaveAttention,
     });
-  }, [filePath, isDirty, saveConflict, onMetaChange, tabId]);
+  }, [filePath, isDirty, saveConflict, autosaveAttention, onMetaChange, tabId]);
 
   useEffect(() => {
     if (!isActive) return;
