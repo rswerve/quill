@@ -319,11 +319,40 @@ where
     F: FnOnce() -> Result<(), String>,
 {
     validate_expected_state(expected)?;
+    let content_hash = sha256_hex(content);
     let initial = existing_file_state(path)?;
     if !expected_state_matches(expected, &initial.fingerprint) {
         return Ok(AtomicWriteResult::Conflict {
             actual: initial.fingerprint,
         });
+    }
+
+    // A byte-identical save still has to honor the conditional-write contract.
+    // Recheck after the same race hook used by the replacement path; only skip the
+    // temp-file/fsync/rename when the live file remains both expectation-valid and
+    // exactly equal to the requested bytes. With `any`, a concurrent external change
+    // falls through to the normal unconditional replacement instead of being
+    // misreported as a successful no-op.
+    let mut before_recheck = Some(before_recheck);
+    if initial.fingerprint
+        == (FileFingerprint::Present {
+            hash: content_hash.clone(),
+        })
+    {
+        before_recheck.take().expect("race hook has not run")()?;
+        let no_op_state = existing_file_state(path)?;
+        if !expected_state_matches(expected, &no_op_state.fingerprint) {
+            return Ok(AtomicWriteResult::Conflict {
+                actual: no_op_state.fingerprint,
+            });
+        }
+        if no_op_state.fingerprint
+            == (FileFingerprint::Present {
+                hash: content_hash.clone(),
+            })
+        {
+            return Ok(AtomicWriteResult::Written { hash: content_hash });
+        }
     }
 
     let parent = path
@@ -337,7 +366,9 @@ where
         .and_then(|()| temporary.file.sync_all())
         .map_err(|error| error.to_string())?;
 
-    before_recheck()?;
+    if let Some(before_recheck) = before_recheck {
+        before_recheck()?;
+    }
     let before_rename = existing_file_state(path)?;
     if !expected_state_matches(expected, &before_rename.fingerprint) {
         return Ok(AtomicWriteResult::Conflict {
@@ -365,9 +396,7 @@ where
     std::fs::rename(temporary.path(), path).map_err(|error| error.to_string())?;
     temporary.persist();
     sync_containing_directory(path)?;
-    Ok(AtomicWriteResult::Written {
-        hash: sha256_hex(content),
-    })
+    Ok(AtomicWriteResult::Written { hash: content_hash })
 }
 
 #[tauri::command]
@@ -1227,6 +1256,111 @@ mod tests {
             }
         );
         assert_eq!(fs::read(&path).unwrap(), b"new bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_identical_content_skips_replacement_after_rechecking() {
+        use std::cell::Cell;
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unchanged.md");
+        fs::write(&path, "same bytes").unwrap();
+        let inode_before = fs::metadata(&path).unwrap().ino();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"same bytes"),
+        };
+        let rechecks = Cell::new(0);
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || {
+            rechecks.set(rechecks.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(b"same bytes"),
+            }
+        );
+        assert_eq!(rechecks.get(), 1);
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode_before);
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_content_does_not_bypass_a_stale_expectation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("stale-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"older bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || Ok(())).unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"same bytes"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_match_recheck_catches_an_external_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+        let expected = ExpectedFileState::Match {
+            hash: sha256_hex(b"same bytes"),
+        };
+
+        let result = write_file_atomic_at(&path, b"same bytes", &expected, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Conflict {
+                actual: FileFingerprint::Present {
+                    hash: sha256_hex(b"external race winner"),
+                },
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"external race winner");
+        assert_no_quill_temp_files(dir.path());
+    }
+
+    #[test]
+    fn atomic_write_identical_any_replaces_a_concurrent_external_change() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raced-unconditional-identical.md");
+        fs::write(&path, "same bytes").unwrap();
+
+        let result = write_file_atomic_at(&path, b"same bytes", &ExpectedFileState::Any, || {
+            fs::write(&path, "external race winner").unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AtomicWriteResult::Written {
+                hash: sha256_hex(b"same bytes"),
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"same bytes");
+        assert_no_quill_temp_files(dir.path());
     }
 
     #[test]
