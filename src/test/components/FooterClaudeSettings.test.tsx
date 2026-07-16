@@ -49,13 +49,28 @@ describe('Footer Claude model/effort display', () => {
     expect(screen.queryByText('DEFAULT')).toBeNull();
   });
 
-  it('surfaces the last observed model (prefix stripped) on the inherit option', () => {
+  it('surfaces the last observed model family on the inherit option', () => {
     renderFooterWithModel({ lastKnownModel: 'claude-opus-4-8' });
-    // Inherited-but-observed: the resolved id with the vendor prefix stripped,
-    // marked "· AUTO" so it's clearly what Claude chose, not an explicit pick.
+    // Inherited-but-observed: just the family, marked "· AUTO" so it's clearly
+    // what Claude chose, not an explicit pick.
     expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue(
-      'OPUS-4-8 · AUTO',
+      'OPUS · AUTO',
     );
+  });
+
+  it('shows only the model family (no version or tag) in label and tooltip', () => {
+    // The live model id carries a version + `[1m]` variant marker (e.g.
+    // claude-opus-4-8[1m]); the footer chip and its tooltip show only the family.
+    renderFooterWithModel({ lastKnownModel: 'claude-opus-4-8[1m]' });
+    expect(screen.getByRole('combobox', { name: 'Claude model' })).toHaveDisplayValue(
+      'OPUS · AUTO',
+    );
+    const title =
+      screen.getByRole('group', { name: 'Claude settings' }).getAttribute('title') ?? '';
+    expect(title).toContain('last observed OPUS');
+    expect(title).not.toContain('4-8');
+    expect(title).not.toContain('[1m]');
+    expect(title).not.toContain('claude-');
   });
 
   it('an explicit selection wins and the tooltip never calls it Auto', () => {

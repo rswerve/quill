@@ -43,11 +43,19 @@ describe('Claude run preferences', () => {
 });
 
 describe('formatModelLabel', () => {
-  it('strips the claude- prefix and uppercases a first-party id', () => {
-    expect(formatModelLabel('claude-opus-4-8')).toBe('OPUS-4-8');
-    expect(formatModelLabel('claude-sonnet-4-6')).toBe('SONNET-4-6');
+  it('shows only the model family, uppercased, for a first-party id', () => {
+    expect(formatModelLabel('claude-opus-4-8')).toBe('OPUS');
+    expect(formatModelLabel('claude-sonnet-4-6')).toBe('SONNET');
+    expect(formatModelLabel('claude-fable-5')).toBe('FABLE');
     // case-insensitive prefix match
-    expect(formatModelLabel('Claude-Haiku-4-5')).toBe('HAIKU-4-5');
+    expect(formatModelLabel('Claude-Haiku-4-5')).toBe('HAIKU');
+  });
+
+  it('drops the version and any context-window tag, leaving just the family', () => {
+    // The live model id carries a version + a `[1m]` variant marker — the compact
+    // chip shows only the family the reader recognizes (FABLE/OPUS/SONNET/HAIKU).
+    expect(formatModelLabel('claude-opus-4-8[1m]')).toBe('OPUS');
+    expect(formatModelLabel('Claude-Sonnet-5[1M]')).toBe('SONNET');
   });
 
   it('shows a custom / provider id verbatim rather than mangling it', () => {

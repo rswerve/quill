@@ -15,18 +15,22 @@ export function isEffort(value: string | null | undefined): value is ClaudeEffor
 }
 
 /**
- * Compact, truthful display for a model id Claude Code reports (e.g.
- * `claude-opus-4-8` → `OPUS-4-8`). Deliberately does NOT translate to a curated
- * friendly-name table: those go stale — the live account already runs a model
- * newer than the published docs — so we never guess. A first-party `claude-`
- * id has the vendor prefix stripped and is uppercased to match the alias
- * options; any other id (custom provider, gateway, unknown) is shown verbatim
- * rather than mangled. Returns null for an absent value.
+ * Compact, truthful display for a model id Claude Code reports: the model
+ * FAMILY only — `claude-opus-4-8[1m]` → `OPUS`, `claude-sonnet-4-6` → `SONNET`.
+ * The version and any context-window tag are dropped as noise; the family is the
+ * first segment after the vendor prefix, uppercased to match the alias options
+ * (FABLE / OPUS / SONNET / HAIKU). Deliberately does NOT translate to a curated
+ * friendly-name table and does NOT hard-code the family list — a new family
+ * surfaces as its own literal name rather than a guess or a stale label. Any
+ * non-`claude-` id (custom provider, gateway, unknown) is shown verbatim rather
+ * than mangled. Returns null for an absent value.
  */
 export function formatModelLabel(model: string | null | undefined): string | null {
   if (!model) return null;
-  if (/^claude-/i.test(model)) return model.replace(/^claude-/i, '').toUpperCase();
-  return model;
+  if (!/^claude-/i.test(model)) return model;
+  // Family = the first segment after `claude-` (drops the -version and any [tag]).
+  const family = model.replace(/^claude-/i, '').split('-')[0];
+  return family ? family.toUpperCase() : model;
 }
 
 export function readClaudeRunOptions(storage: Pick<Storage, 'getItem'>): ClaudeRunOptions {

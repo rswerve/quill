@@ -66,7 +66,7 @@ function autosaveLabel(status: AutosaveStatus): string | null {
  */
 function modelTooltip(claudeModel: ClaudeModelAlias | null, lastKnownModel: string | null): string {
   if (claudeModel) return `Model: ${claudeModel.toUpperCase()} (chosen for the next request)`;
-  if (lastKnownModel) return `Model: Auto — last observed ${lastKnownModel}`;
+  if (lastKnownModel) return `Model: Auto — last observed ${formatModelLabel(lastKnownModel)}`;
   return 'Model: Auto — Claude decides';
 }
 
