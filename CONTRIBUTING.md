@@ -1,6 +1,6 @@
 # Contributing to Quill
 
-Thanks for your interest! Quill is a Tauri 2 + React 19 desktop Markdown editor with track-changes, inline comments, and `@claude` review built in. The [README](./README.md) covers building from source, [`PRD.md`](./PRD.md) is the as-built product spec, and [`CLAUDE.md`](./CLAUDE.md) has the architecture notes.
+Thanks for your interest! Quill is a Tauri 2 + React 19 desktop Markdown editor with track-changes, inline comments, and Claude-powered review built in. The [README](./README.md) covers building from source, [`PRD.md`](./PRD.md) is the as-built product spec, and [`CLAUDE.md`](./CLAUDE.md) has the architecture notes.
 
 ## Development setup
 
@@ -36,4 +36,4 @@ A husky pre-commit hook runs lint-staged and the unit tests automatically.
 
 ## Reporting bugs
 
-Open an issue on the project's repository with your platform, what you did, what you expected, and what happened. For `@claude` problems, mention whether the `claude` CLI works in your terminal.
+Open an issue on the project's repository with your platform, what you did, what you expected, and what happened. For Claude problems, mention whether the `claude` CLI works in your terminal.
