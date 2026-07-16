@@ -196,12 +196,19 @@ select {
 /* ── TipTap / ProseMirror ───────────────────────────────────────── */
 .editor-content {
   outline: none;
+  /* Pass the fill-height down to the ProseMirror surface. */
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .ProseMirror {
   outline: none;
-  /* Layout minimum so an empty document keeps a comfortable page-sized surface */
-  min-height: 912px;
+  /* Fill the page surface so an empty document reaches the viewport bottom
+     rather than reserving a fixed height taller than the screen (which forced
+     a phantom scrollbar). Content past one screen scrolls normally. */
+  flex: 1 0 auto;
+  min-height: 0;
   font-family: var(--font-doc-body);
   font-size: var(--text-doc-body);
   font-weight: 400;
@@ -811,7 +818,13 @@ del.track-delete {
 .studio-body .editor-page-zoom-wrapper {
   width: 640px;
   max-width: 100%;
-  flex: none;
+  /* Fill the scroll area's height so an empty doc reaches the viewport bottom
+     (no phantom scrollbar). Grow to fill, never shrink, so a long document
+     overflows into a real scroll. Fill flows down: wrapper → page → content →
+     ProseMirror (the last two carry the fill at base specificity). */
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 .studio-body .editor-page {
   width: 640px;
@@ -820,6 +833,9 @@ del.track-delete {
   border: 0;
   border-radius: 0;
   background: transparent;
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 .studio-body .editor-empty-state {
   top: 56px;

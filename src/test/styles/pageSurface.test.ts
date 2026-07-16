@@ -48,9 +48,54 @@ describe('page surface (spec 10 — no faux page-break indicator)', () => {
     expect(body).not.toContain('linear-gradient');
   });
 
-  it('keeps a page-sized min-height so a near-empty doc still fills the card', () => {
-    // The layout minimum stays even though the page lines are gone.
-    expect(ruleBody(css, '.ProseMirror')).toMatch(/min-height:\s*912px/);
+  it('fills a near-empty doc via the full flex-grow chain, not a fixed tall min-height', () => {
+    // Regression guard for the phantom scrollbar. An empty doc must fill the
+    // *available* height (flex-grow) rather than reserve a fixed 912px surface
+    // taller than the viewport. The grow flows through EVERY link:
+    //   .editor-scroll-area → .studio-body .editor-page-zoom-wrapper →
+    //   .studio-body .editor-page → .editor-content → .ProseMirror
+    // Wrapper/page carry it at .studio-body specificity (which overrides base
+    // there); content + ProseMirror at base. Each container needs the grow AND
+    // a flex-column, or the fill silently collapses at that link — so assert
+    // all three per container, plus min-height:0 on the leaf.
+    const grow = /flex:\s*1\s+0\s+auto/;
+    const flexbox = /display:\s*flex/;
+    const column = /flex-direction:\s*column/;
+
+    // Read a rule body by its literal selector. Unlike the surface-only
+    // `ruleBody` above, this reads the descendant `.studio-body …` rules that
+    // actually govern the wrapper/page, and tolerates a comment sitting just
+    // before a selector (as `.editor-content` has).
+    const ruleFor = (selector: string): string => {
+      const m = css.match(new RegExp(`${selector.replace(/\./g, '\\.')}\\s*{([^}]*)}`));
+      if (!m) throw new Error(`${selector} not found in App.css`);
+      return m[1];
+    };
+
+    for (const selector of [
+      '.studio-body .editor-page-zoom-wrapper',
+      '.studio-body .editor-page',
+      '.editor-content',
+    ]) {
+      const body = ruleFor(selector);
+      expect(body, selector).toMatch(grow);
+      expect(body, selector).toMatch(flexbox);
+      expect(body, selector).toMatch(column);
+    }
+
+    const prose = ruleFor('.ProseMirror');
+    expect(prose).toMatch(grow);
+    expect(prose).toMatch(/min-height:\s*0\b/);
+    expect(prose).not.toMatch(/min-height:\s*912px/);
+  });
+
+  it('negative control: a broken link (912px, flex:none, or missing display:flex) fails the guard', () => {
+    // Prove each strand of the guard can fail if the regression returns.
+    expect(ruleBody('.ProseMirror { min-height: 912px; }', '.ProseMirror')).toMatch(
+      /min-height:\s*912px/,
+    );
+    expect('flex: none;').not.toMatch(/flex:\s*1\s+0\s+auto/);
+    expect('flex: 1 0 auto;').not.toMatch(/display:\s*flex/);
   });
 
   it('negative control: the assertion catches a painted gradient', () => {
