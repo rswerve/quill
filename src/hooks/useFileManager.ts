@@ -123,6 +123,12 @@ interface UseFileManagerReturn {
   ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (path: string | null, dirty?: boolean) => void;
+  /**
+   * The current monotonic change-revision — bumped on every document/review/chat
+   * mutation (markDirty) and on open/new/restore. The save coordinator reads it to
+   * decide whether a completed write covered a given save request.
+   */
+  getChangeRevision: () => number;
 }
 
 /**
@@ -314,12 +320,19 @@ export function useFileManager(
           contextFolder,
           chat,
         );
-        // The sidecar at targetPath is now our own output. In the Save As
-        // escape (new path while protected) the protection must not follow
-        // the document, or every later save silently skips the sidecar.
-        setSidecarProtected(false);
-        setFilePath(targetPath);
-        if (changeRevisionRef.current === saveRevision) setIsDirty(false);
+        // Apply post-write tab state only if the document identity is unchanged
+        // since this write began. A concurrent edit, New, Open, or restore bumps
+        // the change-revision; a late-completing write must not resurrect the old
+        // path, clear a newer dirty flag, or drop sidecar protection for a document
+        // that is no longer the one on screen (document-epoch safety). The write
+        // itself still landed at targetPath, which the returned outcome reports.
+        // In the Save As escape (new path while protected) nothing changes during
+        // the modal dialog, so the guard passes and protection is correctly cleared.
+        if (changeRevisionRef.current === saveRevision) {
+          setSidecarProtected(false);
+          setFilePath(targetPath);
+          setIsDirty(false);
+        }
         return { status: 'saved', path: targetPath, docHash: docResult.hash, sidecar };
       } catch (e) {
         console.error('Failed to save file:', e);
@@ -395,5 +408,6 @@ export function useFileManager(
     saveFileAs,
     newFile,
     restoreDraft,
+    getChangeRevision: () => changeRevisionRef.current,
   };
 }

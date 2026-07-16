@@ -13,6 +13,7 @@ import {
   stripTransientReplyState,
   type SaveOutcome,
 } from '../hooks/useFileManager';
+import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
@@ -260,6 +261,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     saveFileAs,
     newFile,
     restoreDraft,
+    getChangeRevision,
   } = useFileManager(showError);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
 
@@ -783,73 +785,35 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // a `blocked` sidecar (text saved, annotations withheld) and an external
   // `conflict`. `failed` already reported itself inside useFileManager; a
   // `cancelled` outcome is a deliberate no-op. Returns the saved path, else null.
-  const resolveSaveOutcome = useCallback(
-    (outcome: SaveOutcome): string | null => {
-      switch (outcome.status) {
-        case 'saved':
-          return outcome.path;
-        case 'blocked':
-          showError(
-            'Comments not saved',
-            'The document text was saved, but its comments and suggestions could not be ' +
-              "written: the existing .comments.json file is unreadable and Quill won't " +
-              'overwrite it. Recover or remove that file, then save again.',
-          );
-          return null;
-        case 'conflict':
-          showError(
-            'File changed on disk',
-            `${outcome.path}\n\nThis file was modified outside Quill since it was opened, ` +
-              'so the save was stopped to avoid overwriting those changes.',
-          );
-          return null;
-        case 'failed':
-        case 'cancelled':
-          return null;
+  // Surface the save outcomes that must not read as a silent success: a `blocked`
+  // sidecar (document saved, annotations withheld) and an external `conflict`.
+  // `saved` is silent; `failed` already surfaced inside useFileManager; `cancelled`
+  // is a deliberate no-op.
+  const notifySaveOutcome = useCallback(
+    (outcome: SaveOutcome) => {
+      if (outcome.status === 'blocked') {
+        showError(
+          'Comments not saved',
+          'The document text was saved, but its comments and suggestions could not be ' +
+            "written: the existing .comments.json file is unreadable and Quill won't " +
+            'overwrite it. Recover or remove that file, then save again.',
+        );
+      } else if (outcome.status === 'conflict') {
+        showError(
+          'File changed on disk',
+          `${outcome.path}\n\nThis file was modified outside Quill since it was opened, ` +
+            'so the save was stopped to avoid overwriting those changes.',
+        );
       }
     },
     [showError],
   );
 
-  const handleSaveAs = useCallback(async () => {
-    const live = getLiveReviewState();
-    const outcome = await saveFileAs(
-      getMarkdown(),
-      live.comments,
-      live.suggestions,
-      aiSession,
-      contextFolder,
-      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-      (path) => onRequestSavePath(tabId, path),
-    );
-    const path = resolveSaveOutcome(outcome);
-    // The document gained (or moved) a directory — relative image paths now
-    // resolve against it for anything drawn from here on.
-    if (path) {
-      const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) setImageBaseDir(liveEditor, dirname(path));
-      rememberSessionPermission(window.localStorage, path, aiSession);
-      rememberContextFolderPermission(window.localStorage, path, contextFolder);
-      onRecentFile(path);
-      setLastSavedAt(Date.now());
-    }
-    return path;
-  }, [
-    saveFileAs,
-    getLiveReviewState,
-    aiSession,
-    contextFolder,
-    documentChat,
-    onRecentFile,
-    onRequestSavePath,
-    tabId,
-    resolveSaveOutcome,
-  ]);
-
-  const handleSave = useCallback(async () => {
-    if (!filePath) {
-      return handleSaveAs();
-    }
+  // The coordinator's default-save job: capture the live payload NOW (at
+  // write-begin) and save to the current path. Post-write side effects and
+  // notices live here so they run exactly once per write, even when several
+  // coalesced requests share it.
+  const performSave = useCallback(async (): Promise<SaveOutcome> => {
     const live = getLiveReviewState();
     const outcome = await saveFile(
       getMarkdown(),
@@ -860,23 +824,70 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       undefined,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
     );
-    const path = resolveSaveOutcome(outcome);
-    if (path) {
-      rememberSessionPermission(window.localStorage, path, aiSession);
-      rememberContextFolderPermission(window.localStorage, path, contextFolder);
+    if (outcome.status === 'saved') {
+      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
       setLastSavedAt(Date.now());
     }
-    return path;
+    notifySaveOutcome(outcome);
+    return outcome;
+  }, [saveFile, getLiveReviewState, aiSession, contextFolder, documentChat, notifySaveOutcome]);
+
+  const { requestSave, runExclusive } = useSaveCoordinator({
+    performSave,
+    getRevision: getChangeRevision,
+  });
+
+  // Save As is a distinct job (it prompts and changes the target path), so it runs
+  // through the coordinator's exclusive lane — waiting for any in-flight save and
+  // blocking new saves until it finishes — so writes never overlap the path change.
+  const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
+    const live = getLiveReviewState();
+    const outcome = await saveFileAs(
+      getMarkdown(),
+      live.comments,
+      live.suggestions,
+      aiSession,
+      contextFolder,
+      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+      (path) => onRequestSavePath(tabId, path),
+    );
+    if (outcome.status === 'saved') {
+      // The document gained (or moved) a directory — relative image paths now
+      // resolve against it for anything drawn from here on.
+      const liveEditor = editorRef.current?.getEditor();
+      if (liveEditor) setImageBaseDir(liveEditor, dirname(outcome.path));
+      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
+      onRecentFile(outcome.path);
+      setLastSavedAt(Date.now());
+    }
+    notifySaveOutcome(outcome);
+    return outcome;
   }, [
-    filePath,
-    saveFile,
+    saveFileAs,
     getLiveReviewState,
     aiSession,
     contextFolder,
     documentChat,
-    handleSaveAs,
-    resolveSaveOutcome,
+    onRecentFile,
+    onRequestSavePath,
+    tabId,
+    notifySaveOutcome,
   ]);
+
+  const handleSaveAs = useCallback(async () => {
+    const outcome = await runExclusive(performSaveAs);
+    return outcome.status === 'saved' ? outcome.path : null;
+  }, [runExclusive, performSaveAs]);
+
+  const handleSave = useCallback(async () => {
+    if (!filePath) {
+      return handleSaveAs();
+    }
+    const outcome = await requestSave();
+    return outcome.status === 'saved' ? outcome.path : null;
+  }, [filePath, requestSave, handleSaveAs]);
 
   // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
   // the chrome and the track-changes/comment markup, leaving a clean copy of
