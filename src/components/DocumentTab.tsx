@@ -119,7 +119,7 @@ export interface DocumentTabHandle {
   saveAs: () => Promise<string | null>;
   open: () => Promise<void>;
   openPath: (path: string) => Promise<boolean>;
-  newDocument: () => void;
+  newDocument: () => Promise<void>;
   exportPdf: () => void;
   setMode: (suggesting: boolean) => void;
   setZoom: (zoom: number) => void;
@@ -833,7 +833,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return outcome;
   }, [saveFile, getLiveReviewState, aiSession, contextFolder, documentChat, notifySaveOutcome]);
 
-  const { requestSave, runExclusive } = useSaveCoordinator({
+  const {
+    requestSave,
+    runExclusive,
+    flush: flushSaves,
+  } = useSaveCoordinator({
     performSave,
     getRevision: getChangeRevision,
   });
@@ -909,17 +913,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const performOpen = useCallback(async () => {
     const result = await openFile();
     if (!result) return;
+    // Serialize against any in-flight save before swapping the document identity,
+    // so a late-completing write can't race the change (the epoch guard in
+    // useFileManager is the correctness backstop; this avoids the wasted write).
+    await flushSaves();
     loadFileResult(result);
-  }, [openFile, loadFileResult]);
+  }, [openFile, loadFileResult, flushSaves]);
 
   const performOpenPath = useCallback(
     async (path: string, promptForSession = true) => {
       const result = await openFilePath(path);
       if (!result) return false;
+      await flushSaves();
       loadFileResult(result, promptForSession);
       return true;
     },
-    [openFilePath, loadFileResult],
+    [openFilePath, loadFileResult, flushSaves],
   );
 
   useEffect(() => {
@@ -930,7 +939,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     );
   }, [editor, initialFilePath, onInitialFileLoaded, performOpenPath, restoredFromWorkspace, tabId]);
 
-  const performNew = useCallback(() => {
+  const performNew = useCallback(async () => {
+    // Drain any in-flight save before clearing to a new document, so a late write
+    // can't complete against the old identity (epoch guard is the backstop).
+    await flushSaves();
     newFile();
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
@@ -945,7 +957,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setContextFolder(null);
     setLastSavedAt(null);
     setPanelMode('comments');
-  }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId]);
+  }, [documentChat, newFile, onReleaseSession, setComments, setSuggestions, tabId, flushSaves]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are

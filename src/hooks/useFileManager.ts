@@ -144,6 +144,12 @@ export function useFileManager(
   // Monotonic across document, review, and chat mutations. A save may clear
   // dirty only if nothing changed while its asynchronous writes were pending.
   const changeRevisionRef = useRef(0);
+  // Monotonic across DOCUMENT-IDENTITY changes only — Open, New, restore — NOT
+  // ordinary edits. A save adopts its target path (and clears sidecar protection)
+  // only if the identity is unchanged since the write began, so a plain edit made
+  // during a Save As can't stop the successfully-chosen new path from being
+  // adopted (that is content churn, not an identity change).
+  const documentEpochRef = useRef(0);
   // True when the currently open file's sidecar exists on disk but couldn't be
   // parsed. We refuse to overwrite/delete it so the user can recover it; only
   // an explicit Save As (new path) escapes the guard.
@@ -203,6 +209,7 @@ export function useFileManager(
 
         setFilePath(path);
         changeRevisionRef.current += 1;
+        documentEpochRef.current += 1; // opening a file is an identity change
         // The document layer marks an accepted auto-binding dirty after the
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
@@ -295,6 +302,7 @@ export function useFileManager(
         return { status: 'cancelled' };
       }
       const saveRevision = changeRevisionRef.current;
+      const saveEpoch = documentEpochRef.current;
       // Protect a corrupt sidecar from being clobbered. Saving the markdown to
       // the same path is fine, but skip touching the sidecar so we don't destroy
       // recoverable comment data. A Save As to a different path (forcePath) is
@@ -320,18 +328,21 @@ export function useFileManager(
           contextFolder,
           chat,
         );
-        // Apply post-write tab state only if the document identity is unchanged
-        // since this write began. A concurrent edit, New, Open, or restore bumps
-        // the change-revision; a late-completing write must not resurrect the old
-        // path, clear a newer dirty flag, or drop sidecar protection for a document
-        // that is no longer the one on screen (document-epoch safety). The write
-        // itself still landed at targetPath, which the returned outcome reports.
-        // In the Save As escape (new path while protected) nothing changes during
-        // the modal dialog, so the guard passes and protection is correctly cleared.
-        if (changeRevisionRef.current === saveRevision) {
-          setSidecarProtected(false);
+        // Adopt post-write tab state, gated on two independent signals:
+        //  - IDENTITY (documentEpoch): unchanged → this write belongs to the doc
+        //    still on screen, so adopt targetPath and clear sidecar protection. An
+        //    Open/New/restore during the write bumps the epoch → apply NO tab state
+        //    (the write's bytes still landed at targetPath, reported in the outcome).
+        //    A plain edit does NOT bump the epoch, so a Save As whose new path was
+        //    chosen still adopts it even if the user typed during the write.
+        //  - CONTENT (changeRevision): also unchanged → nothing was edited during
+        //    the write, so it's safe to clear dirty. A concurrent edit keeps dirty.
+        if (documentEpochRef.current === saveEpoch) {
           setFilePath(targetPath);
-          setIsDirty(false);
+          setSidecarProtected(false);
+          if (changeRevisionRef.current === saveRevision) {
+            setIsDirty(false);
+          }
         }
         return { status: 'saved', path: targetPath, docHash: docResult.hash, sidecar };
       } catch (e) {
@@ -383,6 +394,7 @@ export function useFileManager(
 
   const newFile = useCallback(() => {
     changeRevisionRef.current += 1;
+    documentEpochRef.current += 1; // New is an identity change
     setFilePath(null);
     setIsDirty(false);
     setSidecarProtected(false);
@@ -393,6 +405,7 @@ export function useFileManager(
   // prompted to save the recovered work.
   const restoreDraft = useCallback((path: string | null, dirty = true) => {
     changeRevisionRef.current += 1;
+    documentEpochRef.current += 1; // restore swaps in a different document
     setFilePath(path);
     setIsDirty(dirty);
     setSidecarProtected(false);

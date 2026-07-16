@@ -94,6 +94,13 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
   const runningRef = useRef(false);
   const defaultWaitersRef = useRef<DefaultWaiter[]>([]);
   const exclusiveQueueRef = useRef<ExclusiveJob[]>([]);
+  // A single "the document changed while the last write was in flight" slot. Set
+  // after a successful default write whose start-revision the current revision has
+  // already outrun, it forces exactly ONE more default pass so the on-disk state
+  // catches up to the latest edit — even with no second requestSave. Only ever set
+  // or cleared by the DEFAULT-save branch, so a cancelled exclusive job (Save As)
+  // can't erase a fresh pass that belongs to the original path.
+  const freshPassPendingRef = useRef(false);
   // Resolves when the currently-running drain loop goes idle. Replaced per loop.
   const idleRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
   const [status, setStatus] = useState<SaveStatus>({ state: 'idle' });
@@ -108,12 +115,17 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
       }),
       resolve: () => resolveIdle(),
     };
-    setStatus({ state: 'saving' });
-
     void (async () => {
       try {
-        while (exclusiveQueueRef.current.length > 0 || defaultWaitersRef.current.length > 0) {
-          // Exclusive jobs (Save As) drain first and run entirely alone.
+        while (
+          exclusiveQueueRef.current.length > 0 ||
+          defaultWaitersRef.current.length > 0 ||
+          freshPassPendingRef.current
+        ) {
+          setStatus({ state: 'saving' }); // every pass/job re-enters the saving state
+          // Exclusive jobs (Save As) drain first and run entirely alone. They never
+          // touch the fresh-pass slot, so cancelling one can't erase a default
+          // fresh pass that belongs to the original path.
           if (exclusiveQueueRef.current.length > 0) {
             const { job, resolve, reject } = exclusiveQueueRef.current.shift()!;
             try {
@@ -126,8 +138,10 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
             }
             continue;
           }
-          // One coalesced default save. Capture the revision at write-BEGIN, in the
-          // same synchronous step as performSave reads its payload.
+          // One coalesced default save. Consume the fresh-pass slot (this IS that
+          // pass if it was set) and capture the revision at write-BEGIN, in the same
+          // synchronous step as performSave reads its payload.
+          freshPassPendingRef.current = false;
           const startRevision = getRevisionRef.current();
           let outcome: SaveOutcome;
           try {
@@ -139,18 +153,21 @@ export function useSaveCoordinator({ performSave, getRevision }: Options): SaveC
           if (outcome.status === 'saved') {
             // Resolve every waiter this write covered (its edit is now persisted).
             // Waiters requested DURING the write (minRevision > startRevision) stay
-            // and force exactly one more pass — so continuous edits are never lost.
+            // and are covered by a later pass.
             const covered = defaultWaitersRef.current.filter((w) => w.minRevision <= startRevision);
             defaultWaitersRef.current = defaultWaitersRef.current.filter(
               (w) => w.minRevision > startRevision,
             );
             for (const waiter of covered) waiter.resolve(outcome);
+            // If the document moved on during this write, schedule exactly one more
+            // pass so the on-disk state reaches the latest edit — even with no
+            // second requestSave.
+            if (getRevisionRef.current() > startRevision) freshPassPendingRef.current = true;
           } else {
             // Terminal (failed / blocked / conflict / cancelled): resolve ALL pending
-            // default waiters with this outcome and STOP. Never auto-run the queued
-            // fresh pass after a non-success — an immediate loop would hammer a bad
-            // disk or a live conflict. Retry/backoff and conflict resolution belong
-            // to later phases; a new explicit requestSave starts a fresh loop.
+            // default waiters with this outcome and STOP. The slot stays cleared, so
+            // there is no unbacked retry — retry/backoff and conflict resolution are
+            // later phases; a new explicit requestSave starts a fresh loop.
             const pending = defaultWaitersRef.current;
             defaultWaitersRef.current = [];
             for (const waiter of pending) waiter.resolve(outcome);

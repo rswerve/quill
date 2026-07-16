@@ -99,7 +99,9 @@ test('normal relaunch restores clean tab order and active tab, reloading files f
   await expect(page.getByRole('dialog', { name: 'Link Claude Code session' })).toHaveCount(0);
 });
 
-test('an edit made while Save is pending stays dirty and remains in recovery', async ({ page }) => {
+test('an edit made while Save is pending is rescued onto the file by a fresh pass', async ({
+  page,
+}) => {
   const path = '/tmp/save-race.md';
   await setupMemoryTauri(page, {
     openPath: path,
@@ -143,22 +145,41 @@ test('an edit made while Save is pending stays dirty and remains in recovery', a
   await page.evaluate(() => {
     (window as unknown as { __quillReleaseWriteFile: () => void }).__quillReleaseWriteFile();
   });
-  await expect(page.locator('.document-tab.active .document-tab-dirty')).toBeVisible();
+
+  // The coordinator's fresh pass rescues the mid-save edit ONTO the real file: the
+  // deferred original write lands first, then exactly one fresh pass carrying the
+  // newer content — two atomic writes to the .md, no more (sidecar writes excluded).
+  await expect
+    .poll(() =>
+      page.evaluate((docPath) => {
+        const calls = (
+          window as unknown as {
+            __quillCalls: Array<{ cmd: string; args: { path?: string } }>;
+          }
+        ).__quillCalls;
+        return calls.filter((c) => c.cmd === 'write_file_atomic' && c.args.path === docPath).length;
+      }, path),
+    )
+    .toBe(2);
+
+  // The newer content is what actually reached disk — the edit was not lost.
+  expect(
+    await page.evaluate(
+      (docPath) =>
+        (window as unknown as { __quillFiles: Record<string, string> }).__quillFiles[docPath],
+      path,
+    ),
+  ).toBe('Newer content while Save was pending');
+
+  // Everything is saved, so the tab settles clean in the recovery snapshot.
   await expect
     .poll(async () => {
       const workspace = (await persistedWorkspace(page)) as {
-        tabs: Array<{
-          filePath: string | null;
-          dirty: boolean;
-          snapshot?: { content?: string };
-        }>;
+        tabs: Array<{ filePath: string | null; dirty: boolean }>;
       };
       return workspace.tabs.find((tab) => tab.filePath === path);
     })
-    .toMatchObject({
-      dirty: true,
-      snapshot: { content: 'Newer content while Save was pending' },
-    });
+    .toMatchObject({ dirty: false });
 });
 
 test('one recovery decision atomically restores every dirty tab and its annotations', async ({

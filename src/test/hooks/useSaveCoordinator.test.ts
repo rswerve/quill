@@ -255,4 +255,202 @@ describe('useSaveCoordinator', () => {
     });
     expect(result.current.status).toEqual({ state: 'saved' });
   });
+
+  it('queues one fresh pass when the revision advances during a write, with NO second request', async () => {
+    const d1 = deferred<SaveOutcome>();
+    const d2 = deferred<SaveOutcome>();
+    const performSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise);
+    const { result, revisionRef } = setup(performSave);
+
+    let p1!: Promise<SaveOutcome>;
+    act(() => {
+      p1 = result.current.requestSave(); // write 1, startRevision = 1
+    });
+    revisionRef.current = 2; // document changes during the write — but no new request
+
+    await act(async () => {
+      d1.resolve(saved()); // getRevision() 2 > startRevision 1 → a fresh pass runs
+    });
+    expect(performSave).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      d2.resolve(saved()); // getRevision() 2 == startRevision 2 → settles
+    });
+    expect((await p1).status).toBe('saved');
+    expect(performSave).toHaveBeenCalledTimes(2);
+  });
+
+  it('chains a further fresh pass if the document changes again during the fresh pass', async () => {
+    const d1 = deferred<SaveOutcome>();
+    const d2 = deferred<SaveOutcome>();
+    const d3 = deferred<SaveOutcome>();
+    const performSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise)
+      .mockReturnValueOnce(d3.promise);
+    const { result, revisionRef } = setup(performSave);
+
+    act(() => {
+      result.current.requestSave(); // write 1, startRevision = 1
+    });
+    revisionRef.current = 2;
+    await act(async () => {
+      d1.resolve(saved()); // fresh pass 2, startRevision = 2
+    });
+    expect(performSave).toHaveBeenCalledTimes(2);
+
+    revisionRef.current = 3; // changes again during pass 2
+    await act(async () => {
+      d2.resolve(saved()); // fresh pass 3, startRevision = 3
+    });
+    expect(performSave).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      d3.resolve(saved()); // getRevision() 3 == 3 → stop
+    });
+    expect(performSave).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns to saving for a queued fresh pass (status does not stick on saved)', async () => {
+    const d1 = deferred<SaveOutcome>();
+    const d2 = deferred<SaveOutcome>();
+    const performSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise);
+    const { result, revisionRef } = setup(performSave);
+
+    act(() => {
+      result.current.requestSave();
+    });
+    revisionRef.current = 2;
+    await act(async () => {
+      d1.resolve(saved()); // write 1 done → fresh pass 2 starts
+    });
+    expect(result.current.status).toEqual({ state: 'saving' }); // not stuck on 'saved'
+    await act(async () => {
+      d2.resolve(saved());
+    });
+    expect(result.current.status).toEqual({ state: 'saved' });
+  });
+
+  it('flush waits for a queued fresh pass, not just the in-flight write', async () => {
+    const d1 = deferred<SaveOutcome>();
+    const d2 = deferred<SaveOutcome>();
+    const performSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise);
+    const { result, revisionRef } = setup(performSave);
+
+    act(() => {
+      result.current.requestSave();
+    });
+    revisionRef.current = 2; // a fresh pass will be queued when write 1 finishes
+    let flushed = false;
+    act(() => {
+      void result.current.flush().then(() => {
+        flushed = true;
+      });
+    });
+
+    await act(async () => {
+      d1.resolve(saved()); // write 1 done; fresh pass 2 begins
+    });
+    await act(async () => {});
+    expect(flushed).toBe(false); // flush must still be waiting for the fresh pass
+
+    await act(async () => {
+      d2.resolve(saved());
+    });
+    await act(async () => {});
+    expect(flushed).toBe(true);
+  });
+
+  it('holds a default save requested during an exclusive job until it finishes', async () => {
+    const exclusive = deferred<SaveOutcome>();
+    const exclusiveJob = vi.fn(() => exclusive.promise);
+    const performSave = vi.fn(async () => saved());
+    const { result } = setup(performSave);
+
+    act(() => {
+      result.current.runExclusive(exclusiveJob);
+    });
+    act(() => {
+      result.current.requestSave(); // queued behind the exclusive job
+    });
+    expect(performSave).not.toHaveBeenCalled();
+
+    await act(async () => {
+      exclusive.resolve(saved());
+    });
+    await act(async () => {});
+    expect(performSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('a cancelled exclusive job does not erase a queued default fresh pass', async () => {
+    const d1 = deferred<SaveOutcome>();
+    const d2 = deferred<SaveOutcome>();
+    const performSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise);
+    const { result, revisionRef } = setup(performSave);
+
+    act(() => {
+      result.current.requestSave(); // write 1, startRevision = 1
+    });
+    revisionRef.current = 2; // change during write 1 → fresh pass will be queued
+    const exclusiveJob = vi.fn(async (): Promise<SaveOutcome> => ({ status: 'cancelled' }));
+    act(() => {
+      result.current.runExclusive(exclusiveJob); // e.g. Save As the user then cancels
+    });
+
+    await act(async () => {
+      d1.resolve(saved()); // write 1 done; exclusive (cancelled) runs; fresh pass must survive
+    });
+    await act(async () => {});
+    expect(exclusiveJob).toHaveBeenCalledTimes(1);
+    expect(performSave).toHaveBeenCalledTimes(2); // the fresh pass ran despite the cancel
+
+    await act(async () => {
+      d2.resolve(saved());
+    });
+  });
+
+  it('reads payload at write-begin (observes the revision at begin, not at request)', async () => {
+    const observed: number[] = [];
+    const first = deferred<SaveOutcome>();
+    const second = deferred<SaveOutcome>();
+    const revisionRef = { current: 1 };
+    const performSave = vi.fn(() => {
+      observed.push(revisionRef.current); // what the payload snapshot would see
+      return observed.length === 1 ? first.promise : second.promise;
+    });
+    const { result } = renderHook(() =>
+      useSaveCoordinator({ performSave, getRevision: () => revisionRef.current }),
+    );
+
+    act(() => {
+      result.current.requestSave(); // write 1 begins now → observes revision 1
+    });
+    expect(observed).toEqual([1]);
+
+    revisionRef.current = 5; // bump while write 1 is in flight
+    act(() => {
+      result.current.requestSave(); // minRevision 5, queued
+    });
+    await act(async () => {
+      first.resolve(saved()); // write 2 begins → observes the CURRENT revision (5), not 1
+    });
+    expect(observed).toEqual([1, 5]);
+
+    await act(async () => {
+      second.resolve(saved());
+    });
+  });
 });

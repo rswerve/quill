@@ -437,6 +437,80 @@ describe('useFileManager', () => {
       expect(result.current.isDirty).toBe(true);
     });
 
+    it('adopts the Save As path even when an edit lands during the write (epoch vs revision)', async () => {
+      // An edit is content churn, not an identity change, so the successfully-chosen
+      // new path is still adopted; the concurrent edit only keeps the doc dirty.
+      let releaseWrite: (() => void) | undefined;
+      const writeBlocked = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+        const path = (args as { path?: string } | undefined)?.path;
+        if (command === 'write_file_atomic' && path === '/docs/new.md') {
+          await writeBlocked;
+          return { status: 'written', hash: HASH_DOC };
+        }
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_SIDECAR };
+        if (command === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+
+      const { result } = renderHook(() => useFileManager());
+      let savePromise: Promise<SaveOutcome>;
+      await act(async () => {
+        savePromise = result.current.saveFile('content', [], [], null, null, '/docs/new.md');
+        await Promise.resolve();
+      });
+      act(() => result.current.markDirty()); // edit during the in-flight write
+      releaseWrite?.();
+      let outcome: SaveOutcome;
+      await act(async () => {
+        outcome = await savePromise;
+      });
+
+      expect(outcome!).toMatchObject({ status: 'saved', path: '/docs/new.md' });
+      expect(result.current.filePath).toBe('/docs/new.md'); // new path ADOPTED despite the edit
+      expect(result.current.isDirty).toBe(true); // the concurrent edit keeps it dirty
+    });
+
+    it('does not resurrect the old path when identity changes (New) during a write', async () => {
+      let releaseWrite: (() => void) | undefined;
+      const writeBlocked = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+        const path = (args as { path?: string } | undefined)?.path;
+        if (command === 'read_file' && path === '/docs/old.md') return 'old';
+        if (command === 'read_file') throw new Error('no sidecar');
+        if (command === 'find_session_for_markdown') return null;
+        if (command === 'write_file_atomic' && path === '/docs/old.md') {
+          await writeBlocked;
+          return { status: 'written', hash: HASH_DOC };
+        }
+        if (command === 'write_file_atomic') return { status: 'written', hash: HASH_SIDECAR };
+        if (command === 'delete_file_if_match') return { status: 'deleted' };
+        return undefined;
+      });
+
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.openFilePath('/docs/old.md');
+      });
+      let savePromise: Promise<SaveOutcome>;
+      await act(async () => {
+        savePromise = result.current.saveFile('old edited', [], [], null, null); // → /docs/old.md
+        await Promise.resolve();
+      });
+      act(() => result.current.newFile()); // identity changes to a fresh Untitled doc
+      expect(result.current.filePath).toBeNull();
+      releaseWrite?.();
+      await act(async () => {
+        await savePromise;
+      });
+      // The late write landed at /docs/old.md but must NOT resurrect it as the path.
+      expect(result.current.filePath).toBeNull();
+    });
+
     it('persists contextFolder in the sidecar and keeps the sidecar alive for it alone', async () => {
       installSaveRouter();
       const { result } = renderHook(() => useFileManager());
