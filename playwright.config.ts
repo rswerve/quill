@@ -20,6 +20,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
+  // A test that fails on its first attempt and passes on retry is a real
+  // defect, not a pass — retries keep CI moving but must not mask it. Fail the
+  // run on any flaky result in CI (this is exactly what hid the Cmd+Shift+S
+  // strike collision behind workspace-persistence.spec.ts:185).
+  failOnFlakyTests: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     baseURL: e2eUrl,

@@ -12,6 +12,7 @@ import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
 import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
 import { ReviewableCode } from '../extensions/ReviewableCode';
+import { StrikeWithoutSaveShortcut } from '../extensions/StrikeWithoutSaveShortcut';
 import {
   TrackedInsert,
   TrackedDelete,
@@ -98,7 +99,16 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           link: { openOnClick: false },
           code: false,
           underline: false,
+          // Disable StarterKit's bundled Strike and re-add it below without its
+          // Mod-Shift-s keyboard shortcut: that chord is Quill's Save As, and a
+          // focused editor would otherwise toggle strikethrough (or leave a
+          // stored strike mark) when the user reaches for Save As. Removing the
+          // binding at its source keeps Strike's mark, commands, Markdown
+          // round-trip, input rules, and toolbar access intact, and — unlike
+          // consuming the key — never prevents the native menu accelerator.
+          strike: false,
         }),
+        StrikeWithoutSaveShortcut,
         ReviewableCode,
         MarkdownImage,
         Table,
