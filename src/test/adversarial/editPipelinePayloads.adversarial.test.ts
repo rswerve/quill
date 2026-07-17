@@ -415,17 +415,39 @@ describe('edit pipeline adversarial payloads', () => {
     expect(editor.getHTML()).toContain('<em>pulled it off</em>');
   });
 
-  it('fails closed for a newline replacement inside one paragraph', () => {
+  it('inserts a hard break for a newline replacement inside one paragraph (Accept)', () => {
+    // Slice 2: a newline replacement within one block is now a tracked
+    // hard-break insertion, not a refusal.
+    const editor = makePipelineEditor('<p>alpha beta</p>');
+
+    const outcome = applyEdits(editor, [{ find: 'alpha beta', replace: 'alpha\nbeta' }]);
+    expect(outcome.results[0].status).toBe('applied');
+    expect(outcome.suggestionIds.length).toBeGreaterThan(0);
+
+    editor.commands.acceptAllChanges();
+    expect(editor.getHTML()).toBe('<p>alpha<br>beta</p>');
+  });
+
+  it('restores the single line when a hard-break insertion is rejected', () => {
     const editor = makePipelineEditor('<p>alpha beta</p>');
     const before = editor.state.doc;
 
-    const outcome = applyEdits(editor, [{ find: 'alpha beta', replace: 'alpha\nbeta' }]);
+    applyEdits(editor, [{ find: 'alpha beta', replace: 'alpha\nbeta' }]);
+    editor.commands.rejectAllChanges();
 
-    expect(outcome.results[0]).toMatchObject({
-      status: 'conflict',
-      reason: 'structural-change',
-    });
-    expect(outcome.suggestionIds).toEqual([]);
+    expect(editor.state.doc.eq(before)).toBe(true);
+    expect(editor.getHTML()).toBe('<p>alpha beta</p>');
+  });
+
+  it('still refuses a newline replacement that would cross a block boundary', () => {
+    // The break exemption is single-block only — merging two paragraphs stays
+    // structural.
+    const editor = makePipelineEditor('<p>alpha</p><p>beta</p>');
+    const before = editor.state.doc;
+
+    const outcome = applyEdits(editor, [{ find: 'alpha\nbeta', replace: 'alpha\nbeta merged' }]);
+
+    expect(outcome.results[0]).toMatchObject({ status: 'conflict', reason: 'structural-change' });
     expect(editor.state.doc.eq(before)).toBe(true);
   });
 

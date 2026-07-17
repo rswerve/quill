@@ -116,7 +116,8 @@ export function resolveBoundaryProjection(
 }
 
 /**
- * Normalize marks on freshly inserted inline text against the accepted view.
+ * Normalize marks on freshly inserted inline text and hard breaks against the
+ * accepted view, one child at a time so mixed fragments keep explicit marks.
  * This is the production counterpart to the fuzzer's independent legacy
  * projection oracle.
  */
@@ -130,8 +131,16 @@ export function reconcileInsertedBoundaryMarks(
   deleteType: MarkType,
   formatType: MarkType | undefined,
 ): void {
-  const insertedNode = slice.content.childCount === 1 ? slice.content.firstChild : null;
-  if (!insertedNode?.isText) return;
+  const inserted: Array<{ node: ProseMirrorNode; from: number; to: number }> = [];
+  let offset = 0;
+  let supported = slice.content.childCount > 0;
+  slice.content.forEach((node) => {
+    const nodeFrom = from + offset;
+    offset += node.nodeSize;
+    if (!node.isText && node.type.name !== 'hardBreak') supported = false;
+    inserted.push({ node, from: nodeFrom, to: Math.min(from + offset, to) });
+  });
+  if (!supported) return;
 
   const { acceptedMarks, reviewOnlyMarks } = resolveBoundaryProjection(
     docBeforeInsert,
@@ -140,15 +149,17 @@ export function reconcileInsertedBoundaryMarks(
     deleteType,
     formatType,
   );
-  for (const mark of reviewOnlyMarks) {
-    const inherited = insertedNode.marks.some((insertedMark) => mark.eq(insertedMark));
-    const survives = acceptedMarks.some((acceptedMark) => mark.eq(acceptedMark));
-    if (inherited && !survives) tr.removeMark(from, to, mark);
-  }
-  for (const mark of acceptedMarks) {
-    const explicitlySet = insertedNode.marks.some(
-      (insertedMark) => insertedMark.type === mark.type,
-    );
-    if (!explicitlySet) tr.addMark(from, to, mark);
+  for (const child of inserted) {
+    for (const mark of reviewOnlyMarks) {
+      const inherited = child.node.marks.some((insertedMark) => mark.eq(insertedMark));
+      const survives = acceptedMarks.some((acceptedMark) => mark.eq(acceptedMark));
+      if (inherited && !survives) tr.removeMark(child.from, child.to, mark);
+    }
+    for (const mark of acceptedMarks) {
+      const explicitlySet = child.node.marks.some(
+        (insertedMark) => insertedMark.type === mark.type,
+      );
+      if (!explicitlySet) tr.addMark(child.from, child.to, mark);
+    }
   }
 }

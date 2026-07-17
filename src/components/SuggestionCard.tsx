@@ -1,5 +1,6 @@
 import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
+import { segmentsToPreview } from '../utils/suggestionCards';
 import SuggestionCardShell from './SuggestionCardShell';
 import styles from './SuggestionCard.module.css';
 
@@ -37,7 +38,7 @@ export default function SuggestionCard({
   onActivateChatMessage,
 }: SuggestionCardProps) {
   const isInsert = operation === 'insert';
-  const preview = clip(segments.map((segment) => segment.text).join(' … '));
+  const preview = clip(segmentsToPreview(segments));
 
   return (
     <SuggestionCardShell

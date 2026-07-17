@@ -190,6 +190,8 @@ export interface TrackedTextSegment {
   from: number;
   to: number;
   text: string;
+  /** Semantic identity for a non-text inline segment. Optional for old sidecars. */
+  nodeType?: 'hardBreak';
 }
 
 export interface TrackedFormatSegment extends FormatSegment {

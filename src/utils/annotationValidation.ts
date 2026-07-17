@@ -171,7 +171,14 @@ function sanitizeTrackedChangeSegment(raw: unknown): TrackedChangeSegment | null
   const start = Math.min(from, to);
   const end = Math.max(from, to);
   if (start === end || typeof raw.text !== 'string') return null;
-  return { kind: raw.kind, from: start, to: end, text: raw.text };
+  const nodeType = raw.nodeType === 'hardBreak' && raw.text === '\n' ? 'hardBreak' : undefined;
+  return {
+    kind: raw.kind,
+    from: start,
+    to: end,
+    text: raw.text,
+    ...(nodeType ? { nodeType } : {}),
+  };
 }
 
 function suggestionBase(raw: Record<string, unknown>) {

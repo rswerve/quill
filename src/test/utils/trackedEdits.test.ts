@@ -440,13 +440,15 @@ describe('trackedEdits helpers', () => {
       expect(placed).toHaveLength(0);
     });
 
-    it('blocks newline replacements and text edits in mark-ineligible code blocks', () => {
+    it('allows hard-break replacements in prose but blocks mark-ineligible code blocks', () => {
       editor = makeEditor('<p>alpha beta</p>');
       const prose = planEdits(editor.state.doc, 0, editor.state.doc.content.size, [
         { find: 'alpha beta', replace: 'alpha\nbeta' },
       ]);
-      expect(prose.results[0]).toMatchObject({ status: 'conflict', reason: 'structural-change' });
-      expect(prose.placed).toHaveLength(0);
+      expect(prose.results[0]).toMatchObject({ status: 'applied' });
+      expect(prose.placed).toEqual([
+        expect.objectContaining({ kind: 'text', replace: 'alpha\nbeta' }),
+      ]);
 
       editor.destroy();
       editor = makeEditor('<pre><code>alpha beta</code></pre>');
@@ -455,7 +457,7 @@ describe('trackedEdits helpers', () => {
       ]);
       expect(codeNewline.results[0]).toMatchObject({
         status: 'conflict',
-        reason: 'structural-change',
+        reason: 'engine-blocked',
       });
       expect(codeNewline.placed).toHaveLength(0);
 

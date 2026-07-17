@@ -242,6 +242,27 @@ describe('sanitizeSuggestions', () => {
     ]);
   });
 
+  it('preserves only a canonical hard-break segment discriminator', () => {
+    const base = {
+      ...validLogicalSuggestion,
+      segments: [
+        { kind: 'insert', from: 4, to: 5, text: '\n', nodeType: 'hardBreak' },
+        { kind: 'delete', from: 8, to: 9, text: 'x', nodeType: 'hardBreak' },
+        { kind: 'insert', from: 10, to: 11, text: ' ', nodeType: 'image' },
+      ],
+    };
+
+    expect(sanitizeSuggestions([base])).toEqual([
+      expect.objectContaining({
+        segments: [
+          { kind: 'insert', from: 4, to: 5, text: '\n', nodeType: 'hardBreak' },
+          { kind: 'delete', from: 8, to: 9, text: 'x' },
+          { kind: 'insert', from: 10, to: 11, text: ' ' },
+        ],
+      }),
+    ]);
+  });
+
   it('drops a logical record if any segment is malformed', () => {
     expect(
       sanitizeSuggestions([

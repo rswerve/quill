@@ -508,6 +508,43 @@ del.track-delete {
   padding: 0 1px;
 }
 
+/* A hard break has no visible character to carry the ordinary ins/del paint.
+   TrackChanges inserts an empty, pointer-inert widget immediately before each
+   pending break; the glyph lives in CSS so it never enters editor textContent,
+   selections, Markdown, or persistence. */
+.track-hard-break-cue {
+  display: inline-block;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  vertical-align: 0.08em;
+}
+.track-hard-break-cue::before {
+  content: '↵';
+}
+.track-hard-break-cue-insert {
+  background: var(--color-track-add-bg);
+  color: var(--color-track-add-text);
+  text-decoration: underline;
+  text-decoration-color: var(--color-track-add-line);
+  text-underline-offset: 2px;
+}
+.track-hard-break-cue-delete {
+  background: var(--color-track-del-bg);
+  color: var(--color-track-del-text);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-track-del-line);
+}
+.track-hard-break-cue.annotation-focus {
+  box-shadow: var(--annotation-focus-shadow);
+}
+
 /* Pending formatting is already applied; this restrained wash indicates that
    the formatting itself still needs review without competing with ins/del. */
 .ProseMirror span.track-format {
@@ -1036,6 +1073,9 @@ del.track-delete {
     padding: 0 !important;
   }
   del.track-delete {
+    display: none !important;
+  }
+  .track-hard-break-cue {
     display: none !important;
   }
   .ProseMirror span.track-format {

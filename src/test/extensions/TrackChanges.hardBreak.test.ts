@@ -130,6 +130,45 @@ describe('TrackChanges hard-break tracking', () => {
     );
   });
 
+  it('reconciles accepted boundary formatting on every text-break-text child', () => {
+    const editor = makeEditor('<p><strong>leftRIGHT</strong></p>', true);
+    editor.commands.insertContentAt(5, [
+      { type: 'text', text: 'X', marks: [{ type: 'bold' }] },
+      { type: 'hardBreak' },
+      { type: 'text', text: 'Y' },
+    ]);
+
+    const inserted = editor.state.doc.firstChild?.content.content.slice(1, 4) ?? [];
+    expect(inserted.map((node) => node.type.name)).toEqual(['text', 'hardBreak', 'text']);
+    for (const node of inserted) {
+      expect(node.marks.map((mark) => mark.type.name)).toEqual(
+        expect.arrayContaining(['bold', 'tracked_insert']),
+      );
+    }
+    editor.commands.acceptAllChanges();
+    expect(editor.getHTML()).toBe('<p><strong>leftX<br>YRIGHT</strong></p>');
+  });
+
+  it('removes review-only boundary formatting from every text-break-text child', () => {
+    const editor = makeEditor('<p><strong>gone</strong>kept</p>', true);
+    editor.commands.deleteRange({ from: 1, to: 5 });
+    const boldFragment = [
+      { type: 'text', text: 'X', marks: [{ type: 'bold' }] },
+      { type: 'hardBreak', marks: [{ type: 'bold' }] },
+      { type: 'text', text: 'Y', marks: [{ type: 'bold' }] },
+    ];
+    editor.commands.insertContentAt(5, boldFragment);
+
+    const inserted = editor.state.doc.firstChild?.content.content.slice(1, 4) ?? [];
+    expect(inserted.map((node) => node.type.name)).toEqual(['text', 'hardBreak', 'text']);
+    for (const node of inserted) {
+      expect(node.marks.map((mark) => mark.type.name)).not.toContain('bold');
+      expect(node.marks.map((mark) => mark.type.name)).toContain('tracked_insert');
+    }
+    editor.commands.acceptAllChanges();
+    expect(editor.getHTML()).toBe('<p>X<br>Ykept</p>');
+  });
+
   it('deletes only a hard break with accepted/accept/reject parity', () => {
     expectAcceptRejectParity('<p>one<br>two</p>', deleteHardBreak, (editor) => {
       const hardBreak = editor.state.doc.nodeAt(hardBreakPosition(editor));
@@ -166,7 +205,15 @@ describe('TrackChanges hard-break tracking', () => {
     expect(changes).toHaveLength(1);
     expect(changes[0].id).toBe(firstId);
     expect(changes[0].segments).toEqual([
-      expect.objectContaining({ kind: 'delete', from: 1, to: 8, text: 'one two' }),
+      expect.objectContaining({ kind: 'delete', from: 1, to: 4, text: 'one' }),
+      expect.objectContaining({
+        kind: 'delete',
+        from: 4,
+        to: 5,
+        text: '\n',
+        nodeType: 'hardBreak',
+      }),
+      expect.objectContaining({ kind: 'delete', from: 5, to: 8, text: 'two' }),
     ]);
     editor.commands.rejectAllChanges();
     expect(editor.getJSON()).toEqual(original);
@@ -265,7 +312,7 @@ describe('TrackChanges hard-break tracking', () => {
     ]);
   });
 
-  it('keeps images blocked and replacement newlines out of Slice 1', () => {
+  it('keeps images blocked and recognizes a legacy-quote hard-break no-op', () => {
     const imageEditor = makeEditor(
       '<p>before<img src="https://example.com/pixel.png" alt="pixel">after</p>',
       true,
@@ -290,8 +337,8 @@ describe('TrackChanges hard-break tracking', () => {
     );
     expect(newlinePlan.placed).toEqual([]);
     expect(newlinePlan.results[0]).toMatchObject({
-      status: 'conflict',
-      reason: 'structural-change',
+      status: 'no-op',
+      reason: 'already-applied',
     });
   });
 });
