@@ -13,6 +13,7 @@ import { AnnotationFocus } from '../extensions/AnnotationFocus';
 import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
 import { ReviewableCode } from '../extensions/ReviewableCode';
 import { StrikeWithoutSaveShortcut } from '../extensions/StrikeWithoutSaveShortcut';
+import { BlockTrack } from '../extensions/BlockTrack';
 import {
   TrackedInsert,
   TrackedDelete,
@@ -122,6 +123,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         CommentMark,
         PendingComment,
         AnnotationFocus,
+        BlockTrack,
         TrackedInsert,
         TrackedDelete,
         TrackedFormat,
