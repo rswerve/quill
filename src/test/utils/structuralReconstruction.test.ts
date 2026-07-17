@@ -211,3 +211,168 @@ describe('reconstructBlockUnions', () => {
     expect(reconstructBlockUnions(source, [unknown], serialize).doc.childCount).toBe(1);
   });
 });
+
+describe('reconstructBlockUnions hardening', () => {
+  it('R1: reconstructs a 1->2 expansion and maps positions across it', () => {
+    const source = docFrom([paragraph('AB'), paragraph('tail')]);
+    const rec = record({
+      changeId: 'c1',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('A'), paragraph('B')],
+    });
+    const { doc, mapping, restored } = reconstructBlockUnions(source, [rec], serialize);
+    expect(restored).toHaveLength(1);
+    expect(topTexts(doc)).toEqual(['AB', 'A', 'B', 'tail']);
+    expect(topOps(doc)).toEqual(['delete', 'insert', 'insert', null]);
+    expect(mapping.map(1)).toBe(1); // inside source "AB", before the insertion
+    expect(mapping.map(5)).toBe(11); // inside "tail": shifted by the inserted 6 units
+    expect(topTexts(projectBlockUnions(doc, 'source').doc)).toEqual(['AB', 'tail']);
+    expect(topTexts(projectBlockUnions(doc, 'accepted').doc)).toEqual(['A', 'B', 'tail']);
+  });
+
+  it('R3: a valid record still reconstructs when another is quarantined', () => {
+    const source = docFrom([heading('H0'), heading('H2')]);
+    const good = record({
+      changeId: 'g',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('H0')],
+    });
+    const bad = record({
+      changeId: 'b',
+      anchor: { parentPath: [], childIndex: 1, childCount: 1 },
+      sourceFingerprint: 'wrong',
+      proposed: [paragraph('H2')],
+    });
+    const { doc, restored, quarantined } = reconstructBlockUnions(source, [good, bad], serialize);
+    expect(restored.map((r) => r.changeId)).toEqual(['g']);
+    expect(quarantined.map((r) => r.changeId)).toEqual(['b']);
+    expect(topTexts(doc)).toEqual(['H0', 'H0', 'H2']);
+  });
+
+  it('quarantines an untrackable proposed root and a bare listItem', () => {
+    const source = docFrom([paragraph('x')]);
+    const anchor = { parentPath: [] as number[], childIndex: 0, childCount: 1 };
+    const fp = fingerprintRange(source, 0, 1);
+    const codeBlock = record({
+      changeId: 'c',
+      anchor,
+      sourceFingerprint: fp,
+      proposed: [{ type: 'codeBlock', content: [{ type: 'text', text: 'x' }] }],
+    });
+    const bareItem = record({
+      changeId: 'l',
+      anchor,
+      sourceFingerprint: fp,
+      proposed: [
+        {
+          type: 'listItem',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+        },
+      ],
+    });
+    expect(reconstructBlockUnions(source, [codeBlock], serialize).quarantined).toHaveLength(1);
+    expect(reconstructBlockUnions(source, [bareItem], serialize).quarantined).toHaveLength(1);
+    expect(reconstructBlockUnions(source, [codeBlock], serialize).doc.childCount).toBe(1);
+  });
+
+  it('quarantines an untrackable source root', () => {
+    const source = docFrom([{ type: 'codeBlock', content: [{ type: 'text', text: 'x' }] }]);
+    const rec = record({
+      changeId: 'c1',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('x')],
+    });
+    expect(reconstructBlockUnions(source, [rec], serialize).quarantined).toHaveLength(1);
+  });
+
+  it('quarantines every record sharing a duplicate changeId', () => {
+    const source = docFrom([heading('H0'), heading('H2')]);
+    const r1 = record({
+      changeId: 'dup',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('H0')],
+    });
+    const r2 = record({
+      changeId: 'dup',
+      anchor: { parentPath: [], childIndex: 1, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 1, 1),
+      proposed: [paragraph('H2')],
+    });
+    const { doc, quarantined, restored } = reconstructBlockUnions(source, [r1, r2], serialize);
+    expect(quarantined).toHaveLength(2);
+    expect(restored).toHaveLength(0);
+    expect(doc.childCount).toBe(2);
+  });
+
+  it('quarantines forbidden marks and unknown attributes in proposed JSON', () => {
+    const source = docFrom([paragraph('x')]);
+    const anchor = { parentPath: [] as number[], childIndex: 0, childCount: 1 };
+    const fp = fingerprintRange(source, 0, 1);
+    const forbiddenMark = record({
+      changeId: 'm',
+      anchor,
+      sourceFingerprint: fp,
+      proposed: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'x', marks: [{ type: 'tracked_insert' }] }],
+        },
+      ],
+    });
+    const unknownAttr = record({
+      changeId: 'u',
+      anchor,
+      sourceFingerprint: fp,
+      proposed: [
+        { type: 'paragraph', attrs: { bogus: 1 }, content: [{ type: 'text', text: 'x' }] },
+      ],
+    });
+    expect(reconstructBlockUnions(source, [forbiddenMark], serialize).quarantined).toHaveLength(1);
+    expect(reconstructBlockUnions(source, [unknownAttr], serialize).quarantined).toHaveLength(1);
+  });
+
+  it('quarantines malformed runtime records without throwing', () => {
+    const source = docFrom([paragraph('x')]);
+    const fp = fingerprintRange(source, 0, 1);
+    const hostile = [
+      {
+        changeId: 'f',
+        anchor: { parentPath: [], childIndex: 0.5, childCount: 1 },
+        sourceFingerprint: fp,
+        proposed: [paragraph('x')],
+      },
+      { changeId: 'n', sourceFingerprint: fp, proposed: [paragraph('x')] },
+      {
+        changeId: 'p',
+        anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+        sourceFingerprint: fp,
+        proposed: 'nope',
+      },
+    ] as unknown as StructuralSuggestionRecord[];
+    const { doc, quarantined } = reconstructBlockUnions(source, hostile, serialize);
+    expect(quarantined).toHaveLength(3);
+    expect(doc.childCount).toBe(1);
+  });
+
+  it('leaves no residual blockTrack after resolving either projection', () => {
+    const source = docFrom([heading('Title')]);
+    const rec = record({
+      changeId: 'c1',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('Title')],
+    });
+    const { doc } = reconstructBlockUnions(source, [rec], serialize);
+    for (const mode of ['source', 'accepted'] as const) {
+      let residual = false;
+      projectBlockUnions(doc, mode).doc.descendants((n) => {
+        if (n.attrs.blockTrack) residual = true;
+      });
+      expect(residual).toBe(false);
+    }
+  });
+});
