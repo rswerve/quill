@@ -68,15 +68,17 @@ function topOps(doc: PMNode): Array<BlockTrackOp | null> {
 describe('extractStructuralRecords', () => {
   it('round-trips: extract from a reconstructed review doc reproduces the review doc', () => {
     const source = docFrom([heading('H0'), paragraph('keep'), heading('H2')]);
+    const op = { kind: 'headingToParagraph', level: 1 } as const;
     const meta = new Map<string, StructuralRecordMetadata>([
-      ['c0', { author: 'a', createdAt: 't0' }],
-      ['c2', { author: 'b', createdAt: 't2', originCommentId: 'cm' }],
+      ['c0', { op, author: 'a', createdAt: '2026-01-01T00:00:00Z' }],
+      ['c2', { op, author: 'b', createdAt: '2026-01-02T00:00:00Z', originCommentId: 'cm' }],
     ]);
     const original: StructuralSuggestionRecord[] = [
       {
         changeId: 'c0',
         author: 'a',
-        createdAt: 't0',
+        createdAt: '2026-01-01T00:00:00Z',
+        op,
         anchor: { parentPath: [], childIndex: 0, childCount: 1 },
         sourceFingerprint: fingerprintRange(source, 0, 1),
         proposed: [paragraph('H0')],
@@ -84,7 +86,8 @@ describe('extractStructuralRecords', () => {
       {
         changeId: 'c2',
         author: 'b',
-        createdAt: 't2',
+        createdAt: '2026-01-02T00:00:00Z',
+        op,
         originCommentId: 'cm',
         anchor: { parentPath: [], childIndex: 2, childCount: 1 },
         sourceFingerprint: fingerprintRange(source, 2, 1),
@@ -103,6 +106,7 @@ describe('extractStructuralRecords', () => {
       { parentPath: [], childIndex: 2, childCount: 1 },
     ]);
     expect(extracted[0].sourceFingerprint).toBe(fingerprintRange(source, 0, 1));
+    expect(extracted[0].op).toEqual({ kind: 'headingToParagraph', level: 1 });
     expect(extracted[1].originCommentId).toBe('cm');
 
     // Proposed content carries no review identity.

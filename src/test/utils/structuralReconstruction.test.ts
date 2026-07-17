@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { BlockTrack, type BlockTrackOp } from '../../extensions/BlockTrack';
 import { projectBlockUnions } from '../../utils/blockUnionProjection';
 import { reconstructBlockUnions } from '../../utils/structuralReconstruction';
-import type { StructuralSuggestionRecord } from '../../types';
+import type { StructuralOp, StructuralSuggestionRecord } from '../../types';
 
 interface MarkdownStorage {
   markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
@@ -69,7 +69,12 @@ function record(
     proposed: StructuralSuggestionRecord['proposed'];
   },
 ): StructuralSuggestionRecord {
-  return { author: 'a', createdAt: '2026-01-01T00:00:00Z', ...over };
+  return {
+    author: 'a',
+    createdAt: '2026-01-01T00:00:00Z',
+    op: { kind: 'headingToParagraph', level: 1 },
+    ...over,
+  };
 }
 
 function topTexts(doc: PMNode): string[] {
@@ -107,20 +112,24 @@ describe('reconstructBlockUnions', () => {
   });
 
   it('R4: inserts proposed JSON directly so adjacent lists never coalesce', () => {
-    const source = docFrom([bulletList(['A', 'B'])]);
+    // paragraph->list inserts a list immediately before an existing list; a
+    // Markdown reparse would merge them, direct node insertion keeps them separate.
+    const source = docFrom([paragraph('AB'), bulletList(['X'])]);
     const rec = record({
       changeId: 'c1',
+      op: { kind: 'paragraphToList', listType: 'bulletList' },
       anchor: { parentPath: [], childIndex: 0, childCount: 1 },
       sourceFingerprint: fingerprintRange(source, 0, 1),
-      proposed: [bulletList(['C'])],
+      proposed: [bulletList(['AB'])],
     });
 
     const { doc } = reconstructBlockUnions(source, [rec], serialize);
-    expect(doc.childCount).toBe(2);
-    expect(doc.child(0).type.name).toBe('bulletList');
-    expect(doc.child(0).childCount).toBe(2);
+    expect(doc.childCount).toBe(3);
+    expect(doc.child(0).type.name).toBe('paragraph');
     expect(doc.child(1).type.name).toBe('bulletList');
     expect(doc.child(1).childCount).toBe(1);
+    expect(doc.child(2).type.name).toBe('bulletList');
+    expect(doc.child(2).childCount).toBe(1);
   });
 
   it('reconstructs multiple disjoint unions in reverse source order, keeping middle content', () => {
@@ -213,22 +222,24 @@ describe('reconstructBlockUnions', () => {
 });
 
 describe('reconstructBlockUnions hardening', () => {
-  it('R1: reconstructs a 1->2 expansion and maps positions across it', () => {
+  it('maps positions across a paragraph->list union', () => {
     const source = docFrom([paragraph('AB'), paragraph('tail')]);
     const rec = record({
       changeId: 'c1',
+      op: { kind: 'paragraphToList', listType: 'bulletList' },
       anchor: { parentPath: [], childIndex: 0, childCount: 1 },
       sourceFingerprint: fingerprintRange(source, 0, 1),
-      proposed: [paragraph('A'), paragraph('B')],
+      proposed: [bulletList(['AB'])],
     });
     const { doc, mapping, restored } = reconstructBlockUnions(source, [rec], serialize);
     expect(restored).toHaveLength(1);
-    expect(topTexts(doc)).toEqual(['AB', 'A', 'B', 'tail']);
-    expect(topOps(doc)).toEqual(['delete', 'insert', 'insert', null]);
-    expect(mapping.map(1)).toBe(1); // inside source "AB", before the insertion
-    expect(mapping.map(5)).toBe(11); // inside "tail": shifted by the inserted 6 units
+    expect(topTexts(doc)).toEqual(['AB', 'AB', 'tail']);
+    expect(topOps(doc)).toEqual(['delete', 'insert', null]);
+    const insertedSize = doc.child(1).nodeSize; // the proposed bulletList
+    expect(mapping.map(1)).toBe(1); // inside source "AB", before the insertion at pos 4
+    expect(mapping.map(5)).toBe(5 + insertedSize); // inside "tail": shifted by the inserted list
     expect(topTexts(projectBlockUnions(doc, 'source').doc)).toEqual(['AB', 'tail']);
-    expect(topTexts(projectBlockUnions(doc, 'accepted').doc)).toEqual(['A', 'B', 'tail']);
+    expect(topTexts(projectBlockUnions(doc, 'accepted').doc)).toEqual(['AB', 'tail']);
   });
 
   it('R3: a valid record still reconstructs when another is quarantined', () => {
@@ -391,6 +402,40 @@ describe('reconstructBlockUnions hardening', () => {
       expect(result.quarantined).toHaveLength(1);
       expect(result.restored).toHaveLength(0);
     }
+  });
+
+  it('quarantines invalid ops and op/shape mismatches', () => {
+    const headingSrc = docFrom([heading('Title')]);
+    const paraSrc = docFrom([paragraph('Title')]);
+    const twoItemSrc = docFrom([bulletList(['a', 'b'])]);
+    const a = { parentPath: [] as number[], childIndex: 0, childCount: 1 };
+    const orderedList = [
+      { type: 'orderedList', content: [{ type: 'listItem', content: [paragraph('x')] }] },
+    ];
+    const q = (src: PMNode, op: unknown, proposed: unknown[]) =>
+      reconstructBlockUnions(
+        src,
+        [
+          record({
+            changeId: 'c',
+            op: op as StructuralOp,
+            anchor: a,
+            sourceFingerprint: fingerprintRange(src, 0, 1),
+            proposed: proposed as StructuralSuggestionRecord['proposed'],
+          }),
+        ],
+        serialize,
+      ).quarantined.length;
+
+    expect(q(headingSrc, { kind: 'nope' }, [paragraph('Title')])).toBe(1); // invalid kind
+    expect(q(headingSrc, { kind: 'headingToParagraph', level: 9 }, [paragraph('Title')])).toBe(1); // bad level
+    expect(q(headingSrc, { kind: 'paragraphToHeading', level: 1 }, [heading('Title')])).toBe(1); // source mismatch
+    expect(q(headingSrc, { kind: 'headingToParagraph', level: 2 }, [paragraph('Title')])).toBe(1); // level mismatch
+    expect(q(paraSrc, { kind: 'paragraphToList', listType: 'bulletList' }, orderedList)).toBe(1); // listType mismatch
+    expect(
+      q(twoItemSrc, { kind: 'listToParagraph', listType: 'bulletList' }, [paragraph('x')]),
+    ).toBe(1); // not single-item
+    expect(q(headingSrc, { kind: 'headingToParagraph', level: 1 }, [paragraph('Title')])).toBe(0); // valid op reconstructs
   });
 
   it('quarantines malformed runtime records without throwing', () => {

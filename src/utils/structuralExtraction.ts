@@ -1,12 +1,13 @@
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import type { JSONContent } from '@tiptap/core';
 import type { BlockTrackAttr } from '../extensions/BlockTrack';
-import type { StructuralSuggestionRecord } from '../types';
+import type { StructuralOp, StructuralSuggestionRecord } from '../types';
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
 
 /** Metadata that lives in the canonical record, keyed by changeId. */
 export interface StructuralRecordMetadata {
+  op: StructuralOp;
   author: string;
   createdAt: string;
   originCommentId?: string;
@@ -87,6 +88,7 @@ export function extractStructuralRecords(
       changeId,
       author: meta.author,
       createdAt: meta.createdAt,
+      op: meta.op,
       ...(meta.originCommentId ? { originCommentId: meta.originCommentId } : {}),
       ...(meta.originChatMessageId ? { originChatMessageId: meta.originChatMessageId } : {}),
       anchor: {

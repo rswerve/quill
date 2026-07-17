@@ -146,11 +146,27 @@ export interface StructuralAnchor {
   childCount: number;
 }
 
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+export type StructuralListType = 'bulletList' | 'orderedList' | 'taskList';
+
+/**
+ * The typed V1 structural operation a record claims. Reconstruction validates the
+ * source/proposed shape against it, so an untrusted sidecar cannot turn a
+ * paragraph into an arbitrary heading/list that no V1 command could have minted.
+ * V2 adds split/merge variants.
+ */
+export type StructuralOp =
+  | { kind: 'headingToParagraph'; level: HeadingLevel }
+  | { kind: 'paragraphToHeading'; level: HeadingLevel }
+  | { kind: 'listToParagraph'; listType: StructuralListType }
+  | { kind: 'paragraphToList'; listType: StructuralListType };
+
 /** One block-structure suggestion, persisted in the sidecar's structural envelope. */
 export interface StructuralSuggestionRecord {
   changeId: string;
   author: string;
   createdAt: string;
+  op: StructuralOp;
   originCommentId?: string;
   originChatMessageId?: string;
   anchor: StructuralAnchor;

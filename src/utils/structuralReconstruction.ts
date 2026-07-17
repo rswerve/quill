@@ -1,6 +1,11 @@
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
 import { Transform, type Mapping } from '@tiptap/pm/transform';
-import type { StructuralSuggestionRecord } from '../types';
+import type {
+  HeadingLevel,
+  StructuralListType,
+  StructuralOp,
+  StructuralSuggestionRecord,
+} from '../types';
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
 import { BLOCK_TRACK_TYPES } from '../extensions/BlockTrack';
@@ -33,10 +38,71 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0;
+}
+
+function isHeadingLevel(v: unknown): v is HeadingLevel {
+  return isFiniteInt(v) && v >= 1 && v <= 6;
+}
+
+function isStructuralListType(v: unknown): v is StructuralListType {
+  return v === 'bulletList' || v === 'orderedList' || v === 'taskList';
+}
+
+/** Exhaustive runtime validation of a typed structural operation. */
+function opIsValid(op: unknown): op is StructuralOp {
+  if (!isPlainObject(op)) return false;
+  switch (op.kind) {
+    case 'headingToParagraph':
+    case 'paragraphToHeading':
+      return isHeadingLevel(op.level);
+    case 'listToParagraph':
+    case 'paragraphToList':
+      return isStructuralListType(op.listType);
+    default:
+      return false;
+  }
+}
+
+/** Canonical metadata is validated at the deserialization boundary. */
+function metadataValid(r: Record<string, unknown>): boolean {
+  if (!isNonEmptyString(r.changeId) || !isNonEmptyString(r.author)) return false;
+  if (!isNonEmptyString(r.createdAt) || !Number.isFinite(Date.parse(r.createdAt))) return false;
+  if (r.originCommentId !== undefined && !isNonEmptyString(r.originCommentId)) return false;
+  if (r.originChatMessageId !== undefined && !isNonEmptyString(r.originChatMessageId)) return false;
+  if (r.originCommentId !== undefined && r.originChatMessageId !== undefined) return false;
+  return opIsValid(r.op);
+}
+
+/** A single-item list of the declared type wrapping exactly one paragraph. */
+function isSingleItemList(node: PMNode, listType: StructuralListType): boolean {
+  if (node.type.name !== listType || node.childCount !== 1) return false;
+  const item = node.child(0);
+  return item.childCount === 1 && item.child(0).type.name === 'paragraph';
+}
+
+/** The source/proposed roots must be a shape the declared V1 op could have minted. */
+function opShapeValid(op: StructuralOp, source: PMNode[], proposed: PMNode[]): boolean {
+  if (source.length !== 1 || proposed.length !== 1) return false;
+  const s = source[0];
+  const p = proposed[0];
+  switch (op.kind) {
+    case 'headingToParagraph':
+      return s.type.name === 'heading' && s.attrs.level === op.level && p.type.name === 'paragraph';
+    case 'paragraphToHeading':
+      return s.type.name === 'paragraph' && p.type.name === 'heading' && p.attrs.level === op.level;
+    case 'listToParagraph':
+      return isSingleItemList(s, op.listType) && p.type.name === 'paragraph';
+    case 'paragraphToList':
+      return s.type.name === 'paragraph' && isSingleItemList(p, op.listType);
+  }
+}
+
 /** Deserialized JSON is untyped; validate the record's shape before dereferencing. */
 function recordShapeValid(r: unknown): r is StructuralSuggestionRecord {
-  if (!isPlainObject(r)) return false;
-  if (typeof r.changeId !== 'string' || typeof r.sourceFingerprint !== 'string') return false;
+  if (!isPlainObject(r) || !metadataValid(r)) return false;
+  if (typeof r.sourceFingerprint !== 'string') return false;
   if (!Array.isArray(r.proposed) || r.proposed.length === 0) return false;
   const a = r.anchor;
   if (!isPlainObject(a)) return false;
@@ -154,6 +220,10 @@ function validateRecord(
 
   const proposed = parseProposedNodes(sourceDoc.type.schema, record.proposed);
   if (!proposed) return null;
+
+  // The source/proposed roots must be a shape the declared op could have minted.
+  const sourceNodes = range.blockPositions.map((pos) => sourceDoc.nodeAt(pos) as PMNode);
+  if (!opShapeValid(record.op, sourceNodes, proposed)) return null;
 
   // The proposed fragment must be valid as exact siblings at the parent/index,
   // so `tr.insert` never wraps or restructures it (e.g. a bare listItem).
