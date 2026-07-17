@@ -1,3 +1,4 @@
+import type { JSONContent } from '@tiptap/core';
 import type { Fingerprint } from '../utils/atomicFile';
 export type { Fingerprint };
 
@@ -135,10 +136,49 @@ export type PersistedSuggestion = LogicalSuggestion | LegacyTextSuggestion | Leg
 /** Canonical in-memory and newly-persisted suggestion model. */
 export type Suggestion = LogicalSuggestion;
 
+/** Locates a structural change's source branch within the document tree. */
+export interface StructuralAnchor {
+  /** Child indices from the document root to the source branch's parent (empty at top level). */
+  parentPath: number[];
+  /** Index of the source branch's first block within that parent. */
+  childIndex: number;
+  /** Number of contiguous source blocks in the branch. */
+  childCount: number;
+}
+
+/** One block-structure suggestion, persisted in the sidecar's structural envelope. */
+export interface StructuralSuggestionRecord {
+  changeId: string;
+  author: string;
+  createdAt: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+  anchor: StructuralAnchor;
+  /** Markdown of the source subtree at save time; validated on reload. */
+  sourceFingerprint: string;
+  /** The proposed replacement blocks as ProseMirror JSON (no tracking metadata). */
+  proposed: JSONContent[];
+}
+
+/**
+ * The sidecar's structural-suggestion envelope. `sourceDocumentHash` is the
+ * SHA-256 of the source-projected `.md` at save time; on reload a hash mismatch
+ * means the file changed outside Quill, so every structural record is quarantined
+ * rather than risk misbinding onto a shifted block. Versioned independently of
+ * the sidecar.
+ */
+export interface StructuralReviewEnvelope {
+  version: 1;
+  sourceDocumentHash: string;
+  records: StructuralSuggestionRecord[];
+}
+
 export interface SidecarFile {
   version: 2;
   comments: Comment[];
   suggestions: PersistedSuggestion[];
+  /** Block-structure suggestions (the block-union model); absent when there are none. */
+  structural?: StructuralReviewEnvelope;
   aiSession?: AISessionBinding;
   /**
    * Absolute path to a folder of reference documents for this file. Claude
