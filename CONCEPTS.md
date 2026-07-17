@@ -48,12 +48,12 @@ the code. Grows as learnings surface new domain nouns.
 ## AI collaboration
 
 - **Session binding** — the link from a document to a Claude Code session
-  (`AISessionBinding` in the sidecar), so `@claude` replies and chat resume that
+  (`AISessionBinding` in the sidecar), so Claude replies and chat resume that
   conversation; it may be auto-discovered on open, chosen from the picker, or
   minted fresh by "Start new session".
 
 - **Document chat** — the whole-document conversation in the Chat panel. Unlike
-  `@claude` comment replies, it is suggestions-only: its edits arrive as tracked
+  Claude comment replies, it is suggestions-only: its edits arrive as tracked
   changes, never as margin comments.
 
 - **AI gate** — the per-document rule that only one Claude request (a comment
