@@ -1,0 +1,21 @@
+{
+  "name": "format-italic-phrase",
+  "source": "production edits from session e223e232 @ 2026-07-12T03:36:25.867Z; neutral doc synthesized (D2)",
+  "note": "Italicize a phrase via a format op.",
+  "docMarkdown": "Relative to much of the industry, the pilot moved quickly. The government client approved each milestone without delay, and the team kept its habits plain and steady.\n",
+  "edits": [
+    {
+      "find": "government client",
+      "format": {
+        "italic": true
+      }
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      }
+    ]
+  }
+}

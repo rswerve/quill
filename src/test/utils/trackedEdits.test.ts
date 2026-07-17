@@ -213,10 +213,30 @@ describe('trackedEdits helpers', () => {
       });
     });
 
-    it('fails closed for ambiguous, mismatched, plain, and malformed Markdown-link finds', () => {
+    it('uses the href to disambiguate repeated visible link labels', () => {
       editor = makeEditor(
         '<p><a href="https://one.example">same</a> and ' +
           '<a href="https://two.example">same</a> and plain</p>',
+      );
+      const doc = editor.state.doc;
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
+        { find: '[same](https://one.example)', replace: 'first' },
+      ]);
+
+      expect(results[0]).toMatchObject({ status: 'applied' });
+      expect(placed).toEqual([
+        expect.objectContaining({
+          kind: 'text',
+          replace: 'first',
+          linkHref: 'https://one.example',
+        }),
+      ]);
+    });
+
+    it('fails closed for exact duplicates, mismatched, plain, and malformed Markdown links', () => {
+      editor = makeEditor(
+        '<p><a href="https://one.example">same</a> and ' +
+          '<a href="https://one.example">same</a> and plain</p>',
       );
       const doc = editor.state.doc;
       const { placed, results } = planEdits(doc, 0, doc.content.size, [
@@ -230,7 +250,7 @@ describe('trackedEdits helpers', () => {
       expect(results.map(({ status, reason }) => ({ status, reason }))).toEqual([
         { status: 'conflict', reason: 'ambiguous-link' },
         { status: 'not-found', reason: 'link-not-found' },
-        { status: 'conflict', reason: 'ambiguous-link' },
+        { status: 'not-found', reason: 'link-target-mismatch' },
         { status: 'not-found', reason: 'text-not-found' },
       ]);
     });

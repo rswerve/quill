@@ -34,8 +34,8 @@ import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { isEffort } from '../utils/claudePreferences';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
-import { planEdits, rangeText, resolveScopeRange } from '../utils/trackedEdits';
-import { buildLinkReplacementContent } from '../utils/linkEditing';
+import { rangeText } from '../utils/trackedEdits';
+import { applyTrackedEditsToEditor } from '../utils/applyTrackedEdits';
 import {
   mergeQuarantinedSuggestions,
   normalizePersistedSuggestions,
@@ -533,94 +533,28 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         };
       }
 
-      const suggestionIdsBefore = new Set(getTrackedChanges(ed).map((change) => change.id));
-
-      const range = resolveScopeRange(ed.state.doc, comment, scope);
-      // Claude's author id doubles as the cross-author filter: format ops
-      // touching another author's pending format suggestion are skipped whole.
-      const { placed, results } = planEdits(
-        ed.state.doc,
-        range.from,
-        range.to,
-        edits,
-        CLAUDE_AUTHOR_ID,
-      );
-
-      const trackStorage = (
-        ed.storage as unknown as Record<string, { enabled: boolean; authorID: string }>
-      )['trackChanges'] as { enabled: boolean; authorID: string } | undefined;
-      const priorEnabled = trackStorage?.enabled ?? false;
-      const priorAuthor = trackStorage?.authorID ?? AUTHOR;
-
-      // The kernel can still veto a placed edit at dispatch time (a structural
-      // case the planner didn't pre-detect, an overlap with another author's
-      // pending insertion, table/leaf content). The veto is a no-op transaction
-      // carrying TRACKING_BLOCKED_META — and the user-facing notice is
-      // deliberately suppressed while applyingClaudeEditsRef is set — so listen
-      // for it here and flip the vetoed edit's result. Without this, a
-      // silently-dropped edit is reported to the model (and the user) as
-      // applied.
-      let engineVetoed = false;
-      const onEngineVeto = ({
-        transaction,
-      }: {
-        transaction: import('@tiptap/pm/state').Transaction;
-      }) => {
-        if (transaction.getMeta(TRACKING_BLOCKED_META)) engineVetoed = true;
-      };
-      ed.on('transaction', onEngineVeto);
+      // The seam itself (plan → dispatch → engine-honest results) lives in
+      // utils/applyTrackedEdits.ts so it is testable against a real editor.
+      // This wrapper owns only the React-specific parts: the null-editor early
+      // return above, and suppressing the blocked-gesture notices for
+      // automated applies (planEdits pre-blocks Claude's conflicting format
+      // ops and reports them as skipped; a modal mid-apply would be noise —
+      // the engine-veto flip inside the seam keeps the RESULT honest while
+      // the notice stays quiet).
       try {
-        // Suppress the blocked-formatting notice for automated applies:
-        // planEdits already pre-blocks Claude's conflicting format ops and
-        // reports them as skipped; a modal mid-apply would be noise.
         applyingClaudeEditsRef.current = true;
-        ed.commands.setTrackChangesEnabled(true);
-        ed.commands.setTrackChangesAuthor(CLAUDE_AUTHOR_ID);
-        ed.commands.setTrackChangesOrigin(origin ?? null);
-        for (const e of placed) {
-          // Back-to-front: applying a later edit doesn't shift earlier offsets.
-          engineVetoed = false;
-          if (e.kind === 'format') {
-            // One chain = one transaction = one gesture, so the engine mints
-            // a single format suggestion per edit (with origin stamped).
-            let chain = ed.chain().setTextSelection({ from: e.from, to: e.to });
-            for (const op of e.marks) {
-              chain = op.set ? chain.setMark(op.mark) : chain.unsetMark(op.mark);
-            }
-            chain.run();
-          } else {
-            const replacement = e.linkHref
-              ? buildLinkReplacementContent(ed, e, e.linkHref, e.replace)
-              : null;
-            ed.chain()
-              .setTextSelection({ from: e.from, to: e.to })
-              .insertContent(replacement ?? e.replace)
-              .run();
-          }
-          if (engineVetoed) {
-            results[e.editIndex] = {
-              edit: results[e.editIndex].edit,
-              status: 'conflict',
-              reason: 'engine-blocked',
-            };
-          }
-        }
+        return applyTrackedEditsToEditor({
+          editor: ed,
+          comment,
+          edits,
+          scope,
+          authorID: CLAUDE_AUTHOR_ID,
+          fallbackAuthor: AUTHOR,
+          origin,
+        });
       } finally {
-        ed.off('transaction', onEngineVeto);
-        ed.commands.setTrackChangesEnabled(priorEnabled);
-        ed.commands.setTrackChangesAuthor(priorAuthor);
-        ed.commands.setTrackChangesOrigin(null);
         applyingClaudeEditsRef.current = false;
       }
-      const suggestionIds = getTrackedChanges(ed)
-        .filter(
-          (change) =>
-            !suggestionIdsBefore.has(change.id) &&
-            change.originCommentId === origin?.commentId &&
-            change.originChatMessageId === origin?.chatMessageId,
-        )
-        .map((change) => change.id);
-      return { results, suggestionIds };
     },
     [editor],
   );

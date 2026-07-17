@@ -1,0 +1,21 @@
+{
+  "name": "insertion-empty-doc-multiparagraph",
+  "source": "production session c0fed7a9 @ 2026-07-16T18:03:34.602Z",
+  "note": "Pure insertion of multiple paragraphs into an EMPTY document (find:\"\"). Multi-block insertion cannot be tracked as a suggestion — pinned as an HONEST refusal. Pre-fix this silently no-oped. Part of the open structural-suggestions epic.",
+  "docMarkdown": "",
+  "edits": [
+    {
+      "find": "",
+      "replace": "The FIFA World Cup is the most widely watched sporting event on the planet, drawing billions of viewers across every continent. Held once every four years, it brings together the best national teams in a monthlong tournament that has come to feel less like a competition and more like a global festival. For a few weeks, ordinary life bends around kickoff times, and entire countries rise and fall on the outcome of a single match.\n\nSince the first tournament in Uruguay in 1930, the World Cup has grown from a modest gathering of thirteen teams into a sprawling spectacle contested by dozens of nations. Along the way it has produced moments that live far beyond the pitch: Diego Maradona's \"Hand of God,\" Zinedine Zidane's headbutt, and the improbable runs of underdog sides that captured the imagination of fans who had never followed the sport before. Brazil, with five titles, remains the tournament's most decorated nation, but the trophy has traveled widely, from Europe to South America and back again.\n\nWhat sets the World Cup apart is the way it fuses sport with identity. Players carry not just their own ambitions but the hopes of the people back home, and a well-placed goal can turn an athlete into a national hero overnight. Rivalries that simmer for decades are settled in ninety minutes, and unknown newcomers can announce themselves to the world in the space of a single afternoon.\n\nAs the game continues to spread and new footballing powers emerge, each edition of the tournament writes another chapter in a story that belongs to the whole world. Whatever the result, the World Cup endures as a rare reminder of how a simple game, played well, can unite people who share almost nothing else."
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "conflict",
+        "reason": "structural-change"
+      }
+    ],
+    "docUnchanged": true
+  }
+}

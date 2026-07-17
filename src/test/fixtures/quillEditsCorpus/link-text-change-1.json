@@ -1,0 +1,19 @@
+{
+  "name": "link-text-change-1",
+  "source": "production session 99594f95 @ 2026-07-13T15:07:56.063Z",
+  "note": "Link display-text change through the markdown-link fallback.",
+  "docMarkdown": "# Welcome\n\nHere's some text!\n\nHere's gesome text!\n\n[some text](https://www.cnn.com)\n\n*italics*\n\n**bold**",
+  "edits": [
+    {
+      "find": "some text",
+      "replace": "a little surprise"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      }
+    ]
+  }
+}

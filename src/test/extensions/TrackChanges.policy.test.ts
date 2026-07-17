@@ -3,6 +3,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   TRACKING_BLOCKED_META,
+  getTrackedChanges,
   TrackChanges,
   TrackedDelete,
   TrackedFormat,
@@ -78,7 +79,21 @@ describe('Suggesting-mode operation veto', () => {
     expect(blocks.at(-1)?.operation).toBe('paragraphStructure');
 
     editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('omega').run();
-    expect(editor.state.doc.textContent).toContain('omega');
+    expect(getTrackedChanges(editor)).toEqual([
+      expect.objectContaining({
+        segments: expect.arrayContaining([
+          expect.objectContaining({ kind: 'delete', text: 'alpha' }),
+          expect.objectContaining({ kind: 'insert', text: 'omega' }),
+        ]),
+      }),
+    ]);
+    editor.commands.rejectAllChanges();
+    expect(editor.getJSON()).toEqual(beforeCrossBlock);
+
+    const accepted = makeEditor();
+    accepted.chain().setTextSelection({ from: 1, to: 6 }).insertContent('omega').run();
+    accepted.commands.acceptAllChanges();
+    expect(accepted.getHTML()).toBe('<p>omega beta</p><p>gamma delta</p>');
   });
 
   it('allows a Shift+Enter hard break and keeps it rejectable', () => {

@@ -6,6 +6,8 @@ import {
   TrackChanges,
   TrackedInsert,
   TrackedDelete,
+  TrackedFormat,
+  TRACKING_BLOCKED_META,
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import type { TrackedChangeInfo, TrackedTextSegment } from '../../types';
@@ -37,12 +39,18 @@ function textChanges(editor: Editor): TestTextChange[] {
   );
 }
 
-function makeEditor(content = '<p>Hello world</p>') {
+function makeEditor(content = '<p>Hello world</p>', includeTrackedFormat = true) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   return new Editor({
     element: el,
-    extensions: [StarterKit, TrackedInsert, TrackedDelete, TrackChanges],
+    extensions: [
+      StarterKit,
+      TrackedInsert,
+      TrackedDelete,
+      ...(includeTrackedFormat ? [TrackedFormat] : []),
+      TrackChanges,
+    ],
     content,
   });
 }
@@ -130,22 +138,28 @@ describe('TrackChanges extension', () => {
       expect(hasMarkOfType(editor, 'tracked_delete')).toBe(true);
     });
 
-    // This editor doesn't register the TrackedFormat mark, so format tracking
-    // degrades to the old passthrough (TrackedFormat.test.ts covers tracking).
-    it('bold formatting is not tracked when the TrackedFormat mark is absent', () => {
+    it('fails closed when a trackable format mark lacks the TrackedFormat capability', () => {
+      editor.destroy();
+      document.body.innerHTML = '';
+      editor = makeEditor('<p>Hello world</p>', false);
+      editor.commands.setTrackChangesEnabled(true);
+      editor.commands.setTrackChangesAuthor('alice');
+      const before = editor.getJSON();
+      let blocked: unknown;
+      editor.on('transaction', ({ transaction }) => {
+        blocked = transaction.getMeta(TRACKING_BLOCKED_META);
+      });
+
       editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
-      // Bold should be applied
-      const hasBold = (() => {
-        let found = false;
-        editor.state.doc.descendants((node) => {
-          if (node.marks.some((m) => m.type.name === 'bold')) found = true;
-        });
-        return found;
-      })();
-      expect(hasBold).toBe(true);
-      // But no track marks should exist for formatting changes
-      expect(hasMarkOfType(editor, 'tracked_insert')).toBe(false);
-      expect(hasMarkOfType(editor, 'tracked_delete')).toBe(false);
+
+      expect(editor.getJSON()).toEqual(before);
+      expect(blocked).toEqual(
+        expect.objectContaining({
+          operation: 'inlineFormat',
+          markName: 'bold',
+          notice: 'This formatting change could not be tracked safely. Nothing changed.',
+        }),
+      );
     });
 
     it('reports a single contiguous change when its run is split across text nodes', () => {
@@ -331,10 +345,15 @@ describe('TrackChanges extension', () => {
       editor = makeEditor('<p>start end</p>');
       editor.commands.setTrackChangesEnabled(true);
       const before = editor.getJSON();
+      let blocked: unknown;
+      editor.on('transaction', ({ transaction }) => {
+        blocked = transaction.getMeta(TRACKING_BLOCKED_META);
+      });
       editor.chain().setTextSelection(7).insertContent('<p>pasted one</p><p>pasted two</p>').run();
 
       expect(editor.getJSON()).toEqual(before);
       expect(textChanges(editor)).toEqual([]);
+      expect(blocked).toEqual(expect.objectContaining({ operation: 'paragraphStructure' }));
     });
   });
 

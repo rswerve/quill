@@ -1,0 +1,36 @@
+{
+  "name": "unusual-table-cell-edits",
+  "source": "synthetic (unusual-format sweep, 2026-07-17 overnight)",
+  "note": "Table stress: an in-cell text replacement is non-structural and must apply; a find spanning two cells is cross-block and must be refused; plain text after the table is untouched by table policy.",
+  "docMarkdown": "# Quarterly numbers\n\n| Region | Result | Owner |\n| --- | --- | --- |\n| North | ahead of plan | Dana |\n| South | behind plan | Rowan |\n\nClosing note after the table.\n",
+  "edits": [
+    {
+      "find": "ahead of plan",
+      "replace": "well ahead of plan"
+    },
+    {
+      "find": "behind plan\nRowan",
+      "replace": "on plan"
+    },
+    {
+      "find": "Closing note",
+      "replace": "Final note"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "conflict",
+        "reason": "structural-change"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["well ahead of plan", "Final note"],
+    "docTextExcludes": ["on plan\n"]
+  }
+}

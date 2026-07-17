@@ -1,0 +1,38 @@
+{
+  "name": "model-typographic-mismatch",
+  "source": "synthetic (models routinely emit straight quotes where documents carry curly ones)",
+  "note": "Typographic honesty: finds quoting straight apostrophes/quotes do NOT match curly-quoted document text — both report honest not-found while the clean edit applies. A typographic normalization leniency is considered and DEFERRED (decisions D10): it needs daytime design (quote pairing, dash variants, NBSP) — silently matching across typography risks wrong-target hits.",
+  "docMarkdown": "The team’s plan was “ship small, ship often” — and it worked.\n\nA second paragraph closes the note.\n",
+  "edits": [
+    {
+      "find": "The team's plan",
+      "replace": "The group's plan"
+    },
+    {
+      "find": "\"ship small, ship often\"",
+      "format": {
+        "italic": true
+      }
+    },
+    {
+      "find": "and it worked",
+      "replace": "and it held up"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "not-found",
+        "reason": "text-not-found"
+      },
+      {
+        "status": "not-found",
+        "reason": "text-not-found"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["and it held up"]
+  }
+}

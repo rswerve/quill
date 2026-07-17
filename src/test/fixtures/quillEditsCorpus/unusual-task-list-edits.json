@@ -1,0 +1,29 @@
+{
+  "name": "unusual-task-list-edits",
+  "source": "synthetic (unusual-format sweep, 2026-07-17 overnight)",
+  "note": "Task-list items accept both text replacements and format suggestions.",
+  "docMarkdown": "Launch checklist:\n\n- [ ] draft the announcement\n- [x] reserve the room\n- [ ] invite the beta group\n",
+  "edits": [
+    {
+      "find": "draft the announcement",
+      "replace": "draft and review the announcement"
+    },
+    {
+      "find": "invite the beta group",
+      "format": {
+        "bold": true
+      }
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["draft and review the announcement"]
+  }
+}

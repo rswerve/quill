@@ -1,0 +1,31 @@
+{
+  "name": "unusual-code-content",
+  "source": "synthetic (unusual-format sweep, 2026-07-17 overnight)",
+  "note": "Code-content policy split: a text edit inside a FENCED block is mark-ineligible and refuses honestly (pre-fix this CORRUPTED by duplicating text), while INLINE code text lives in a normal paragraph and accepts tracked formatting — ReviewableCode exists precisely so inline code participates in format suggestions.",
+  "docMarkdown": "Setup guide.\n\n```bash\nnpm install\nnpm run dev\n```\n\nInline `npm test` runs the suite.\n",
+  "edits": [
+    {
+      "find": "npm install",
+      "replace": "npm ci"
+    },
+    {
+      "find": "npm test",
+      "format": {
+        "bold": true
+      }
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "conflict",
+        "reason": "engine-blocked"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["npm install"],
+    "mintedChangesAtLeast": 1
+  }
+}
