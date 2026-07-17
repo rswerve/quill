@@ -14,6 +14,7 @@ import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
 import { ReviewableCode } from '../extensions/ReviewableCode';
 import { StrikeWithoutSaveShortcut } from '../extensions/StrikeWithoutSaveShortcut';
 import { BlockTrack } from '../extensions/BlockTrack';
+import { StructuralRecordStore } from '../extensions/StructuralRecordStore';
 import {
   TrackedInsert,
   TrackedDelete,
@@ -124,6 +125,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         PendingComment,
         AnnotationFocus,
         BlockTrack,
+        StructuralRecordStore,
         TrackedInsert,
         TrackedDelete,
         TrackedFormat,
