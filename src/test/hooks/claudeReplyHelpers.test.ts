@@ -152,6 +152,29 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
   });
 
+  it('states the single-newline block-separator convention for multi-block format finds', () => {
+    // The Markdown source Claude reads separates paragraphs with blank lines,
+    // but the plaintext projection the matcher searches joins blocks with a
+    // single '\n' — the prompt must say so or multi-paragraph finds miss.
+    const prompt = buildPrompt(makeComment([]), 'merge these', 'doc body', RANGES, null, null);
+    expect(prompt).toContain(
+      'separate each block\'s text with a SINGLE "\\n" — never a blank line',
+    );
+    expect(prompt).toContain('joins blocks with one newline');
+  });
+
+  it('confines text edits to one block and routes structural changes to prose', () => {
+    // The track-changes kernel vetoes block merges/splits (structural steps),
+    // so the prompt must keep the model from proposing them as text edits —
+    // the old "turn a bullet list into prose via one big find" guidance
+    // produced silently-dropped edits in production.
+    const prompt = buildPrompt(makeComment([]), 'merge these', 'doc body', RANGES, null, null);
+    expect(prompt).toContain('must start and end inside ONE paragraph, list item, or heading');
+    expect(prompt).toContain('single-block prose (no newlines)');
+    expect(prompt).toContain('explain in prose that it needs Editing mode');
+    expect(prompt).not.toContain('To turn a bullet list into prose');
+  });
+
   it('always sends the full document — no diff branch even with intact context', () => {
     // Pre-document-scale prompts sent a line diff when the session's context
     // was intact; compaction info now only affects the note wording.

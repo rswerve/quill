@@ -108,6 +108,32 @@ describe('trackedEdits helpers', () => {
       expect(at).not.toBeNull();
       expect(doc.textBetween(at!.from, at!.to, '\n', ' ')).toBe(find);
     });
+
+    it('locates a Markdown-style blank-line find across sibling paragraphs', () => {
+      editor = makeEditor('<p>alpha one</p><p>beta two</p>');
+      const doc = editor.state.doc;
+      const at = locateEdit(doc, 0, doc.content.size, 'alpha one\n\nbeta two');
+
+      expect(at).not.toBeNull();
+      expect(doc.textBetween(at!.from, at!.to, '\n', ' ')).toBe('alpha one\nbeta two');
+    });
+
+    it('prefers a genuine verbatim blank-line match over an earlier collapsed match', () => {
+      editor = makeEditor('<p>alpha</p><p>beta</p><p>alpha</p><p></p><p>beta</p>');
+      const doc = editor.state.doc;
+      const at = locateEdit(doc, 0, doc.content.size, 'alpha\n\nbeta');
+
+      expect(at).not.toBeNull();
+      expect(at!.from).toBeGreaterThan(1);
+      expect(doc.textBetween(at!.from, at!.to, '\n', ' ')).toBe('alpha\n\nbeta');
+    });
+
+    it('does not broaden a single-newline find across a genuine empty paragraph', () => {
+      editor = makeEditor('<p>alpha</p><p></p><p>beta</p>');
+      const doc = editor.state.doc;
+
+      expect(locateEdit(doc, 0, doc.content.size, 'alpha\nbeta')).toBeNull();
+    });
   });
 
   describe('resolveScopeRange', () => {
@@ -150,7 +176,8 @@ describe('trackedEdits helpers', () => {
       expect(placed).toHaveLength(2);
       // Back-to-front: gamma (later) comes first.
       expect(placed[0].from).toBeGreaterThan(placed[1].from);
-      expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G' });
+      expect(placed[0]).toMatchObject({ kind: 'text', replace: 'G', editIndex: 1 });
+      expect(placed[1]).toMatchObject({ kind: 'text', replace: 'A', editIndex: 0 });
     });
 
     it('accepts a model edit that spells an existing link with Markdown syntax', () => {
@@ -182,6 +209,7 @@ describe('trackedEdits helpers', () => {
         to: 18,
         replace: 'CNN',
         linkHref: 'https://www.cnn.com',
+        editIndex: 1,
       });
     });
 
@@ -300,6 +328,28 @@ describe('trackedEdits helpers', () => {
       expect(notice).toContain('“already right” — it already matches the proposal.');
       expect(notice).not.toContain('x'.repeat(80));
     });
+
+    it('explains planner and engine structural conflicts honestly', () => {
+      const notice = formatEditResultNotice([
+        {
+          edit: { find: 'first\nsecond', replace: 'merged' },
+          status: 'conflict',
+          reason: 'structural-change',
+        },
+        {
+          edit: { find: 'pending text', replace: 'replacement' },
+          status: 'conflict',
+          reason: 'engine-blocked',
+        },
+      ]);
+
+      expect(notice).toContain(
+        'structural changes can’t be tracked as suggestions yet. Make this change in Editing mode.',
+      );
+      expect(notice).toContain(
+        'Suggesting mode can’t safely track this change in that content, or it conflicts with another author’s pending suggestion. Make it in Editing mode or resolve the existing suggestion first.',
+      );
+    });
   });
 
   describe('planEdits format ops', () => {
@@ -315,6 +365,7 @@ describe('trackedEdits helpers', () => {
           kind: 'format',
           from: 7,
           to: 11,
+          editIndex: 0,
           marks: [
             { mark: 'bold', set: true },
             { mark: 'strike', set: false },
@@ -323,17 +374,88 @@ describe('trackedEdits helpers', () => {
       ]);
     });
 
-    it('skips malformed entries: both replace and format, neither, empty find, no known styles', () => {
+    it('skips malformed entries: ambiguous both, neither, empty find, no known styles', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
       const { placed, results } = planEdits(doc, 0, doc.content.size, [
         { find: 'beta', replace: 'B', format: { bold: true } } as never,
+        { find: 'beta', replace: 'beta', format: { underline: true } } as never,
         { find: 'beta' } as never,
         { find: '', format: { bold: true } },
         { find: 'beta', format: { underline: true } as never },
       ]);
       expect(results.every((candidate) => candidate.status === 'malformed')).toBe(true);
       expect(placed).toHaveLength(0);
+    });
+
+    it('blocks cross-paragraph text edits but still plans cross-paragraph format ops', () => {
+      editor = makeEditor('<p>alpha one</p><p>beta two</p><p>gamma three</p>');
+      const doc = editor.state.doc;
+      const find = 'alpha one\n\nbeta two';
+      const text = planEdits(doc, 0, doc.content.size, [{ find, replace: 'rewritten' }]);
+      const format = planEdits(doc, 0, doc.content.size, [{ find, format: { italic: true } }]);
+
+      expect(text.results[0]).toMatchObject({ status: 'conflict', reason: 'structural-change' });
+      expect(text.placed).toHaveLength(0);
+      expect(format.results[0].status).toBe('applied');
+      expect(format.placed).toEqual([
+        {
+          kind: 'format',
+          from: 1,
+          to: 20,
+          editIndex: 0,
+          marks: [{ mark: 'italic', set: true }],
+        },
+      ]);
+    });
+
+    it('blocks cross-paragraph deletion before the tracking engine can swallow it', () => {
+      editor = makeEditor('<p>alpha one</p><p>beta two</p>');
+      const doc = editor.state.doc;
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [
+        { find: 'alpha one\n\nbeta two', replace: '' },
+      ]);
+
+      expect(results[0]).toMatchObject({ status: 'conflict', reason: 'structural-change' });
+      expect(placed).toHaveLength(0);
+    });
+
+    it('blocks newline replacements and text edits in mark-ineligible code blocks', () => {
+      editor = makeEditor('<p>alpha beta</p>');
+      const prose = planEdits(editor.state.doc, 0, editor.state.doc.content.size, [
+        { find: 'alpha beta', replace: 'alpha\nbeta' },
+      ]);
+      expect(prose.results[0]).toMatchObject({ status: 'conflict', reason: 'structural-change' });
+      expect(prose.placed).toHaveLength(0);
+
+      editor.destroy();
+      editor = makeEditor('<pre><code>alpha beta</code></pre>');
+      const codeNewline = planEdits(editor.state.doc, 0, editor.state.doc.content.size, [
+        { find: 'alpha beta', replace: 'alpha\nbeta' },
+      ]);
+      expect(codeNewline.results[0]).toMatchObject({
+        status: 'conflict',
+        reason: 'structural-change',
+      });
+      expect(codeNewline.placed).toHaveLength(0);
+
+      const codeInline = planEdits(editor.state.doc, 0, editor.state.doc.content.size, [
+        { find: 'alpha beta', replace: 'gamma' },
+      ]);
+      expect(codeInline.results[0]).toMatchObject({
+        status: 'conflict',
+        reason: 'engine-blocked',
+      });
+      expect(codeInline.placed).toHaveLength(0);
+
+      const codeFormat = planEdits(editor.state.doc, 0, editor.state.doc.content.size, [
+        { find: 'alpha beta', format: { bold: true } },
+      ]);
+      expect(codeFormat.results[0]).toMatchObject({
+        status: 'conflict',
+        reason: 'engine-blocked',
+      });
+      expect(codeFormat.placed).toHaveLength(0);
     });
 
     it('skips structurally invalid entries from untrusted model JSON without throwing', () => {
@@ -347,7 +469,7 @@ describe('trackedEdits helpers', () => {
         { find: 'gamma', replace: 'G' },
       ]);
       expect(results.filter((candidate) => candidate.status === 'malformed')).toHaveLength(4);
-      expect(placed).toEqual([{ kind: 'text', from: 12, to: 17, replace: 'G' }]);
+      expect(placed).toEqual([{ kind: 'text', from: 12, to: 17, replace: 'G', editIndex: 4 }]);
     });
 
     it('skips format ops whose target already matches the requested state', () => {
@@ -366,6 +488,7 @@ describe('trackedEdits helpers', () => {
           kind: 'format',
           from: 7,
           to: 11,
+          editIndex: 2,
           marks: [
             { mark: 'bold', set: true },
             { mark: 'italic', set: false },
@@ -382,7 +505,9 @@ describe('trackedEdits helpers', () => {
         { find: 'beta', format: { italic: true } },
       ]);
       expect(results[1]).toMatchObject({ status: 'conflict', reason: 'overlapping-edit' });
-      expect(placed).toEqual([{ kind: 'text', from: 1, to: 11, replace: 'rewritten' }]);
+      expect(placed).toEqual([
+        { kind: 'text', from: 1, to: 11, replace: 'rewritten', editIndex: 0 },
+      ]);
     });
 
     it("blocks a format op touching another author's pending format suggestion", () => {
@@ -410,17 +535,20 @@ describe('trackedEdits helpers', () => {
           kind: 'format',
           from: 1,
           to: 6,
+          editIndex: 1,
           marks: [{ mark: 'italic', set: true }],
         },
       ]);
     });
 
-    it('applies through the engine as one format suggestion with origin stamped', () => {
+    it('applies a format op with a redundant identical replacement through the engine', () => {
       editor = makeEditor('<p>alpha beta gamma</p>');
       const doc = editor.state.doc;
-      const { placed } = planEdits(doc, 0, doc.content.size, [
-        { find: 'beta', format: { bold: true } },
-      ]);
+      const edit = { find: 'beta', replace: 'beta', format: { bold: true } } as never;
+      const { placed, results } = planEdits(doc, 0, doc.content.size, [edit]);
+
+      expect(results).toEqual([{ edit, status: 'applied' }]);
+      expect(placed[0]).toMatchObject({ kind: 'format' });
 
       editor.commands.setTrackChangesEnabled(true);
       editor.commands.setTrackChangesAuthor('claude');

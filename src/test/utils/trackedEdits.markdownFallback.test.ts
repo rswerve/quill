@@ -63,6 +63,7 @@ describe('Markdown-tolerant edit planning', () => {
         from: 1,
         to: 37,
         replace: 'Clearer Q2 contrast',
+        editIndex: 0,
       },
     ]);
   });
@@ -207,7 +208,9 @@ describe('Markdown-tolerant edit planning', () => {
     ]);
 
     expect(results[0]).toMatchObject({ status: 'applied' });
-    expect(placed).toEqual([{ kind: 'text', from: 1, to: 19, replace: 'clear control line' }]);
+    expect(placed).toEqual([
+      { kind: 'text', from: 1, to: 19, replace: 'clear control line', editIndex: 0 },
+    ]);
   });
 
   it.each(['accept', 'reject'] as const)(

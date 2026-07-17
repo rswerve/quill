@@ -552,6 +552,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const priorEnabled = trackStorage?.enabled ?? false;
       const priorAuthor = trackStorage?.authorID ?? AUTHOR;
 
+      // The kernel can still veto a placed edit at dispatch time (a structural
+      // case the planner didn't pre-detect, an overlap with another author's
+      // pending insertion, table/leaf content). The veto is a no-op transaction
+      // carrying TRACKING_BLOCKED_META — and the user-facing notice is
+      // deliberately suppressed while applyingClaudeEditsRef is set — so listen
+      // for it here and flip the vetoed edit's result. Without this, a
+      // silently-dropped edit is reported to the model (and the user) as
+      // applied.
+      let engineVetoed = false;
+      const onEngineVeto = ({
+        transaction,
+      }: {
+        transaction: import('@tiptap/pm/state').Transaction;
+      }) => {
+        if (transaction.getMeta(TRACKING_BLOCKED_META)) engineVetoed = true;
+      };
+      ed.on('transaction', onEngineVeto);
       try {
         // Suppress the blocked-formatting notice for automated applies:
         // planEdits already pre-blocks Claude's conflicting format ops and
@@ -562,6 +579,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         ed.commands.setTrackChangesOrigin(origin ?? null);
         for (const e of placed) {
           // Back-to-front: applying a later edit doesn't shift earlier offsets.
+          engineVetoed = false;
           if (e.kind === 'format') {
             // One chain = one transaction = one gesture, so the engine mints
             // a single format suggestion per edit (with origin stamped).
@@ -579,8 +597,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
               .insertContent(replacement ?? e.replace)
               .run();
           }
+          if (engineVetoed) {
+            results[e.editIndex] = {
+              edit: results[e.editIndex].edit,
+              status: 'conflict',
+              reason: 'engine-blocked',
+            };
+          }
         }
       } finally {
+        ed.off('transaction', onEngineVeto);
         ed.commands.setTrackChangesEnabled(priorEnabled);
         ed.commands.setTrackChangesAuthor(priorAuthor);
         ed.commands.setTrackChangesOrigin(null);
