@@ -15,6 +15,7 @@ import { ReviewableCode } from '../../extensions/ReviewableCode';
 
 const INITIAL_DOCUMENT = '<p><strong>alpha</strong> beta gamma</p>';
 const PLAIN_DOCUMENT = '<p>alpha beta gamma</p>';
+const HARD_BREAK_DOCUMENT = '<p>alpha<br>beta<br>gamma</p>';
 const TRACK_MARKS = new Set(['tracked_insert', 'tracked_delete', 'tracked_format']);
 const INSERT_TEXT = ['x', 'YZ', ' ', 'q!'] as const;
 const FUZZ_SEEDS = 80;
@@ -70,7 +71,10 @@ function destroyEditors(): void {
 }
 
 function projectAcceptedNode(node: JSONContent): JSONContent | null {
-  if (node.type === 'text' && node.marks?.some((mark) => mark.type === 'tracked_delete')) {
+  if (
+    (node.type === 'text' || node.type === 'hardBreak') &&
+    node.marks?.some((mark) => mark.type === 'tracked_delete')
+  ) {
     return null;
   }
   const projected: JSONContent = { ...node };
@@ -120,13 +124,23 @@ function trackMarks(editor: Editor): string[] {
 
 function acceptedTextLength(editor: Editor): number {
   const paragraph = acceptedProjection(editor).content?.[0];
-  return paragraph?.content?.reduce((length, node) => length + (node.text?.length ?? 0), 0) ?? 0;
+  return (
+    paragraph?.content?.reduce(
+      (length, node) => length + (node.type === 'hardBreak' ? 1 : (node.text?.length ?? 0)),
+      0,
+    ) ?? 0
+  );
 }
 
-function visibleTextSpans(editor: Editor): Array<{ from: number; to: number }> {
+function visibleInlineSpans(editor: Editor): Array<{ from: number; to: number }> {
   const spans: Array<{ from: number; to: number }> = [];
   editor.state.doc.descendants((node, pos, parent) => {
-    if (!node.isText || parent !== editor.state.doc.firstChild) return;
+    if (
+      (!node.isText && node.type.name !== 'hardBreak') ||
+      parent !== editor.state.doc.firstChild
+    ) {
+      return;
+    }
     const deleted = node.marks.some((mark) => mark.type.name === 'tracked_delete');
     if (!deleted) spans.push({ from: pos, to: pos + node.nodeSize });
   });
@@ -134,7 +148,7 @@ function visibleTextSpans(editor: Editor): Array<{ from: number; to: number }> {
 }
 
 function acceptedIndexToPosition(editor: Editor, rawIndex: number, bias: 'left' | 'right'): number {
-  const spans = visibleTextSpans(editor);
+  const spans = visibleInlineSpans(editor);
   const total = spans.reduce((length, span) => length + span.to - span.from, 0);
   let remaining = Math.max(0, Math.min(rawIndex, total));
   let previous = spans[0]?.from ?? 1;
@@ -491,6 +505,10 @@ describe('TrackChanges property invariants', () => {
 
   it('preserves the invariants across seeded text edits with undo and redo', () => {
     expectCampaignToPass((seed) => generateTextTrace(seed, true), PLAIN_DOCUMENT);
+  }, 30_000);
+
+  it('preserves the invariants across seeded edits that consume hard breaks', () => {
+    expectCampaignToPass((seed) => generateTextTrace(seed, true), HARD_BREAK_DOCUMENT);
   }, 30_000);
 
   it('preserves the invariants across seeded format-only edits', () => {

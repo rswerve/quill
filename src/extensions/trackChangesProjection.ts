@@ -17,7 +17,10 @@ export interface TrackedDocumentProjection {
 }
 
 function projectAcceptedNode(node: ProseMirrorNode): ProseMirrorNode | null {
-  if (node.isText && node.marks.some((mark) => mark.type.name === 'tracked_delete')) {
+  if (
+    (node.isText || node.type.name === 'hardBreak') &&
+    node.marks.some((mark) => mark.type.name === 'tracked_delete')
+  ) {
     return null;
   }
 

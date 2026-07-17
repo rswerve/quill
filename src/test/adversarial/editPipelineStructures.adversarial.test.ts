@@ -157,17 +157,24 @@ describe('edit pipeline adversarial document structures', () => {
     expect(editor.state.doc.eq(before)).toBe(true);
   });
 
-  it('fails closed when a text replacement consumes a hard break', () => {
+  it('tracks and resolves a text replacement that consumes a hard break', () => {
     const editor = makePipelineEditor('<p>before<br>after</p>');
-    const before = editor.state.doc;
 
     const outcome = applyEdits(editor, [{ find: 'before after', replace: 'combined' }]);
 
-    expect(outcome.results[0]).toMatchObject({ status: 'conflict', reason: 'engine-blocked' });
-    expect(outcome.suggestionIds).toEqual([]);
-    expect(editor.state.doc.eq(before)).toBe(true);
+    expect(outcome.results[0]).toMatchObject({ status: 'applied' });
+    expect(outcome.suggestionIds).toHaveLength(1);
+    expect(trackedIds(editor)).toEqual(outcome.suggestionIds);
+    expect(acceptedText(editor)).toBe('combined');
     editor.commands.acceptAllChanges();
-    expect(editor.getHTML()).toBe('<p>before<br>after</p>');
+    expect(editor.getHTML()).toBe('<p>combined</p>');
+
+    const rejected = makePipelineEditor('<p>before<br>after</p>');
+    const original = rejected.state.doc;
+    const rejectedOutcome = applyEdits(rejected, [{ find: 'before after', replace: 'combined' }]);
+    expect(rejectedOutcome.results[0]).toMatchObject({ status: 'applied' });
+    rejected.commands.rejectAllChanges();
+    expect(rejected.state.doc.eq(original)).toBe(true);
   });
 
   it('tracks formatting across a hard break because no leaf is consumed', () => {
