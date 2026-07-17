@@ -100,9 +100,22 @@ export function mapRangeTextOffsetToPos(
 }
 
 /**
+ * Prefer the model's find string verbatim. If it has Markdown-style blank
+ * lines and no verbatim match exists, retry with each blank-line run collapsed
+ * to the single block separator used by rangeText(). Return the exact candidate
+ * whose offsets map into the plaintext projection; never mutate the source edit.
+ */
+function matchingFind(text: string, find: string): string | null {
+  if (text.includes(find)) return find;
+  const collapsed = find.replace(/\n[ \t]*(?:\n[ \t]*)+/g, '\n');
+  return collapsed !== find && text.includes(collapsed) ? collapsed : null;
+}
+
+/**
  * Given a target range and a `find` string, locate the first occurrence within
  * the range's plaintext and return its absolute from/to document positions.
- * Returns null when `find` is not present verbatim.
+ * Returns null when neither the verbatim string nor its conservative
+ * Markdown-blank-line fallback is present.
  */
 export function locateEdit(
   doc: ProseMirrorNode,
@@ -111,10 +124,11 @@ export function locateEdit(
   find: string,
 ): { from: number; to: number } | null {
   const text = rangeText(doc, rangeFrom, rangeTo);
-  const idx = text.indexOf(find);
-  if (idx === -1) return null;
+  const candidate = matchingFind(text, find);
+  if (candidate === null) return null;
+  const idx = text.indexOf(candidate);
   const absFrom = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, idx);
-  const absTo = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, idx + find.length);
+  const absTo = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, idx + candidate.length);
   if (absFrom === null || absTo === null) return null;
   return { from: absFrom, to: absTo };
 }
@@ -133,8 +147,8 @@ export function resolveScopeRange(
   return { from: comment.from, to: comment.to };
 }
 
-/** A located edit ready to apply, sorted back-to-front for application. */
-export type PlacedEdit =
+/** A located edit before its input-order result index is attached. */
+type PlannedEdit =
   | { kind: 'text'; from: number; to: number; replace: string; linkHref?: string }
   | {
       kind: 'format';
@@ -144,6 +158,11 @@ export type PlacedEdit =
       marks: Array<{ mark: FormatMarkName; set: boolean }>;
     };
 
+/** A located edit ready to apply, sorted back-to-front for application. */
+export type PlacedEdit = PlannedEdit & { editIndex: number };
+
+type PlannedTextEdit = Extract<PlannedEdit, { kind: 'text' }>;
+type PlannedFormatEdit = Extract<PlannedEdit, { kind: 'format' }>;
 type PlacedTextEdit = Extract<PlacedEdit, { kind: 'text' }>;
 type PlacedFormatEdit = Extract<PlacedEdit, { kind: 'format' }>;
 
@@ -160,6 +179,8 @@ export type EditResultReason =
   | 'already-applied'
   | 'overlapping-edit'
   | 'pending-suggestion'
+  | 'structural-change'
+  | 'engine-blocked'
   | 'invalid-edit'
   | 'invalid-link'
   | 'document-unavailable';
@@ -173,7 +194,7 @@ export interface EditResult {
 
 interface PlanDecision {
   result: EditResult;
-  placed?: PlacedEdit;
+  placed?: PlannedEdit;
 }
 
 interface MarkdownLinkValue {
@@ -357,13 +378,15 @@ function locateAllEdits(
   find: string,
 ): Array<{ from: number; to: number }> {
   const text = rangeText(doc, rangeFrom, rangeTo);
+  const candidate = matchingFind(text, find);
+  if (candidate === null) return [];
   const matches: Array<{ from: number; to: number }> = [];
-  let index = text.indexOf(find);
+  let index = text.indexOf(candidate);
   while (index !== -1) {
     const from = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index);
-    const to = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index + find.length);
+    const to = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index + candidate.length);
     if (from !== null && to !== null) matches.push({ from, to });
-    index = text.indexOf(find, index + 1);
+    index = text.indexOf(candidate, index + 1);
   }
   return matches;
 }
@@ -641,8 +664,10 @@ function planEdit(
   const format = (edit as QuillFormatEdit).format;
   const hasReplace = typeof replace === 'string';
   const hasFormat = typeof format === 'object' && format !== null && !Array.isArray(format);
-  // XOR: an edit is a text replacement or a format op, never both/neither.
-  if (hasReplace === hasFormat) {
+  // The protocol asks for XOR. Tolerate one unambiguous model deviation: a
+  // format op may echo find unchanged in replace. A different replacement plus
+  // format remains ambiguous, and neither shape remains malformed.
+  if ((!hasReplace && !hasFormat) || (hasReplace && hasFormat && replace !== edit.find)) {
     return { result: result(edit, 'malformed', 'invalid-edit') };
   }
 
@@ -665,15 +690,64 @@ function formatConflictReason(
 }
 
 /**
+ * Suggesting mode can track only inline replacements in textblocks that admit
+ * its insert/delete marks. Structural edits and mark-ineligible blocks must
+ * fail closed instead of being swallowed or partially applied by the engine.
+ */
+function textEditConflictReason(
+  doc: ProseMirrorNode,
+  edit: PlannedTextEdit,
+): EditResultReason | null {
+  const $from = doc.resolve(edit.from);
+  const $to = doc.resolve(edit.to);
+  if (!$from.sameParent($to) || !$from.parent.isTextblock || edit.replace.includes('\n')) {
+    return 'structural-change';
+  }
+  const insertType = doc.type.schema.marks['tracked_insert'];
+  const deleteType = doc.type.schema.marks['tracked_delete'];
+  if (
+    !insertType ||
+    !deleteType ||
+    !$from.parent.type.allowsMarkType(insertType) ||
+    !$from.parent.type.allowsMarkType(deleteType)
+  ) {
+    return 'engine-blocked';
+  }
+  return null;
+}
+
+/** Every touched textblock must admit both the requested marks and our marker. */
+function formatEditCanCarryMarks(doc: ProseMirrorNode, edit: PlannedFormatEdit): boolean {
+  const schema = doc.type.schema;
+  const formatType = schema.marks['tracked_format'];
+  const markTypes = edit.marks.map(({ mark }) => schema.marks[mark]);
+  if (!formatType || markTypes.some((mark) => !mark)) return false;
+
+  let foundText = false;
+  let allowed = true;
+  doc.nodesBetween(edit.from, edit.to, (node, pos) => {
+    if (!node.isText || !allowed) return;
+    foundText = true;
+    const parentType = doc.resolve(pos).parent.type;
+    allowed =
+      parentType.allowsMarkType(formatType) &&
+      markTypes.every((mark) => parentType.allowsMarkType(mark));
+  });
+  return foundText && allowed;
+}
+
+/**
  * Pure planning step: turn quote-based edits into absolute-position edits,
  * sorted back-to-front so applying them in order keeps earlier positions
  * valid. Skipped (and reported) rather than guessed at: unlocatable finds,
  * text-identical replacements (a formatting ask must use a format op),
- * malformed entries (both/neither of replace and format, empty-find format,
- * no recognized styles), format ops overlapping a text replacement from the
- * same block (the replacement subsumes them), and — when `formatAuthor` is
- * given — format ops touching text that carries another author's pending
- * format suggestion (v1 cross-author policy: whole-op block, never partial).
+ * malformed entries (neither shape, ambiguous replace+format, empty-find
+ * format, no recognized styles), structural text edits that Suggesting mode
+ * cannot represent, edits in content that cannot carry tracking marks, format
+ * ops overlapping a text replacement from the same block (the replacement
+ * subsumes them), and — when `formatAuthor` is given — format ops touching text
+ * that carries another author's pending format suggestion (v1 cross-author
+ * policy: whole-op block, never partial).
  */
 export function planEdits(
   doc: ProseMirrorNode,
@@ -689,8 +763,21 @@ export function planEdits(
   for (const edit of edits) {
     const decision = planEdit(doc, rangeFrom, rangeTo, edit);
     const editIndex = results.push(decision.result) - 1;
-    if (decision.placed?.kind === 'text') texts.push({ editIndex, placed: decision.placed });
-    if (decision.placed?.kind === 'format') formats.push({ editIndex, placed: decision.placed });
+    if (decision.placed?.kind === 'text') {
+      const reason = textEditConflictReason(doc, decision.placed);
+      if (reason) {
+        results[editIndex] = result(edit, 'conflict', reason);
+      } else {
+        texts.push({ editIndex, placed: { ...decision.placed, editIndex } });
+      }
+    }
+    if (decision.placed?.kind === 'format') {
+      if (formatEditCanCarryMarks(doc, decision.placed)) {
+        formats.push({ editIndex, placed: { ...decision.placed, editIndex } });
+      } else {
+        results[editIndex] = result(edit, 'conflict', 'engine-blocked');
+      }
+    }
   }
 
   const placed: PlacedEdit[] = texts.map((candidate) => candidate.placed);
@@ -737,6 +824,10 @@ function editResultReason(result: EditResult): string {
       return 'it overlaps another proposed text change.';
     case 'pending-suggestion':
       return 'it conflicts with a pending suggestion.';
+    case 'structural-change':
+      return 'it spans or would split multiple paragraphs or list items; structural changes can’t be tracked as suggestions yet. Make this change in Editing mode.';
+    case 'engine-blocked':
+      return 'Suggesting mode can’t safely track this change in that content, or it conflicts with another author’s pending suggestion. Make it in Editing mode or resolve the existing suggestion first.';
     case 'invalid-edit':
       return 'the edit instruction is malformed.';
     case 'invalid-link':
