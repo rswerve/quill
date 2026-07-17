@@ -20,6 +20,10 @@ type StructureShape = {
   children?: StructureShape[];
 };
 
+function isTextOrHardBreak(node: ProseMirrorNode): boolean {
+  return node.isText || node.type.name === 'hardBreak';
+}
+
 function structureShape(node: ProseMirrorNode): StructureShape | null {
   if (node.isText || node.type.name === 'hardBreak') return null;
   const children: StructureShape[] = [];
@@ -88,7 +92,7 @@ function overlapsForeignPendingInsertion(
   if (step.from >= step.to) return false;
   let overlaps = false;
   doc.nodesBetween(step.from, step.to, (node) => {
-    if (!node.isText || overlaps) return;
+    if (!isTextOrHardBreak(node) || overlaps) return;
     overlaps = node.marks.some((mark) => {
       const data = mark.attrs.dataTracked as { status?: string; authorID?: string } | undefined;
       return mark.type === insertType && data?.status === 'pending' && data.authorID !== authorID;
@@ -222,7 +226,7 @@ export function classifyDeletedRanges(
     anyAlreadyDeleted: false,
   };
   doc.nodesBetween(from, to, (node, pos) => {
-    if (!node.isText) return;
+    if (!isTextOrHardBreak(node)) return;
     const nodeFrom = Math.max(pos, from);
     const nodeTo = Math.min(pos + node.nodeSize, to);
     if (nodeFrom >= nodeTo) return;

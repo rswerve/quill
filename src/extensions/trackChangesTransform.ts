@@ -288,6 +288,10 @@ function applyFormatStep(
 
 type ReplaceStepData = { from: number; to: number; slice: Slice };
 
+function isTextOrHardBreak(node: ProseMirrorNode): boolean {
+  return node.isText || node.type.name === 'hardBreak';
+}
+
 function adjacentTracked(
   doc: ProseMirrorNode,
   from: number,
@@ -319,21 +323,21 @@ function adjacentTracked(
     if (from < to) {
       let found: DataTracked | null = null;
       doc.nodesBetween(from, to, (node) => {
-        if (found || !node.isText) return;
+        if (found || !isTextOrHardBreak(node)) return;
         found = pendingTracked(node);
       });
       if (found) return found;
     }
     if (from > 0) {
       const before = doc.resolve(from).nodeBefore;
-      if (before?.isText) {
+      if (before && isTextOrHardBreak(before)) {
         const tracked = pendingTracked(before);
         if (tracked) return tracked;
       }
     }
     if (to < doc.content.size) {
       const after = doc.resolve(to).nodeAfter;
-      if (after?.isText) {
+      if (after && isTextOrHardBreak(after)) {
         const tracked = pendingTracked(after);
         if (tracked) return tracked;
       }

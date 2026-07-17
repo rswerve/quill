@@ -715,14 +715,15 @@ function textEditConflictReason(
   ) {
     return 'engine-blocked';
   }
-  // Insert/delete tracking is mark-backed. It cannot represent consuming an
-  // inline leaf (a hard break or image), even when both text endpoints share a
-  // parent: the surrounding text would be marked deleted while the leaf
-  // survived acceptance. Fail closed before the engine can report a corrupt
-  // partial replacement as applied.
+  // Insert/delete tracking is mark-backed. Hard breaks can carry those marks
+  // through their parent textblock, but every other inline leaf (such as an
+  // image) still needs a typed node-edit protocol. Fail closed before the
+  // engine can report a corrupt partial replacement as applied.
   let touchesInlineLeaf = false;
   doc.nodesBetween(edit.from, edit.to, (node) => {
-    if (node.isInline && node.isLeaf && !node.isText) touchesInlineLeaf = true;
+    if (node.isInline && node.isLeaf && !node.isText && node.type.name !== 'hardBreak') {
+      touchesInlineLeaf = true;
+    }
   });
   if (touchesInlineLeaf) return 'engine-blocked';
   // Pre-detect the foreign-insertion case that the kernel would otherwise
@@ -1024,7 +1025,7 @@ function rangeHasForeignPendingText(
 ): boolean {
   let found = false;
   doc.nodesBetween(from, to, (node) => {
-    if (found || !node.isText) return;
+    if (found || (!node.isText && node.type.name !== 'hardBreak')) return;
     found = node.marks.some(
       (mark) =>
         (mark.type.name === 'tracked_insert' || mark.type.name === 'tracked_delete') &&

@@ -339,4 +339,61 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
     });
     expect(boldRuns).toBeGreaterThanOrEqual(2);
   });
+
+  describe('hard breaks (Slice 1: delete across a break through the Claude apply path)', () => {
+    function hasHardBreak(ed: Editor): boolean {
+      let found = false;
+      ed.state.doc.descendants((node) => {
+        if (node.type.name === 'hardBreak') found = true;
+      });
+      return found;
+    }
+
+    it('replaces a range spanning a hard break as one tracked suggestion (legacy space quote)', () => {
+      // A hard break projects to Claude as a space (rangeText), so the model's
+      // find is "one two"; the located range spans the <br>. Pre-Slice-1 this
+      // reported applied while the kernel left the break behind (probe F
+      // corruption) or D3 refused it as engine-blocked. Now it applies as one
+      // logical replacement and Accept produces exactly the requested text.
+      editor = makeEditor('<p>one<br>two</p>');
+      const { results, suggestionIds } = apply(editor, [{ find: 'one two', replace: 'combined' }]);
+
+      expect(results).toEqual([
+        { edit: { find: 'one two', replace: 'combined' }, status: 'applied' },
+      ]);
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      const kinds = changes[0].segments.map((s) => s.kind).sort();
+      expect(kinds).toEqual(['delete', 'insert']);
+      expect(suggestionIds).toEqual([changes[0].id]);
+
+      // Accept: the requested text, and NO stray hard break survives.
+      editor.commands.acceptAllChanges();
+      expect(hasHardBreak(editor)).toBe(false);
+      expect(docText(editor)).toBe('combined');
+      expect(getTrackedChanges(editor)).toHaveLength(0);
+    });
+
+    it('Reject restores the original hard-broken lines exactly', () => {
+      editor = makeEditor('<p>one<br>two</p>');
+      const before = editor.state.doc;
+      apply(editor, [{ find: 'one two', replace: 'combined' }]);
+
+      editor.commands.rejectAllChanges();
+      expect(editor.state.doc.eq(before)).toBe(true);
+      expect(hasHardBreak(editor)).toBe(true);
+      expect(getTrackedChanges(editor)).toHaveLength(0);
+    });
+
+    it('still refuses a replacement whose range contains an image (images remain out of scope)', () => {
+      // The break exemption must not leak to other inline leaves — images need
+      // a separate typed node-edit protocol, not this mark-based path.
+      editor = makeEditor('<p>before<img src="x.png">after</p>');
+      const before = editor.state.doc;
+      const { results } = apply(editor, [{ find: 'before after', replace: 'combined' }]);
+
+      expect(results[0]).toMatchObject({ status: 'conflict', reason: 'engine-blocked' });
+      expect(editor.state.doc.eq(before)).toBe(true);
+    });
+  });
 });

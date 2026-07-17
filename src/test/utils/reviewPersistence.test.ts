@@ -203,6 +203,50 @@ describe('restoreReviewMarks', () => {
     expect(restored.status).toBe('pending');
   });
 
+  it('round-trips a pending hard-break deletion through the sidecar', () => {
+    editor = makeEditor('<p>one<br>two</p>');
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    let hardBreakPos = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (hardBreakPos < 0 && node.type.name === 'hardBreak') hardBreakPos = pos;
+    });
+    expect(hardBreakPos).toBeGreaterThan(0);
+    editor
+      .chain()
+      .setTextSelection({ from: hardBreakPos, to: hardBreakPos + 1 })
+      .deleteSelection()
+      .run();
+
+    const records = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+    expect(records).toEqual([
+      expect.objectContaining({
+        type: 'change',
+        segments: [expect.objectContaining({ kind: 'delete', text: ' ' })],
+      }),
+    ]);
+    editor.destroy();
+
+    editor = makeEditor('<p>one<br>two</p>');
+    const restored = restoreReviewMarks(editor, [], records);
+
+    expect(restored).toEqual({ quarantinedSuggestions: [], mismatches: [] });
+    let restoredBreakMarks: string[] | null = null;
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'hardBreak') {
+        restoredBreakMarks = node.marks.map((mark) => mark.type.name);
+      }
+    });
+    expect(restoredBreakMarks).toContain('tracked_delete');
+    expect(getTrackedChanges(editor)).toEqual([
+      expect.objectContaining({
+        segments: [expect.objectContaining({ kind: 'delete', text: ' ' })],
+      }),
+    ]);
+    editor.commands.acceptAllChanges();
+    expect(editor.getHTML()).toBe('<p>onetwo</p>');
+  });
+
   it('restores disjoint format spans under one logical id with exact deltas', () => {
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
     restoreReviewMarks(editor, [], [formatSuggestion({ originCommentId: 'c42' })]);

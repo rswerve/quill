@@ -56,7 +56,10 @@ function destroyEditors(): void {
 }
 
 function projectAcceptedNode(node: JSONContent): JSONContent | null {
-  if (node.type === 'text' && node.marks?.some((mark) => mark.type === 'tracked_delete')) {
+  if (
+    (node.type === 'text' || node.type === 'hardBreak') &&
+    node.marks?.some((mark) => mark.type === 'tracked_delete')
+  ) {
     return null;
   }
   const projected: JSONContent = { ...node };
@@ -69,7 +72,17 @@ function projectAcceptedNode(node: JSONContent): JSONContent | null {
     const content = node.content
       .map(projectAcceptedNode)
       .filter((child): child is JSONContent => child !== null);
-    if (content.length > 0) projected.content = content;
+    const joined: JSONContent[] = [];
+    for (const child of content) {
+      const previous = joined.at(-1);
+      const sameMarks = JSON.stringify(previous?.marks ?? []) === JSON.stringify(child.marks ?? []);
+      if (previous?.type === 'text' && child.type === 'text' && sameMarks) {
+        previous.text = `${previous.text ?? ''}${child.text ?? ''}`;
+      } else {
+        joined.push(child);
+      }
+    }
+    if (joined.length > 0) projected.content = joined;
     else delete projected.content;
   }
   return projected;
