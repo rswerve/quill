@@ -1,0 +1,29 @@
+{
+  "name": "unusual-rtl-mixed",
+  "source": "synthetic (unusual-format sweep, 2026-07-17 overnight)",
+  "note": "RTL scripts embedded in LTR prose: formatting and replacement both anchor correctly.",
+  "docMarkdown": "The Hebrew phrase שלום עולם appears mid-sentence, and the Arabic مرحبا بالعالم follows it.\n\nA second paragraph anchors the end.\n",
+  "edits": [
+    {
+      "find": "שלום עולם",
+      "format": {
+        "bold": true
+      }
+    },
+    {
+      "find": "مرحبا بالعالم",
+      "replace": "مرحبا"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["مرحبا"]
+  }
+}

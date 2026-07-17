@@ -557,20 +557,21 @@ function planMarkdownLinkFallback(
   const source = parseMarkdownLink(edit.find);
   if (!source) return null;
 
-  const matches = linkSpans(doc, rangeFrom, rangeTo).filter(
+  const labelMatches = linkSpans(doc, rangeFrom, rangeTo).filter(
     (span) => rangeText(doc, span.from, span.to) === source.label,
   );
-  if (matches.length === 0) {
+  if (labelMatches.length === 0) {
     return { result: result(edit, 'not-found', 'link-not-found') };
+  }
+  const matches = labelMatches.filter((span) => normalizeHref(span.href) === source.href);
+  if (matches.length === 0) {
+    return { result: result(edit, 'not-found', 'link-target-mismatch') };
   }
   if (matches.length > 1) {
     return { result: result(edit, 'conflict', 'ambiguous-link') };
   }
 
   const [match] = matches;
-  if (normalizeHref(match.href) !== source.href) {
-    return { result: result(edit, 'not-found', 'link-target-mismatch') };
-  }
 
   const replacementLink = parseMarkdownLink(edit.replace);
   const replaceLooksLikeLink = edit.replace.startsWith('[') && edit.replace.includes('](');
@@ -680,11 +681,11 @@ function formatConflictReason(
   doc: ProseMirrorNode,
   format: PlacedFormatEdit,
   texts: PlacedTextEdit[],
-  formatAuthor?: string,
+  editAuthor?: string,
 ): EditResultReason | null {
   const overlapsText = texts.some((text) => format.from < text.to && text.from < format.to);
   if (overlapsText) return 'overlapping-edit';
-  return formatAuthor && rangeHasForeignPendingFormat(doc, format.from, format.to, formatAuthor)
+  return editAuthor && rangeHasForeignPendingFormat(doc, format.from, format.to, editAuthor)
     ? 'pending-suggestion'
     : null;
 }
@@ -697,6 +698,7 @@ function formatConflictReason(
 function textEditConflictReason(
   doc: ProseMirrorNode,
   edit: PlannedTextEdit,
+  editAuthor?: string,
 ): EditResultReason | null {
   const $from = doc.resolve(edit.from);
   const $to = doc.resolve(edit.to);
@@ -713,7 +715,116 @@ function textEditConflictReason(
   ) {
     return 'engine-blocked';
   }
+  // Insert/delete tracking is mark-backed. It cannot represent consuming an
+  // inline leaf (a hard break or image), even when both text endpoints share a
+  // parent: the surrounding text would be marked deleted while the leaf
+  // survived acceptance. Fail closed before the engine can report a corrupt
+  // partial replacement as applied.
+  let touchesInlineLeaf = false;
+  doc.nodesBetween(edit.from, edit.to, (node) => {
+    if (node.isInline && node.isLeaf && !node.isText) touchesInlineLeaf = true;
+  });
+  if (touchesInlineLeaf) return 'engine-blocked';
+  // Pre-detect the foreign-insertion case that the kernel would otherwise
+  // veto generically, and extend the same v1 cross-author policy to pending
+  // deletions. A source quote containing review-only deleted text changes
+  // meaning depending on how that earlier suggestion resolves.
+  if (editAuthor && rangeHasForeignPendingText(doc, edit.from, edit.to, editAuthor)) {
+    return 'pending-suggestion';
+  }
   return null;
+}
+
+function sameTextEdit(a: PlacedTextEdit, b: PlacedTextEdit): boolean {
+  return a.from === b.from && a.to === b.to && a.replace === b.replace && a.linkHref === b.linkHref;
+}
+
+/** Half-open text ranges overlap; two distinct insertions overlap at one point. */
+function textEditsOverlap(a: PlacedTextEdit, b: PlacedTextEdit): boolean {
+  const aIsInsertion = a.from === a.to;
+  const bIsInsertion = b.from === b.to;
+  if (aIsInsertion && bIsInsertion) return a.from === b.from;
+  if (aIsInsertion) return b.from < a.from && a.from < b.to;
+  if (bIsInsertion) return a.from < b.from && b.from < a.to;
+  return a.from < b.to && b.from < a.to;
+}
+
+interface TextCandidate {
+  editIndex: number;
+  placed: PlacedTextEdit;
+}
+
+interface FormatCandidate {
+  editIndex: number;
+  placed: PlacedFormatEdit;
+}
+
+function deduplicateTextEdits(
+  candidates: TextCandidate[],
+  edits: QuillEdit[],
+  results: EditResult[],
+): TextCandidate[] {
+  const unique: TextCandidate[] = [];
+  for (const candidate of candidates) {
+    if (unique.some((prior) => sameTextEdit(prior.placed, candidate.placed))) {
+      results[candidate.editIndex] = result(edits[candidate.editIndex], 'no-op', 'already-applied');
+    } else {
+      unique.push(candidate);
+    }
+  }
+  return unique;
+}
+
+function rejectOverlappingTextEdits(
+  candidates: TextCandidate[],
+  edits: QuillEdit[],
+  results: EditResult[],
+): TextCandidate[] {
+  const overlappingIndexes = new Set<number>();
+  for (let left = 0; left < candidates.length; left += 1) {
+    for (let right = left + 1; right < candidates.length; right += 1) {
+      if (!textEditsOverlap(candidates[left].placed, candidates[right].placed)) continue;
+      overlappingIndexes.add(candidates[left].editIndex);
+      overlappingIndexes.add(candidates[right].editIndex);
+    }
+  }
+  return candidates.filter((candidate) => {
+    if (!overlappingIndexes.has(candidate.editIndex)) return true;
+    results[candidate.editIndex] = result(
+      edits[candidate.editIndex],
+      'conflict',
+      'overlapping-edit',
+    );
+    return false;
+  });
+}
+
+function sameFormatEdit(a: PlacedFormatEdit, b: PlacedFormatEdit): boolean {
+  return (
+    a.from === b.from &&
+    a.to === b.to &&
+    a.marks.length === b.marks.length &&
+    a.marks.every(
+      (operation, index) =>
+        operation.mark === b.marks[index].mark && operation.set === b.marks[index].set,
+    )
+  );
+}
+
+function deduplicateFormatEdits(
+  candidates: FormatCandidate[],
+  edits: QuillEdit[],
+  results: EditResult[],
+): FormatCandidate[] {
+  const unique: FormatCandidate[] = [];
+  for (const candidate of candidates) {
+    if (unique.some((prior) => sameFormatEdit(prior.placed, candidate.placed))) {
+      results[candidate.editIndex] = result(edits[candidate.editIndex], 'no-op', 'already-applied');
+    } else {
+      unique.push(candidate);
+    }
+  }
+  return unique;
 }
 
 /** Every touched textblock must admit both the requested marks and our marker. */
@@ -745,26 +856,27 @@ function formatEditCanCarryMarks(doc: ProseMirrorNode, edit: PlannedFormatEdit):
  * format, no recognized styles), structural text edits that Suggesting mode
  * cannot represent, edits in content that cannot carry tracking marks, format
  * ops overlapping a text replacement from the same block (the replacement
- * subsumes them), and — when `formatAuthor` is given — format ops touching text
- * that carries another author's pending format suggestion (v1 cross-author
- * policy: whole-op block, never partial).
+ * subsumes them), and — when `editAuthor` is given — text edits touching a
+ * foreign pending insertion/deletion or format edits touching a foreign
+ * pending format suggestion (v1 cross-author policy: whole-op block, never
+ * partial).
  */
 export function planEdits(
   doc: ProseMirrorNode,
   rangeFrom: number,
   rangeTo: number,
   edits: QuillEdit[],
-  formatAuthor?: string,
+  editAuthor?: string,
 ): { placed: PlacedEdit[]; results: EditResult[] } {
   const results: EditResult[] = [];
-  const texts: Array<{ editIndex: number; placed: PlacedTextEdit }> = [];
-  const formats: Array<{ editIndex: number; placed: PlacedFormatEdit }> = [];
+  const texts: TextCandidate[] = [];
+  const formats: FormatCandidate[] = [];
 
   for (const edit of edits) {
     const decision = planEdit(doc, rangeFrom, rangeTo, edit);
     const editIndex = results.push(decision.result) - 1;
     if (decision.placed?.kind === 'text') {
-      const reason = textEditConflictReason(doc, decision.placed);
+      const reason = textEditConflictReason(doc, decision.placed, editAuthor);
       if (reason) {
         results[editIndex] = result(edit, 'conflict', reason);
       } else {
@@ -780,10 +892,22 @@ export function planEdits(
     }
   }
 
-  const placed: PlacedEdit[] = texts.map((candidate) => candidate.placed);
-  const textEdits = texts.map((candidate) => candidate.placed);
-  for (const candidate of formats) {
-    const reason = formatConflictReason(doc, candidate.placed, textEdits, formatAuthor);
+  // Exact duplicate model entries are unambiguous: apply the first and report
+  // later copies as already covered. Do this before overlap detection so a
+  // harmless duplicate does not cause the real edit to be rejected.
+  const uniqueTexts = deduplicateTextEdits(texts, edits, results);
+
+  // Multiple replacements computed against one source document cannot safely
+  // share source characters: applying either invalidates the other's absolute
+  // range. Reject every member symmetrically instead of allowing back-to-front
+  // dispatch to splice fragments from two proposals into one suggestion.
+  const safeTexts = rejectOverlappingTextEdits(uniqueTexts, edits, results);
+
+  const placed: PlacedEdit[] = safeTexts.map((candidate) => candidate.placed);
+  const textEdits = safeTexts.map((candidate) => candidate.placed);
+  const uniqueFormats = deduplicateFormatEdits(formats, edits, results);
+  for (const candidate of uniqueFormats) {
+    const reason = formatConflictReason(doc, candidate.placed, textEdits, editAuthor);
     if (reason) {
       results[candidate.editIndex] = result(edits[candidate.editIndex], 'conflict', reason);
     } else {
@@ -887,6 +1011,25 @@ function rangeHasForeignPendingFormat(
         m.type.name === 'tracked_format' &&
         m.attrs.dataTracked?.status === 'pending' &&
         m.attrs.dataTracked?.authorID !== author,
+    );
+  });
+  return found;
+}
+
+function rangeHasForeignPendingText(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+  author: string,
+): boolean {
+  let found = false;
+  doc.nodesBetween(from, to, (node) => {
+    if (found || !node.isText) return;
+    found = node.marks.some(
+      (mark) =>
+        (mark.type.name === 'tracked_insert' || mark.type.name === 'tracked_delete') &&
+        mark.attrs.dataTracked?.status === 'pending' &&
+        mark.attrs.dataTracked?.authorID !== author,
     );
   });
   return found;

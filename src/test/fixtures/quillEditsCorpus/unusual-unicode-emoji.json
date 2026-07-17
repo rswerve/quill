@@ -1,0 +1,36 @@
+{
+  "name": "unusual-unicode-emoji",
+  "source": "synthetic (unusual-format sweep, 2026-07-17 overnight)",
+  "note": "Astral emoji (surrogate pairs), accented text, and em-dashes: offsets must stay correct through the UTF-16 projection.",
+  "docMarkdown": "Status report 📊 for the café rollout.\n\nThe naïve estimate — 12 days — held up. Team morale: 🎉🎉.\n\nDiacritics: the coöperative approach worked.\n",
+  "edits": [
+    {
+      "find": "café rollout",
+      "replace": "café and bistro rollout"
+    },
+    {
+      "find": "Team morale: 🎉🎉.",
+      "replace": "Team morale: through the roof 🎉."
+    },
+    {
+      "find": "coöperative approach",
+      "format": {
+        "italic": true
+      }
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["café and bistro rollout", "through the roof 🎉"]
+  }
+}

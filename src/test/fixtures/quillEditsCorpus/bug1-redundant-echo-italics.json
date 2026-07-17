@@ -1,0 +1,33 @@
+{
+  "name": "bug1-redundant-echo-italics",
+  "source": "production edits from session 91f56c44 @ 2026-07-17T03:18:37.344Z; neutral doc synthesized (D2)",
+  "note": "Bug 1 (2026-07-17): format edits carrying a redundant replace === find echo now plan as pure format ops instead of \"malformed\".",
+  "docMarkdown": "Given the success of the impossible project, everyone asks how the team pulled it off.\n\nThe honest answer is that the project, like most ambitious efforts, combined skill with luck. Nobody pulled rank, and nobody pretended the outcome was guaranteed.\n",
+  "edits": [
+    {
+      "find": "pulled it off",
+      "replace": "pulled it off",
+      "format": {
+        "italic": true
+      }
+    },
+    {
+      "find": "project,",
+      "replace": "project,",
+      "format": {
+        "italic": true
+      }
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "mintedChangesAtLeast": 2
+  }
+}

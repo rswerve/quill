@@ -1,0 +1,19 @@
+{
+  "name": "link-text-change-2",
+  "source": "production session 99594f95 @ 2026-07-13T15:08:42.815Z",
+  "note": "Second link-text change on the mutated doc.",
+  "docMarkdown": "# Welcome\n\nHere's a little surprise!\n\nHere's ge!\n\n[some text](https://www.cnn.com)\n\n*italics*\n\n**bold**",
+  "edits": [
+    {
+      "find": "some text",
+      "replace": "a fun surprise"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      }
+    ]
+  }
+}

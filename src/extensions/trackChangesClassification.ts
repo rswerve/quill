@@ -116,10 +116,20 @@ function classifyMarkStep(
 ): ClassifiedStepResult {
   const markName = step.mark.type.name;
   const capability = inlineMarkCapability(markName);
+  if (capability === 'track' && !formatType) {
+    return {
+      blocked: {
+        operation: 'inlineFormat',
+        markName,
+        notice: 'This formatting change could not be tracked safely. Nothing changed.',
+      },
+      step: null,
+    };
+  }
   if (capability !== 'block') {
     return {
       blocked: null,
-      step: { kind: capability === 'track' && formatType ? 'format' : 'passthrough', step },
+      step: { kind: capability === 'track' ? 'format' : 'passthrough', step },
     };
   }
   const policy = inlineFormatPolicy(markName);

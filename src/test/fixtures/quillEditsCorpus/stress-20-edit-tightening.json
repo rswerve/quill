@@ -1,0 +1,153 @@
+{
+  "name": "stress-20-edit-tightening",
+  "source": "synthetic (inspired by a 20-edit production payload whose doc is withheld per D2)",
+  "note": "20 disjoint tightening edits across 20 paragraphs in one payload.",
+  "docMarkdown": "Topic 1 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 1 in the planning outline, and it grew over time.\n\nTopic 2 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 2 in the planning outline, and it grew over time.\n\nTopic 3 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 3 in the planning outline, and it grew over time.\n\nTopic 4 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 4 in the planning outline, and it grew over time.\n\nTopic 5 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 5 in the planning outline, and it grew over time.\n\nTopic 6 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 6 in the planning outline, and it grew over time.\n\nTopic 7 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 7 in the planning outline, and it grew over time.\n\nTopic 8 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 8 in the planning outline, and it grew over time.\n\nTopic 9 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 9 in the planning outline, and it grew over time.\n\nTopic 10 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 10 in the planning outline, and it grew over time.\n\nTopic 11 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 11 in the planning outline, and it grew over time.\n\nTopic 12 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 12 in the planning outline, and it grew over time.\n\nTopic 13 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 13 in the planning outline, and it grew over time.\n\nTopic 14 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 14 in the planning outline, and it grew over time.\n\nTopic 15 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 15 in the planning outline, and it grew over time.\n\nTopic 16 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 16 in the planning outline, and it grew over time.\n\nTopic 17 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 17 in the planning outline, and it grew over time.\n\nTopic 18 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 18 in the planning outline, and it grew over time.\n\nTopic 19 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 19 in the planning outline, and it grew over time.\n\nTopic 20 began as a small effort that was described, at some length and with a certain amount of repetition, as item number 20 in the planning outline, and it grew over time.\n",
+  "edits": [
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 1 in the planning outline",
+      "replace": "described as item 1"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 2 in the planning outline",
+      "replace": "described as item 2"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 3 in the planning outline",
+      "replace": "described as item 3"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 4 in the planning outline",
+      "replace": "described as item 4"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 5 in the planning outline",
+      "replace": "described as item 5"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 6 in the planning outline",
+      "replace": "described as item 6"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 7 in the planning outline",
+      "replace": "described as item 7"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 8 in the planning outline",
+      "replace": "described as item 8"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 9 in the planning outline",
+      "replace": "described as item 9"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 10 in the planning outline",
+      "replace": "described as item 10"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 11 in the planning outline",
+      "replace": "described as item 11"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 12 in the planning outline",
+      "replace": "described as item 12"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 13 in the planning outline",
+      "replace": "described as item 13"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 14 in the planning outline",
+      "replace": "described as item 14"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 15 in the planning outline",
+      "replace": "described as item 15"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 16 in the planning outline",
+      "replace": "described as item 16"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 17 in the planning outline",
+      "replace": "described as item 17"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 18 in the planning outline",
+      "replace": "described as item 18"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 19 in the planning outline",
+      "replace": "described as item 19"
+    },
+    {
+      "find": "described, at some length and with a certain amount of repetition, as item number 20 in the planning outline",
+      "replace": "described as item 20"
+    }
+  ],
+  "expect": {
+    "statuses": [
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      },
+      {
+        "status": "applied"
+      }
+    ],
+    "docTextContains": ["described as item 1", "described as item 20"]
+  }
+}
