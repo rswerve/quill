@@ -1,5 +1,35 @@
 import type { TrackedChangeInfo, TrackedFormatSegment, TrackedTextSegment } from '../types';
 
+/** Visible glyph for a hard break in a review-card preview. */
+export const LINE_BREAK_GLYPH = '↵';
+
+/**
+ * Display text for a review-card preview. A hard-break segment renders as the
+ * ↵ glyph so it never previews as a blank or a raw newline. Contiguous
+ * segments join seamlessly — a text–break–text run reads "one↵two" — while a
+ * genuine gap keeps the ellipsis separator. A break-only preview (no visible
+ * text) would otherwise be a bare symbol, so it gets the spelled-out
+ * "↵ line break" label for clarity and screen readers.
+ */
+export function segmentsToPreview(segments: TrackedTextSegment[]): string {
+  let preview = '';
+  let hasText = false;
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      const previous = segments[index - 1];
+      preview += previous.to === segment.from ? '' : ' … ';
+    }
+    if (segment.nodeType === 'hardBreak') {
+      preview += LINE_BREAK_GLYPH;
+    } else {
+      preview += segment.text;
+      hasText = true;
+    }
+  });
+  if (!hasText && preview.length > 0) preview += ' line break';
+  return preview;
+}
+
 /** One review-panel card. Canonical changes no longer need a grouping pass. */
 export type SuggestionCardGroup =
   | {

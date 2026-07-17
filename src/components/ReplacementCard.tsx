@@ -1,5 +1,6 @@
 import type { Comment, TrackedChangeInfo, TrackedTextSegment } from '../types';
 import { clip } from '../utils/format';
+import { segmentsToPreview } from '../utils/suggestionCards';
 import SuggestionCardShell from './SuggestionCardShell';
 import { cx } from '../utils/cx';
 import styles from './SuggestionCard.module.css';
@@ -37,8 +38,8 @@ export default function ReplacementCard({
   onActivateComment,
   onActivateChatMessage,
 }: ReplacementCardProps) {
-  const originalText = deletions.map((segment) => segment.text).join(' … ');
-  const replacementText = insertions.map((segment) => segment.text).join(' … ');
+  const originalText = segmentsToPreview(deletions);
+  const replacementText = segmentsToPreview(insertions);
 
   return (
     <SuggestionCardShell

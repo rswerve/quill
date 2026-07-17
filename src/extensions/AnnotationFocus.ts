@@ -34,7 +34,7 @@ export function findAnnotationRange(
   let from: number | null = null;
   let to: number | null = null;
   doc.descendants((node, pos) => {
-    if (!node.isText || !nodeMatches(node, target)) return;
+    if ((!node.isText && node.type.name !== 'hardBreak') || !nodeMatches(node, target)) return;
     if (from === null || pos < from) from = pos;
     if (to === null || pos + node.nodeSize > to) to = pos + node.nodeSize;
   });
@@ -85,9 +85,13 @@ export const AnnotationFocus = Extension.create({
             if (!target) return null;
             const decorations: Decoration[] = [];
             state.doc.descendants((node, pos) => {
-              if (!node.isText || !nodeMatches(node, target)) return;
+              if ((!node.isText && node.type.name !== 'hardBreak') || !nodeMatches(node, target)) {
+                return;
+              }
               decorations.push(
-                Decoration.inline(pos, pos + node.nodeSize, { class: 'annotation-focus' }),
+                node.isText
+                  ? Decoration.inline(pos, pos + node.nodeSize, { class: 'annotation-focus' })
+                  : Decoration.node(pos, pos + node.nodeSize, { class: 'annotation-focus' }),
               );
             });
             return DecorationSet.create(state.doc, decorations);

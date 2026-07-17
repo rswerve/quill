@@ -435,6 +435,67 @@ test.describe('visual regression safety net', () => {
         await shot(page, theme, 'suggestion-cards');
       });
 
+      test('hard-break insertion and deletion review cues', async ({ page }) => {
+        await setupVisual(page, theme);
+        const editor = activeEditor(page);
+        await editor.click();
+        await page.keyboard.type('Existing');
+        await page.keyboard.press('Shift+Enter');
+        await page.keyboard.type('break. Createbreak here.');
+        await page
+          .getByRole('group', { name: 'Editing mode' })
+          .getByRole('button', { name: 'Suggesting' })
+          .click();
+
+        // Delete the existing break as one node selection. It remains in the
+        // document under a tracked-delete mark until review.
+        await editor.evaluate((root) => {
+          const hardBreak = root.querySelector('br:not(.ProseMirror-trailingBreak)');
+          if (!hardBreak) throw new Error('visual hard break missing');
+          const range = document.createRange();
+          range.setStartBefore(hardBreak);
+          range.setEndAfter(hardBreak);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          (root as HTMLElement).focus({ preventScroll: true });
+        });
+        await page.keyboard.press('Backspace');
+
+        // Create a second pending break inside "Createbreak". The exact caret
+        // comes from a DOM range so the visual fixture is stable across engines.
+        await editor.evaluate((root) => {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            const text = node as Text;
+            const offset = text.data.indexOf('Createbreak');
+            if (offset < 0) continue;
+            const range = document.createRange();
+            range.setStart(text, offset + 'Create'.length);
+            range.collapse(true);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            (root as HTMLElement).focus({ preventScroll: true });
+            return;
+          }
+          throw new Error('visual insertion caret text missing');
+        });
+        await page.keyboard.press('Shift+Enter');
+
+        await expect(page.locator('[data-hard-break-cue="insert"]')).toBeVisible();
+        await expect(page.locator('[data-hard-break-cue="delete"]')).toBeVisible();
+        await expect(page.getByText('“↵ line break”')).toHaveCount(2);
+
+        // Focus one card so the snapshot also guards the linked cue treatment.
+        await page.locator('[data-suggestion-kind="delete"]').getByText('“↵ line break”').click();
+        await expect(page.locator('[data-hard-break-cue="delete"]')).toHaveClass(
+          /annotation-focus/,
+        );
+        await shot(page, theme, 'hard-break-suggestions', page.locator('.app'));
+      });
+
       test('suggestion provenance and direct-active states', async ({ page }) => {
         const paragraphs = [
           'The origin comment asks Claude to tighten the next sentence.',

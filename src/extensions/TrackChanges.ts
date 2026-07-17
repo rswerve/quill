@@ -2,7 +2,9 @@ import { Extension, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { EditorState, Transaction } from '@tiptap/pm/state';
 import type { MarkType, Node as ProseMirrorNode, Schema } from '@tiptap/pm/model';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { TrackedChangeInfo, TrackedChangeSegment, TrackedFormatSegment } from '../types';
+import { ANNOTATION_FOCUS_KEY } from './AnnotationFocus';
 import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
 import { SKIP_TRACKING_META } from './trackChangesMeta';
 import { resolveTrackedChanges } from './trackChangesResolution';
@@ -48,6 +50,56 @@ declare module '@tiptap/core' {
 }
 
 const TRACK_PLUGIN_KEY = new PluginKey<TrackChangesStorage>('trackChanges');
+
+type HardBreakCueKind = 'insert' | 'delete';
+
+function hardBreakCueKind(node: ProseMirrorNode): HardBreakCueKind | null {
+  if (node.type.name !== 'hardBreak') return null;
+  if (node.marks.some((mark) => mark.type.name === 'tracked_insert')) return 'insert';
+  if (node.marks.some((mark) => mark.type.name === 'tracked_delete')) return 'delete';
+  return null;
+}
+
+/**
+ * Visible review affordances for marked hard breaks. The widget DOM stays
+ * empty: its glyph is CSS-generated, so it never changes editor textContent,
+ * selection text, Markdown, or persistence. `marks: []` deliberately keeps
+ * the widget outside the surrounding `<ins>`/`<del>` wrapper.
+ */
+function hardBreakCueDecorations(state: EditorState): DecorationSet | null {
+  const decorations: Decoration[] = [];
+  const focus = ANNOTATION_FOCUS_KEY.getState(state);
+
+  state.doc.descendants((node, pos) => {
+    const kind = hardBreakCueKind(node);
+    if (!kind) return;
+    const mark = node.marks.find((candidate) => candidate.type.name === `tracked_${kind}`);
+    const changeId = String(mark?.attrs.changeId ?? mark?.attrs.dataTracked?.id ?? '');
+    const active = focus?.kind === 'suggestion' && focus.id === changeId;
+
+    decorations.push(
+      Decoration.widget(
+        pos,
+        () => {
+          const cue = document.createElement('span');
+          cue.className = `track-hard-break-cue track-hard-break-cue-${kind}${active ? ' annotation-focus' : ''}`;
+          cue.dataset.hardBreakCue = kind;
+          cue.setAttribute('aria-hidden', 'true');
+          cue.setAttribute('contenteditable', 'false');
+          return cue;
+        },
+        {
+          key: `hard-break-cue:${kind}:${changeId || pos}:${active ? 'active' : 'idle'}`,
+          side: -1,
+          marks: [],
+          ignoreSelection: true,
+        },
+      ),
+    );
+  });
+
+  return decorations.length > 0 ? DecorationSet.create(state.doc, decorations) : null;
+}
 
 /**
  * Mark names whose add/remove becomes a tracked formatting suggestion in
@@ -233,6 +285,10 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
     return [
       new Plugin({
         key: TRACK_PLUGIN_KEY,
+
+        props: {
+          decorations: hardBreakCueDecorations,
+        },
 
         view(editorView) {
           const origDispatch = editorView.dispatch.bind(editorView);
