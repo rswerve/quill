@@ -9,6 +9,7 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
+import { sanitizeSuggestions } from '../../utils/annotationValidation';
 import {
   mergeQuarantinedSuggestions,
   suggestionsFromTrackedChanges,
@@ -222,7 +223,7 @@ describe('restoreReviewMarks', () => {
     expect(records).toEqual([
       expect.objectContaining({
         type: 'change',
-        segments: [expect.objectContaining({ kind: 'delete', text: ' ' })],
+        segments: [expect.objectContaining({ kind: 'delete', text: '\n', nodeType: 'hardBreak' })],
       }),
     ]);
     editor.destroy();
@@ -240,11 +241,144 @@ describe('restoreReviewMarks', () => {
     expect(restoredBreakMarks).toContain('tracked_delete');
     expect(getTrackedChanges(editor)).toEqual([
       expect.objectContaining({
-        segments: [expect.objectContaining({ kind: 'delete', text: ' ' })],
+        segments: [expect.objectContaining({ kind: 'delete', text: '\n', nodeType: 'hardBreak' })],
       }),
     ]);
     editor.commands.acceptAllChanges();
     expect(editor.getHTML()).toBe('<p>onetwo</p>');
+  });
+
+  it('round-trips a pending hard-break insertion through the sidecar', () => {
+    editor = makeEditor('<p>onetwo</p>');
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.commands.setTextSelection(4);
+    editor.commands.setHardBreak();
+
+    const records = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+    expect(records).toEqual([
+      expect.objectContaining({
+        type: 'change',
+        segments: [expect.objectContaining({ kind: 'insert', text: '\n', nodeType: 'hardBreak' })],
+      }),
+    ]);
+    editor.destroy();
+
+    editor = makeEditor('<p>one<br>two</p>');
+    const sanitized = sanitizeSuggestions(JSON.parse(JSON.stringify(records)) as unknown);
+    expect(sanitized[0]).toMatchObject({
+      segments: [expect.objectContaining({ text: '\n', nodeType: 'hardBreak' })],
+    });
+    expect(restoreReviewMarks(editor, [], sanitized)).toEqual({
+      quarantinedSuggestions: [],
+      mismatches: [],
+    });
+    let restoredBreakMarks: string[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'hardBreak') {
+        restoredBreakMarks = node.marks.map((mark) => mark.type.name);
+      }
+    });
+    expect(restoredBreakMarks).toContain('tracked_insert');
+    editor.commands.rejectAllChanges();
+    expect(editor.getHTML()).toBe('<p>onetwo</p>');
+  });
+
+  it('restores a legacy space-encoded hard-break segment', () => {
+    editor = makeEditor('<p>one<br>two</p>');
+    const legacy = {
+      id: 'legacy-break',
+      type: 'change' as const,
+      author: 'claude',
+      createdAt: '2026-07-11T12:00:00.000Z',
+      status: 'pending' as const,
+      segments: [{ kind: 'delete' as const, from: 4, to: 5, text: ' ' }],
+    };
+
+    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+      quarantinedSuggestions: [],
+      mismatches: [],
+    });
+    expect(getTrackedChanges(editor)[0].segments).toEqual([
+      expect.objectContaining({ kind: 'delete', text: '\n', nodeType: 'hardBreak' }),
+    ]);
+  });
+
+  it('restores a legacy mixed text-and-break segment with its old space projection', () => {
+    editor = makeEditor('<p>one<br>two</p>');
+    const legacy = {
+      id: 'legacy-mixed-break',
+      type: 'change' as const,
+      author: 'claude',
+      createdAt: '2026-07-11T12:00:00.000Z',
+      status: 'pending' as const,
+      segments: [{ kind: 'delete' as const, from: 1, to: 8, text: 'one two' }],
+    };
+
+    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+      quarantinedSuggestions: [],
+      mismatches: [],
+    });
+    expect(getTrackedChanges(editor)[0].segments).toEqual([
+      expect.objectContaining({ kind: 'delete', text: 'one' }),
+      expect.objectContaining({ kind: 'delete', text: '\n', nodeType: 'hardBreak' }),
+      expect.objectContaining({ kind: 'delete', text: 'two' }),
+    ]);
+    editor.commands.acceptAllChanges();
+    expect(editor.getHTML()).toBe('<p></p>');
+  });
+
+  it('quarantines a semantic hard-break segment when its range is ordinary text', () => {
+    editor = makeEditor('<p>x</p>');
+    const record = {
+      id: 'mismatched-break',
+      type: 'change' as const,
+      author: 'claude',
+      createdAt: '2026-07-11T12:00:00.000Z',
+      status: 'pending' as const,
+      segments: [
+        {
+          kind: 'insert' as const,
+          from: 1,
+          to: 2,
+          text: '\n',
+          nodeType: 'hardBreak' as const,
+        },
+      ],
+    };
+
+    const restored = restoreReviewMarks(editor, [], [record]);
+    expect(restored.quarantinedSuggestions).toEqual([record]);
+    expect(restored.mismatches).toEqual([
+      expect.objectContaining({ suggestionId: 'mismatched-break', expected: '\n', actual: null }),
+    ]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('round-trips a format suggestion spanning a hard break without text-node semantics', () => {
+    editor = makeEditor('<p>one<br>two</p>');
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 8 }).setItalic().run();
+
+    const records = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+    const formatSegments = records[0]?.type === 'change' ? records[0].segments : [];
+    expect(formatSegments).toEqual([
+      expect.objectContaining({ kind: 'format', text: 'one' }),
+      expect.objectContaining({ kind: 'format', text: 'two' }),
+    ]);
+    for (const segment of formatSegments) expect(segment).not.toHaveProperty('nodeType');
+    editor.destroy();
+
+    editor = makeEditor('<p><em>one<br>two</em></p>');
+    expect(restoreReviewMarks(editor, [], records)).toEqual({
+      quarantinedSuggestions: [],
+      mismatches: [],
+    });
+    expect(getTrackedChanges(editor)[0].segments).toEqual([
+      expect.objectContaining({ kind: 'format', text: 'one' }),
+      expect.objectContaining({ kind: 'format', text: 'two' }),
+    ]);
   });
 
   it('restores disjoint format spans under one logical id with exact deltas', () => {

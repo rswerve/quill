@@ -249,7 +249,7 @@ function restoreSuggestionMarks(
   }
 }
 
-function exactRangeText(
+function legacyRangeText(
   doc: TiptapEditor['state']['doc'],
   from: number,
   to: number,
@@ -261,13 +261,27 @@ function exactRangeText(
   return doc.textBetween(from, to, '\n', ' ');
 }
 
+function exactSegmentText(
+  doc: TiptapEditor['state']['doc'],
+  segment: TrackedChangeSegment,
+): string | null {
+  if (segment.kind !== 'format' && segment.nodeType === 'hardBreak') {
+    if (segment.to !== segment.from + 1) return null;
+    return doc.nodeAt(segment.from)?.type.name === 'hardBreak' ? '\n' : null;
+  }
+  // Ordinary text and records predating the discriminator retain the exact
+  // historical leaf-space projection, including a legacy mixed text+break
+  // span such as "one two".
+  return legacyRangeText(doc, segment.from, segment.to);
+}
+
 function suggestionMismatches(
   doc: TiptapEditor['state']['doc'],
   suggestion: LogicalSuggestion,
 ): ReviewRestoreMismatch[] {
-  const spans = suggestion.segments.map(({ from, to, text }) => ({ from, to, expected: text }));
-  return spans.flatMap(({ from, to, expected }) => {
-    const actual = exactRangeText(doc, from, to);
+  return suggestion.segments.flatMap((segment) => {
+    const { from, to, text: expected } = segment;
+    const actual = exactSegmentText(doc, segment);
     return actual === expected ? [] : [{ suggestionId: suggestion.id, from, to, expected, actual }];
   });
 }

@@ -6,6 +6,28 @@ import { buildLinkReplacementContent } from './linkEditing';
 import { planEdits, resolveScopeRange } from './trackedEdits';
 import type { EditResult } from './trackedEdits';
 
+type InlineReplacementNode = { type: 'text'; text: string } | { type: 'hardBreak' };
+
+/**
+ * Turn a planner-approved replacement string into an inline content fragment,
+ * mapping each `\n` to a `{ type: 'hardBreak' }` node (Shift+Enter). The planner
+ * only lets a newline-bearing replacement through when it stays inside one
+ * textblock whose schema admits hard breaks (and rejects newline-bearing link
+ * replacements), so this is total: it never falls back to inserting a raw
+ * newline. Empty text chunks are dropped, but every delimiter is preserved so
+ * leading, trailing, and consecutive breaks survive (`\n`, `\nX`, `X\n`,
+ * `X\n\nY`).
+ */
+export function buildInlineReplacementContent(replace: string): InlineReplacementNode[] {
+  const content: InlineReplacementNode[] = [];
+  const segments = replace.split('\n');
+  segments.forEach((segment, index) => {
+    if (index > 0) content.push({ type: 'hardBreak' });
+    if (segment.length > 0) content.push({ type: 'text', text: segment });
+  });
+  return content;
+}
+
 export interface ApplyTrackedEditsInput {
   editor: Editor;
   /** Anchor range the scope resolves around (ignored for scope 'doc'). */
@@ -79,12 +101,22 @@ export function applyTrackedEditsToEditor(input: ApplyTrackedEditsInput): ApplyT
         }
         chain.run();
       } else {
-        const replacement = e.linkHref
-          ? buildLinkReplacementContent(ed, e, e.linkHref, e.replace)
-          : null;
+        // A newline-bearing replacement builds real hardBreak nodes (the
+        // planner has already guaranteed one textblock, a break-admitting
+        // schema, and no link href on this edit). Otherwise the plain string
+        // (or link fragment) inserts as before.
+        let content:
+          | ReturnType<typeof buildLinkReplacementContent>
+          | InlineReplacementNode[]
+          | null = null;
+        if (e.linkHref) {
+          content = buildLinkReplacementContent(ed, e, e.linkHref, e.replace);
+        } else if (e.replace.includes('\n')) {
+          content = buildInlineReplacementContent(e.replace);
+        }
         ed.chain()
           .setTextSelection({ from: e.from, to: e.to })
-          .insertContent(replacement ?? e.replace)
+          .insertContent(content ?? e.replace)
           .run();
       }
       if (engineVetoed) {

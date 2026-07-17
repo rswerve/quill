@@ -1,5 +1,6 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { EditScope, QuillEdit, QuillFormatEdit, QuillTextEdit } from '../types';
+import { buildEditTextProjection, locateEditTextMatches } from './editTextProjection';
 import { normalizeHref } from './linkEditing';
 
 /**
@@ -54,61 +55,8 @@ export function mapRangeTextOffsetToPos(
   to: number,
   offset: number,
 ): number | null {
-  // This must emit exactly one map entry per character of
-  // doc.textBetween(from, to, '\n', ' ') — same order, same count — or every
-  // offset after the first divergence maps to the wrong position. textBetween's
-  // actual rules (prosemirror-model Fragment.textBetween): a '\n' separator is
-  // emitted on entering every textblock after the first (including EMPTY
-  // textblocks) and before a block-level leaf that renders leaf text; a ' ' is
-  // emitted for every leaf node given the leafText argument; text nodes emit
-  // their (range-clamped) characters. Nothing is emitted at mark boundaries:
-  // adjacent text runs in one block are contiguous in the string.
-  const map: number[] = [];
-  let first = true;
-  // Boundary just after the most recently emitted character. Separators are
-  // anchored here: they have no width in the document.
-  let lastEnd = from;
-
-  doc.nodesBetween(from, to, (node, pos) => {
-    let leafText = '';
-    if (!node.isText && node.isLeaf) leafText = ' ';
-    if (node.isBlock && ((node.isLeaf && leafText) || node.isTextblock)) {
-      if (first) {
-        first = false;
-      } else {
-        map.push(lastEnd);
-      }
-    }
-    if (node.isText) {
-      const start = Math.max(pos, from);
-      const end = Math.min(pos + node.nodeSize, to);
-      for (let p = start; p < end; p++) {
-        map.push(p);
-      }
-      if (end > start) lastEnd = end;
-    } else if (node.isLeaf && leafText) {
-      map.push(Math.max(pos, from));
-      lastEnd = Math.min(pos + node.nodeSize, to);
-    }
-  });
-
-  // Final boundary: just after the last emitted character.
-  map.push(lastEnd);
-
-  if (offset < 0 || offset >= map.length) return null;
-  return map[offset];
-}
-
-/**
- * Prefer the model's find string verbatim. If it has Markdown-style blank
- * lines and no verbatim match exists, retry with each blank-line run collapsed
- * to the single block separator used by rangeText(). Return the exact candidate
- * whose offsets map into the plaintext projection; never mutate the source edit.
- */
-function matchingFind(text: string, find: string): string | null {
-  if (text.includes(find)) return find;
-  const collapsed = find.replace(/\n[ \t]*(?:\n[ \t]*)+/g, '\n');
-  return collapsed !== find && text.includes(collapsed) ? collapsed : null;
+  const projection = buildEditTextProjection(doc, from, to, 'legacy');
+  return projection.positions[offset] ?? null;
 }
 
 /**
@@ -123,14 +71,7 @@ export function locateEdit(
   rangeTo: number,
   find: string,
 ): { from: number; to: number } | null {
-  const text = rangeText(doc, rangeFrom, rangeTo);
-  const candidate = matchingFind(text, find);
-  if (candidate === null) return null;
-  const idx = text.indexOf(candidate);
-  const absFrom = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, idx);
-  const absTo = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, idx + candidate.length);
-  if (absFrom === null || absTo === null) return null;
-  return { from: absFrom, to: absTo };
+  return locateEditTextMatches(doc, rangeFrom, rangeTo, find)[0] ?? null;
 }
 
 /** Resolve the absolute from/to bounds for an edit scope around a comment. */
@@ -377,18 +318,7 @@ function locateAllEdits(
   rangeTo: number,
   find: string,
 ): Array<{ from: number; to: number }> {
-  const text = rangeText(doc, rangeFrom, rangeTo);
-  const candidate = matchingFind(text, find);
-  if (candidate === null) return [];
-  const matches: Array<{ from: number; to: number }> = [];
-  let index = text.indexOf(candidate);
-  while (index !== -1) {
-    const from = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index);
-    const to = mapRangeTextOffsetToPos(doc, rangeFrom, rangeTo, index + candidate.length);
-    if (from !== null && to !== null) matches.push({ from, to });
-    index = text.indexOf(candidate, index + 1);
-  }
-  return matches;
+  return locateEditTextMatches(doc, rangeFrom, rangeTo, find);
 }
 
 function blockMatchesProjection(
@@ -635,6 +565,14 @@ function planTextEdit(
   if (find === replace) return { result: result(edit, 'no-op', 'already-applied') };
   const at = locateEdit(doc, rangeFrom, rangeTo, find);
   if (at) {
+    // A legacy space quote can locate an existing hard break. Compare the
+    // replacement with the canonical range before minting a delete/reinsert
+    // suggestion for a structure that already matches.
+    const sameTextblock = doc.resolve(at.from).sameParent(doc.resolve(at.to));
+    const current = buildEditTextProjection(doc, at.from, at.to, 'canonical').text;
+    if (sameTextblock && current === replace) {
+      return { result: result(edit, 'no-op', 'already-applied') };
+    }
     return {
       result: result(edit, 'applied'),
       placed: { kind: 'text', from: at.from, to: at.to, replace },
@@ -702,8 +640,15 @@ function textEditConflictReason(
 ): EditResultReason | null {
   const $from = doc.resolve(edit.from);
   const $to = doc.resolve(edit.to);
-  if (!$from.sameParent($to) || !$from.parent.isTextblock || edit.replace.includes('\n')) {
+  if (!$from.sameParent($to) || !$from.parent.isTextblock) {
     return 'structural-change';
+  }
+  if (edit.linkHref && edit.replace.includes('\n')) return 'invalid-link';
+  if (edit.replace.includes('\n')) {
+    const hardBreak = doc.type.schema.nodes['hardBreak'];
+    if (!hardBreak || !$from.parent.canReplaceWith($from.index(), $from.index(), hardBreak)) {
+      return 'engine-blocked';
+    }
   }
   const insertType = doc.type.schema.marks['tracked_insert'];
   const deleteType = doc.type.schema.marks['tracked_delete'];

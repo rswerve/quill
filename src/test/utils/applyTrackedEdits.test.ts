@@ -10,7 +10,10 @@ import {
   getTrackedChanges,
   TRACKING_BLOCKED_META,
 } from '../../extensions/TrackChanges';
-import { applyTrackedEditsToEditor } from '../../utils/applyTrackedEdits';
+import {
+  applyTrackedEditsToEditor,
+  buildInlineReplacementContent,
+} from '../../utils/applyTrackedEdits';
 import { rangeText } from '../../utils/trackedEdits';
 import type { QuillEdit } from '../../types';
 
@@ -363,8 +366,17 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
       ]);
       const changes = getTrackedChanges(editor);
       expect(changes).toHaveLength(1);
-      const kinds = changes[0].segments.map((s) => s.kind).sort();
-      expect(kinds).toEqual(['delete', 'insert']);
+      // One logical replacement carrying both delete and insert. The struck run
+      // spans the break, which is now its own segment (Slice 2 stopped
+      // coalescing a hard break into adjacent text), so assert the kinds
+      // present rather than an exact coalesced count.
+      const kinds = new Set(changes[0].segments.map((s) => s.kind));
+      expect(kinds).toEqual(new Set(['delete', 'insert']));
+      // The struck break is its own segment, tagged with the nodeType
+      // discriminator so the review UI can render it authoritatively.
+      expect(
+        changes[0].segments.some((s) => s.kind === 'delete' && s.nodeType === 'hardBreak'),
+      ).toBe(true);
       expect(suggestionIds).toEqual([changes[0].id]);
 
       // Accept: the requested text, and NO stray hard break survives.
@@ -394,6 +406,123 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
 
       expect(results[0]).toMatchObject({ status: 'conflict', reason: 'engine-blocked' });
       expect(editor.state.doc.eq(before)).toBe(true);
+    });
+  });
+
+  describe('buildInlineReplacementContent (Slice 2: newline → hardBreak fragment)', () => {
+    it('maps each newline to a hardBreak and preserves every delimiter', () => {
+      expect(buildInlineReplacementContent('one\ntwo')).toEqual([
+        { type: 'text', text: 'one' },
+        { type: 'hardBreak' },
+        { type: 'text', text: 'two' },
+      ]);
+      expect(buildInlineReplacementContent('\n')).toEqual([{ type: 'hardBreak' }]);
+      expect(buildInlineReplacementContent('\nX')).toEqual([
+        { type: 'hardBreak' },
+        { type: 'text', text: 'X' },
+      ]);
+      expect(buildInlineReplacementContent('X\n')).toEqual([
+        { type: 'text', text: 'X' },
+        { type: 'hardBreak' },
+      ]);
+      expect(buildInlineReplacementContent('X\n\nY')).toEqual([
+        { type: 'text', text: 'X' },
+        { type: 'hardBreak' },
+        { type: 'hardBreak' },
+        { type: 'text', text: 'Y' },
+      ]);
+      // No newline / empty → no empty text nodes.
+      expect(buildInlineReplacementContent('plain')).toEqual([{ type: 'text', text: 'plain' }]);
+      expect(buildInlineReplacementContent('')).toEqual([]);
+    });
+  });
+
+  describe('hard breaks (Slice 2: creating a break through the Claude apply path)', () => {
+    function hardBreakCount(ed: Editor): number {
+      let count = 0;
+      ed.state.doc.descendants((node) => {
+        if (node.type.name === 'hardBreak') count += 1;
+      });
+      return count;
+    }
+
+    it('inserts a hard break: split one line into two within the block', () => {
+      editor = makeEditor('<p>one two</p>');
+      const { results } = apply(editor, [{ find: 'one two', replace: 'one\ntwo' }]);
+
+      expect(results[0].status).toBe('applied');
+      const changes = getTrackedChanges(editor);
+      expect(changes.length).toBeGreaterThan(0);
+      // Pin the builder→kernel→persistence handoff: the inserted break is a
+      // tracked insert segment carrying the semantic encoding, not a raw
+      // newline in text. (Narrow the union in one expression so nodeType/text
+      // are valid on TrackedTextSegment.)
+      expect(
+        changes
+          .flatMap((c) => c.segments)
+          .some((s) => s.kind === 'insert' && s.nodeType === 'hardBreak' && s.text === '\n'),
+      ).toBe(true);
+
+      editor.commands.acceptAllChanges();
+      expect(hardBreakCount(editor)).toBe(1);
+      expect(editor.getHTML()).toBe('<p>one<br>two</p>');
+    });
+
+    it('rejecting an inserted break leaves the original single line', () => {
+      editor = makeEditor('<p>one two</p>');
+      const before = editor.state.doc;
+      apply(editor, [{ find: 'one two', replace: 'one\ntwo' }]);
+
+      editor.commands.rejectAllChanges();
+      expect(editor.state.doc.eq(before)).toBe(true);
+      expect(hardBreakCount(editor)).toBe(0);
+    });
+
+    it('joins two hard-broken lines via a canonical newline find', () => {
+      editor = makeEditor('<p>one<br>two</p>');
+      const { results } = apply(editor, [{ find: 'one\ntwo', replace: 'one two' }]);
+
+      expect(results[0].status).toBe('applied');
+      editor.commands.acceptAllChanges();
+      expect(hardBreakCount(editor)).toBe(0);
+      expect(editor.getHTML()).toBe('<p>one two</p>');
+    });
+
+    it('reports a no-op when a legacy space find pairs with a canonical break replacement', () => {
+      // find "one two" (legacy, matching the existing break) + replace
+      // "one\ntwo" (canonical) describes the current structure — no change.
+      editor = makeEditor('<p>one<br>two</p>');
+      const before = editor.state.doc;
+      const { results } = apply(editor, [{ find: 'one two', replace: 'one\ntwo' }]);
+
+      expect(results[0]).toMatchObject({ status: 'no-op' });
+      expect(editor.state.doc.eq(before)).toBe(true);
+    });
+
+    it('preserves consecutive breaks through Accept', () => {
+      editor = makeEditor('<p>alpha</p>');
+      const { results } = apply(editor, [{ find: 'alpha', replace: 'a\n\nb' }]);
+
+      expect(results[0].status).toBe('applied');
+      editor.commands.acceptAllChanges();
+      expect(editor.getHTML()).toBe('<p>a<br><br>b</p>');
+    });
+
+    // Edge-position atoms are where schema normalization on insert is most
+    // likely to drop a break, so drive each through the real engine + Accept
+    // rather than trusting the array oracle alone.
+    it.each([
+      { replace: '\nalpha', accepted: '<p><br>alpha</p>', breaks: 1 },
+      { replace: 'alpha\n', accepted: '<p>alpha<br></p>', breaks: 1 },
+      { replace: '\n', accepted: '<p><br></p>', breaks: 1 },
+    ])('keeps an edge-position break for replace $replace', ({ replace, accepted, breaks }) => {
+      editor = makeEditor('<p>WORD</p>');
+      const { results } = apply(editor, [{ find: 'WORD', replace }]);
+
+      expect(results[0].status).toBe('applied');
+      editor.commands.acceptAllChanges();
+      expect(hardBreakCount(editor)).toBe(breaks);
+      expect(editor.getHTML()).toBe(accepted);
     });
   });
 });

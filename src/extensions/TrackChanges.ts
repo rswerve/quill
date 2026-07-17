@@ -383,6 +383,13 @@ function appendLogicalSegment(
     segments.push(segment);
     return;
   }
+  // A hard break is a semantic inline node, not an anonymous character in a
+  // neighboring text span. Keep it as its own segment so persistence and the
+  // review UI never have to infer node identity from a merged string.
+  if (previous.nodeType === 'hardBreak' || segment.nodeType === 'hardBreak') {
+    segments.push(segment);
+    return;
+  }
   if (previous.to === segment.from) {
     previous.to = segment.to;
     previous.text += segment.text;
@@ -430,13 +437,18 @@ function logicalSegment(
   data: LogicalMarkData,
   isFormat: boolean,
 ): TrackedChangeSegment {
-  const text = node.text ?? doc.textBetween(pos, pos + node.nodeSize, '\n', ' ');
+  const isHardBreak = node.type.name === 'hardBreak';
+  const text =
+    isHardBreak && !isFormat
+      ? '\n'
+      : (node.text ?? doc.textBetween(pos, pos + node.nodeSize, '\n', ' '));
   if (!isFormat) {
     return {
       kind: data.operation as 'insert' | 'delete',
       from: pos,
       to: pos + node.nodeSize,
       text,
+      ...(isHardBreak ? { nodeType: 'hardBreak' as const } : {}),
     };
   }
   return {
