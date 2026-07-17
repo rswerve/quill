@@ -4,7 +4,7 @@ import { TaskList, TaskItem } from '@tiptap/extension-list';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { BlockTrack, type BlockTrackOp } from '../../extensions/BlockTrack';
-import { projectBlockUnions } from '../../utils/blockUnionProjection';
+import { projectBlockUnions, projectDocument } from '../../utils/blockUnionProjection';
 
 let editor: Editor;
 
@@ -120,5 +120,28 @@ describe('projectBlockUnions', () => {
       expect(topTexts(projected)).toEqual(['just text']);
       expect(removedBranchRanges).toEqual([]);
     }
+  });
+});
+
+describe('projectDocument (two-axis)', () => {
+  it('disk view {source, review} equals the structural source projection', () => {
+    const doc = docFrom(splitUnion());
+    const disk = projectDocument(doc, { structural: 'source', inline: 'review' });
+    expect(topTexts(disk.doc)).toEqual(['Hello world']);
+    expect(topOps(disk.doc)).toEqual([null]);
+    // inline:'review' keeps the full structural mapping.
+    expect(disk.removedBranchRanges).toHaveLength(2);
+  });
+
+  it('accepted-content view {accepted, accepted} yields the proposed shape', () => {
+    const doc = docFrom(splitUnion());
+    const view = projectDocument(doc, { structural: 'accepted', inline: 'accepted' });
+    expect(topTexts(view.doc)).toEqual(['Hello', 'world']);
+    expect(topOps(view.doc)).toEqual([null, null]);
+  });
+
+  it('defaults the inline axis to review', () => {
+    const doc = docFrom(splitUnion());
+    expect(topTexts(projectDocument(doc, { structural: 'source' }).doc)).toEqual(['Hello world']);
   });
 });

@@ -1,6 +1,7 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { Transform, type Mapping } from '@tiptap/pm/transform';
 import type { BlockTrackAttr, BlockTrackOp } from '../extensions/BlockTrack';
+import { projectTrackedDocument } from '../extensions/trackChangesProjection';
 
 /** Which view of a document containing block unions to produce. */
 export type StructuralMode = 'review' | 'source' | 'accepted';
@@ -77,4 +78,36 @@ export function projectBlockUnions(doc: PMNode, mode: StructuralMode): BlockUnio
   }
 
   return { doc: tr.doc, mapping: tr.mapping, removedBranchRanges };
+}
+
+/** The inline axis: keep the review union, or project inline changes to accepted. */
+export type InlineMode = 'review' | 'accepted';
+
+export interface ProjectionAxes {
+  structural: StructuralMode;
+  inline?: InlineMode;
+}
+
+/**
+ * The two-axis projection: structural branch selection composed with the inline
+ * accepted-vs-review projection. The disk view is `{structural:'source',
+ * inline:'review'}`; the accepted-content view (stats, Claude context, clean
+ * print) is `{structural:'accepted', inline:'accepted'}`.
+ *
+ * The returned mapping reflects the structural axis. When `inline` is `accepted`
+ * the inline drop is a content rebuild (via the existing, fuzzer-validated
+ * `projectTrackedDocument`), which does not preserve a position mapping, so
+ * inline-accepted positions are not mapped — callers that need them resolve at
+ * their own seam. The disk view needs no inline projection, so it keeps the full
+ * structural mapping.
+ */
+export function projectDocument(doc: PMNode, axes: ProjectionAxes): BlockUnionProjection {
+  const structural = projectBlockUnions(doc, axes.structural);
+  if ((axes.inline ?? 'review') === 'review') return structural;
+  const accepted = projectTrackedDocument(structural.doc).accepted;
+  return {
+    doc: accepted,
+    mapping: structural.mapping,
+    removedBranchRanges: structural.removedBranchRanges,
+  };
 }
