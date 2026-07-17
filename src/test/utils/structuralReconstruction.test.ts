@@ -347,6 +347,52 @@ describe('reconstructBlockUnions hardening', () => {
     expect(reconstructBlockUnions(source, [rec], serialize).doc.childCount).toBe(1);
   });
 
+  it('quarantines hostile leaf-node and mark attributes in proposed JSON', () => {
+    const source = docFrom([paragraph('x')]);
+    const anchor = { parentPath: [] as number[], childIndex: 0, childCount: 1 };
+    const fp = fingerprintRange(source, 0, 1);
+    const hostile = [
+      // nested hardBreak with an unknown attribute
+      [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'a' },
+            { type: 'hardBreak', attrs: { bogus: 1 } },
+          ],
+        },
+      ],
+      // nested hardBreak with an injected blockTrack
+      [{ type: 'paragraph', content: [{ type: 'hardBreak', attrs: { blockTrack: null } }] }],
+      // text with a bold mark carrying an unknown attribute
+      [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'a', marks: [{ type: 'bold', attrs: { bogus: 1 } }] }],
+        },
+      ],
+      // link mark with an unknown attribute
+      [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              text: 'a',
+              marks: [{ type: 'link', attrs: { href: 'https://x', bogus: 1 } }],
+            },
+          ],
+        },
+      ],
+    ];
+    for (const proposed of hostile) {
+      const rec = record({ changeId: 'c1', anchor, sourceFingerprint: fp, proposed });
+      const result = reconstructBlockUnions(source, [rec], serialize);
+      expect(result.quarantined).toHaveLength(1);
+      expect(result.restored).toHaveLength(0);
+    }
+  });
+
   it('quarantines malformed runtime records without throwing', () => {
     const source = docFrom([paragraph('x')]);
     const fp = fingerprintRange(source, 0, 1);

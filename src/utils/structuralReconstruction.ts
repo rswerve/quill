@@ -79,18 +79,25 @@ function attrsAreClean(json: Record<string, unknown>, nodeType: NodeType): boole
   return Object.keys(json.attrs).every((k) => allowed.has(k));
 }
 
-function marksAreClean(json: Record<string, unknown>): boolean {
+function markIsClean(schema: Schema, mark: unknown): boolean {
+  if (!isPlainObject(mark) || typeof mark.type !== 'string') return false;
+  if (FORBIDDEN_MARKS.has(mark.type) || !schema.marks[mark.type]) return false;
+  if (mark.attrs === undefined) return true;
+  if (!isPlainObject(mark.attrs)) return false;
+  const allowed = new Set(Object.keys(schema.marks[mark.type].spec.attrs ?? {}));
+  return Object.keys(mark.attrs).every((k) => allowed.has(k));
+}
+
+function marksAreClean(schema: Schema, json: Record<string, unknown>): boolean {
   if (json.marks === undefined) return true;
   if (!Array.isArray(json.marks)) return false;
-  return !json.marks.some(
-    (m) => isPlainObject(m) && typeof m.type === 'string' && FORBIDDEN_MARKS.has(m.type),
-  );
+  return json.marks.every((mark) => markIsClean(schema, mark));
 }
 
 function rawNodeIsClean(schema: Schema, json: unknown): boolean {
   if (!isPlainObject(json) || typeof json.type !== 'string') return false;
   const nodeType = schema.nodes[json.type];
-  if (!nodeType || !attrsAreClean(json, nodeType) || !marksAreClean(json)) return false;
+  if (!nodeType || !attrsAreClean(json, nodeType) || !marksAreClean(schema, json)) return false;
   if (json.content === undefined) return true;
   if (!Array.isArray(json.content)) return false;
   // Recurse with the same strict check — text/leaf nodes are handled by the type
