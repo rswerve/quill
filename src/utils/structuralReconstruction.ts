@@ -93,14 +93,9 @@ function rawNodeIsClean(schema: Schema, json: unknown): boolean {
   if (!nodeType || !attrsAreClean(json, nodeType) || !marksAreClean(json)) return false;
   if (json.content === undefined) return true;
   if (!Array.isArray(json.content)) return false;
-  return json.content.every((c) => rawNodeIsClean(schema, c) || textNodeIsClean(c));
-}
-
-/** Leaf text/inline nodes: no forbidden marks; a `text` node has no children. */
-function textNodeIsClean(json: unknown): boolean {
-  if (!isPlainObject(json) || typeof json.type !== 'string') return false;
-  if (!marksAreClean(json)) return false;
-  return json.type === 'text' || !('content' in json);
+  // Recurse with the same strict check — text/leaf nodes are handled by the type
+  // + marks checks above, so there is no weaker "leaf" fallback to slip through.
+  return json.content.every((c) => rawNodeIsClean(schema, c));
 }
 
 interface ValidRecord {

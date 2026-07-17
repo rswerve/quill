@@ -335,6 +335,18 @@ describe('reconstructBlockUnions hardening', () => {
     expect(reconstructBlockUnions(source, [unknownAttr], serialize).quarantined).toHaveLength(1);
   });
 
+  it('quarantines an unknown inline node nested inside proposed content', () => {
+    const source = docFrom([paragraph('x')]);
+    const rec = record({
+      changeId: 'c1',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [{ type: 'paragraph', content: [{ type: 'notAnInlineNode' }] }],
+    });
+    expect(reconstructBlockUnions(source, [rec], serialize).quarantined).toHaveLength(1);
+    expect(reconstructBlockUnions(source, [rec], serialize).doc.childCount).toBe(1);
+  });
+
   it('quarantines malformed runtime records without throwing', () => {
     const source = docFrom([paragraph('x')]);
     const fp = fingerprintRange(source, 0, 1);
