@@ -1422,6 +1422,29 @@ describe('structural envelope persistence', () => {
     });
     expect(nextOutcome!.status).toBe('saved');
   });
+
+  it('restores structural protection independently of sidecarProtected (crash recovery)', async () => {
+    // A recovery snapshot carries structuralProtected=true WITHOUT sidecarProtected —
+    // structural protection is stronger and must survive restore on its own, blocking
+    // BOTH files (a crash must not downgrade it to comments-only, which writes the .md).
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    act(() => {
+      result.current.restoreDraft('/docs/r.md', true, {
+        expectedDoc: { state: 'present', hash: HASH_DOC }, // known baseline (not baseline-unknown)
+        expectedSidecar: { state: 'present', hash: HASH_SIDECAR },
+        sidecarProtected: false,
+        structuralProtected: true,
+      });
+    });
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# changed', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(writes).toHaveLength(0);
+  });
 });
 
 describe('stripTransientReplyState', () => {

@@ -258,8 +258,13 @@ export function useFileManager(
   }, [setIsDirty]);
 
   const setProtected = useCallback((value: boolean, structural = false) => {
-    sidecarProtectedRef.current = value;
-    structuralProtectedRef.current = value && structural;
+    // Structural protection is STRONGER than (and implies) sidecar protection —
+    // blocking BOTH files necessarily blocks the sidecar — so it forces sidecar
+    // protection on rather than being gated by it. This keeps a restored,
+    // structurally-protected draft safe even when its sidecar bit is unset (the
+    // recovery envelope is a trust boundary and may carry the two independently).
+    sidecarProtectedRef.current = value || structural;
+    structuralProtectedRef.current = structural;
   }, []);
 
   // Snapshot the current on-disk baselines + protection for the workspace recovery
