@@ -34,6 +34,7 @@ export type SuggestionRelocation =
         | 'not-found'
         | 'ambiguous'
         | 'leaf-span'
+        | 'mark-ineligible'
         | 'invalid';
     };
 
@@ -101,6 +102,31 @@ function segmentsValid(doc: ProseMirrorNode, suggestion: LogicalSuggestion): boo
   });
 }
 
+const SEGMENT_MARK: Record<string, string> = {
+  insert: 'tracked_insert',
+  delete: 'tracked_delete',
+  format: 'tracked_format',
+};
+
+/**
+ * Whether every textblock covering [from, to] admits `markName`. Plain text is not
+ * enough: code-block content is `text`-sourced but rejects tracked/comment marks, so a
+ * unique match INSIDE a code block would "relocate" yet `addMark` there is a silent
+ * no-op — a record with no live mark. Fail closed on any ineligible parent or a mark
+ * type the schema lacks. (A suggestion span is intra-block, but nodesBetween covers the
+ * general case.)
+ */
+function spanAdmitsMark(doc: ProseMirrorNode, from: number, to: number, markName: string): boolean {
+  const markType = doc.type.schema.marks[markName];
+  if (!markType) return false;
+  let ok = true;
+  doc.nodesBetween(from, to, (node) => {
+    if (node.isTextblock && !node.type.allowsMarkType(markType)) ok = false;
+    return ok;
+  });
+  return ok;
+}
+
 export function relocateSuggestion(
   doc: ProseMirrorNode,
   suggestion: LogicalSuggestion,
@@ -125,6 +151,14 @@ export function relocateSuggestion(
   if (newFrom === undefined) return { status: 'quarantined', reason: 'invalid' };
   const relocated = shiftSuggestion(suggestion, newFrom - span.from);
   if (!segmentsValid(doc, relocated)) return { status: 'quarantined', reason: 'invalid' };
+
+  // A text-only match can still land where its tracking mark cannot live (a code
+  // block). Restoring there would addMark into a no-op — a record with no live mark.
+  for (const segment of relocated.segments) {
+    if (!spanAdmitsMark(doc, segment.from, segment.to, SEGMENT_MARK[segment.kind])) {
+      return { status: 'quarantined', reason: 'mark-ineligible' };
+    }
+  }
   return { status: 'relocated', suggestion: relocated };
 }
 
@@ -152,5 +186,7 @@ export function relocateComment(
   const from = projection.positions[start];
   const to = projection.positions[start + comment.anchorText.length];
   if (from === undefined || to === undefined) return null;
+  // The comment mark must be admissible where it would land (not a code block).
+  if (!spanAdmitsMark(doc, from, to, 'comment')) return null;
   return { from, to };
 }

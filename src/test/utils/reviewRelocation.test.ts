@@ -1,18 +1,35 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
-import { Markdown } from 'tiptap-markdown';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, afterEach } from 'vitest';
 import { relocateSuggestion, relocateComment } from '../../utils/reviewRelocation';
+import {
+  TrackChanges,
+  TrackedInsert,
+  TrackedDelete,
+  TrackedFormat,
+} from '../../extensions/TrackChanges';
+import { ReviewableCode } from '../../extensions/ReviewableCode';
+import { CommentMark } from '../../extensions/Comment';
 import type { LogicalSuggestion, TrackedChangeSegment } from '../../types';
 
 const editors: Editor[] = [];
 function makeEditor(): Editor {
   const el = document.createElement('div');
   document.body.appendChild(el);
+  // The real review-mark schema: the relocation matcher's mark-eligibility gate needs
+  // the tracked/comment mark types to exist (and code blocks to reject them).
   const editor = new Editor({
     element: el,
-    extensions: [StarterKit, Markdown.configure({ html: false, tightLists: true })],
+    extensions: [
+      StarterKit.configure({ code: false }),
+      ReviewableCode,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges,
+      CommentMark,
+    ],
     content: '',
   });
   editors.push(editor);
@@ -130,6 +147,18 @@ describe('relocateSuggestion (unbound mode)', () => {
     expect(result).toEqual({ status: 'quarantined', reason: 'leaf-segment' });
   });
 
+  it('quarantines a unique match that lands inside a code block (mark-ineligible)', () => {
+    // Code-block text is `text`-sourced so it passes the leaf gate, but a code block
+    // rejects tracked marks — restoring there would be a silent no-op.
+    const doc = docFrom({
+      type: 'doc',
+      content: [{ type: 'codeBlock', content: [{ type: 'text', text: 'uniquecode' }] }],
+    });
+    const real = posOf(doc, 'uniquecode');
+    const result = relocateSuggestion(doc, suggestion([del(real, real + 10, 'uniquecode')]));
+    expect(result).toEqual({ status: 'quarantined', reason: 'mark-ineligible' });
+  });
+
   it('quarantines a legacy flattened span whose ONLY match sits on a surviving hard break', () => {
     // Doc: "one<hardBreak>two". Legacy projection reads "one two" with the break as a
     // space, so a legacy `"one two"` segment matches there — but the span touches a
@@ -204,6 +233,14 @@ describe('relocateComment (unbound mode)', () => {
   it('returns null when the anchor text is gone', () => {
     const doc = docFrom(para('nothing to see'));
     expect(relocateComment(doc, { anchorText: 'absent' })).toBeNull();
+  });
+
+  it('does not relocate a comment into a code block (mark-ineligible)', () => {
+    const doc = docFrom({
+      type: 'doc',
+      content: [{ type: 'codeBlock', content: [{ type: 'text', text: 'codeword' }] }],
+    });
+    expect(relocateComment(doc, { anchorText: 'codeword' })).toBeNull();
   });
 
   it('does not relocate onto a span that touches a hard break (leaf-provenance gate)', () => {
