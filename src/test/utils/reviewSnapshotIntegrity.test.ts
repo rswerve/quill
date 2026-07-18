@@ -420,13 +420,34 @@ describe('validateSnapshot: raw tracked-mark exactness (Codex round 2)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('rejects a logicalKind on a single (non-replacement) operation', () => {
-    const { editor } = coherent(); // a lone tracked delete
+  it('ACCEPTS a partial replacement: a lone delete that retains replacement identity', () => {
+    // Replace "Hello" with "Hi", then delete the pending insertion — the engine keeps only the
+    // delete fragment, which retains logicalKind 'replacement' so later typing can reuse it.
+    // That is a LEGITIMATE lone-op-with-replacement state; the validator must not reject it.
+    const editor = makeEditor();
+    editor.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello world' }] }],
+      },
+      { emitUpdate: false },
+    );
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('Hi').run(); // insert "Hi" + delete "Hello"
+    const hiFrom = posOf(editor.state.doc, 'Hi');
+    editor.commands.deleteRange({ from: hiFrom, to: hiFrom + 2 }); // remove the own pending insertion
     const json = jsonOf(editor);
-    forEachTrackedMark(json, (data) => (data.logicalKind = 'replacement'));
-    const result = validateSnapshot(editor.schema, json, [], []);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain('logicalKind');
+    // Precondition: a lone delete fragment (no insert) that still carries replacement identity.
+    const datas: Array<Record<string, unknown>> = [];
+    forEachTrackedMark(json, (data) => datas.push(data));
+    const ops = new Set(datas.map((d) => d.operation));
+    expect(ops.has('delete') && !ops.has('insert')).toBe(true);
+    expect(datas.some((d) => d.logicalKind === 'replacement')).toBe(true);
+
+    const suggestions = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+    const result = validateSnapshot(editor.schema, json, [], suggestions);
+    expect(result.ok).toBe(true);
   });
 
   it('rejects a replacement whose fragments dropped logicalKind', () => {

@@ -82,13 +82,24 @@ export function useWorkspaceRecoveryGuard(): WorkspaceRecoveryGuard {
     [finalize],
   );
 
+  const preservingRef = useRef<Promise<boolean> | null>(null);
   const preserve = useCallback(
-    async (quarantine: () => Promise<string | null>): Promise<boolean> => {
-      const preserved = await quarantine();
-      if (!preserved) return false; // preservation failed → stay suspended + degraded, retryable
-      setDegraded(false);
-      setBoth(false);
-      return true;
+    (quarantine: () => Promise<string | null>): Promise<boolean> => {
+      // Dedupe concurrent calls (a double-click) onto ONE quarantine request: a second call
+      // while one is in flight awaits the same result instead of issuing a second quarantine.
+      if (preservingRef.current) return preservingRef.current;
+      const run = (async () => {
+        const preserved = await quarantine();
+        if (!preserved) return false; // failed → stay suspended + degraded, retryable
+        setDegraded(false);
+        setBoth(false);
+        return true;
+      })();
+      preservingRef.current = run;
+      void run.finally(() => {
+        preservingRef.current = null;
+      });
+      return run;
     },
     [setBoth],
   );

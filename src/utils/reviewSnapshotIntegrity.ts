@@ -213,17 +213,16 @@ function validateRawTrackedMarks(doc: ProseMirrorNode, schema: Schema): string |
   });
   if (error) return error;
   // Each logical change must present an allowed operation shape (insertion / deletion /
-  // insert+delete replacement / format), and `logicalKind` must agree: exactly the
-  // insert+delete replacement carries 'replacement', nothing else does.
+  // insert+delete replacement / format). A full insert+delete replacement MUST carry
+  // logicalKind 'replacement'; a LONE insert or delete MAY carry it (a partial replacement
+  // whose other half was deleted retains the identity so later typing can reuse it — see
+  // trackChangesTransform). `format` is already forbidden logicalKind per-fragment above.
   for (const [id, m] of meta) {
     const shape = [...m.ops].sort().join('|');
     if (!ALLOWED_OP_SETS.has(shape))
       return `tracked mark ${id} has an invalid operation set {${shape}}`;
-    const isReplacement = shape === 'delete|insert';
-    if (isReplacement && m.logicalKind !== 'replacement')
+    if (shape === 'delete|insert' && m.logicalKind !== 'replacement')
       return `tracked mark ${id} is an insert+delete replacement but its logicalKind is not 'replacement'`;
-    if (!isReplacement && m.logicalKind !== undefined)
-      return `tracked mark ${id} (${shape}) must not carry logicalKind`;
   }
   return null;
 }
