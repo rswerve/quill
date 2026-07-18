@@ -79,4 +79,33 @@ describe('reconcileCommentsWithDocument', () => {
     expect(result).toBe(comments);
     expect(result[0]).toBe(COMMENT);
   });
+
+  it('preserves a detached (mark-less) unresolved comment across reconciliation', () => {
+    // No mark is set for this comment id; it must survive rather than being dropped.
+    editor = new Editor({ extensions: [StarterKit, CommentMark], content: '<p>plain text</p>' });
+    const detached = { ...COMMENT, detached: true as const };
+    const comments = [detached];
+
+    const result = reconcileCommentsWithDocument(comments, editor.state.doc);
+
+    expect(result).toBe(comments);
+    expect(result).toEqual([detached]);
+  });
+
+  it('does not reattach a detached comment even when a stray mark with its id exists', () => {
+    // A stray mark matching the detached comment's id must NOT re-home it.
+    editor = makeEditor(); // sets a comment mark for COMMENT.id
+    const detached = {
+      ...COMMENT,
+      from: 999,
+      to: 1000,
+      anchorText: 'stale',
+      detached: true as const,
+    };
+
+    const result = reconcileCommentsWithDocument([detached], editor.state.doc);
+
+    // Preserved verbatim (stale coords untouched, never rebound to the live mark).
+    expect(result).toEqual([detached]);
+  });
 });

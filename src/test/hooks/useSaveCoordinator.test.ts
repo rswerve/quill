@@ -20,6 +20,10 @@ const saved = (): SaveOutcome => ({
   sidecar: { state: 'absent' },
 });
 const failed = (message = 'disk full'): SaveOutcome => ({ status: 'failed', message });
+const reviewBlocked = (): SaveOutcome => ({
+  status: 'review-blocked',
+  unmappable: [{ kind: 'comment', id: 'c1' }],
+});
 
 /** Render the coordinator with a mutable revision counter the test controls. */
 function setup(performSave: () => Promise<SaveOutcome>, initialRevision = 1) {
@@ -504,6 +508,20 @@ describe('useSaveCoordinator', () => {
       expect(drained.outcome.status).toBe('saved');
       expect(drained.revision).toBe(1); // covered watermark
       expect(performSave).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT advance the covered revision on review-blocked (nothing was written)', async () => {
+      const performSave = vi.fn(async () => reviewBlocked());
+      const { result } = setup(performSave); // revision 1
+
+      let drained!: { outcome: SaveOutcome; revision: number };
+      await act(async () => {
+        drained = await result.current.saveAndDrain();
+      });
+      expect(drained.outcome.status).toBe('review-blocked');
+      // The watermark starts below 0 and only a SUCCESSFUL write advances it, so the
+      // edit at revision 1 stays uncovered — a later save still runs.
+      expect(drained.revision).toBe(-1);
     });
 
     it('reports a FRESH-PASS failure, never the first write’s success (Codex pinned)', async () => {

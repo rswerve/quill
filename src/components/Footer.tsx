@@ -55,6 +55,8 @@ function autosaveLabel(status: AutosaveStatus): string | null {
       return 'Save failed — retrying';
     case 'stopped':
       return status.reason === 'blocked' ? 'Autosave paused' : null;
+    case 'review-blocked':
+      return 'Save blocked — fix annotation';
     default:
       return null;
   }

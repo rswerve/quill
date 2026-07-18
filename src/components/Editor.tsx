@@ -4,7 +4,10 @@ import StarterKit from '@tiptap/starter-kit';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { TextSelection } from '@tiptap/pm/state';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
+import { parseMarkdownToDoc } from '../utils/markdownDoc';
+import { restoreDocJSONInto, type DocJSONRestoreResult } from '../utils/docJSONRestore';
 import { MarkdownImage } from '../extensions/MarkdownImage';
 import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
@@ -20,6 +23,9 @@ import {
   TrackChanges,
 } from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
+import type { Comment, JSONContent, Suggestion } from '../types';
+
+export type { DocJSONRestoreResult };
 
 export const toolbarSelectionStore = {
   value: null as { from: number; to: number; editor: TiptapEditor } | null,
@@ -30,6 +36,35 @@ export interface EditorRef {
   getMarkdown: () => string;
   setContent: (md: string) => void;
   getEditor: () => TiptapEditor | null;
+  /**
+   * Parse markdown into a DETACHED document with the live editor's schema and parse
+   * options, WITHOUT touching the live editor. This reproduces exactly what reopening
+   * the file would build (`setContent`'s own path: markdown parser → HTML →
+   * schema DOMParser), so canonical-capture can map review anchors from the live
+   * document into the document a reload will actually produce. Null before ready.
+   */
+  parseMarkdown: (md: string) => ProseMirrorNode | null;
+  /**
+   * Serialize an arbitrary document node to Markdown with the live editor's serializer —
+   * WITHOUT touching the live editor. Used to persist the CANONICAL document (the one a
+   * reopen rebuilds) so the on-disk bytes match what the editor shows and typed whitespace
+   * that collapses on reparse is stored collapsed. Empty string before the editor is ready.
+   */
+  serializeDoc: (doc: ProseMirrorNode) => string;
+  /**
+   * Lossless crash-recovery restore: replace the whole document with a persisted
+   * ProseMirror JSON (all review marks embedded) so positions are byte-exact and NOTHING
+   * relocates. Fails closed — the JSON is validated (structure + doc↔records bijection)
+   * BEFORE any mutation, and the caller must not install records unless this returns ok.
+   * The single replacement transaction bypasses TrackChanges (skipTracking) and the
+   * dirty/undo machinery, resets the selection and stored marks, and clears transient
+   * plugin decorations, so a restore never re-tracks itself or inherits stale UI state.
+   */
+  restoreDocJSON: (
+    json: JSONContent,
+    comments: Comment[],
+    suggestions: Suggestion[],
+  ) => DocJSONRestoreResult;
 }
 
 interface EditorProps {
@@ -260,6 +295,24 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         getEditor() {
           return editor;
+        },
+        parseMarkdown(md: string): ProseMirrorNode | null {
+          return editor ? parseMarkdownToDoc(editor, md) : null;
+        },
+        serializeDoc(doc: ProseMirrorNode): string {
+          if (!editor) return '';
+          return (
+            editor.storage as unknown as Record<
+              string,
+              { serializer: { serialize: (d: ProseMirrorNode) => string } }
+            >
+          ).markdown.serializer.serialize(doc);
+        },
+        restoreDocJSON(json, comments, suggestions): DocJSONRestoreResult {
+          if (!editor) return { ok: false, reason: 'editor not ready' };
+          const result = restoreDocJSONInto(editor, json, comments, suggestions);
+          if (result.ok) setIsEmpty(editor.isEmpty);
+          return result;
         },
       }),
       [editor],

@@ -22,6 +22,10 @@ const conflict = (): SaveOutcome => ({
   actual: { state: 'absent' },
 });
 const cancelled = (): SaveOutcome => ({ status: 'cancelled' });
+const reviewBlocked = (): SaveOutcome => ({
+  status: 'review-blocked',
+  unmappable: [{ kind: 'comment', id: 'c1' }],
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -164,6 +168,25 @@ describe('useAutosave', () => {
     act(() => result.current.notifyChange());
     await advance(IDLE_MS + MAX_MS);
     expect(ctl.perform).toHaveBeenCalledTimes(1);
+  });
+
+  it('review-blocked shows a distinct status; a later edit re-arms a retry (no backoff)', async () => {
+    const { result, ctl } = setup(async () => ({
+      outcome: reviewBlocked(),
+      revision: ctl.revision,
+    }));
+    act(() => result.current.notifyChange());
+    await advance(IDLE_MS);
+    expect(result.current.status).toEqual({ state: 'review-blocked' });
+    expect(ctl.perform).toHaveBeenCalledTimes(1);
+
+    // UNLIKE a block: fixing the annotation is a normal edit that re-arms and retries.
+    ctl.perform.mockImplementation(async () => ({ outcome: saved(), revision: 2 }));
+    ctl.revision = 2;
+    act(() => result.current.notifyChange());
+    await advance(IDLE_MS);
+    expect(ctl.perform).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toEqual({ state: 'saved' });
   });
 
   it('backs off after a failure; an edit during backoff does not reset the debounce', async () => {

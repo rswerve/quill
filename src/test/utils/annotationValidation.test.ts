@@ -79,6 +79,23 @@ describe('sanitizeComments', () => {
     expect(sanitizeComments({ 0: validComment })).toEqual([]);
   });
 
+  it('carries only a literal detached:true and keeps it independent of resolved', () => {
+    const detached = sanitizeComments([{ ...validComment, detached: true }])[0];
+    expect(detached.detached).toBe(true);
+    expect(detached.resolved).toBe(false); // independent states
+    const resolvedDetached = sanitizeComments([
+      { ...validComment, resolved: true, detached: true },
+    ])[0];
+    expect(resolvedDetached).toMatchObject({ resolved: true, detached: true });
+  });
+
+  it.each([false, 'true', 1, null, undefined])(
+    'omits the detached flag for the non-literal-true value %s',
+    (detached) => {
+      expect('detached' in sanitizeComments([{ ...validComment, detached }])[0]).toBe(false);
+    },
+  );
+
   it('drops records that are not objects or lack an id', () => {
     expect(sanitizeComments([null, 42, 'x', {}, { id: '' }])).toEqual([]);
   });
@@ -308,6 +325,15 @@ describe('sanitizeSuggestions', () => {
     expect('originCommentId' in empty).toBe(false);
     const [numeric] = sanitizeSuggestions([{ ...validSuggestion, originCommentId: 7 }]);
     expect('originCommentId' in numeric).toBe(false);
+  });
+
+  it('carries only a literal detached:true on a suggestion (false/invalid omitted)', () => {
+    const [detached] = sanitizeSuggestions([{ ...validSuggestion, detached: true }]);
+    expect(detached.detached).toBe(true);
+    for (const bad of [false, 'true', 1, null]) {
+      const [s] = sanitizeSuggestions([{ ...validSuggestion, detached: bad }]);
+      expect('detached' in s).toBe(false);
+    }
   });
 
   it('keeps format suggestions and canonicalizes segment and mark order', () => {

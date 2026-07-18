@@ -18,7 +18,11 @@ export type AutosaveStatus =
   | { state: 'failed'; retryInMs: number }
   // `conflict` means the resolution banner is up (the UI should defer to it); `blocked`
   // means a protected sidecar / unknown baseline the user must fix — a distinct status.
-  | { state: 'stopped'; reason: 'conflict' | 'blocked' };
+  | { state: 'stopped'; reason: 'conflict' | 'blocked' }
+  // Canonical capture refused (an annotation covers text that changes on save). Nothing
+  // was written and no I/O failed — unlike `stopped`, the NEXT edit re-arms a retry (so
+  // fixing the annotation resumes saving), with no backoff and no toast spam.
+  | { state: 'review-blocked' };
 
 interface Options {
   /**
@@ -148,6 +152,14 @@ export function useAutosave({
         // No write happened and it is NOT an I/O failure (e.g. a dialog dismissed):
         // do not enter the retry loop. Settle to idle.
         setStatus({ state: 'idle' });
+        return 'break';
+      }
+      if (outcome.status === 'review-blocked') {
+        // Nothing written, no I/O failure — an annotation can't be canonically anchored.
+        // Do NOT back off or latch (no pauseReason): the next edit re-arms and retries,
+        // so fixing the annotation resumes autosave. Show a distinct blocked status.
+        backoffIndex.current = 0;
+        setStatus({ state: 'review-blocked' });
         return 'break';
       }
       // failed → a transient I/O error. Back off, then retry; edits meanwhile must NOT

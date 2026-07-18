@@ -10,6 +10,11 @@ import { rangeText } from './trackedEdits';
  * If the whole marked span is deleted, ProseMirror removes the mark and the
  * unresolved comment disappears with it. Resolved comments are deliberately
  * mark-less, so they retain their stored snapshot until they are unresolved.
+ *
+ * A `detached` comment (one a load could not re-anchor) is likewise mark-less on
+ * purpose: it is preserved AS-IS and never reattached here, even if a stray mark with
+ * its id or matching text happens to exist — repair goes through explicit unique
+ * relocation, never this projection.
  */
 export function reconcileCommentsWithDocument(
   comments: Comment[],
@@ -19,7 +24,7 @@ export function reconcileCommentsWithDocument(
   const reconciled: Comment[] = [];
 
   for (const comment of comments) {
-    if (comment.resolved) {
+    if (comment.resolved || comment.detached) {
       reconciled.push(comment);
       continue;
     }
