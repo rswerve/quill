@@ -368,13 +368,25 @@ export interface DraftFile {
   comments: Comment[];
   suggestions: Suggestion[];
   /**
-   * Block-structure suggestion records for the recovered document. Like `content`,
-   * these are the structural SOURCE (the `.md` view): recovery reconstructs the
-   * unions from them the same way a file reload does from the sidecar envelope, but
-   * without a hash gate — the snapshot's source and records were captured together
-   * in memory, so there is no external-edit surface to defend against.
+   * Block-structure suggestion records for the recovered document, in the LOSSLESS
+   * (live-union) coordinate space — they pair with `docJSON`. Recovery seeds the
+   * record store from these when it restores the byte-exact docJSON (the seed
+   * validates them against that live union), so they must match `docJSON`, not the
+   * normalized reparse of `content`.
    */
   structural?: StructuralSuggestionRecord[];
+  /**
+   * The SAME structural records rebased into the CANONICAL source coordinate space
+   * (the whitespace-normalized reparse of `content`), for the DEGRADED fallback.
+   * When `docJSON` is corrupt/absent, recovery `setContent(content)` reparses the
+   * source — normalizing whitespace — then reconstructs the unions; a live-coordinate
+   * record's source fingerprint would no longer match and the proposal would
+   * spuriously quarantine, so the degraded path uses THESE (falling back to
+   * `structural` only for legacy snapshots that predate this field). Distinct from
+   * `structural` because the lossless and degraded documents are different coordinate
+   * spaces; captured together with `content` so there is no external-edit surface.
+   */
+  degradedStructural?: StructuralSuggestionRecord[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   chat?: DocumentChatThread;

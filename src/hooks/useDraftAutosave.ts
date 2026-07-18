@@ -120,6 +120,13 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
         (r) => typeof r === 'object' && r !== null,
       ) as StructuralSuggestionRecord[])
     : [];
+  // The degraded-recovery coordinate set (rebased to the canonical source). Same shallow
+  // trust boundary; kept distinct from `structural` (the lossless/live-coordinate set).
+  const degradedStructural = Array.isArray(d.degradedStructural)
+    ? (d.degradedStructural.filter(
+        (r) => typeof r === 'object' && r !== null,
+      ) as StructuralSuggestionRecord[])
+    : [];
   const docJSON = classifyDocJSON(d);
   return {
     version: 1,
@@ -132,6 +139,7 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     comments: sanitizeComments(d.comments),
     suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
     ...(structural.length > 0 ? { structural } : {}),
+    ...(degradedStructural.length > 0 ? { degradedStructural } : {}),
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
     ...(chat ? { chat } : {}),

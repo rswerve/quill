@@ -121,6 +121,14 @@ function draftSnapshot(draft: DraftFile) {
       : {}),
     comments: draft.comments,
     suggestions: draft.suggestions,
+    // Carry BOTH structural coordinate sets so a recovered-but-not-remounted tab re-emitted
+    // through the shell keeps its block-union proposals: `structural` for lossless docJSON
+    // recovery, `degradedStructural` for the whitespace-normalized degraded fallback. Dropping
+    // them here would silently lose the proposal before the tab handle takes over.
+    ...(draft.structural && draft.structural.length > 0 ? { structural: draft.structural } : {}),
+    ...(draft.degradedStructural && draft.degradedStructural.length > 0
+      ? { degradedStructural: draft.degradedStructural }
+      : {}),
     aiSession: draft.aiSession,
     contextFolder: draft.contextFolder,
   };

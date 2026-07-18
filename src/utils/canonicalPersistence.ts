@@ -99,3 +99,39 @@ export function prepareCanonicalPersistence(
     structural: rebased.records,
   };
 }
+
+/**
+ * Prepare the DEGRADED-recovery structural bundle for a workspace snapshot.
+ *
+ * A crash snapshot carries two coherent structural representations in DIFFERENT
+ * coordinate spaces (they must never be conflated):
+ *  - LOSSLESS: the byte-exact `docJSON` (live union) + live-coordinate records. On
+ *    recovery these restore the user's exact unsaved document, whitespace included.
+ *  - DEGRADED: the source Markdown + these REBASED records. Degraded recovery
+ *    `setContent(sourceMarkdown)` reparses through the production pipeline —
+ *    `parseMarkdownToDoc(editor, sourceMarkdown)` — which NORMALIZES whitespace, so
+ *    a live-coordinate record's source fingerprint would no longer match and the
+ *    proposal would spuriously quarantine. Rebasing the records onto that exact
+ *    parsed canonical source makes the degraded reconstruction coordinate-correct.
+ *
+ * `sourceMarkdown` is the structural SOURCE (`payload.content`), never the union.
+ * Returns `{ok:false}` when the rebase can't be built (a should-never-happen
+ * malformed live union) so the caller can fail closed and keep the last good
+ * snapshot rather than persist a degraded bundle that can't be reconstructed.
+ */
+export function rebaseForDegradedRecovery(
+  editor: TiptapEditor,
+  sourceMarkdown: string,
+  liveStructural: readonly StructuralSuggestionRecord[],
+): { ok: true; records: StructuralSuggestionRecord[] } | { ok: false } {
+  if (liveStructural.length === 0) return { ok: true, records: [] };
+  const canonicalSourceDoc = parseMarkdownToDoc(editor, sourceMarkdown);
+  const serialize = markdownSerializer(editor);
+  const rebased = rebaseStructuralRecordsToCanonicalSource(
+    editor.state.doc,
+    canonicalSourceDoc,
+    liveStructural,
+    serialize,
+  );
+  return rebased.ok ? { ok: true, records: rebased.records } : { ok: false };
+}

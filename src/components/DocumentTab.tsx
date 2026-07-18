@@ -57,6 +57,7 @@ import {
 import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import {
   prepareCanonicalPersistence,
+  rebaseForDegradedRecovery,
   type CanonicalSaveState,
 } from '../utils/canonicalPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
@@ -603,6 +604,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       ? buildStructuralSavePayload(ed, reviewMd)
       : ({ ok: true, content: reviewMd, structural: [] } satisfies StructuralSavePayload);
     if (!payload.ok) return lastGoodWorkspaceSnapshotRef.current;
+    // The DEGRADED-recovery bundle: the same structural records rebased into the canonical
+    // source coordinate space (the normalized reparse of `payload.content`). Lossless recovery
+    // uses `structural` (live) against the byte-exact docJSON; the degraded path reparses the
+    // source (normalizing whitespace) and needs these instead, or a proposal would spuriously
+    // quarantine. Fail closed like the payload guard: if the rebase can't be built, keep the
+    // last good snapshot rather than emit a degraded bundle that can't be reconstructed.
+    const degraded = ed
+      ? rebaseForDegradedRecovery(ed, payload.content, payload.structural)
+      : { ok: true as const, records: [] as StructuralSuggestionRecord[] };
+    if (!degraded.ok) return lastGoodWorkspaceSnapshotRef.current;
     // One stable document node for BOTH the lossless docJSON and the records derived from
     // its marks, so the snapshot is internally coherent (the bijection recovery relies on).
     const doc = ed?.state.doc;
@@ -617,6 +628,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
       ...(payload.structural.length > 0 ? { structural: payload.structural } : {}),
+      ...(degraded.records.length > 0 ? { degradedStructural: degraded.records } : {}),
       aiSession,
       contextFolder,
       ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
@@ -1655,7 +1667,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         const ed2 = editorRef.current?.getEditor();
         if (ed2) {
           // Reconstruct the structural unions FIRST (source → union), then restore inline marks.
-          restoreStructuralFromDraft(ed2, draft.structural ?? []);
+          // `setContent(draft.content)` above normalized whitespace, so use the records rebased
+          // to that canonical source (`degradedStructural`); a legacy snapshot without them falls
+          // back to the live-coordinate `structural` (its pre-fix, possibly-quarantining behavior).
+          restoreStructuralFromDraft(ed2, draft.degradedStructural ?? draft.structural ?? []);
           const restored = restorePersistedReviewMarks(
             ed2,
             draftComments,
