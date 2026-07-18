@@ -732,4 +732,42 @@ describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
     expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['sg1']);
     expect(getTrackedChanges(editor)).toEqual([]);
   });
+
+  it('bound: a resolved comment inside a code block is detached (eligibility ignores resolution)', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>');
+    const resolvedInCode = comment({ resolved: true, anchorText: 'codeword', from: 1, to: 9 });
+    const result = restoreReviewMarks(editor, [resolvedInCode], [], 'bound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('unbound: two suggestions relocating onto one span with excluding marks are both quarantined', () => {
+    editor = makeEditor(); // one unique "world" at 7..12
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], { id: 'del' });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor)).toEqual([]); // zero marks stamped
+  });
+
+  it('unbound: a disjoint third suggestion survives while the conflicting pair is quarantined', () => {
+    editor = makeEditor(); // "Hello" at 1..6, "world" at 7..12 (both unique)
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], { id: 'del' });
+    const third = logical([{ kind: 'delete', from: 300, to: 305, text: 'Hello' }], { id: 'third' });
+    const result = restoreReviewMarks(editor, [], [ins, del, third], 'unbound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['third']);
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor).map((c) => c.id)).toEqual(['third']);
+  });
+
+  it('bound: a malformed sidecar with two conflicting suggestions on one span quarantines both', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const ins = logical([{ kind: 'insert', from: 7, to: 12, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 7, to: 12, text: 'world' }], { id: 'del' });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
 });

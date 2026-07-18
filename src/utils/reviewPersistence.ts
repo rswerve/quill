@@ -16,6 +16,7 @@ import {
   relocateSuggestion,
   spanAdmitsMark,
   suggestionMarksAdmissible,
+  SEGMENT_MARK,
 } from './reviewRelocation';
 import { rangeText } from './trackedEdits';
 
@@ -213,9 +214,11 @@ function restoreComments(
     const requiresUnique = mode === 'unbound' || comment.detached === true;
     const willStamp = !comment.resolved;
     let located = requiresUnique ? relocateComment(doc, comment) : locateBoundComment(doc, comment);
-    // A comment we intend to stamp must land where the mark can live. (The unbound
-    // `relocateComment` already enforces this; the bound stored-range path does not.)
-    if (located && willStamp && !spanAdmitsMark(doc, located.from, located.to, 'comment')) {
+    // Mark admissibility defines whether an anchor is USABLE at all — independent of
+    // resolution. A resolved comment validated inside a code block would clear detached
+    // and later fail silently when unresolved, so gate it here, not only when stamping.
+    // (The unbound `relocateComment` already enforces this; the bound path does not.)
+    if (located && !spanAdmitsMark(doc, located.from, located.to, 'comment')) {
       located = null;
     }
     if (!located) {
@@ -373,6 +376,58 @@ interface SuggestionRestoreOutcome {
   mismatches: ReviewRestoreMismatch[];
 }
 
+/** Two segments cover an overlapping document range. */
+function segmentsOverlap(a: TrackedChangeSegment, b: TrackedChangeSegment): boolean {
+  return a.from < b.to && b.from < a.to;
+}
+
+/**
+ * Two suggestions conflict when segments of each overlap a shared range AND their mark
+ * types mutually exclude one another (`tracked_insert` excludes `tracked_delete`). Marks
+ * are stamped sequentially, so the second such mark would EVICT the first — leaving one
+ * suggestion silently unmarked yet reported restored.
+ */
+function suggestionsConflict(
+  schema: TiptapEditor['schema'],
+  a: LogicalSuggestion,
+  b: LogicalSuggestion,
+): boolean {
+  for (const sa of a.segments) {
+    for (const sb of b.segments) {
+      if (!segmentsOverlap(sa, sb)) continue;
+      const ma = schema.marks[SEGMENT_MARK[sa.kind]];
+      const mb = schema.marks[SEGMENT_MARK[sb.kind]];
+      if (ma && mb && (ma.excludes(mb) || mb.excludes(ma))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Independently-valid relocations can still collide once stamped: two suggestions may
+ * land on the same span with excluding mark types. Split the batch so any suggestion in
+ * a conflicting pair is quarantined together (never stamped), while disjoint ones
+ * survive. Applies in BOTH modes, over the candidates' FINAL positions.
+ */
+function partitionByMarkConflict(
+  schema: TiptapEditor['schema'],
+  candidates: LogicalSuggestion[],
+): { survivors: LogicalSuggestion[]; conflicted: LogicalSuggestion[] } {
+  const conflicted = new Set<string>();
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      if (suggestionsConflict(schema, candidates[i], candidates[j])) {
+        conflicted.add(candidates[i].id);
+        conflicted.add(candidates[j].id);
+      }
+    }
+  }
+  return {
+    survivors: candidates.filter((suggestion) => !conflicted.has(suggestion.id)),
+    conflicted: candidates.filter((suggestion) => conflicted.has(suggestion.id)),
+  };
+}
+
 /**
  * Bound mode: stored positions are authoritative, validated against the segment text
  * as a corruption defense. A suggestion quarantines if any segment's text no longer sits
@@ -396,9 +451,17 @@ function restoreBoundSuggestions(
     // `||` short-circuits so a text-mismatched (possibly out-of-range) suggestion never
     // reaches the eligibility walk, which resolves positions.
     (mismatchedIds.has(suggestion.id) || !suggestionMarksAdmissible(doc, suggestion));
-  const restorable = suggestions.filter((suggestion) => !isQuarantined(suggestion));
-  restoreSuggestionMarks(tr, schema, restorable, size);
-  return { quarantined: suggestions.filter(isQuarantined), relocated: [], mismatches };
+  // Only pending records stamp a mark, so only they can collide.
+  const candidates = suggestions.filter(
+    (suggestion) => suggestion.status === 'pending' && !isQuarantined(suggestion),
+  );
+  const { survivors, conflicted } = partitionByMarkConflict(schema, candidates);
+  restoreSuggestionMarks(tr, schema, survivors, size);
+  return {
+    quarantined: [...suggestions.filter(isQuarantined), ...conflicted],
+    relocated: [],
+    mismatches,
+  };
 }
 
 /**
@@ -415,15 +478,18 @@ function restoreUnboundSuggestions(
   size: number,
 ): SuggestionRestoreOutcome {
   const quarantined: Suggestion[] = [];
-  const relocated: LogicalSuggestion[] = [];
+  const relocatedCandidates: LogicalSuggestion[] = [];
   for (const suggestion of suggestions) {
     if (suggestion.status !== 'pending') continue;
     const outcome = relocateSuggestion(doc, suggestion);
-    if (outcome.status === 'relocated') relocated.push(outcome.suggestion);
+    if (outcome.status === 'relocated') relocatedCandidates.push(outcome.suggestion);
     else quarantined.push(suggestion);
   }
-  restoreSuggestionMarks(tr, schema, relocated, size);
-  return { quarantined, relocated, mismatches: [] };
+  // Two suggestions can each relocate onto the same unique span; if their marks exclude
+  // one another, stamping both would evict one. Quarantine the conflicting group.
+  const { survivors, conflicted } = partitionByMarkConflict(schema, relocatedCandidates);
+  restoreSuggestionMarks(tr, schema, survivors, size);
+  return { quarantined: [...quarantined, ...conflicted], relocated: survivors, mismatches: [] };
 }
 
 /**

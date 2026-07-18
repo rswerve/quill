@@ -102,7 +102,7 @@ function segmentsValid(doc: ProseMirrorNode, suggestion: LogicalSuggestion): boo
   });
 }
 
-const SEGMENT_MARK: Record<string, string> = {
+export const SEGMENT_MARK: Record<string, string> = {
   insert: 'tracked_insert',
   delete: 'tracked_delete',
   format: 'tracked_format',
