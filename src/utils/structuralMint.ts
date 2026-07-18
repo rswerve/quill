@@ -1,5 +1,6 @@
 import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection, type Command, type Transaction } from '@tiptap/pm/state';
+import { Transform } from '@tiptap/pm/transform';
 import { setBlockType } from '@tiptap/pm/commands';
 import type { StructuralOp } from '../types';
 import {
@@ -71,6 +72,7 @@ export type StructuralMintRefusal =
   | 'unsupported-shape'
   | 'overlapping-structural'
   | 'annotated-footprint'
+  | 'origin-comment-partial'
   | 'native-no-op'
   | 'self-check-failed';
 
@@ -159,17 +161,83 @@ function metadataValid(req: StructuralMintRequest): boolean {
   );
 }
 
-/** True when the subtree (or the root itself) carries any review mark. */
-function subtreeHasReviewMark(root: PMNode): boolean {
-  const marked = (node: PMNode) => node.marks.some((m) => isReviewMarkName(m.type.name));
-  if (marked(root)) return true;
-  let found = false;
-  root.descendants((node) => {
-    if (found) return false;
-    if (marked(node)) found = true;
-    return !found;
+/**
+ * Classify the review marks a mint's footprint carries, honoring the Option-B
+ * origin-comment carveout. V1a's default is strict: any review mark in the
+ * footprint refuses. The one exception is the caller's origin comment — a single
+ * strict-active comment mark (matching id, `resolved===false`, valid kind) that
+ * is **fully contained** in the footprint as one contiguous run. It is kept on the
+ * source (delete) branch and stripped from the proposed (insert) branch so the
+ * comment stays one contiguous anchor.
+ *
+ * Refuses `annotated-footprint` for any tracked mark, any foreign comment, an
+ * origin comment on a non-inline node, a non-active origin mark, or a disconnected
+ * (multi-span) origin run; refuses `origin-comment-partial` when the origin
+ * comment straddles the footprint boundary. `clean` means nothing to strip
+ * (disjoint or absent origin); `contained` means strip the origin from the
+ * proposed branch and use a comment-stripped target as the accepted-projection
+ * oracle. The scan is whole-document so a straddling origin's outside spans are
+ * seen; it inspects every mark-bearing node (text, hardBreak, inline atoms).
+ */
+type FootprintAnnotations =
+  | { status: 'clean' }
+  | { status: 'contained' }
+  | { status: 'refuse'; reason: StructuralMintRefusal };
+
+function classifyFootprintAnnotations(
+  doc: PMNode,
+  target: TargetBlock,
+  originCommentId: string | null,
+): FootprintAnnotations {
+  const originSpans: Array<{ from: number; to: number }> = [];
+  let originOutside = false;
+  let refusal: StructuralMintRefusal | null = null;
+
+  doc.descendants((node, pos) => {
+    if (refusal) return false;
+    const to = pos + node.nodeSize;
+    const inFootprint = pos >= target.from && to <= target.to;
+    for (const mark of node.marks) {
+      if (!isReviewMarkName(mark.type.name)) continue;
+      const isOriginComment =
+        mark.type.name === 'comment' &&
+        originCommentId !== null &&
+        mark.attrs.commentId === originCommentId;
+      if (!isOriginComment) {
+        // Any tracked mark or foreign comment inside the footprint refuses; the
+        // same marks outside the footprint are irrelevant to this mint.
+        if (inFootprint) {
+          refusal = 'annotated-footprint';
+          return false;
+        }
+        continue;
+      }
+      // The origin comment: tolerated only as a strict active inline mark.
+      if (!node.isInline || mark.attrs.resolved !== false || !isCommentKind(mark.attrs.kind)) {
+        refusal = 'annotated-footprint';
+        return false;
+      }
+      if (inFootprint) originSpans.push({ from: pos, to });
+      else originOutside = true;
+    }
+    return true;
   });
-  return found;
+
+  if (refusal) return { status: 'refuse', reason: refusal };
+  if (originSpans.length === 0) return { status: 'clean' }; // disjoint or absent
+  if (originOutside) return { status: 'refuse', reason: 'origin-comment-partial' };
+  // A tolerated origin must be one contiguous run — a gap is an invalid envelope.
+  originSpans.sort((a, b) => a.from - b.from);
+  for (let i = 1; i < originSpans.length; i += 1) {
+    if (originSpans[i].from !== originSpans[i - 1].to) {
+      return { status: 'refuse', reason: 'annotated-footprint' };
+    }
+  }
+  return { status: 'contained' };
+}
+
+function isCommentKind(kind: unknown): boolean {
+  return kind === 'note' || kind === 'claude';
 }
 
 /** True when the subtree (or the root itself) already carries a blockTrack identity. */
@@ -222,6 +290,28 @@ function onlyChildChanged(before: PMNode, after: PMNode, index: number): boolean
   return true;
 }
 
+/**
+ * The document the accepted projection must equal: the native conversion, with
+ * the origin comment removed from the converted target's content only when the
+ * carveout stripped it from the proposed branch. A structural oracle, NOT a
+ * comment-record resolution — real resolution is the later Accept side effect,
+ * which also removes a disjoint origin's mark elsewhere (projection alone will not).
+ */
+function buildAcceptedOracle(
+  schema: Schema,
+  afterDoc: PMNode,
+  target: TargetBlock,
+  originContained: boolean,
+): PMNode {
+  const commentType = schema.marks.comment;
+  if (!originContained || !commentType) return afterDoc;
+  // The converted target keeps its position/extent (a block-type change preserves
+  // content size), so its content range is [target.from + 1, target.to - 1).
+  const transform = new Transform(afterDoc);
+  transform.removeMark(target.from + 1, target.to - 1, commentType);
+  return transform.doc;
+}
+
 export function compileStructuralMint(
   state: EditorState,
   request: StructuralMintRequest,
@@ -262,8 +352,12 @@ export function compileStructuralMint(
     return refuse('overlapping-structural');
   }
 
-  // 7. The captured subtree is annotation-free (V1a; 1b relaxes for the origin comment).
-  if (subtreeHasReviewMark(target.node)) return refuse('annotated-footprint');
+  // 7. Classify the footprint's review marks, honoring the Option-B origin-comment
+  //    carveout: a strict-active, fully-contained origin comment is tolerated (it
+  //    rides on the delete branch); everything else in the footprint refuses.
+  const originCommentId = request.origin?.kind === 'comment' ? request.origin.id : null;
+  const annotations = classifyFootprintAnnotations(state.doc, target, originCommentId);
+  if (annotations.status === 'refuse') return refuse(annotations.reason);
 
   // 8. Capture the native conversion against a detached state.
   const captured = captureNativeConversion(state, command, target);
@@ -283,14 +377,21 @@ export function compileStructuralMint(
   //    transaction. Inserting after the unchanged source, rather than replacing
   //    the whole span, keeps a live selection inside the source branch.
   const tr = state.tr;
-  tr.insert(
-    target.to,
-    proposed.type.create(
-      { ...proposed.attrs, blockTrack: { changeId, op: 'insert' } },
-      proposed.content,
-      proposed.marks,
-    ),
+  const flaggedProposed = proposed.type.create(
+    { ...proposed.attrs, blockTrack: { changeId, op: 'insert' } },
+    proposed.content,
+    proposed.marks,
   );
+  tr.insert(target.to, flaggedProposed);
+  // Option-B: strip the origin comment from the proposed (insert) branch's content
+  // only, so it stays one contiguous anchor on the retained source (delete) branch.
+  // Safe after the foreign-mark gate — the origin comment is the only comment here.
+  if (annotations.status === 'contained') {
+    const commentType = state.schema.marks.comment;
+    if (commentType) {
+      tr.removeMark(target.to + 1, target.to + flaggedProposed.nodeSize - 1, commentType);
+    }
+  }
   tr.setNodeMarkup(target.from, undefined, {
     ...target.node.attrs,
     blockTrack: { changeId, op: 'delete' },
@@ -315,10 +416,18 @@ export function compileStructuralMint(
   const analyzerMeta = new Map<string, StructuralUnionMetadata>(retainedRecords(state));
   analyzerMeta.set(changeId, { op });
   const union = analyzeStructuralUnions(tr.doc, analyzerMeta).persistable.get(changeId);
+  const acceptedOracle = buildAcceptedOracle(
+    state.schema,
+    afterDoc,
+    target,
+    annotations.status === 'contained',
+  );
   if (
     !union ||
     !projectBlockUnions(tr.doc, 'source').doc.eq(projectBlockUnions(state.doc, 'source').doc) ||
-    !projectBlockUnions(tr.doc, 'accepted').doc.eq(projectBlockUnions(afterDoc, 'accepted').doc)
+    !projectBlockUnions(tr.doc, 'accepted').doc.eq(
+      projectBlockUnions(acceptedOracle, 'accepted').doc,
+    )
   ) {
     return refuse('self-check-failed');
   }

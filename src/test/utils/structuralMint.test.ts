@@ -78,6 +78,17 @@ function expectOk(r: StructuralMintResult): Extract<StructuralMintResult, { ok: 
   return r;
 }
 
+/** True when any node in the block subtree carries the given comment id. */
+function blockHasComment(block: import('@tiptap/pm/model').Node, commentId: string): boolean {
+  let has = false;
+  block.descendants((node) => {
+    if (node.marks.some((m) => m.type.name === 'comment' && m.attrs.commentId === commentId)) {
+      has = true;
+    }
+  });
+  return has;
+}
+
 describe('compileStructuralMint — success shape', () => {
   it('mints a heading→paragraph union (source flagged delete, native result inserted flagged insert)', () => {
     editor = makeEditor('<h2>Title</h2><p>Body</p>');
@@ -457,5 +468,145 @@ describe('compileStructuralMint — review-mark families and the runtime boundar
       ...override,
     } as unknown as StructuralMintRequest;
     expect(compileStructuralMint(editor.state, request)).toEqual({ ok: false, reason });
+  });
+});
+
+describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () => {
+  const headingToParagraph = { kind: 'headingToParagraph', level: 1 } as const;
+
+  it('mints with a contained origin comment: kept on the delete branch, stripped from the insert branch', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('cm1').run(); // on "Title"
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: headingToParagraph,
+          targetPos: posInBlock(0),
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(true); // source keeps it
+    expect(doc.child(1).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(blockHasComment(doc.child(1), 'cm1')).toBe(false); // proposed stripped
+    expect(activeRecords(editor.state)[0].originCommentId).toBe('cm1');
+  });
+
+  it('refuses an origin comment that straddles the footprint boundary (origin-comment-partial)', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    editor.chain().setTextSelection({ from: 1, to: 11 }).setComment('cm1').run(); // spans into "Body"
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'origin-comment-partial' });
+  });
+
+  it('refuses an unrelated comment in the footprint even with an origin set', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('other').run();
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('refuses a tracked mark in the footprint even with an origin comment set', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('cm1').run();
+    const tr = editor.state.tr.addMark(1, 6, editor.state.schema.marks.tracked_insert.create());
+    tr.setMeta(SKIP_TRACKING_META, true);
+    editor.view.dispatch(tr);
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('does not extend the carveout to a chat origin — a footprint comment still refuses', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('cm1').run();
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'chat', id: 'msg1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('allows a disjoint origin comment and leaves it byte-identical outside the union', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    editor.chain().setTextSelection({ from: 8, to: 12 }).setComment('cm1').run(); // on "Body"
+    const bodyBefore = editor.state.doc.child(1).toJSON();
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: headingToParagraph,
+          targetPos: posInBlock(0),
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(false); // union branches untouched
+    expect(blockHasComment(doc.child(1), 'cm1')).toBe(false);
+    expect(doc.child(2).toJSON()).toEqual(bodyBefore); // Body byte-identical
+  });
+
+  it('allows an origin comment carried only by a hard-break leaf and strips it from proposed', () => {
+    editor = makeEditor('<h1>A<br>B</h1>');
+    editor.chain().setTextSelection({ from: 2, to: 3 }).setComment('cm1').run(); // the hardBreak leaf
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: headingToParagraph,
+          targetPos: posInBlock(0),
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(true); // kept on the source leaf
+    expect(blockHasComment(doc.child(1), 'cm1')).toBe(false); // stripped from proposed
+  });
+
+  it('refuses a disconnected (multi-span) origin comment as an invalid envelope', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    editor.chain().setTextSelection({ from: 1, to: 3 }).setComment('cm1').run(); // "Ti"
+    editor.chain().setTextSelection({ from: 5, to: 6 }).setComment('cm1').run(); // "e", gap at "tl"
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
   });
 });
