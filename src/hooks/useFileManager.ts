@@ -6,8 +6,11 @@ import type {
   Suggestion,
   AISessionBinding,
   DocumentChatThread,
+  StructuralReviewEnvelope,
+  StructuralSuggestionRecord,
 } from '../types';
 import { sidecarPath } from '../utils/sidecarPath';
+import { parseStructuralEnvelope } from '../utils/structuralEnvelope';
 import { basename } from '../utils/path';
 import {
   sanitizeComments,
@@ -56,10 +59,15 @@ export function stripTransientReplyState(comments: Comment[]): Comment[] {
  */
 function normalizeSidecar(raw: unknown): SidecarFile {
   const parsed = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  // Shape-validate the structural envelope only — the per-record trust boundary is
+  // reconstruction (structuralReconstruction), which quarantines a bad record
+  // rather than dropping it, so a shallow parse here must not deep-sanitize.
+  const structural = parseStructuralEnvelope(parsed.structural);
   return {
     version: 2,
     comments: sanitizeComments(parsed.comments),
     suggestions: sanitizeSuggestions(parsed.suggestions),
+    ...(structural ? { structural } : {}),
     aiSession: sanitizeAISession(parsed.aiSession),
     contextFolder: sanitizeContextFolder(parsed.contextFolder),
     chat: sanitizeDocumentChat(parsed.chat),
@@ -112,6 +120,7 @@ interface UseFileManagerReturn {
   markDirty: () => void;
   openFile: () => Promise<{
     content: string;
+    docHash: string;
     sidecar: SidecarFile;
     filePath: string;
     autoBound?: boolean;
@@ -119,6 +128,7 @@ interface UseFileManagerReturn {
   } | null>;
   openFilePath: (path: string) => Promise<{
     content: string;
+    docHash: string;
     sidecar: SidecarFile;
     filePath: string;
     autoBound?: boolean;
@@ -132,6 +142,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     forcePath?: string,
     chat?: DocumentChatThread | null,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   saveFileAs: (
     content: string,
@@ -141,6 +152,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
     requestPathOwnership?: (path: string) => boolean,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (
@@ -317,7 +329,7 @@ export function useFileManager(
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
         setIsDirty(false);
-        return { content, sidecar, filePath: path, autoBound, sidecarError };
+        return { content, docHash: docRead.hash, sidecar, filePath: path, autoBound, sidecarError };
       } catch (e) {
         console.error('Failed to open file:', e);
         onError?.('Could not open file', `${path}\n\n${String(e)}`);
@@ -347,6 +359,8 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat: DocumentChatThread | null | undefined,
+      structural: StructuralSuggestionRecord[],
+      docHash: string,
       expectedSidecar: Fingerprint | null,
     ): Promise<SidecarSaveResult> => {
       const scPath = sidecarPath(path);
@@ -360,12 +374,20 @@ export function useFileManager(
       // AI activity still collapses to no sidecar.
       const cleanComments = stripTransientReplyState(comments);
       const cleanChat = chat ? { ...chat, messages: stripTransientChatState(chat.messages) } : null;
+      // Structural records are the whole reason the union's proposed branch survives
+      // a lost sidecar (the .md is source-only), so they count as data to persist —
+      // an empty sidecar with a structural record must NOT be deleted.
+      const envelope: StructuralReviewEnvelope | undefined =
+        structural.length > 0
+          ? { version: 1, sourceDocumentHash: docHash, records: structural }
+          : undefined;
       if (
         cleanComments.length === 0 &&
         suggestions.length === 0 &&
         !aiSession &&
         !contextFolder &&
-        !chat
+        !chat &&
+        !envelope
       ) {
         // Nothing to persist — remove any empty sidecar we may have left behind, but
         // NOT one that changed underneath us (conditional delete → conflict), and
@@ -379,6 +401,7 @@ export function useFileManager(
         version: 2,
         comments: cleanComments,
         suggestions,
+        ...(envelope ? { structural: envelope } : {}),
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
         ...(cleanChat ? { chat: cleanChat } : {}),
@@ -399,6 +422,7 @@ export function useFileManager(
       contextFolder: string | null,
       forcePath?: string,
       chat?: DocumentChatThread | null,
+      structural: StructuralSuggestionRecord[] = [],
     ): Promise<SaveOutcome> => {
       // Read the path from the ref, not state: a fresh pass right after a Save As
       // runs before React commits the new filePath, and must target it.
@@ -462,6 +486,8 @@ export function useFileManager(
           aiSession,
           contextFolder,
           chat,
+          structural,
+          docResult.hash,
           usingExpected ? expectedSidecarRef.current : null,
         );
         if (!sidecarResult.ok) {
@@ -530,6 +556,7 @@ export function useFileManager(
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
       requestPathOwnership?: (path: string) => boolean,
+      structural: StructuralSuggestionRecord[] = [],
     ): Promise<SaveOutcome> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';
@@ -547,6 +574,7 @@ export function useFileManager(
           contextFolder,
           resolvedPath,
           chat,
+          structural,
         );
       } catch (e) {
         console.error('Failed to save as:', e);

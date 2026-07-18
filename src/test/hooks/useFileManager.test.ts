@@ -11,7 +11,23 @@ import {
   stripTransientReplyState,
   type SaveOutcome,
 } from '../../hooks/useFileManager';
-import type { ChatMessage, Comment, DocumentChatThread, Reply } from '../../types';
+import type {
+  ChatMessage,
+  Comment,
+  DocumentChatThread,
+  Reply,
+  StructuralSuggestionRecord,
+} from '../../types';
+
+const SAMPLE_STRUCTURAL: StructuralSuggestionRecord = {
+  changeId: 'sc1',
+  author: 'claude',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  op: { kind: 'headingToParagraph', level: 1 },
+  anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+  sourceFingerprint: '# Title',
+  proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+};
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -1258,6 +1274,92 @@ describe('useFileManager', () => {
       });
       expect(result.current.isDirty).toBe(true);
     });
+  });
+});
+
+describe('structural envelope persistence', () => {
+  const sidecarWrite = () =>
+    mockInvoke.mock.calls.find(
+      (call) =>
+        call[0] === 'write_file_atomic' &&
+        (call[1] as { path?: string })?.path?.endsWith('.comments.json'),
+    );
+
+  it('S1: a structural-only document still writes a sidecar (never deletes it)', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      // No comments/suggestions/session/folder/chat — only a structural record.
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
+    });
+    // A delete would signal "nothing to persist"; the record must reach disk instead.
+    const deleteCall = mockInvoke.mock.calls.find((call) => call[0] === 'delete_file_if_match');
+    expect(deleteCall).toBeUndefined();
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural.records).toHaveLength(1);
+    expect(written.structural.records[0].changeId).toBe('sc1');
+  });
+
+  it('stamps the envelope hash from the .md write, not the sidecar hash', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
+    });
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural.version).toBe(1);
+    // HASH_DOC is what write_file_atomic returns for the .md; HASH_SIDECAR is the
+    // sidecar's own hash. The envelope must carry the SOURCE .md's hash (the F5 gate).
+    expect(written.structural.sourceDocumentHash).toBe(HASH_DOC);
+    expect(written.structural.sourceDocumentHash).not.toBe(HASH_SIDECAR);
+  });
+
+  it('omits the structural field entirely when there are no structural records', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.saveFile('body', [SAMPLE_COMMENT], [], null, null, '/docs/n.md');
+    });
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural).toBeUndefined();
+  });
+
+  it('preserves a valid structural envelope on open and drops a malformed one', async () => {
+    const withEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 1, sourceDocumentHash: 'abc', records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(withEnvelope));
+    const { result } = renderHook(() => useFileManager());
+    let good: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      good = await result.current.openFilePath('/docs/g.md');
+    });
+    expect(good!.sidecar.structural?.records).toHaveLength(1);
+    expect(good!.docHash).toBe(readHash('# Title'));
+
+    const badEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 2, sourceDocumentHash: 'abc', records: [] }, // wrong envelope version
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(badEnvelope));
+    let bad: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      bad = await result.current.openFilePath('/docs/b.md');
+    });
+    expect(bad!.sidecar.structural).toBeUndefined();
   });
 });
 
