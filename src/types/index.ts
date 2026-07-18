@@ -319,6 +319,14 @@ export interface DraftFile {
   content: string;
   comments: Comment[];
   suggestions: Suggestion[];
+  /**
+   * Block-structure suggestion records for the recovered document. Like `content`,
+   * these are the structural SOURCE (the `.md` view): recovery reconstructs the
+   * unions from them the same way a file reload does from the sidecar envelope, but
+   * without a hash gate — the snapshot's source and records were captured together
+   * in memory, so there is no external-edit surface to defend against.
+   */
+  structural?: StructuralSuggestionRecord[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   chat?: DocumentChatThread;

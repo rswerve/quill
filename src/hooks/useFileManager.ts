@@ -7,10 +7,10 @@ import type {
   AISessionBinding,
   DocumentChatThread,
   StructuralReviewEnvelope,
+  StructuralSuggestionRecord,
 } from '../types';
 import { sidecarPath } from '../utils/sidecarPath';
 import { parseStructuralEnvelope } from '../utils/structuralEnvelope';
-import type { StructuralSaveInput } from '../utils/structuralSavePayload';
 import { basename } from '../utils/path';
 import {
   sanitizeComments,
@@ -34,18 +34,15 @@ function emptySidecar(): SidecarFile {
 }
 
 /**
- * The structural envelope to persist: a fresh record set is stamped with the
- * current `.md` write's hash; a preserved envelope is written verbatim (keeping
- * its own hash so stale records stay inert); an empty record set writes nothing.
+ * The structural envelope to persist: a fresh record set stamped with the current
+ * `.md` write's hash (the F5 reload gate). An empty record set writes nothing.
  */
 function buildStructuralEnvelope(
-  structural: StructuralSaveInput | undefined,
+  structural: StructuralSuggestionRecord[],
   docHash: string,
 ): StructuralReviewEnvelope | undefined {
-  if (!structural) return undefined;
-  if ('envelope' in structural) return structural.envelope;
-  if (structural.records.length === 0) return undefined;
-  return { version: 1, sourceDocumentHash: docHash, records: structural.records };
+  if (structural.length === 0) return undefined;
+  return { version: 1, sourceDocumentHash: docHash, records: structural };
 }
 
 /**
@@ -157,7 +154,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     forcePath?: string,
     chat?: DocumentChatThread | null,
-    structural?: StructuralSaveInput,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   saveFileAs: (
     content: string,
@@ -167,7 +164,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
     requestPathOwnership?: (path: string) => boolean,
-    structural?: StructuralSaveInput,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (
@@ -292,7 +289,21 @@ export function useFileManager(
           if (scRead.state === 'present') {
             sidecarFingerprint = { state: 'present', hash: scRead.hash };
             try {
-              sidecar = normalizeSidecar(JSON.parse(scRead.content));
+              const raw = JSON.parse(scRead.content);
+              sidecar = normalizeSidecar(raw);
+              // A present-but-malformed structural envelope may hold the only copy of
+              // the proposed content. normalizeSidecar drops the shape-invalid field;
+              // protect the file (like a corrupt sidecar) so the next save can't
+              // overwrite it, rather than silently discarding those proposals.
+              if (
+                typeof raw === 'object' &&
+                raw !== null &&
+                (raw as Record<string, unknown>).structural !== undefined &&
+                parseStructuralEnvelope((raw as Record<string, unknown>).structural) === null
+              ) {
+                sidecarError = `structural suggestions block is malformed`;
+                console.error(`Sidecar at ${sidecarPath(path)} has a malformed structural block`);
+              }
             } catch (e) {
               // Present but corrupt JSON: keep an empty in-memory model, flag the
               // error, and protect the on-disk file. The fingerprint still tracks it.
@@ -374,7 +385,7 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat: DocumentChatThread | null | undefined,
-      structural: StructuralSaveInput | undefined,
+      structural: StructuralSuggestionRecord[],
       docHash: string,
       expectedSidecar: Fingerprint | null,
     ): Promise<SidecarSaveResult> => {
@@ -436,7 +447,7 @@ export function useFileManager(
       contextFolder: string | null,
       forcePath?: string,
       chat?: DocumentChatThread | null,
-      structural?: StructuralSaveInput,
+      structural?: StructuralSuggestionRecord[],
     ): Promise<SaveOutcome> => {
       // Read the path from the ref, not state: a fresh pass right after a Save As
       // runs before React commits the new filePath, and must target it.
@@ -500,7 +511,7 @@ export function useFileManager(
           aiSession,
           contextFolder,
           chat,
-          structural,
+          structural ?? [],
           docResult.hash,
           usingExpected ? expectedSidecarRef.current : null,
         );
@@ -570,7 +581,7 @@ export function useFileManager(
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
       requestPathOwnership?: (path: string) => boolean,
-      structural?: StructuralSaveInput,
+      structural?: StructuralSuggestionRecord[],
     ): Promise<SaveOutcome> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';

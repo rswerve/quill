@@ -358,4 +358,23 @@ describe('sanitizeDraft baselines', () => {
     expect(out!.expectedSidecar).toBeUndefined();
     expect(out!.sidecarProtected).toBeUndefined();
   });
+
+  it('carries structural records through shallowly (reconstruction is the record boundary)', () => {
+    const record = {
+      changeId: 'sc1',
+      author: 'claude',
+      createdAt: 'now',
+      op: { kind: 'headingToParagraph', level: 1 },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: '# Title',
+      proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+    };
+    // One well-shaped record + one non-object entry that the shallow filter drops.
+    const out = sanitizeDraft({ ...base, structural: [record, 42] });
+    expect(out!.structural).toEqual([record]);
+  });
+
+  it('omits structural entirely for a legacy snapshot without the field', () => {
+    expect(sanitizeDraft(base)!.structural).toBeUndefined();
+  });
 });

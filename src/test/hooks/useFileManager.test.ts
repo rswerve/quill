@@ -1290,9 +1290,9 @@ describe('structural envelope persistence', () => {
     const { result } = renderHook(() => useFileManager());
     await act(async () => {
       // No comments/suggestions/session/folder/chat — only a structural record.
-      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, {
-        records: [SAMPLE_STRUCTURAL],
-      });
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
     });
     // A delete would signal "nothing to persist"; the record must reach disk instead.
     const deleteCall = mockInvoke.mock.calls.find((call) => call[0] === 'delete_file_if_match');
@@ -1306,9 +1306,9 @@ describe('structural envelope persistence', () => {
     installSaveRouter();
     const { result } = renderHook(() => useFileManager());
     await act(async () => {
-      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, {
-        records: [SAMPLE_STRUCTURAL],
-      });
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
     });
     const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
     expect(written.structural.version).toBe(1);
@@ -1328,27 +1328,7 @@ describe('structural envelope persistence', () => {
     expect(written.structural).toBeUndefined();
   });
 
-  it('writes a preserved envelope verbatim, keeping its original (stale) hash', async () => {
-    installSaveRouter();
-    const { result } = renderHook(() => useFileManager());
-    const preserved = {
-      version: 1 as const,
-      sourceDocumentHash: 'original-stale-hash',
-      records: [SAMPLE_STRUCTURAL],
-    };
-    await act(async () => {
-      await result.current.saveFile('# Title', [], [], null, null, '/docs/p.md', null, {
-        envelope: preserved,
-      });
-    });
-    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
-    // Verbatim: the ORIGINAL hash survives, NOT this write's .md hash, so the
-    // quarantined records stay gated against the changed source on the next reload.
-    expect(written.structural.sourceDocumentHash).toBe('original-stale-hash');
-    expect(written.structural.sourceDocumentHash).not.toBe(HASH_DOC);
-  });
-
-  it('preserves a valid structural envelope on open and drops a malformed one', async () => {
+  it('loads a valid structural envelope on open', async () => {
     const withEnvelope = JSON.stringify({
       version: 2,
       comments: [],
@@ -1365,7 +1345,12 @@ describe('structural envelope persistence', () => {
     });
     expect(good!.sidecar.structural?.records).toHaveLength(1);
     expect(good!.docHash).toBe(readHash('# Title'));
+    expect(good!.sidecarError).toBeNull();
+  });
 
+  it('PROTECTS a present-but-malformed structural envelope instead of silently dropping it', async () => {
+    // A malformed structural block may hold the only copy of proposed content, so it
+    // must be treated like a corrupt sidecar (protected), not quietly discarded.
     const badEnvelope = JSON.stringify({
       version: 2,
       comments: [],
@@ -1375,11 +1360,20 @@ describe('structural envelope persistence', () => {
     mockInvoke
       .mockResolvedValueOnce(fpPresent('# Title'))
       .mockResolvedValueOnce(fpPresent(badEnvelope));
+    const { result } = renderHook(() => useFileManager());
     let bad: Awaited<ReturnType<typeof result.current.openFilePath>>;
     await act(async () => {
       bad = await result.current.openFilePath('/docs/b.md');
     });
+    // The shape-invalid field is not loaded, but the file is now protected: a later
+    // same-path save reports blocked and never overwrites the on-disk sidecar.
     expect(bad!.sidecar.structural).toBeUndefined();
+    expect(bad!.sidecarError).toBeTruthy();
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# Title', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
   });
 });
 

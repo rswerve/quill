@@ -10,12 +10,12 @@ import {
   retainedRecords,
   type CanonicalRecord,
 } from '../../extensions/StructuralRecordStore';
+import { buildStructuralSavePayload } from '../../utils/structuralSavePayload';
 import {
-  buildStructuralSavePayload,
-  resolveStructuralPersist,
-} from '../../utils/structuralSavePayload';
-import { reconstructStructuralIntoEditor } from '../../utils/structuralReload';
-import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../../types';
+  reconstructStructuralIntoEditor,
+  reconstructStructuralFromRecords,
+} from '../../utils/structuralReload';
+import type { StructuralReviewEnvelope } from '../../types';
 
 const editors: Editor[] = [];
 
@@ -210,43 +210,117 @@ describe('structural save -> reload round trip (structural axis)', () => {
   });
 });
 
-describe('resolveStructuralPersist', () => {
-  const rec = (id: string): StructuralSuggestionRecord => ({
-    changeId: id,
-    author: 'claude',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    op: { kind: 'headingToParagraph', level: 1 },
-    anchor: { parentPath: [], childIndex: 0, childCount: 1 },
-    sourceFingerprint: '# Title',
-    proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
-  });
-  const loadedEnvelope: StructuralReviewEnvelope = {
-    version: 1,
-    sourceDocumentHash: 'original-hash',
-    records: [rec('q1')],
-  };
+describe('buildStructuralSavePayload — incomplete unions fail closed', () => {
+  /** A lone insert branch (proposed content) with no delete counterpart. */
+  function mintInsertOnlyOrphan(editor: Editor, changeId: string) {
+    const { state } = editor;
+    const heading = state.doc.child(0);
+    const tr = state.tr.insert(
+      heading.nodeSize,
+      state.schema.nodes.paragraph.create(
+        { blockTrack: { changeId, op: 'insert' } },
+        state.schema.text('Proposed'),
+      ),
+    );
+    editor.view.dispatch(tr);
+  }
 
-  it('rebuilds from live records when nothing quarantined', () => {
-    expect(resolveStructuralPersist([rec('a')], [], loadedEnvelope)).toEqual({
-      records: [rec('a')],
+  /** A lone delete branch (flagged original) with no proposed counterpart. */
+  function mintDeleteOnlyOrphan(editor: Editor, changeId: string) {
+    const { state } = editor;
+    const heading = state.doc.child(0);
+    editor.view.dispatch(
+      state.tr.setNodeMarkup(0, undefined, {
+        ...heading.attrs,
+        blockTrack: { changeId, op: 'delete' },
+      }),
+    );
+  }
+
+  it('refuses an insert-only orphan instead of accepting its proposed branch to disk', () => {
+    const editor = makeEditor('# Title\n\nBody');
+    mintInsertOnlyOrphan(editor, 'x');
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(false);
+    if (payload.ok) return;
+    expect(payload.error).toContain('incomplete');
+  });
+
+  it('refuses a delete-only orphan', () => {
+    const editor = makeEditor('# Title\n\nBody');
+    mintDeleteOnlyOrphan(editor, 'x');
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(false);
+    if (payload.ok) return;
+    expect(payload.error).toContain('incomplete');
+  });
+});
+
+describe('reconstructStructuralFromRecords (workspace recovery path)', () => {
+  it('reconstructs from in-memory records with no hash gate', () => {
+    // Author a union, extract records the way the workspace snapshot does.
+    const live = makeEditor('# Title\n\nBody');
+    mintHeadingToParagraph(live, 'c1');
+    const reviewJSON = live.state.doc.toJSON();
+    const payload = buildStructuralSavePayload(live, getMarkdown(live));
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) return;
+
+    // Recover: parse the source md, reconstruct from records (no envelope/hash).
+    const recovered = makeEditor('');
+    recovered.commands.setContent(payload.content, { emitUpdate: false });
+    const result = reconstructStructuralFromRecords(recovered, payload.structural);
+    expect(result.quarantined).toEqual([]);
+    expect(retainedRecords(recovered.state).get('c1')?.op).toEqual({
+      kind: 'headingToParagraph',
+      level: 1,
     });
+    expect(recovered.state.doc.toJSON()).toEqual(reviewJSON);
   });
 
-  it('preserves the loaded envelope verbatim when records quarantined and none are live', () => {
-    expect(resolveStructuralPersist([], [rec('q1')], loadedEnvelope)).toEqual({
-      envelope: loadedEnvelope,
+  it('empty records reset the store and leave the document untouched', () => {
+    const editor = makeEditor('# Title\n\nBody');
+    mintHeadingToParagraph(editor, 'stale');
+    const before = editor.state.doc.toJSON();
+    const result = reconstructStructuralFromRecords(editor, []);
+    expect(result).toEqual({ restored: [], quarantined: [] });
+    expect(retainedRecords(editor.state).size).toBe(0);
+    expect(editor.state.doc.toJSON()).toEqual(before);
+  });
+});
+
+describe('buildStructuralSavePayload — complete-but-malformed unions fail the dry-run', () => {
+  /**
+   * A union whose two branches are SCATTERED (delete at the top, insert appended at
+   * the end). Counts match (one complete active union, one record), but the record's
+   * contiguous anchor would reconstruct the insert branch right after the delete —
+   * a different document — so the exact-parity dry-run must refuse it.
+   */
+  function mintScatteredUnion(editor: Editor) {
+    const { state } = editor;
+    const heading = state.doc.child(0);
+    const tr = state.tr;
+    tr.setNodeMarkup(0, undefined, {
+      ...heading.attrs,
+      blockTrack: { changeId: 'c1', op: 'delete' },
     });
-  });
+    tr.insert(
+      state.doc.content.size,
+      state.schema.nodes.paragraph.create(
+        { blockTrack: { changeId: 'c1', op: 'insert' } },
+        state.schema.text('Title'),
+      ),
+    );
+    addStructuralRecord(tr, record('c1'));
+    editor.view.dispatch(tr);
+  }
 
-  it('lets fresh live records win over quarantined ones (single-hash envelope)', () => {
-    // The mixed case: a live union AND a quarantined record. The fresh record set
-    // wins (its own new hash); quarantined records are surfaced at load, not here.
-    expect(resolveStructuralPersist([rec('a')], [rec('q1')], loadedEnvelope)).toEqual({
-      records: [rec('a')],
-    });
-  });
-
-  it('rebuilds (empty) when quarantined but no envelope was ever loaded', () => {
-    expect(resolveStructuralPersist([], [rec('q1')], null)).toEqual({ records: [] });
+  it('refuses a scattered union that would reconstruct into a different order', () => {
+    const editor = makeEditor('# Title\n\nMiddle\n\nBody');
+    mintScatteredUnion(editor);
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(false);
+    if (payload.ok) return;
+    expect(payload.error).toContain('would not survive reload');
   });
 });

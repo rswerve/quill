@@ -1,13 +1,16 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
 import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
-import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../types';
+import { Transform } from '@tiptap/pm/transform';
+import type { StructuralSuggestionRecord } from '../types';
 import { projectBlockUnions } from './blockUnionProjection';
 import { extractStructuralRecords, type StructuralRecordMetadata } from './structuralExtraction';
+import { reconstructBlockUnions } from './structuralReconstruction';
 import {
   activeRecords,
   activeStructuralChangeIds,
   orphanStructuralChangeIds,
 } from '../extensions/StructuralRecordStore';
+import { structuralFootprints } from './structuralFootprints';
 import type { MarkdownSerialize } from './structuralFingerprint';
 
 /**
@@ -19,40 +22,6 @@ import type { MarkdownSerialize } from './structuralFingerprint';
 export type StructuralSavePayload =
   | { ok: true; content: string; structural: StructuralSuggestionRecord[] }
   | { ok: false; error: string };
-
-/**
- * What the sidecar writer should persist for the structural axis: either a fresh
- * record set (the writer stamps the envelope hash from THIS `.md` write) or a
- * loaded envelope preserved verbatim (keeping its own hash, so records that
- * describe a now-stale source stay inert on reload rather than misbinding).
- */
-export type StructuralSaveInput =
-  | { records: StructuralSuggestionRecord[] }
-  | { envelope: StructuralReviewEnvelope };
-
-/**
- * Decide what to persist for the structural axis. Fresh live records rebuild the
- * envelope under the new `.md` hash. But if the last load QUARANTINED records
- * (the source changed outside Quill) and there are no fresh live records to
- * write, preserve the loaded envelope verbatim — its original hash keeps the
- * records gated against the changed source, so they stay preserved-but-inert
- * instead of being dropped from disk or rebuilt under a hash that could misbind.
- *
- * A single envelope carries one source hash, so it cannot mix fresh records (new
- * source) with preserved ones (old source); when both exist, the fresh records
- * win and the quarantined ones are surfaced at load. That mix requires minting a
- * new union while others are quarantined — unreachable until the mint slice.
- */
-export function resolveStructuralPersist(
-  liveRecords: StructuralSuggestionRecord[],
-  quarantined: StructuralSuggestionRecord[],
-  loadedEnvelope: StructuralReviewEnvelope | null,
-): StructuralSaveInput {
-  if (quarantined.length > 0 && liveRecords.length === 0 && loadedEnvelope) {
-    return { envelope: loadedEnvelope };
-  }
-  return { records: liveRecords };
-}
 
 interface MarkdownStorage {
   markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
@@ -87,17 +56,31 @@ export function buildStructuralSavePayload(
   fallbackMarkdown: string,
 ): StructuralSavePayload {
   const { state } = editor;
-  const activeIds = activeStructuralChangeIds(state.doc);
-  if (activeIds.size === 0) {
-    // No unions — the disk view is the live document. Keep the caller's exact
-    // serialization so the write is byte-for-byte what it was before structural
-    // support existed.
+  // Look at ALL block-track markup, not just complete unions: an INCOMPLETE union
+  // (a lone delete or insert branch with no counterpart) has zero *active* ids, so
+  // keying the fast path on `activeStructuralChangeIds` would route it down the
+  // ordinary-document path and serialize the live document raw — silently ACCEPTING
+  // an orphan insert branch into the source `.md`. The fast path is taken only when
+  // there is no block-track markup at all.
+  const footprints = structuralFootprints(state.doc);
+  if (footprints.length === 0) {
+    // No structural markup — the disk view is the live document. Keep the caller's
+    // exact serialization so the write is byte-for-byte what it was before
+    // structural support existed.
     return { ok: true, content: fallbackMarkdown, structural: [] };
   }
 
-  // Fail closed: a live union whose canonical record is missing must never reach
-  // disk — reconstruction could not restore it and Save/Reject would have no
-  // metadata. The save aborts before writing anything.
+  // Fail closed on any block-track markup that is not a COMPLETE, recorded union:
+  const activeIds = activeStructuralChangeIds(state.doc);
+  // (a) an incomplete union — a footprint whose change has only one branch live.
+  const incomplete = [...new Set(footprints.map((f) => f.changeId))].filter(
+    (id) => !activeIds.has(id),
+  );
+  if (incomplete.length > 0) {
+    return { ok: false, error: `incomplete structural union: ${incomplete.join(', ')}` };
+  }
+  // (b) an orphan — a complete union whose canonical record is missing, so
+  // reconstruction could not restore it and Save/Reject would have no metadata.
   const orphans = orphanStructuralChangeIds(state);
   if (orphans.length > 0) {
     return {
@@ -121,10 +104,10 @@ export function buildStructuralSavePayload(
   );
 
   let structural: StructuralSuggestionRecord[];
-  let content: string;
+  let sourceDoc: PMNode;
   try {
     structural = extractStructuralRecords(state.doc, metadata, serialize);
-    content = serialize(projectBlockUnions(state.doc, 'source').doc);
+    sourceDoc = projectBlockUnions(state.doc, 'source').doc;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -137,5 +120,45 @@ export function buildStructuralSavePayload(
     return { ok: false, error: 'incomplete structural union' };
   }
 
-  return { ok: true, content, structural };
+  // Dry-run the reload: reconstruct the extracted records against the source
+  // projection and require it to reproduce the live structural arrangement
+  // EXACTLY. Counts alone would miss a complete-but-malformed union — scattered or
+  // interleaved branches whose record count matches but that reconstruct into a
+  // different order and would quarantine (losing the proposal) on the real reload.
+  // Exact parity makes "if it saves, it reloads exactly" true. Marks are ignored:
+  // the inline/comment axis is dropped by the source Markdown and restored
+  // separately, so it is not part of the structural round trip.
+  const dryRun = reconstructBlockUnions(sourceDoc, structural, serialize);
+  const restoredIds = new Set(dryRun.restored.map((record) => record.changeId));
+  const idsMatch =
+    dryRun.quarantined.length === 0 &&
+    restoredIds.size === activeIds.size &&
+    [...activeIds].every((id) => restoredIds.has(id));
+  if (!idsMatch || !structuralSkeletonEq(dryRun.doc, state.doc)) {
+    return { ok: false, error: 'structural union would not survive reload' };
+  }
+
+  return { ok: true, content: serialize(sourceDoc), structural };
+}
+
+const REVIEW_MARK_TYPES = ['tracked_insert', 'tracked_delete', 'tracked_format', 'comment'];
+
+/**
+ * Compare two documents' structural skeletons (block tree + `blockTrack` identity),
+ * ignoring the inline review axis. Structural reconstruction restores blocks and
+ * their branch flags but not inline tracked/comment marks (those are Markdown-
+ * dropped and restored on top), so an exact `Node.eq` after stripping those marks
+ * is the right "same structural arrangement" test.
+ */
+function structuralSkeletonEq(a: PMNode, b: PMNode): boolean {
+  return stripReviewMarks(a).eq(stripReviewMarks(b));
+}
+
+function stripReviewMarks(doc: PMNode): PMNode {
+  const tr = new Transform(doc);
+  for (const name of REVIEW_MARK_TYPES) {
+    const markType = doc.type.schema.marks[name];
+    if (markType) tr.removeMark(0, tr.doc.content.size, markType);
+  }
+  return tr.doc;
 }

@@ -78,6 +78,7 @@ function snapshotFromDraft(draft: DraftFile): DraftSnapshot {
     content: draft.content,
     comments: draft.comments,
     suggestions: draft.suggestions,
+    ...(draft.structural && draft.structural.length > 0 ? { structural: draft.structural } : {}),
     aiSession: draft.aiSession,
     contextFolder: draft.contextFolder,
     ...(draft.chat ? { chat: draft.chat } : {}),

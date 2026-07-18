@@ -2,6 +2,7 @@ import type { Editor as TiptapEditor } from '@tiptap/core';
 import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../types';
 import { reconstructFromEnvelope } from './structuralEnvelope';
+import { reconstructBlockUnions, type ReconstructionResult } from './structuralReconstruction';
 import { resetStructuralRecords, type CanonicalRecord } from '../extensions/StructuralRecordStore';
 import type { MarkdownSerialize } from './structuralFingerprint';
 
@@ -31,62 +32,78 @@ export interface StructuralReloadResult {
 }
 
 /**
- * Reconstruct block-union structural suggestions into a freshly loaded editor,
- * the FIRST step of the two-axis reload — it must run AFTER the source `.md` has
- * been parsed into the editor (`setContent`) and BEFORE inline/comment marks are
- * restored, because it rebuilds the review document those marks' positions were
- * captured against.
+ * Apply a reconstruction result to the editor: replace the document with the
+ * reconstructed review document when any record reconstructed, and reset the
+ * canonical record store to exactly those records (so a prior document's records
+ * never leak in and every live union has its metadata). One history-excluded,
+ * tracking-skipped, update-suppressed transaction, so a just-opened document is
+ * neither marked dirty nor re-interpreted as a tracked edit.
+ */
+function applyReconstruction(
+  editor: TiptapEditor,
+  result: ReconstructionResult,
+): StructuralReloadResult {
+  const { state } = editor;
+  const tr = state.tr;
+  if (result.restored.length > 0) {
+    // The reconstructed review document's top-level content reproduces the review
+    // document exactly, so review-coordinate inline and comment positions line up
+    // for the mark-restore step that follows.
+    tr.replaceWith(0, state.doc.content.size, result.doc.content);
+  }
+  resetStructuralRecords(tr, result.restored.map(toCanonicalRecord));
+  tr.setMeta('preventUpdate', true);
+  tr.setMeta('skipTracking', true);
+  tr.setMeta('addToHistory', false);
+  editor.view.dispatch(tr);
+  return { restored: result.restored, quarantined: result.quarantined };
+}
+
+/**
+ * Reconstruct block-union structural suggestions into a freshly loaded editor from
+ * a persisted sidecar ENVELOPE — the FIRST step of the two-axis file reload. It
+ * must run AFTER the source `.md` has been parsed into the editor (`setContent`)
+ * and BEFORE inline/comment marks are restored, because it rebuilds the review
+ * document those marks' positions were captured against.
  *
- * The editor's current document is the pristine SOURCE (both branches collapsed
- * to the original). This:
- *  1. Gates reconstruction on `sourceHash` (the SHA-256 of the loaded `.md`) — a
- *     mismatch quarantines every record so nothing misbinds onto a shifted block.
- *  2. Replaces the editor document with the reconstructed review document (source
- *     + proposed branches, both flagged) when any record reconstructs.
- *  3. Resets the canonical record store to exactly the reconstructed records, so a
- *     prior document's records never leak in and every live union has its metadata.
- *
- * The replace + store reset run in one history-excluded, tracking-skipped,
- * update-suppressed transaction so a just-opened document is neither marked dirty
- * nor re-interpreted as a tracked edit. Passing `envelope: null` still resets the
- * store (clearing a previous document's records) and leaves the document untouched.
+ * Reconstruction is gated on `sourceHash` (the SHA-256 of the loaded `.md`) — a
+ * mismatch means the file changed outside Quill, so every record is quarantined
+ * and nothing misbinds onto a shifted block. Passing `envelope: null` still resets
+ * the store (clearing a previous document's records) and leaves the doc untouched.
  */
 export function reconstructStructuralIntoEditor(
   editor: TiptapEditor,
   envelope: StructuralReviewEnvelope | null,
   sourceHash: string,
 ): StructuralReloadResult {
-  const { state } = editor;
-
-  if (!envelope) {
-    const tr = state.tr;
-    resetStructuralRecords(tr, []);
-    tr.setMeta('preventUpdate', true);
-    tr.setMeta('skipTracking', true);
-    tr.setMeta('addToHistory', false);
-    editor.view.dispatch(tr);
-    return { restored: [], quarantined: [] };
-  }
-
+  if (!envelope) return applyReconstruction(editor, emptyReconstruction(editor));
   const serialize = markdownSerializer(editor);
-  const {
-    doc: reviewDoc,
-    restored,
-    quarantined,
-  } = reconstructFromEnvelope(state.doc, sourceHash, envelope, serialize);
+  return applyReconstruction(
+    editor,
+    reconstructFromEnvelope(editor.state.doc, sourceHash, envelope, serialize),
+  );
+}
 
-  const tr = state.tr;
-  if (restored.length > 0) {
-    // Replace the whole document with the reconstructed review document. Its
-    // top-level content reproduces reviewDoc exactly, so review-coordinate inline
-    // and comment positions line up for the mark-restore step that follows.
-    tr.replaceWith(0, state.doc.content.size, reviewDoc.content);
-  }
-  resetStructuralRecords(tr, restored.map(toCanonicalRecord));
-  tr.setMeta('preventUpdate', true);
-  tr.setMeta('skipTracking', true);
-  tr.setMeta('addToHistory', false);
-  editor.view.dispatch(tr);
+/**
+ * Reconstruct block-union structural suggestions into a freshly recovered editor
+ * from workspace-recovery RECORDS — the crash-recovery counterpart of
+ * `reconstructStructuralIntoEditor`. A workspace snapshot's source Markdown and
+ * records were captured together in memory, so there is no external-edit surface
+ * and thus no whole-document hash gate; the per-record trust boundary in
+ * `reconstructBlockUnions` still quarantines a malformed record. Same ordering
+ * contract: run it after `setContent` and before the inline/comment mark restore.
+ */
+export function reconstructStructuralFromRecords(
+  editor: TiptapEditor,
+  records: StructuralSuggestionRecord[],
+): StructuralReloadResult {
+  if (records.length === 0) return applyReconstruction(editor, emptyReconstruction(editor));
+  const serialize = markdownSerializer(editor);
+  return applyReconstruction(editor, reconstructBlockUnions(editor.state.doc, records, serialize));
+}
 
-  return { restored, quarantined };
+/** An empty result over the current document — resets the store, changes nothing. */
+function emptyReconstruction(editor: TiptapEditor): ReconstructionResult {
+  const { doc, tr } = editor.state;
+  return { doc, mapping: tr.mapping, restored: [], quarantined: [] };
 }

@@ -44,10 +44,12 @@ import {
 } from '../utils/reviewPersistence';
 import {
   buildStructuralSavePayload,
-  resolveStructuralPersist,
-  type StructuralSaveInput,
+  type StructuralSavePayload,
 } from '../utils/structuralSavePayload';
-import { reconstructStructuralIntoEditor } from '../utils/structuralReload';
+import {
+  reconstructStructuralIntoEditor,
+  reconstructStructuralFromRecords,
+} from '../utils/structuralReload';
 import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
@@ -191,7 +193,7 @@ export interface DocumentTabHandle {
   unlinkSession: () => void;
   linkContextFolder: () => void;
   unlinkContextFolder: () => void;
-  getWorkspaceSnapshot: () => DraftSnapshot;
+  getWorkspaceSnapshot: () => DraftSnapshot | null;
   /**
    * Flush a pending autosave and drain the coordinator; awaited by the shell on
    * close/quit. Resolves with whether the tab is STILL dirty afterward (true = the
@@ -462,11 +464,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // slice (the only path that puts structural records on disk today), so no real
   // sidecar can carry one yet.
   const quarantinedStructuralRef = useRef<StructuralSuggestionRecord[]>([]);
-  // The structural envelope exactly as loaded from disk, kept so that if any of its
-  // records quarantined on reload (source changed outside Quill) a save can preserve
-  // it verbatim — its original hash keeps those records inert — rather than dropping
-  // them. Cleared on New / a load with no structural envelope.
-  const loadedStructuralEnvelopeRef = useRef<StructuralReviewEnvelope | null>(null);
+  // The most recent successfully-built workspace snapshot, retained so that if the
+  // structural payload can't be built the recovery data is kept intact rather than
+  // degraded (Codex's crash-recovery correction). Never source-flattened.
+  const lastGoodWorkspaceSnapshotRef = useRef<DraftSnapshot | null>(null);
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
@@ -486,14 +487,27 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // The shell owns persistence and asks each mounted tab for a live snapshot.
   // Keep transient AI reply state out of this second on-disk write path just as
   // the regular sidecar serializer does.
-  const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
+  const getWorkspaceSnapshot = useCallback((): DraftSnapshot | null => {
+    const reviewMd = getDocMarkdown();
+    const ed = editorRef.current?.getEditor();
+    // Capture the structural SOURCE (the `.md` view) + records, mirroring a disk
+    // save, so recovery reconstructs unions the same way a file reload does. If the
+    // payload can't be built (a malformed/orphan union — the same should-never-happen
+    // state the save path fails closed on), do NOT degrade the recovery data: retain
+    // the last good snapshot (or skip the write, leaving the existing workspace file
+    // untouched) rather than flatten the document and drop the proposed branch.
+    const payload = ed
+      ? buildStructuralSavePayload(ed, reviewMd)
+      : ({ ok: true, content: reviewMd, structural: [] } satisfies StructuralSavePayload);
+    if (!payload.ok) return lastGoodWorkspaceSnapshotRef.current;
     const live = getLiveReviewState();
     const baselines = getBaselines();
-    return {
+    const snapshot: DraftSnapshot = {
       filePath,
-      content: getDocMarkdown(),
+      content: payload.content,
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
+      ...(payload.structural.length > 0 ? { structural: payload.structural } : {}),
       aiSession,
       contextFolder,
       ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
@@ -503,6 +517,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       expectedSidecar: baselines.expectedSidecar,
       sidecarProtected: baselines.sidecarProtected,
     };
+    lastGoodWorkspaceSnapshotRef.current = snapshot;
+    return snapshot;
   }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder, getBaselines]);
 
   // Read the live document text for a comment's anchored range and its
@@ -735,26 +751,42 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [onNotice],
   );
 
-  // The structural half of the two-axis reload: rebuild the block unions (and reset
-  // the canonical record store) BEFORE inline/comment marks are restored, then stash
-  // the loaded envelope + any quarantined records and warn about the latter.
-  const restoreStructuralUnions = useCallback(
-    (ed: TiptapEditor, envelope: StructuralReviewEnvelope | null, docHash: string) => {
-      loadedStructuralEnvelopeRef.current = envelope;
-      const result = reconstructStructuralIntoEditor(ed, envelope, docHash);
-      quarantinedStructuralRef.current = result.quarantined;
-      if (result.quarantined.length > 0) {
-        const count = result.quarantined.length;
-        onNotice({
-          title: 'Structural suggestions need review',
-          message:
-            `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored ` +
-            `because the document changed outside Quill. The saved records are preserved on disk but ` +
-            `cannot affect the document until it is reconciled.`,
-        });
-      }
+  const warnStructuralQuarantine = useCallback(
+    (count: number) => {
+      if (count <= 0) return;
+      onNotice({
+        title: 'Structural suggestions need review',
+        message:
+          `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored ` +
+          `because the document changed outside Quill. The saved records are preserved on disk but ` +
+          `cannot affect the document until it is reconciled.`,
+      });
     },
     [onNotice],
+  );
+
+  // The structural half of the two-axis FILE reload: rebuild the block unions (and
+  // reset the canonical record store) BEFORE inline/comment marks are restored, then
+  // stash the loaded envelope + any quarantined records and warn about the latter.
+  const restoreStructuralUnions = useCallback(
+    (ed: TiptapEditor, envelope: StructuralReviewEnvelope | null, docHash: string) => {
+      const result = reconstructStructuralIntoEditor(ed, envelope, docHash);
+      quarantinedStructuralRef.current = result.quarantined;
+      warnStructuralQuarantine(result.quarantined.length);
+    },
+    [warnStructuralQuarantine],
+  );
+
+  // The workspace-RECOVERY counterpart: reconstruct from in-memory records (no hash
+  // gate — the snapshot's source and records were captured together). There is no
+  // on-disk envelope to preserve, so a save after recovery rebuilds from live state.
+  const restoreStructuralFromDraft = useCallback(
+    (ed: TiptapEditor, records: StructuralSuggestionRecord[]) => {
+      const result = reconstructStructuralFromRecords(ed, records);
+      quarantinedStructuralRef.current = result.quarantined;
+      warnStructuralQuarantine(result.quarantined.length);
+    },
+    [warnStructuralQuarantine],
   );
 
   // A mounted background tab keeps its editor state, but layout APIs return
@@ -940,22 +972,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // envelope. For a document with no structural union it returns getMarkdown()
   // verbatim (byte-identical to the pre-structural save); a malformed union
   // returns `{ ok: false }` so the caller aborts BEFORE any byte is written.
-  const captureDiskPayload = useCallback(():
-    | { ok: true; content: string; structural: StructuralSaveInput }
-    | { ok: false; error: string } => {
+  const captureDiskPayload = useCallback((): StructuralSavePayload => {
     const ed = editorRef.current?.getEditor();
     const fallback = editorRef.current?.getMarkdown() ?? '';
-    if (!ed) return { ok: true, content: fallback, structural: { records: [] } };
-    const payload = buildStructuralSavePayload(ed, fallback);
-    if (!payload.ok) return payload;
-    // Rebuild from live records, unless the last load quarantined records and there
-    // are no live ones — then preserve the loaded envelope verbatim.
-    const structural = resolveStructuralPersist(
-      payload.structural,
-      quarantinedStructuralRef.current,
-      loadedStructuralEnvelopeRef.current,
-    );
-    return { ok: true, content: payload.content, structural };
+    if (!ed) return { ok: true, content: fallback, structural: [] };
+    // Fail closed if the last load left unreconciled (quarantined) structural
+    // records: rebuilding the envelope from live state would DROP them, while the
+    // on-disk sidecar still holds the only copy. Refuse every write route until the
+    // document is reconciled — the sidecar is never overwritten, so nothing is lost
+    // (and nothing rejected is resurrected). Proper mixed active+quarantined
+    // preservation needs a multi-batch envelope and lands with the mint slice.
+    if (quarantinedStructuralRef.current.length > 0) {
+      return { ok: false, error: 'unreconciled structural suggestions on disk' };
+    }
+    return buildStructuralSavePayload(ed, fallback);
   }, []);
 
   // A failed structural payload build aborts the save before any byte is written
@@ -1302,7 +1332,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setSuggestions([]);
     quarantinedSuggestionsRef.current = [];
     quarantinedStructuralRef.current = [];
-    loadedStructuralEnvelopeRef.current = null;
     onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
@@ -1436,6 +1465,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // suppresses the update event).
       const ed = editorRef.current?.getEditor();
       if (ed) {
+        restoreStructuralFromDraft(ed, draft.structural ?? []);
         restorePersistedReviewMarks(ed, draftComments, draftSuggestions);
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
@@ -1454,6 +1484,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       documentChat,
       restoreDraft,
       restorePersistedReviewMarks,
+      restoreStructuralFromDraft,
       setComments,
       setSuggestions,
     ],

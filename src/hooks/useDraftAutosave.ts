@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { DraftFile, WorkspaceFile, WorkspaceTab, Fingerprint } from '../types';
+import type {
+  DraftFile,
+  WorkspaceFile,
+  WorkspaceTab,
+  Fingerprint,
+  StructuralSuggestionRecord,
+} from '../types';
 import {
   sanitizeComments,
   sanitizeSuggestions,
@@ -70,6 +76,13 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   const chat = sanitizeDocumentChat(d.chat);
   const expectedDoc = sanitizeFingerprint(d.expectedDoc);
   const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
+  // Shallow only — keep well-shaped record objects and let structural
+  // reconstruction (the per-record trust boundary) quarantine anything malformed.
+  const structural = Array.isArray(d.structural)
+    ? (d.structural.filter(
+        (r) => typeof r === 'object' && r !== null,
+      ) as StructuralSuggestionRecord[])
+    : [];
   return {
     version: 1,
     savedAt: typeof d.savedAt === 'string' ? d.savedAt : new Date().toISOString(),
@@ -77,6 +90,7 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     content: d.content,
     comments: sanitizeComments(d.comments),
     suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
+    ...(structural.length > 0 ? { structural } : {}),
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
     ...(chat ? { chat } : {}),
