@@ -78,6 +78,7 @@ type MarkMeta = {
   createdAt: unknown;
   originCommentId: unknown;
   originChatMessageId: unknown;
+  logicalKind: unknown;
   ops: Set<TrackedOp>;
 };
 
@@ -116,6 +117,23 @@ function formatDeltaError(id: string, delta: unknown): string | null {
   return null;
 }
 
+/** Field-type checks common to every tracked mark (author/status/timestamps/origins/logicalKind). */
+function trackedMarkFieldError(id: string, data: Record<string, unknown>): string | null {
+  if (typeof data.authorID !== 'string') return `tracked mark ${id} has a non-string authorID`;
+  // A persisted tracked mark is always unresolved — accepted/rejected changes drop their marks.
+  if (data.status !== 'pending')
+    return `tracked mark ${id} is "${String(data.status)}", not pending`;
+  if (typeof data.createdAt !== 'number') return `tracked mark ${id} has a non-numeric createdAt`;
+  if (data.updatedAt !== undefined && typeof data.updatedAt !== 'number')
+    return `tracked mark ${id} has a non-numeric updatedAt`;
+  for (const key of ['originCommentId', 'originChatMessageId'] as const)
+    if (data[key] !== undefined && typeof data[key] !== 'string')
+      return `tracked mark ${id} has a non-string ${key}`;
+  if (data.logicalKind !== undefined && data.logicalKind !== 'replacement')
+    return `tracked mark ${id} has an invalid logicalKind "${String(data.logicalKind)}"`;
+  return null;
+}
+
 /** Shape-check one tracked mark's attrs (dataTracked + changeId must agree with the mark type). */
 function trackedMarkDataError(op: TrackedOp, attrs: Record<string, unknown>): string | null {
   const data = attrs.dataTracked as Record<string, unknown> | undefined;
@@ -126,12 +144,10 @@ function trackedMarkDataError(op: TrackedOp, attrs: Record<string, unknown>): st
     return `tracked mark ${id} changeId "${String(attrs.changeId)}" != dataTracked.id`;
   if (data.operation !== op)
     return `tracked mark ${id} operation "${String(data.operation)}" != ${op}`;
-  if (typeof data.authorID !== 'string') return `tracked mark ${id} has a non-string authorID`;
-  // A persisted tracked mark is always unresolved — accepted/rejected changes drop their marks.
-  if (data.status !== 'pending')
-    return `tracked mark ${id} is "${String(data.status)}", not pending`;
-  if (typeof data.createdAt !== 'number') return `tracked mark ${id} has a non-numeric createdAt`;
+  const fieldError = trackedMarkFieldError(id, data);
+  if (fieldError) return fieldError;
   if (op === 'format') {
+    if (data.logicalKind !== undefined) return `format mark ${id} must not carry a logicalKind`;
     if (data.delta === undefined) return `format mark ${id} has no delta`;
     return formatDeltaError(id, data.delta);
   }
@@ -156,7 +172,8 @@ function fragmentMetaError(
     prior.status !== data.status ||
     prior.createdAt !== data.createdAt ||
     prior.originCommentId !== data.originCommentId ||
-    prior.originChatMessageId !== data.originChatMessageId
+    prior.originChatMessageId !== data.originChatMessageId ||
+    prior.logicalKind !== data.logicalKind
   ) {
     return `tracked mark ${id} has inconsistent metadata across fragments`;
   }
@@ -188,18 +205,25 @@ function validateRawTrackedMarks(doc: ProseMirrorNode, schema: Schema): string |
           createdAt: data.createdAt,
           originCommentId: data.originCommentId,
           originChatMessageId: data.originChatMessageId,
+          logicalKind: data.logicalKind,
           ops: new Set([op]),
         });
       }
     }
   });
   if (error) return error;
-  // Each logical change must present an allowed operation shape: an insertion, a deletion, an
-  // insert+delete replacement, or a format — never an arbitrary mix.
+  // Each logical change must present an allowed operation shape (insertion / deletion /
+  // insert+delete replacement / format), and `logicalKind` must agree: exactly the
+  // insert+delete replacement carries 'replacement', nothing else does.
   for (const [id, m] of meta) {
     const shape = [...m.ops].sort().join('|');
     if (!ALLOWED_OP_SETS.has(shape))
       return `tracked mark ${id} has an invalid operation set {${shape}}`;
+    const isReplacement = shape === 'delete|insert';
+    if (isReplacement && m.logicalKind !== 'replacement')
+      return `tracked mark ${id} is an insert+delete replacement but its logicalKind is not 'replacement'`;
+    if (!isReplacement && m.logicalKind !== undefined)
+      return `tracked mark ${id} (${shape}) must not carry logicalKind`;
   }
   return null;
 }
@@ -292,7 +316,9 @@ function commentCoverageError(doc: ProseMirrorNode, c: Comment): string | null {
   let error: string | null = null;
   doc.descendants((node, pos) => {
     if (error) return false;
-    if (!node.isText) return; // block boundaries / atoms are not mark-admissible → not gaps
+    // Text AND hard breaks are annotation-mark-admissible (Quill marks breaks); everything
+    // else (block boundaries, atoms) can't carry a comment mark, so it isn't a gap.
+    if (!node.isText && node.type.name !== 'hardBreak') return;
     const from = pos;
     const to = pos + node.nodeSize;
     const marked = node.marks.some(
@@ -316,7 +342,9 @@ function commentMarkError(doc: ProseMirrorNode, c: Comment): string | null {
   if (attrs.length === 0) return `active comment ${c.id} has no mark`;
   if (attrs.some((a) => a.kind !== c.kind))
     return `comment ${c.id} mark kind does not match record`;
-  if (attrs.some((a) => a.resolved === true)) return `active comment ${c.id} has a resolved mark`;
+  // Strictly unresolved: a persisted `resolved` of `true` OR a stray string like "false" fails.
+  if (attrs.some((a) => a.resolved !== false))
+    return `active comment ${c.id} has a non-false resolved mark`;
   return commentCoverageError(doc, c);
 }
 

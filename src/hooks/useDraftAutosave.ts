@@ -70,6 +70,12 @@ interface UseWorkspaceAutosaveOptions {
   revision: string;
   /** Captures every open tab. Null means a just-mounted tab is not ready yet. */
   getWorkspace: () => WorkspaceFile | null;
+  /**
+   * When true, EVERY write is refused — including explicit `writeWorkspace(override)` from the
+   * quit/discard flows, which bypass `enabled`. This protects a corrupt recovery snapshot: while
+   * a degraded recovery awaits preservation, no path may overwrite the original on disk.
+   */
+  isProtected?: () => boolean;
 }
 
 interface UseWorkspaceAutosaveReturn {
@@ -197,11 +203,16 @@ export function useWorkspaceAutosave({
   hasDirtyTabs,
   revision,
   getWorkspace,
+  isProtected,
 }: UseWorkspaceAutosaveOptions): UseWorkspaceAutosaveReturn {
   const getWorkspaceRef = useRef(getWorkspace);
   getWorkspaceRef.current = getWorkspace;
+  const isProtectedRef = useRef(isProtected);
+  isProtectedRef.current = isProtected;
 
   const writeWorkspace = useCallback(async (override?: WorkspaceFile): Promise<boolean> => {
+    // Evidence protection applies to EVERY write, including explicit overrides from quit/discard.
+    if (isProtectedRef.current?.()) return false;
     const workspace = override ?? getWorkspaceRef.current();
     if (!workspace) return false;
     try {

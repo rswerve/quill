@@ -26,8 +26,13 @@ export interface WorkspaceRecoveryGuard {
   begin: (expectedTabIds: string[]) => void;
   /** A snapshot-bearing tab reported how it recovered. */
   report: (tabId: string, outcome: WorkspaceRecoveryOutcome) => void;
-  /** Release the hold after the corrupt original has been successfully preserved. */
-  resumeAfterPreservation: () => void;
+  /**
+   * Preserve the corrupt original, then resume — atomically owned here so resumption can NEVER
+   * happen without a successful quarantine. Runs `quarantine`; on a truthy result the hold is
+   * released and it returns true; on a falsy result nothing changes (stays suspended + degraded)
+   * and it returns false so the caller can surface the failure.
+   */
+  preserve: (quarantine: () => Promise<string | null>) => Promise<boolean>;
 }
 
 export function useWorkspaceRecoveryGuard(): WorkspaceRecoveryGuard {
@@ -77,10 +82,16 @@ export function useWorkspaceRecoveryGuard(): WorkspaceRecoveryGuard {
     [finalize],
   );
 
-  const resumeAfterPreservation = useCallback(() => {
-    setDegraded(false);
-    setBoth(false);
-  }, [setBoth]);
+  const preserve = useCallback(
+    async (quarantine: () => Promise<string | null>): Promise<boolean> => {
+      const preserved = await quarantine();
+      if (!preserved) return false; // preservation failed → stay suspended + degraded, retryable
+      setDegraded(false);
+      setBoth(false);
+      return true;
+    },
+    [setBoth],
+  );
 
-  return { suspended, suspendedRef, degraded, begin, report, resumeAfterPreservation };
+  return { suspended, suspendedRef, degraded, begin, report, preserve };
 }

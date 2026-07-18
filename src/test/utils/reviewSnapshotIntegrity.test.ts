@@ -419,6 +419,104 @@ describe('validateSnapshot: raw tracked-mark exactness (Codex round 2)', () => {
     const result = validateSnapshot(editor.schema, jsonOf(editor), [], suggestions);
     expect(result.ok).toBe(true);
   });
+
+  it('rejects a logicalKind on a single (non-replacement) operation', () => {
+    const { editor } = coherent(); // a lone tracked delete
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.logicalKind = 'replacement'));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('logicalKind');
+  });
+
+  it('rejects a replacement whose fragments dropped logicalKind', () => {
+    const editor = makeEditor();
+    editor.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'alpha beta' }] }],
+      },
+      { emitUpdate: false },
+    );
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('ALPHA').run();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => delete data.logicalKind); // strip it from both halves
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('logicalKind');
+  });
+
+  it('rejects a comment mark with a stringified resolved="false"', () => {
+    const editor = makeEditor();
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              text: 'hi',
+              marks: [
+                { type: 'comment', attrs: { commentId: 'c1', kind: 'note', resolved: 'false' } },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const record: Comment = {
+      id: 'c1',
+      anchorText: 'hi',
+      from: 1,
+      to: 3,
+      author: 'R',
+      createdAt: '2026-01-01T00:00:00Z',
+      resolved: false,
+      kind: 'note',
+      replies: [],
+    };
+    const result = validateSnapshot(editor.schema, doc, [record], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('non-false resolved');
+  });
+
+  it('rejects a comment split across an UNMARKED hard break (a real coverage gap)', () => {
+    const editor = makeEditor();
+    const cm = { type: 'comment', attrs: { commentId: 'c1', kind: 'note', resolved: false } };
+    // "aa" [marked] · hardBreak [UNMARKED] · "bb" [marked] — the break is annotation content,
+    // so leaving it unmarked is a genuine gap, not a block boundary.
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'aa', marks: [cm] },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'bb', marks: [cm] },
+          ],
+        },
+      ],
+    };
+    const record: Comment = {
+      id: 'c1',
+      anchorText: 'aa bb', // rangeText projects a hard break as a space, so this matches the envelope
+      from: 1,
+      to: 6,
+      author: 'R',
+      createdAt: '2026-01-01T00:00:00Z',
+      resolved: false,
+      kind: 'note',
+      replies: [],
+    };
+    // Reconcile passes (envelope text matches) so the CONTIGUITY check is what rejects the gap.
+    const result = validateSnapshot(editor.schema, doc, [record], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('gap');
+  });
 });
 
 describe('validateSnapshot: comment bijection', () => {

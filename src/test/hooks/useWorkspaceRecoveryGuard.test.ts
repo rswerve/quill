@@ -77,15 +77,21 @@ describe('useWorkspaceRecoveryGuard composed with useWorkspaceAutosave', () => {
     expect(result.current.degraded).toBe(true);
     expect(writeCalls()).toHaveLength(0);
 
-    // Preservation done → resume → the fresh workspace finally writes.
-    act(() => result.current.resumeAfterPreservation());
+    // A SUCCESSFUL quarantine (truthy result) resumes → the fresh workspace finally writes.
+    const quarantineOk = vi.fn(async () => '/quarantined/workspace.corrupt-1.json');
+    let preserved = false;
+    await act(async () => {
+      preserved = await result.current.preserve(quarantineOk);
+    });
+    expect(preserved).toBe(true);
+    expect(quarantineOk).toHaveBeenCalledTimes(1);
     rerender({ revision: 'r2' });
     await flush();
     expect(result.current.degraded).toBe(false);
     expect(writeCalls().length).toBeGreaterThan(0); // writes resume once the original is preserved
   });
 
-  it('quarantine failure (no resume) keeps persistence suspended → still zero writes', async () => {
+  it('quarantine FAILURE (falsy result) cannot resume — stays suspended, still zero writes', async () => {
     const { result, rerender } = renderHook(({ revision }) => useComposed(revision), {
       initialProps: { revision: 'r0' },
     });
@@ -93,10 +99,19 @@ describe('useWorkspaceRecoveryGuard composed with useWorkspaceAutosave', () => {
     await flush();
     mockInvoke.mockClear();
     act(() => result.current.report('t1', 'degraded'));
-    // resumeAfterPreservation is NOT called (quarantine failed) — stays suspended.
+
+    // The hook OWNS this: a null quarantine result must NOT resume.
+    const quarantineFail = vi.fn(async () => null);
+    let preserved = true;
+    await act(async () => {
+      preserved = await result.current.preserve(quarantineFail);
+    });
+    expect(preserved).toBe(false);
+    expect(quarantineFail).toHaveBeenCalledTimes(1);
+    expect(result.current.suspended).toBe(true);
+    expect(result.current.degraded).toBe(true);
     rerender({ revision: 'r1' });
     await flush();
-    expect(result.current.suspended).toBe(true);
     expect(writeCalls()).toHaveLength(0);
   });
 

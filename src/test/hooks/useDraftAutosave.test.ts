@@ -155,6 +155,28 @@ describe('useWorkspaceAutosave', () => {
     expect(writeCalls()).toHaveLength(0);
   });
 
+  it('isProtected refuses EVERY write, including an explicit override (quit/discard bypass)', async () => {
+    const { result } = renderHook(() =>
+      useWorkspaceAutosave({
+        enabled: true,
+        hasDirtyTabs: true,
+        revision: 'r',
+        getWorkspace: () => WORKSPACE,
+        isProtected: () => true, // a degraded recovery is holding evidence
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The auto-write is gated, AND an explicit override write (as quit/discard uses) is refused.
+    let wrote = true;
+    await act(async () => {
+      wrote = await result.current.writeWorkspace(WORKSPACE);
+    });
+    expect(wrote).toBe(false);
+    expect(writeCalls()).toHaveLength(0);
+  });
+
   it('swallows invoke failures (non-Tauri context is a no-op)', async () => {
     mockInvoke.mockRejectedValue(new Error('not in tauri'));
     const { result } = renderHook(() =>

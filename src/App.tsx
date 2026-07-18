@@ -275,6 +275,8 @@ export default function App() {
       hasDirtyTabs: tabs.some((tab) => tab.isDirty),
       revision: workspaceRevision,
       getWorkspace: getCurrentWorkspace,
+      // Refuse EVERY write (incl. quit/discard overrides) while a corrupt recovery is unpreserved.
+      isProtected: () => recoveryGuard.suspendedRef.current,
     });
 
   const handleTabRef = useCallback((tabId: string, handle: DocumentTabHandle | null) => {
@@ -1030,16 +1032,15 @@ export default function App() {
               label: 'Preserve & Continue',
               kind: 'primary',
               onClick: async () => {
-                const preservedPath = await quarantineWorkspace();
-                if (!preservedPath) {
+                // The guard owns this: it resumes ONLY on a successful quarantine.
+                const preserved = await recoveryGuard.preserve(quarantineWorkspace);
+                if (!preserved) {
                   showNotice({
                     title: 'Could not preserve recovery',
                     message:
                       'Quill has not overwritten the recovery file. Check app-data permissions and try again.',
                   });
-                  return;
                 }
-                recoveryGuard.resumeAfterPreservation();
               },
             },
           ]}
