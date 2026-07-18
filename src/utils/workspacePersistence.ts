@@ -72,25 +72,22 @@ export function buildDiscardedWorkspaceFile(
   return buildWorkspaceFile(kept, activeTabId, getSnapshot, savedAt);
 }
 
-function snapshotFromDraft(draft: DraftFile): DraftSnapshot {
-  return {
-    filePath: draft.filePath,
-    content: draft.content,
-    // Preserve the lossless representation through the discard/recovery shell paths, or an
-    // existing snapshot would lose byte-exact recovery while moving between them.
-    ...(draft.docJSON && draft.docJSONVersion
-      ? { docJSON: draft.docJSON, docJSONVersion: draft.docJSONVersion }
-      : {}),
-    comments: draft.comments,
-    suggestions: draft.suggestions,
-    ...(draft.structural && draft.structural.length > 0 ? { structural: draft.structural } : {}),
-    ...(draft.degradedStructural && draft.degradedStructural.length > 0
-      ? { degradedStructural: draft.degradedStructural }
-      : {}),
-    aiSession: draft.aiSession,
-    contextFolder: draft.contextFolder,
-    ...(draft.chat ? { chat: draft.chat } : {}),
-  };
+/**
+ * Project a `DraftFile` to the `DraftSnapshot` the shell persists — the ONE place both the
+ * initial pre-handle re-emission (App) and the discard/recovery shell paths funnel through.
+ *
+ * A blind spread, NOT a hand-maintained field whitelist: dropping a field here silently loses
+ * recovery data, and two parallel whitelists are exactly how `structural` once vanished from the
+ * App path. This carries every persisted field verbatim — lossless docJSON, both structural
+ * coordinate arrays, chat, on-disk baselines, and protection flags — so a recovered-but-not-
+ * remounted tab keeps its conflict detection and write protection. It excludes only `version`
+ * and `savedAt` (re-stamped when the envelope is formed) and `docJSONState` (read-derived by the
+ * sanitizer, never persisted). Structural arrays pass through as opaque `unknown[]`, untrusted
+ * until reconstruction.
+ */
+export function projectDraftSnapshot(draft: DraftFile): DraftSnapshot {
+  const { version, savedAt, docJSONState, ...snapshot } = draft;
+  return snapshot;
 }
 
 /** Apply the same Discard-All policy to a persisted recovery envelope. */
@@ -107,7 +104,7 @@ export function buildDiscardedRecoveryWorkspaceFile(
     workspace.activeTabId,
     (tabId) => {
       const snapshot = tabsById.get(tabId)?.snapshot;
-      return snapshot ? snapshotFromDraft(snapshot) : null;
+      return snapshot ? projectDraftSnapshot(snapshot) : null;
     },
     workspace.savedAt,
   );
