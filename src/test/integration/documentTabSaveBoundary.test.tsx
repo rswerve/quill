@@ -207,6 +207,23 @@ const commentText = (ed: Editor, id = 'c1'): string | null => {
   return range ? ed.state.doc.textBetween(range.from, range.to) : null;
 };
 
+/** The ProseMirror position where `needle` begins in the live document. */
+function posOfText(ed: Editor, needle: string): number {
+  let result = -1;
+  ed.state.doc.descendants((node, pos) => {
+    if (result >= 0) return false;
+    if (node.isText && node.text) {
+      const at = node.text.indexOf(needle);
+      if (at >= 0) {
+        result = pos + at;
+        return false;
+      }
+    }
+    return true;
+  });
+  return result;
+}
+
 /**
  * Make the comment GENUINELY unmappable: grow it so its END boundary sits BETWEEN two
  * spaces. An ordinary highlight ACROSS a double space now maps gracefully (it tucks onto
@@ -423,6 +440,24 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
     expect(saved).toBe(DOC_PATH);
     expect(m.mutations.some((x) => x.kind === 'write' && x.path === DOC_PATH)).toBe(true);
+  });
+
+  it('normalizes collapsing whitespace on write: the saved .md holds the single canonical space', async () => {
+    const m = await mountTab({ reads: boundReads() }); // "foo bar target here"
+    const ed = editorOf(m.handle);
+    // Introduce a double space DOWNSTREAM of the comment (so capture still succeeds), then
+    // save: the on-disk bytes must be the collapsed one-space form the editor already shows.
+    act(() => {
+      ed.view.dispatch(ed.state.tr.insertText(' ', posOfText(ed, 'here')));
+    });
+    expect(ed.state.doc.textContent).toContain('target  here'); // two spaces live
+
+    await act(async () => {
+      await m.handle.save();
+    });
+    const write = m.mutations.find((x) => x.kind === 'write' && x.path === DOC_PATH);
+    expect(write?.content).toContain('target here'); // collapsed to one on disk
+    expect(write?.content).not.toContain('target  here'); // never the double space
   });
 });
 

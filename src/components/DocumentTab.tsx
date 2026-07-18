@@ -565,9 +565,20 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     );
     // Normalize on write: persist the CANONICAL Markdown — the exact document a reopen
     // rebuilds — so a typed double space is stored as the single space it always collapses
-    // to and the on-disk bytes match what the editor shows. Coordinates were captured
-    // against THIS canonDoc, so a bound reopen lands every anchor with no drift.
-    const markdown = editorRef.current?.serializeDoc(canonDoc) ?? liveMarkdown;
+    // to and the on-disk bytes match what the editor shows. Coordinates were captured against
+    // THIS canonDoc; the write is only correct if a reopen rebuilds canonDoc EXACTLY, i.e.
+    // the canonical Markdown is a true round-trip fixed point (`parse(serialize(canonDoc))
+    // === canonDoc`). Verify that before trusting it — if some construct is not idempotent
+    // under a second round-trip, fall back to the live serialization, whose reopen is canonDoc
+    // by definition, so a bound reopen never drifts either way. This keeps normalization
+    // provably safe by construction rather than by enumerating every Markdown construct.
+    const canonicalMarkdown = editorRef.current?.serializeDoc(canonDoc);
+    const reparsed =
+      canonicalMarkdown != null ? editorRef.current?.parseMarkdown(canonicalMarkdown) : null;
+    const markdown =
+      canonicalMarkdown != null && reparsed != null && reparsed.eq(canonDoc)
+        ? canonicalMarkdown
+        : liveMarkdown;
     return { capture, markdown };
   }, [getDocMarkdown, getLiveReviewState]);
 
