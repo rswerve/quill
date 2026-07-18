@@ -7,7 +7,6 @@ import { BlockTrack } from '../../extensions/BlockTrack';
 import {
   StructuralRecordStore,
   addStructuralRecord,
-  resetStructuralRecords,
   retainedRecords,
   type CanonicalRecord,
 } from '../../extensions/StructuralRecordStore';
@@ -22,6 +21,10 @@ import { captureCanonicalReviewState } from '../../utils/canonicalCapture';
 import { restoreDocJSONInto } from '../../utils/docJSONRestore';
 import { parseMarkdownToDoc } from '../../utils/markdownDoc';
 import { restoreReviewMarks } from '../../utils/reviewPersistence';
+import {
+  buildCanonicalStructuralReview,
+  rebaseStructuralRecordsToCanonicalSource,
+} from '../../utils/structuralCanonical';
 import { buildStructuralSavePayload } from '../../utils/structuralSavePayload';
 import { reconstructStructuralIntoEditor } from '../../utils/structuralReload';
 import type { Comment, StructuralReviewEnvelope } from '../../types';
@@ -115,8 +118,8 @@ function commentOnProposed(editor: Editor): Comment {
   return comment;
 }
 
-describe('structural + whitespace composition seams at f77307a', () => {
-  it('documents that the current save composition writes BOTH union branches, not structural source', () => {
+describe('structural + whitespace composition seams', () => {
+  it('builds source-only Markdown and one canonical review union without duplicating the proposal', () => {
     const live = makeEditor('# Title\n\nBody');
     mintUnion(live);
     const reviewJSON = live.state.doc.toJSON();
@@ -124,31 +127,29 @@ describe('structural + whitespace composition seams at f77307a', () => {
     expect(payload.ok).toBe(true);
     if (!payload.ok) return;
 
-    // Structural persistence correctly selects only the original branch.
+    // The disk document is the source branch only — never the live union.
     expect(payload.content).toBe('# Title\n\nBody');
-    // DocumentTab's merged save route ignores payload.content and writes the whitespace
-    // canonicalization of getMarkdown(live), which contains both union branches.
-    const currentLiveMarkdown = markdown(live);
-    expect(currentLiveMarkdown).toBe('# Title\n\nTitle\n\nBody');
-    const currentCanon = parseMarkdownToDoc(live, currentLiveMarkdown);
-    const currentlyWritten = serialize(live, currentCanon);
-    expect(currentlyWritten).not.toBe(payload.content);
+    expect(markdown(live)).toBe('# Title\n\nTitle\n\nBody');
 
-    // On reopen, the structural record reconstructs ANOTHER proposed branch beside the
-    // already-serialized untracked copy. The resulting review doc is not the saved review.
-    const reopened = makeEditor(currentlyWritten);
-    const envelope: StructuralReviewEnvelope = {
-      version: 1,
-      sourceDocumentHash: 'same-bytes',
-      records: payload.structural,
-    };
-    const restored = reconstructStructuralIntoEditor(reopened, envelope, 'same-bytes');
-    expect(restored.quarantined).toEqual([]);
-    expect(reopened.state.doc.toJSON()).not.toEqual(reviewJSON);
-    expect(reopened.state.doc.childCount).toBe(4);
+    const canonicalSource = parseMarkdownToDoc(live, payload.content);
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      canonicalSource,
+      payload.structural,
+      (node) => serialize(live, node as PMNode),
+    );
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    const rebuilt = buildCanonicalStructuralReview(canonicalSource, rebased.records, (node) =>
+      serialize(live, node as PMNode),
+    );
+    expect(rebuilt.ok).toBe(true);
+    if (!rebuilt.ok) return;
+    expect(rebuilt.doc.toJSON()).toEqual(reviewJSON);
+    expect(rebuilt.doc.childCount).toBe(3);
   });
 
-  it('proves proposed-branch inline anchors require a reconstructed canonical REVIEW union', () => {
+  it('captures proposed-branch inline anchors against the reconstructed canonical review union', () => {
     const live = makeEditor('# Title\n\nBody');
     mintUnion(live);
     const comment = commentOnProposed(live);
@@ -167,30 +168,38 @@ describe('structural + whitespace composition seams at f77307a', () => {
     );
     expect(againstBareSource.ok).toBe(false);
 
-    const canonicalReviewEditor = makeEditor(payload.content);
-    const envelope: StructuralReviewEnvelope = {
-      version: 1,
-      sourceDocumentHash: 'canonical-source',
-      records: payload.structural,
-    };
-    reconstructStructuralIntoEditor(canonicalReviewEditor, envelope, 'canonical-source');
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      canonicalSource,
+      payload.structural,
+      (node) => serialize(live, node as PMNode),
+    );
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    const canonicalReview = buildCanonicalStructuralReview(
+      canonicalSource,
+      rebased.records,
+      (node) => serialize(live, node as PMNode),
+    );
+    expect(canonicalReview.ok).toBe(true);
+    if (!canonicalReview.ok) return;
     const againstReviewUnion = captureCanonicalReviewState(
       live.state.doc,
-      canonicalReviewEditor.state.doc,
+      canonicalReview.doc,
       [comment],
       [],
     );
     expect(againstReviewUnion.ok).toBe(true);
     if (!againstReviewUnion.ok) return;
     expect(
-      canonicalReviewEditor.state.doc.textBetween(
+      canonicalReview.doc.textBetween(
         againstReviewUnion.comments[0].from,
         againstReviewUnion.comments[0].to,
       ),
     ).toBe('Title');
   });
 
-  it('proves source normalization must rebase structural fingerprints before reconstruction', () => {
+  it('rebases normalized source fingerprints so reconstruction succeeds without quarantine', () => {
     const live = makeEditor();
     // Set PM JSON directly: parsing Markdown here would collapse the double space before the
     // test begins and would not model a user typing it into the live editor.
@@ -214,49 +223,62 @@ describe('structural + whitespace composition seams at f77307a', () => {
     if (!payload.ok) return;
     expect(payload.structural[0].sourceFingerprint).toBe('# Title  Here');
 
-    // Whitespace normalization changes the exact source subtree bytes. If the normalized
-    // source is written while retaining the record extracted against the live source, the
-    // fingerprint trust boundary correctly quarantines it on the very next reopen.
+    // Whitespace normalization changes the exact source subtree bytes. Rebase the record
+    // before reconstruction so the trust boundary stays exact without quarantining it.
     const canonicalSource = parseMarkdownToDoc(live, payload.content);
     const canonicalSourceMarkdown = serialize(live, canonicalSource);
     expect(canonicalSourceMarkdown).toBe('# Title Here\n\nBody');
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      canonicalSource,
+      payload.structural,
+      (node) => serialize(live, node as PMNode),
+    );
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records[0].sourceFingerprint).toBe('# Title Here');
+
     const reopened = makeEditor(canonicalSourceMarkdown);
     const envelope: StructuralReviewEnvelope = {
       version: 1,
       sourceDocumentHash: 'canonical-source',
-      records: payload.structural,
+      records: rebased.records,
     };
     const result = reconstructStructuralIntoEditor(reopened, envelope, 'canonical-source');
-    expect(result.restored).toEqual([]);
-    expect(result.quarantined.map((entry) => entry.changeId)).toEqual(['struct-1']);
+    expect(result.quarantined).toEqual([]);
+    expect(result.restored.map((entry) => entry.changeId)).toEqual(['struct-1']);
+    expect(reopened.state.doc.childCount).toBe(3);
+    expect(reopened.state.doc.child(0).textContent).toBe('Title Here');
+    expect(reopened.state.doc.child(1).textContent).toBe('Title  Here');
   });
 
-  it('proves lossless docJSON restore needs a store-only structural metadata seed', () => {
+  it('restores lossless docJSON with a metadata-only structural record seed', () => {
     const live = makeEditor('# Title\n\nBody');
     mintUnion(live);
     const reviewJSON = live.state.doc.toJSON();
 
     const recovered = makeEditor('placeholder');
-    const restored = restoreDocJSONInto(recovered, reviewJSON, [], []);
+    const restored = restoreDocJSONInto(
+      recovered,
+      reviewJSON,
+      [],
+      [],
+      [
+        {
+          ...record,
+          anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+          sourceFingerprint: '# Title',
+          proposed: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Title' }],
+            },
+          ],
+        },
+      ],
+    );
     expect(restored).toEqual({ ok: true });
     expect(recovered.state.doc.toJSON()).toEqual(reviewJSON);
-
-    // docJSON restores blockTrack attrs, but plugin state is not part of PM JSON.
-    expect(retainedRecords(recovered.state).size).toBe(0);
-    const orphaned = buildStructuralSavePayload(recovered, markdown(recovered));
-    expect(orphaned.ok).toBe(false);
-    if (!orphaned.ok) expect(orphaned.error).toContain('without a record');
-
-    // The required seam is metadata-only: seed the canonical store in one history/update/
-    // tracking-suppressed transaction, without reconstructing or touching document bytes.
-    const beforeSeed = recovered.state.doc.toJSON();
-    const tr = recovered.state.tr;
-    resetStructuralRecords(tr, [record]);
-    tr.setMeta('preventUpdate', true);
-    tr.setMeta('skipTracking', true);
-    tr.setMeta('addToHistory', false);
-    recovered.view.dispatch(tr);
-    expect(recovered.state.doc.toJSON()).toEqual(beforeSeed);
     expect(retainedRecords(recovered.state).get(record.changeId)).toEqual(record);
     expect(buildStructuralSavePayload(recovered, markdown(recovered)).ok).toBe(true);
   });
