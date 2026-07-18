@@ -85,13 +85,29 @@ function markSignature(marks: readonly Mark[]): string {
     .join('|');
 }
 
-/** Block ancestry signature at a position: every block ancestor's type + attrs. */
+// Block attributes that are COSMETIC — the Markdown layer normalizes them, so they
+// can differ between the live doc and its round-tripped canonical form without any
+// change to which text is where. Including them in the block signature would make
+// identical list content falsely diverge (and, at worst, needlessly quarantine).
+// `tight` is list spacing; excluding it can never cause a mismap, since two lists
+// differing only in tightness anchor the same text at the same structural position.
+const COSMETIC_BLOCK_ATTRS = new Set(['tight']);
+
+function blockAttrSignature(attrs: Record<string, unknown>): string {
+  const semantic: Record<string, unknown> = {};
+  for (const key of Object.keys(attrs)) {
+    if (!COSMETIC_BLOCK_ATTRS.has(key)) semantic[key] = attrs[key];
+  }
+  return JSON.stringify(semantic);
+}
+
+/** Block ancestry signature at a position: every block ancestor's type + semantic attrs. */
 function blockSignature(doc: ProseMirrorNode, pos: number): string {
   const $pos = doc.resolve(Math.min(Math.max(pos, 0), doc.content.size));
   const parts: string[] = [];
   for (let depth = 1; depth <= $pos.depth; depth += 1) {
     const node = $pos.node(depth);
-    parts.push(`${node.type.name}:${JSON.stringify(node.attrs)}`);
+    parts.push(`${node.type.name}:${blockAttrSignature(node.attrs)}`);
   }
   return parts.join('>');
 }

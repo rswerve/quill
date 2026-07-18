@@ -528,3 +528,51 @@ describe('reviewAnchorMap: removed-edge-block cursor rebind (Codex round 4)', ()
     expect(mapper.map(q - 2, q - 2)).toBeNull();
   });
 });
+
+describe('reviewAnchorMap: cosmetic block attrs (Codex round 5)', () => {
+  const list = (tight: boolean) => ({
+    type: 'doc',
+    content: [
+      {
+        type: 'bulletList',
+        attrs: { tight },
+        content: [
+          {
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'item' }] }],
+          },
+        ],
+      },
+    ],
+  });
+
+  it('list content maps across a tight/loose difference (tight is cosmetic)', () => {
+    const live = liveDoc(list(false));
+    const canon = liveDoc(list(true)); // same text, only the cosmetic tight attr flipped
+    const from = nthPos(live, 'item');
+    const mapped = buildAnchorMapper(live, canon).map(from, from + 4);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('item');
+  });
+
+  it('a real list-type change (bullet -> ordered) still fails', () => {
+    const live = liveDoc(list(true));
+    const canon = liveDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'orderedList',
+          attrs: { start: 1, tight: true },
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'item' }] }],
+            },
+          ],
+        },
+      ],
+    });
+    const from = nthPos(live, 'item');
+    expect(buildAnchorMapper(live, canon).map(from, from + 4)).toBeNull();
+  });
+});
