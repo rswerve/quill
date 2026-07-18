@@ -112,6 +112,11 @@ function draftSnapshot(draft: DraftFile) {
   return {
     filePath: draft.filePath,
     content: draft.content,
+    // Carry the lossless representation through the shell so a restored-but-not-remounted
+    // tab keeps byte-exact recovery instead of silently degrading to Markdown.
+    ...(draft.docJSON && draft.docJSONVersion
+      ? { docJSON: draft.docJSON, docJSONVersion: draft.docJSONVersion }
+      : {}),
     comments: draft.comments,
     suggestions: draft.suggestions,
     aiSession: draft.aiSession,

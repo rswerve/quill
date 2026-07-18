@@ -30,6 +30,22 @@ function sanitizeFingerprint(raw: unknown): Fingerprint | undefined {
   return undefined;
 }
 
+/**
+ * Preserve only a PLAUSIBLE lossless-document envelope (versioned, a `doc`-typed object).
+ * Authoritative schema + bijection validation belongs where the live editor schema is
+ * (the restore primitive); this boundary just keeps a well-shaped blob and drops garbage
+ * so a malformed one falls back to the Markdown path instead of reaching the editor.
+ */
+function sanitizeDocJSON(
+  raw: unknown,
+  version: unknown,
+): { docJSON: DraftFile['docJSON']; docJSONVersion: 1 } | null {
+  if (version !== 1) return null;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  if ((raw as Record<string, unknown>).type !== 'doc') return null;
+  return { docJSON: raw as DraftFile['docJSON'], docJSONVersion: 1 };
+}
+
 export type DraftSnapshot = Omit<DraftFile, 'version' | 'savedAt'>;
 
 interface UseWorkspaceAutosaveOptions {
@@ -70,11 +86,13 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   const chat = sanitizeDocumentChat(d.chat);
   const expectedDoc = sanitizeFingerprint(d.expectedDoc);
   const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
+  const docJSON = sanitizeDocJSON(d.docJSON, d.docJSONVersion);
   return {
     version: 1,
     savedAt: typeof d.savedAt === 'string' ? d.savedAt : new Date().toISOString(),
     filePath: d.filePath,
     content: d.content,
+    ...(docJSON ?? {}),
     comments: sanitizeComments(d.comments),
     suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
     aiSession: sanitizeAISession(d.aiSession) ?? null,

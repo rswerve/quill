@@ -76,6 +76,11 @@ function snapshotFromDraft(draft: DraftFile): DraftSnapshot {
   return {
     filePath: draft.filePath,
     content: draft.content,
+    // Preserve the lossless representation through the discard/recovery shell paths, or an
+    // existing snapshot would lose byte-exact recovery while moving between them.
+    ...(draft.docJSON && draft.docJSONVersion
+      ? { docJSON: draft.docJSON, docJSONVersion: draft.docJSONVersion }
+      : {}),
     comments: draft.comments,
     suggestions: draft.suggestions,
     aiSession: draft.aiSession,

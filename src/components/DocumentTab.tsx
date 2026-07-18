@@ -179,6 +179,21 @@ export function unboundRecoveryNotice(
   };
 }
 
+/**
+ * Shown when a crash snapshot's lossless document was PRESENT but corrupt — distinct from a
+ * clean recovery. The Markdown text is salvaged (it's stored independently), but exact
+ * review anchoring is lost, so it degrades to text-only + best-effort relocation.
+ */
+export function degradedRecoveryNotice(): { title: string; message: string } {
+  return {
+    title: 'Recovered in text-only mode',
+    message:
+      'This file’s saved review state was damaged and could not be restored exactly. Your text ' +
+      'was recovered; some comments and suggestions may be detached or set aside. Save the file ' +
+      'to store a fresh copy of your work.',
+  };
+}
+
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
   filePath: string | null;
@@ -516,11 +531,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // Keep transient AI reply state out of this second on-disk write path just as
   // the regular sidecar serializer does.
   const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
+    // One stable document node for BOTH the lossless docJSON and the records derived from
+    // its marks, so the snapshot is internally coherent (the bijection recovery relies on).
+    const doc = editorRef.current?.getEditor()?.state.doc;
     const live = getLiveReviewState();
     const baselines = getBaselines();
     return {
       filePath,
       content: getDocMarkdown(),
+      // The lossless representation: byte-exact recovery when it survives; Markdown remains
+      // the back-compat + degraded-salvage fallback.
+      ...(doc ? { docJSON: doc.toJSON(), docJSONVersion: 1 as const } : {}),
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
       aiSession,
@@ -1421,29 +1442,47 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       if (liveEditor) {
         setImageBaseDir(liveEditor, draft.filePath ? dirname(draft.filePath) : null);
       }
-      editorRef.current?.setContent(draft.content);
       const draftComments = draft.comments ?? [];
       const draftSuggestions = draft.suggestions ?? [];
-      setComments(draftComments);
       setLastKnownModel(newestObservedModel(draftComments, draft.chat));
       setLastKnownEffort(newestObservedEffort(draftComments, draft.chat));
-      setSuggestions(draftSuggestions);
-      // The draft's annotations need their marks stamped back just like a file
-      // load — the snapshot's content is serialized Markdown, which drops them
-      // (and the same manual tracked-changes refresh, since the restore
-      // suppresses the update event).
+
+      // Prefer the LOSSLESS path: a valid docJSON restores the document + every mark at
+      // byte-exact positions (nothing relocates, no whitespace drift). restoreDocJSON
+      // validates structure + doc↔records bijection and fails closed, so we only install
+      // the matching records when it actually restored.
+      const lossless =
+        draft.docJSON && draft.docJSONVersion === 1
+          ? editorRef.current?.restoreDocJSON(draft.docJSON, draftComments, draftSuggestions)
+          : undefined;
       const ed = editorRef.current?.getEditor();
-      if (ed) {
-        // A recovered draft carries no anchor provenance (its coordinates were captured
-        // against its own embedded content but are not source-hash bound), so it restores
-        // UNBOUND — relocate conservatively rather than trust the snapshot's positions.
-        const restored = restorePersistedReviewMarks(
-          ed,
-          draftComments,
-          draftSuggestions,
-          'unbound',
-        );
-        announceUnboundLoad('recovery', restored);
+
+      if (lossless?.ok && ed) {
+        setComments(draftComments);
+        setSuggestions(draftSuggestions);
+        // Detached/quarantined records are mark-less BY DESIGN, so they cannot be rebuilt
+        // from the live marks — seed them back into the quarantine store, or they'd vanish.
+        quarantinedSuggestionsRef.current = draftSuggestions.filter((s) => s.detached === true);
+        setTrackedChanges(getTrackedChanges(ed));
+      } else {
+        // Legacy snapshot (no docJSON) OR a docJSON that failed validation → degraded
+        // text-only recovery through Markdown + unbound relocation. Markdown is stored
+        // independently, so the user's text survives even a corrupt lossless blob.
+        editorRef.current?.setContent(draft.content);
+        setComments(draftComments);
+        setSuggestions(draftSuggestions);
+        const ed2 = editorRef.current?.getEditor();
+        if (ed2) {
+          const restored = restorePersistedReviewMarks(
+            ed2,
+            draftComments,
+            draftSuggestions,
+            'unbound',
+          );
+          // A PRESENT-but-invalid docJSON is corruption (not a legacy snapshot): say so.
+          if (lossless && !lossless.ok) onNotice(degradedRecoveryNotice());
+          else announceUnboundLoad('recovery', restored);
+        }
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);
@@ -1462,6 +1501,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       restoreDraft,
       restorePersistedReviewMarks,
       announceUnboundLoad,
+      onNotice,
       setComments,
       setSuggestions,
     ],
