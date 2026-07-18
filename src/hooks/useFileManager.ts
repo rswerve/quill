@@ -113,6 +113,30 @@ export type SaveOutcome =
   | { status: 'failed'; message: string; path?: string }
   | { status: 'review-blocked'; unmappable: UnmappableAnchor[] };
 
+/**
+ * Why a sidecar's coordinates are only hints. `legacy` — no provenance (a pre-anchor-
+ * versioning sidecar); `source-mismatch` — the `.md` changed since Quill wrote it (an
+ * external / partial `.md`-only edit); `version-mismatch` — a newer anchor scheme wrote it.
+ * Used to tailor the recovery notice.
+ */
+export type ReviewUnboundReason = 'legacy' | 'source-mismatch' | 'version-mismatch';
+
+/**
+ * Why a sidecar's coordinates are only hints for the `.md` on disk, or undefined when they
+ * are authoritative (bound). Checked most-specific first: no provenance is legacy; a hash
+ * that no longer matches is an external/partial `.md` edit; a matching hash under a
+ * different anchor version is a newer scheme.
+ */
+function reviewProvenanceReason(
+  sidecar: SidecarFile,
+  docHash: string,
+): ReviewUnboundReason | undefined {
+  if (sidecar.reviewSourceHash === undefined) return 'legacy';
+  if (sidecar.reviewSourceHash !== docHash) return 'source-mismatch';
+  if (sidecar.reviewAnchorVersion !== REVIEW_ANCHOR_VERSION) return 'version-mismatch';
+  return undefined;
+}
+
 /** A successfully opened document: its content, review sidecar, and anchor authority. */
 export interface OpenResult {
   content: string;
@@ -128,6 +152,8 @@ export interface OpenResult {
    * conservatively rather than trusting stale positions.
    */
   reviewMode: ReviewRestoreMode;
+  /** Present only when `reviewMode === 'unbound'` — why, for the recovery notice. */
+  reviewUnboundReason?: ReviewUnboundReason;
 }
 
 /**
@@ -340,15 +366,17 @@ export function useFileManager(
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
         setIsDirty(false);
-        // Bound iff the sidecar's provenance proves it corresponds to THESE `.md` bytes:
-        // both the source hash and the anchor version must match. A legacy sidecar (no
-        // hash) or an externally-edited `.md` (hash mismatch) is unbound → relocate.
-        const reviewMode: ReviewRestoreMode =
-          sidecar.reviewSourceHash === docRead.hash &&
-          sidecar.reviewAnchorVersion === REVIEW_ANCHOR_VERSION
-            ? 'bound'
-            : 'unbound';
-        return { content, sidecar, filePath: path, autoBound, sidecarError, reviewMode };
+        const reviewUnboundReason = reviewProvenanceReason(sidecar, docRead.hash);
+        const reviewMode: ReviewRestoreMode = reviewUnboundReason ? 'unbound' : 'bound';
+        return {
+          content,
+          sidecar,
+          filePath: path,
+          autoBound,
+          sidecarError,
+          reviewMode,
+          ...(reviewUnboundReason ? { reviewUnboundReason } : {}),
+        };
       } catch (e) {
         console.error('Failed to open file:', e);
         onError?.('Could not open file', `${path}\n\n${String(e)}`);

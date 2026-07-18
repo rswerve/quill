@@ -122,34 +122,38 @@ describe('useFileManager', () => {
       return res!;
     };
 
-    it('reviewMode is bound when the sidecar source hash + version match the .md', async () => {
+    it('reviewMode is bound (no reason) when the sidecar source hash + version match the .md', async () => {
       // readHash('# Hello') is the .md's hash; a matching sidecar is authoritative.
       const res = await openWithSidecar(
         '# Hello',
         sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }),
       );
       expect(res.reviewMode).toBe('bound');
+      expect(res.reviewUnboundReason).toBeUndefined();
     });
 
-    it('reviewMode is unbound for a legacy sidecar with no provenance', async () => {
+    it('unbound + legacy for a sidecar with no provenance', async () => {
       const res = await openWithSidecar('# Hello', sidecarWith({}));
       expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('legacy');
     });
 
-    it('reviewMode is unbound when the .md was edited externally (hash mismatch)', async () => {
+    it('unbound + source-mismatch when the .md was edited externally (hash mismatch)', async () => {
       const res = await openWithSidecar(
         '# Hello edited',
         sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }), // stale hash
       );
       expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('source-mismatch');
     });
 
-    it('reviewMode is unbound when the anchor version does not match', async () => {
+    it('unbound + version-mismatch when the anchor version does not match', async () => {
       const res = await openWithSidecar(
         '# Hello',
         sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 999 }),
       );
       expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('version-mismatch');
     });
 
     it('calls sidecarPath correctly — sidecar read uses .comments.json path', async () => {
