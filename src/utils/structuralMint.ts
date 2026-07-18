@@ -1,4 +1,4 @@
-import type { Node as PMNode, Schema } from '@tiptap/pm/model';
+import type { Mark, Node as PMNode, Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection, type Command, type Transaction } from '@tiptap/pm/state';
 import { Transform } from '@tiptap/pm/transform';
 import { setBlockType } from '@tiptap/pm/commands';
@@ -191,6 +191,7 @@ function classifyFootprintAnnotations(
 ): FootprintAnnotations {
   const originSpans: Array<{ from: number; to: number }> = [];
   let originOutside = false;
+  let firstOrigin: Mark | null = null;
   let refusal: StructuralMintRefusal | null = null;
 
   doc.descendants((node, pos) => {
@@ -217,8 +218,20 @@ function classifyFootprintAnnotations(
         refusal = 'annotated-footprint';
         return false;
       }
-      if (inFootprint) originSpans.push({ from: pos, to });
-      else originOutside = true;
+      if (inFootprint) {
+        // Every tolerated origin fragment must be the SAME mark — identical id,
+        // resolved, kind, and any future attribute. Adjacent same-id fragments
+        // with a divergent (but individually valid) kind are an inconsistent
+        // anchor, not one carveout comment, and must refuse.
+        if (firstOrigin === null) firstOrigin = mark;
+        else if (!firstOrigin.eq(mark)) {
+          refusal = 'annotated-footprint';
+          return false;
+        }
+        originSpans.push({ from: pos, to });
+      } else {
+        originOutside = true;
+      }
     }
     return true;
   });

@@ -1,6 +1,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
+import { EditorState } from '@tiptap/pm/state';
 import { describe, it, expect, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { CommentMark } from '../../extensions/Comment';
@@ -601,6 +602,54 @@ describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () =
     editor.chain().setTextSelection({ from: 5, to: 6 }).setComment('cm1').run(); // "e", gap at "tl"
     const r = compileStructuralMint(
       editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('refuses adjacent same-id origin fragments whose kind diverges (inconsistent anchor)', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    // Same commentId, both valid kinds, exactly adjacent — but not one mark.
+    editor.chain().setTextSelection({ from: 1, to: 3 }).setComment('cm1', 'note').run(); // "Ti"
+    editor.chain().setTextSelection({ from: 3, to: 6 }).setComment('cm1', 'claude').run(); // "tle"
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('refuses an origin comment mark carried on the block node itself (non-inline)', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    const { schema, plugins } = editor.state;
+    // nodeFromJSON permits a mark on a block node without checking admissibility,
+    // so the non-inline guard is reachable. Build that exact state directly (the
+    // view strips a block mark on dispatch) and hand it to the compiler.
+    const doc = schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { level: 1 },
+          marks: [
+            { type: 'comment', attrs: { commentId: 'cm1', resolved: false, kind: 'claude' } },
+          ],
+          content: [{ type: 'text', text: 'Title' }],
+        },
+      ],
+    });
+    expect(doc.child(0).marks.map((m) => m.type.name)).toContain('comment');
+    const state = EditorState.create({ doc, plugins });
+    const r = compileStructuralMint(
+      state,
       req({
         op: headingToParagraph,
         targetPos: posInBlock(0),
