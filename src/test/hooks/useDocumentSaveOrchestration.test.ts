@@ -95,25 +95,24 @@ describe('useDocumentSaveOrchestration', () => {
     expect(saveFile).toHaveBeenCalledTimes(2); // the write is no longer blocked
   });
 
-  it('runConflictResolution is single-flight — two same-tick jobs run only one', async () => {
+  it('runConflictResolution is single-flight and mirrors the busy state on/off', async () => {
     const { result } = renderHook(() => useDocumentSaveOrchestration(makeDeps()));
-    let running = 0;
-    let maxConcurrent = 0;
-    const job = vi.fn(async () => {
-      running += 1;
-      maxConcurrent = Math.max(maxConcurrent, running);
-      await new Promise((r) => setTimeout(r, 5));
-      running -= 1;
+    let resolveJob!: () => void;
+    const job = vi.fn(() => new Promise<void>((r) => (resolveJob = r)));
+
+    let p1!: Promise<void>;
+    let p2!: Promise<void>;
+    act(() => {
+      p1 = result.current.runConflictResolution(job);
+      p2 = result.current.runConflictResolution(job); // same tick — ref is already set
     });
+    expect(job).toHaveBeenCalledTimes(1); // the second call is dropped synchronously
+    expect(result.current.resolvingConflict).toBe(true); // busy mirror ON while the job is pending
 
     await act(async () => {
-      const a = result.current.runConflictResolution(job);
-      const b = result.current.runConflictResolution(job); // same tick — ref is already set
-      await Promise.all([a, b]);
+      resolveJob();
+      await Promise.all([p1, p2]);
     });
-
-    expect(job).toHaveBeenCalledTimes(1); // the second call is dropped synchronously
-    expect(maxConcurrent).toBe(1);
-    expect(result.current.resolvingConflict).toBe(false); // lifecycle released
+    expect(result.current.resolvingConflict).toBe(false); // busy mirror released
   });
 });
