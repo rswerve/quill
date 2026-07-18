@@ -4,7 +4,9 @@ import StarterKit from '@tiptap/starter-kit';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { TextSelection } from '@tiptap/pm/state';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
+import { parseMarkdownToDoc } from '../utils/markdownDoc';
 import { MarkdownImage } from '../extensions/MarkdownImage';
 import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
@@ -30,6 +32,14 @@ export interface EditorRef {
   getMarkdown: () => string;
   setContent: (md: string) => void;
   getEditor: () => TiptapEditor | null;
+  /**
+   * Parse markdown into a DETACHED document with the live editor's schema and parse
+   * options, WITHOUT touching the live editor. This reproduces exactly what reopening
+   * the file would build (`setContent`'s own path: markdown parser → HTML →
+   * schema DOMParser), so canonical-capture can map review anchors from the live
+   * document into the document a reload will actually produce. Null before ready.
+   */
+  parseMarkdown: (md: string) => ProseMirrorNode | null;
 }
 
 interface EditorProps {
@@ -260,6 +270,9 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         getEditor() {
           return editor;
+        },
+        parseMarkdown(md: string): ProseMirrorNode | null {
+          return editor ? parseMarkdownToDoc(editor, md) : null;
         },
       }),
       [editor],
