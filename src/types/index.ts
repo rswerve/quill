@@ -373,9 +373,12 @@ export interface DraftFile {
    * (live-union) coordinate space — they pair with `docJSON`. Recovery seeds the
    * record store from these when it restores the byte-exact docJSON (the seed
    * validates them against that live union), so they must match `docJSON`, not the
-   * normalized reparse of `content`.
+   * normalized reparse of `content`. Typed `unknown[]` because this is the untrusted
+   * READ boundary: the writer emits valid `StructuralSuggestionRecord`s, but a
+   * restored workspace file is untrusted and every entry is validated at seed /
+   * reconstruction time (`partitionStructuralRecords`), never trusted from disk.
    */
-  structural?: StructuralSuggestionRecord[];
+  structural?: unknown[];
   /**
    * The SAME structural records rebased into the CANONICAL source coordinate space
    * (the whitespace-normalized reparse of `content`), for the DEGRADED fallback.
@@ -386,8 +389,9 @@ export interface DraftFile {
    * `structural` only for legacy snapshots that predate this field). Distinct from
    * `structural` because the lossless and degraded documents are different coordinate
    * spaces; captured together with `content` so there is no external-edit surface.
+   * Same untrusted-READ-boundary typing as `structural`.
    */
-  degradedStructural?: StructuralSuggestionRecord[];
+  degradedStructural?: unknown[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   chat?: DocumentChatThread;

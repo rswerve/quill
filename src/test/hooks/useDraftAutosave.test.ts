@@ -407,6 +407,28 @@ describe('sanitizeDraft baselines', () => {
     expect(out!.structural).toEqual([record]);
   });
 
+  it('PRESERVES object-shaped MALFORMED entries as opaque evidence (only non-objects dropped)', () => {
+    const record = {
+      changeId: 'sc1',
+      author: 'claude',
+      createdAt: 'now',
+      op: { kind: 'headingToParagraph', level: 1 },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: '# Title',
+      proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+    };
+    // A malformed-but-object entry must SURVIVE the sanitizer (it may be the only copy) so the
+    // seed / reconstruction trust boundary quarantines it — the sanitizer never deep-validates.
+    const malformed = { changeId: 'broken' };
+    const out = sanitizeDraft({
+      ...base,
+      structural: [record, malformed, 42],
+      degradedStructural: [malformed],
+    });
+    expect(out!.structural).toEqual([record, malformed]); // 42 (non-object) dropped, malformed kept
+    expect(out!.degradedStructural).toEqual([malformed]);
+  });
+
   it('omits structural entirely for a legacy snapshot without the field', () => {
     expect(sanitizeDraft(base)!.structural).toBeUndefined();
   });

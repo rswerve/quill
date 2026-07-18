@@ -25,7 +25,7 @@ import {
   TrackChanges,
 } from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
-import type { Comment, JSONContent, StructuralSuggestionRecord, Suggestion } from '../types';
+import type { Comment, JSONContent, Suggestion } from '../types';
 
 export type { DocJSONRestoreResult };
 
@@ -66,7 +66,7 @@ export interface EditorRef {
     json: JSONContent,
     comments: Comment[],
     suggestions: Suggestion[],
-    structural?: readonly StructuralSuggestionRecord[],
+    structural?: readonly unknown[],
   ) => DocJSONRestoreResult;
 }
 

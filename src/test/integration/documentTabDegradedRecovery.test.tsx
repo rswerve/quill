@@ -231,9 +231,13 @@ describe('Slice C — degraded-recovery structural coordinate fix', () => {
     const draft = structuralDraft();
     // Raw source keeps the double space; the live-coordinate record fingerprints it verbatim.
     expect(draft.content).toBe('# Title  Here\n\nBody');
-    expect(draft.structural?.[0].sourceFingerprint).toBe('# Title  Here');
+    expect((draft.structural?.[0] as { sourceFingerprint: string }).sourceFingerprint).toBe(
+      '# Title  Here',
+    );
     // The degraded (rebased) record fingerprints the NORMALIZED canonical source.
-    expect(draft.degradedStructural?.[0].sourceFingerprint).toBe('# Title Here');
+    expect((draft.degradedStructural?.[0] as { sourceFingerprint: string }).sourceFingerprint).toBe(
+      '# Title Here',
+    );
   });
 
   it('coordinate oracle: setContent(content) EXACTLY equals the canonical source used for rebase', () => {
@@ -265,6 +269,25 @@ describe('Slice C — degraded-recovery structural coordinate fix', () => {
     expect(unionReconstructed(m.handle)).toBe(true);
     // Byte-exact: the live union preserved the user's double space.
     expect(doc.child(0).textContent).toBe('Title  Here');
+  });
+
+  it('degraded recovery reconstructs the valid record and quarantines a malformed one alongside it', async () => {
+    const draft = structuralDraft();
+    // A malformed entry rides alongside the valid rebased record; the sanitizer preserves it
+    // (object-shaped), reconstruction partitions it: the valid union rebuilds, the malformed
+    // value stays opaque quarantine — the valid proposal must NOT be lost to a bad neighbor.
+    const withMalformed = throughDisk({
+      ...draft,
+      degradedStructural: [...(draft.degradedStructural ?? []), { changeId: 'broken' }],
+    });
+    const corrupt: DraftFile = {
+      ...withMalformed,
+      docJSON: { type: 'doc', content: [{ type: 'not_a_real_node' }] },
+      docJSONVersion: 1,
+    };
+    const m = await mountRecovery(corrupt);
+    expect(m.outcome).toHaveBeenCalledWith('tab-1', 'degraded');
+    expect(unionReconstructed(m.handle)).toBe(true); // valid reconstructed despite the malformed one
   });
 
   it('WITHOUT degradedStructural (legacy snapshot) the degraded path still quarantines — fix is load-bearing', async () => {

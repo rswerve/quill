@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type {
-  DraftFile,
-  WorkspaceFile,
-  WorkspaceTab,
-  Fingerprint,
-  StructuralSuggestionRecord,
-} from '../types';
+import type { DraftFile, WorkspaceFile, WorkspaceTab, Fingerprint } from '../types';
 import {
   sanitizeComments,
   sanitizeSuggestions,
@@ -113,19 +107,17 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   const chat = sanitizeDocumentChat(d.chat);
   const expectedDoc = sanitizeFingerprint(d.expectedDoc);
   const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
-  // Shallow only — keep well-shaped record objects and let structural
-  // reconstruction (the per-record trust boundary) quarantine anything malformed.
-  const structural = Array.isArray(d.structural)
-    ? (d.structural.filter(
-        (r) => typeof r === 'object' && r !== null,
-      ) as StructuralSuggestionRecord[])
+  // Shallow only — PRESERVE every well-shaped entry as opaque `unknown` and let the seed /
+  // reconstruction trust boundary (`partitionStructuralRecords`) validate or quarantine each.
+  // No cast to `StructuralSuggestionRecord[]`: these are untrusted restored bytes, and dropping
+  // non-object noise while keeping malformed-but-object evidence is the honest boundary.
+  const structural: unknown[] = Array.isArray(d.structural)
+    ? d.structural.filter((r) => typeof r === 'object' && r !== null)
     : [];
-  // The degraded-recovery coordinate set (rebased to the canonical source). Same shallow
-  // trust boundary; kept distinct from `structural` (the lossless/live-coordinate set).
-  const degradedStructural = Array.isArray(d.degradedStructural)
-    ? (d.degradedStructural.filter(
-        (r) => typeof r === 'object' && r !== null,
-      ) as StructuralSuggestionRecord[])
+  // The degraded-recovery coordinate set (rebased to the canonical source). Same shallow,
+  // preserving, untrusted boundary; kept distinct from `structural` (the lossless set).
+  const degradedStructural: unknown[] = Array.isArray(d.degradedStructural)
+    ? d.degradedStructural.filter((r) => typeof r === 'object' && r !== null)
     : [];
   const docJSON = classifyDocJSON(d);
   return {

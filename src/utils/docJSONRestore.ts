@@ -8,7 +8,7 @@ import { FIND_KEY } from '../extensions/Find';
 import { PENDING_COMMENT_KEY } from '../extensions/PendingComment';
 import { ANNOTATION_FOCUS_KEY } from '../extensions/AnnotationFocus';
 import { SKIP_TRACKING_META } from '../extensions/trackChangesMeta';
-import type { Comment, JSONContent, StructuralSuggestionRecord, Suggestion } from '../types';
+import type { Comment, JSONContent, Suggestion } from '../types';
 
 /** Outcome of a lossless (PM-JSON) recovery restore. */
 export type DocJSONRestoreResult = { ok: true } | { ok: false; reason: string };
@@ -31,7 +31,7 @@ export function restoreDocJSONInto(
   json: JSONContent,
   comments: Comment[],
   suggestions: Suggestion[],
-  structural: readonly StructuralSuggestionRecord[] = [],
+  structural: readonly unknown[] = [],
 ): DocJSONRestoreResult {
   const validation = validateSnapshot(editor.schema, json, comments, suggestions);
   if (!validation.ok) return { ok: false, reason: validation.reason };
