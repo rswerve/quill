@@ -341,6 +341,13 @@ export interface DraftFile {
   expectedSidecar?: Fingerprint | null;
   /** Whether the sidecar was protected (unreadable) when the draft was snapshotted. */
   sidecarProtected?: boolean;
+  /**
+   * Whether the sidecar's STRUCTURAL block was malformed when snapshotted. Carried
+   * separately from `sidecarProtected` so recovery re-establishes the stronger
+   * protection (block BOTH files); a crash must not downgrade it to comments-only
+   * protection, which would overwrite the `.md` the proposal is anchored to.
+   */
+  structuralProtected?: boolean;
 }
 
 /**

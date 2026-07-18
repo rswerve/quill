@@ -319,12 +319,21 @@ describe('sanitizeDraft baselines', () => {
       expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
+      structuralProtected: true,
     });
     expect(out).toMatchObject({
       expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
+      structuralProtected: true,
     });
+  });
+
+  it('carries structuralProtected independently of sidecarProtected', () => {
+    const out = sanitizeDraft({ ...base, structuralProtected: true });
+    expect(out!.structuralProtected).toBe(true);
+    expect(out!.sidecarProtected).toBeUndefined();
+    expect(sanitizeDraft(base)!.structuralProtected).toBeUndefined();
   });
 
   it('drops a present baseline whose hash is not 64-char lowercase hex', () => {

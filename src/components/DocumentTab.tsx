@@ -526,6 +526,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       expectedDoc: baselines.expectedDoc,
       expectedSidecar: baselines.expectedSidecar,
       sidecarProtected: baselines.sidecarProtected,
+      structuralProtected: baselines.structuralProtected,
     };
     lastGoodWorkspaceSnapshotRef.current = snapshot;
     return snapshot;
@@ -1243,6 +1244,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
       onRecentFile(outcome.path);
       setLastSavedAt(Date.now());
+      // Save As changed the path/baselines — drop the last-good snapshot (captured
+      // under the OLD path) so a payload failure right after can't return it.
+      lastGoodWorkspaceSnapshotRef.current = null;
     }
     notifySaveOutcome(outcome);
     return outcome;
@@ -1476,6 +1480,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         expectedDoc: draft.expectedDoc ?? null,
         expectedSidecar: draft.expectedSidecar ?? null,
         sidecarProtected: draft.sidecarProtected,
+        structuralProtected: draft.structuralProtected,
       });
       setLastSavedAt(null);
       const liveEditor = editorRef.current?.getEditor();

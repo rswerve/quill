@@ -1379,6 +1379,49 @@ describe('structural envelope persistence', () => {
     const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
     expect(writes).toHaveLength(0);
   });
+
+  it('lets Save As to a DIFFERENT path escape structural protection and clears it', async () => {
+    const badEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 2, sourceDocumentHash: 'abc', records: [] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title')) // read .md
+      .mockResolvedValueOnce(fpPresent(badEnvelope)); // read sidecar (malformed structural)
+    mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+      const path = (args as { path?: string } | undefined)?.path;
+      if (command === 'show_save_dialog') return '/docs/copy.md';
+      if (command === 'read_file_with_fingerprint') return fpAbsent();
+      if (command === 'write_file_atomic') {
+        return {
+          status: 'written',
+          hash: path?.endsWith('.comments.json') ? HASH_SIDECAR : HASH_DOC,
+        };
+      }
+      if (command === 'delete_file_if_match') return { status: 'deleted' };
+      return null; // find_session_for_markdown
+    });
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.openFilePath('/docs/b.md');
+    });
+
+    // Save As to a genuinely different path writes a fresh (clean) file.
+    let asOutcome: SaveOutcome;
+    await act(async () => {
+      asOutcome = await result.current.saveFileAs('# Title', [], [], null, null);
+    });
+    expect(asOutcome!).toMatchObject({ status: 'saved', path: '/docs/copy.md' });
+
+    // Protection cleared: a same-path save to the new copy is no longer blocked.
+    let nextOutcome: SaveOutcome;
+    await act(async () => {
+      nextOutcome = await result.current.saveFile('# Title again', [], [], null, null);
+    });
+    expect(nextOutcome!.status).toBe('saved');
+  });
 });
 
 describe('stripTransientReplyState', () => {

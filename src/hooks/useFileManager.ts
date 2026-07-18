@@ -179,6 +179,7 @@ interface UseFileManagerReturn {
       expectedDoc?: Fingerprint | null;
       expectedSidecar?: Fingerprint | null;
       sidecarProtected?: boolean;
+      structuralProtected?: boolean;
     },
   ) => void;
   /**
@@ -192,6 +193,7 @@ interface UseFileManagerReturn {
     expectedDoc: Fingerprint | null;
     expectedSidecar: Fingerprint | null;
     sidecarProtected: boolean;
+    structuralProtected: boolean;
   };
 }
 
@@ -267,6 +269,7 @@ export function useFileManager(
       expectedDoc: expectedDocRef.current,
       expectedSidecar: expectedSidecarRef.current,
       sidecarProtected: sidecarProtectedRef.current,
+      structuralProtected: structuralProtectedRef.current,
     }),
     [],
   );
@@ -673,6 +676,7 @@ export function useFileManager(
         expectedDoc?: Fingerprint | null;
         expectedSidecar?: Fingerprint | null;
         sidecarProtected?: boolean;
+        structuralProtected?: boolean;
       },
     ) => {
       changeRevisionRef.current += 1;
@@ -689,10 +693,14 @@ export function useFileManager(
       expectedDocRef.current = restoredDoc;
       expectedSidecarRef.current = restoredSidecar;
       // Protect the sidecar if the snapshot recorded it protected OR its baseline is
-      // unknown for a saved path (can't verify → don't clobber). An unknown DOC
-      // baseline is handled by the fail-closed save path, not here.
+      // unknown for a saved path (can't verify → don't clobber). Carry STRUCTURAL
+      // protection through too, so recovery of a doc whose on-disk sidecar had a
+      // malformed structural block still blocks BOTH files (a crash must not
+      // downgrade it to comments-only protection, which would write the `.md`). An
+      // unknown DOC baseline is handled by the fail-closed save path, not here.
       setProtected(
         baselines?.sidecarProtected === true || (path !== null && restoredSidecar === null),
+        baselines?.structuralProtected === true,
       );
     },
     [updateFilePath, setProtected, setIsDirty],

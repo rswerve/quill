@@ -97,6 +97,9 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     ...(expectedDoc ? { expectedDoc } : {}),
     ...(expectedSidecar ? { expectedSidecar } : {}),
     ...(typeof d.sidecarProtected === 'boolean' ? { sidecarProtected: d.sidecarProtected } : {}),
+    ...(typeof d.structuralProtected === 'boolean'
+      ? { structuralProtected: d.structuralProtected }
+      : {}),
   };
 }
 
