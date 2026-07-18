@@ -144,4 +144,31 @@ describe('extractStructuralRecords', () => {
     const meta = new Map<string, StructuralRecordMetadata>(); // no metadata for any change
     expect(extractStructuralRecords(reviewDoc, meta, serialize)).toEqual([]);
   });
+
+  it('does not extract a nonadjacent pair that only looks complete by id counts', () => {
+    const reviewDoc = docFrom([
+      {
+        type: 'heading',
+        attrs: { level: 1, blockTrack: { changeId: 'scattered', op: 'delete' } },
+        content: [{ type: 'text', text: 'x' }],
+      },
+      paragraph('intervening'),
+      {
+        type: 'paragraph',
+        attrs: { blockTrack: { changeId: 'scattered', op: 'insert' } },
+        content: [{ type: 'text', text: 'x' }],
+      },
+    ]);
+    const meta = new Map<string, StructuralRecordMetadata>([
+      [
+        'scattered',
+        {
+          op: { kind: 'headingToParagraph', level: 1 },
+          author: 'a',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    ]);
+    expect(extractStructuralRecords(reviewDoc, meta, serialize)).toEqual([]);
+  });
 });

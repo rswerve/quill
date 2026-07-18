@@ -1,16 +1,12 @@
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralSuggestionRecord } from '../types';
 import { structuralSkeletonEq } from './canonicalDocument';
-import {
-  activeStructuralChangeIds,
-  toCanonicalRecord,
-  type CanonicalRecord,
-} from '../extensions/StructuralRecordStore';
+import { toCanonicalRecord, type CanonicalRecord } from '../extensions/StructuralRecordStore';
 import { projectBlockUnions } from './blockUnionProjection';
 import { buildAnchorMapper } from './reviewAnchorMap';
-import { structuralFootprints } from './structuralFootprints';
 import { structuralFingerprint, type MarkdownSerialize } from './structuralFingerprint';
 import { reconstructBlockUnions } from './structuralReconstruction';
+import { analyzeStructuralUnions } from './structuralUnionIndex';
 
 export type RebasedStructuralRecords =
   | { ok: true; records: StructuralSuggestionRecord[] }
@@ -117,13 +113,17 @@ export function rebaseStructuralRecordsToCanonicalSource(
   records: readonly StructuralSuggestionRecord[],
   serialize: MarkdownSerialize,
 ): RebasedStructuralRecords {
-  const footprintIds = new Set(structuralFootprints(liveReviewDoc).map((entry) => entry.changeId));
-  const activeIds = activeStructuralChangeIds(liveReviewDoc);
   const recordIds = records.map((record) => record.changeId);
   const recordSet = new Set(recordIds);
+  const metadata = new Map(records.map((record) => [record.changeId, record]));
+  const index = analyzeStructuralUnions(liveReviewDoc, metadata);
+  const activeIds = new Set(index.persistable.keys());
   const idsAreComplete =
-    footprintIds.size === activeIds.size &&
-    [...footprintIds].every((id) => activeIds.has(id)) &&
+    index.hasStructuralMarkup === records.length > 0 &&
+    index.issues.length === 0 &&
+    index.missingMetadataIds.size === 0 &&
+    index.allIdentityIds.size === index.topologyValid.size &&
+    [...index.allIdentityIds].every((id) => index.topologyValid.has(id)) &&
     recordSet.size === recordIds.length &&
     activeIds.size === recordSet.size &&
     [...activeIds].every((id) => recordSet.has(id));
@@ -223,15 +223,17 @@ export function prepareStructuralRecordSeed(
   persisted: readonly StructuralSuggestionRecord[],
   serialize: MarkdownSerialize,
 ): StructuralRecordSeed {
-  const footprintIds = new Set(
-    structuralFootprints(restoredReviewDoc).map((entry) => entry.changeId),
-  );
-  const activeIds = activeStructuralChangeIds(restoredReviewDoc);
   const persistedIds = persisted.map((record) => record.changeId);
   const persistedSet = new Set(persistedIds);
+  const metadata = new Map(persisted.map((record) => [record.changeId, record]));
+  const index = analyzeStructuralUnions(restoredReviewDoc, metadata);
+  const activeIds = new Set(index.persistable.keys());
   const exactIds =
-    footprintIds.size === activeIds.size &&
-    [...footprintIds].every((id) => activeIds.has(id)) &&
+    index.hasStructuralMarkup === persisted.length > 0 &&
+    index.issues.length === 0 &&
+    index.missingMetadataIds.size === 0 &&
+    index.allIdentityIds.size === index.topologyValid.size &&
+    [...index.allIdentityIds].every((id) => index.topologyValid.has(id)) &&
     persistedSet.size === persistedIds.length &&
     activeIds.size === persistedSet.size &&
     [...activeIds].every((id) => persistedSet.has(id));

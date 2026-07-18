@@ -2,8 +2,8 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralRecordMetadata } from '../utils/structuralExtraction';
-import { structuralFootprints } from '../utils/structuralFootprints';
 import type { StructuralSuggestionRecord } from '../types';
+import { analyzeStructuralUnions } from '../utils/structuralUnionIndex';
 
 /** The authoritative, immutable metadata for one structural change. */
 export interface CanonicalRecord extends StructuralRecordMetadata {
@@ -64,31 +64,26 @@ export function retainedRecords(state: EditorState): Map<string, CanonicalRecord
 
 /** Change ids with a structurally complete live union (both branches present). */
 export function activeStructuralChangeIds(doc: PMNode): Set<string> {
-  const branches = new Map<string, { del: boolean; ins: boolean }>();
-  for (const footprint of structuralFootprints(doc)) {
-    const entry = branches.get(footprint.changeId) ?? { del: false, ins: false };
-    if (footprint.op === 'delete') entry.del = true;
-    else entry.ins = true;
-    branches.set(footprint.changeId, entry);
-  }
-  return new Set([...branches].filter(([, e]) => e.del && e.ins).map(([id]) => id));
+  return new Set(analyzeStructuralUnions(doc).topologyValid.keys());
 }
 
 /** Records whose union is currently live and complete (persistable / card-facing). */
 export function activeRecords(state: EditorState): CanonicalRecord[] {
-  const active = activeStructuralChangeIds(state.doc);
-  return [...retainedRecords(state).values()].filter((r) => active.has(r.changeId));
+  const records = retainedRecords(state);
+  const index = analyzeStructuralUnions(state.doc, records);
+  // Preserve the store's immutable creation order; the index decides membership.
+  return [...records.values()].filter((record) => index.persistable.has(record.changeId));
 }
 
 /** Live union change ids that have no retained record — a save must fail closed on these. */
 export function orphanStructuralChangeIds(state: EditorState): string[] {
-  const retained = retainedRecords(state);
-  return [...activeStructuralChangeIds(state.doc)].filter((id) => !retained.has(id));
+  return [...analyzeStructuralUnions(state.doc, retainedRecords(state)).missingMetadataIds];
 }
 
 /** True when a change id is safe to mint (not already active or retained). */
 export function canMintChangeId(state: EditorState, changeId: string): boolean {
-  return changeId.length > 0 && !retainedRecords(state).has(changeId);
+  if (changeId.length === 0 || retainedRecords(state).has(changeId)) return false;
+  return !analyzeStructuralUnions(state.doc).allIdentityIds.has(changeId);
 }
 
 /** Add a canonical record at mint (immutable; a reused id is ignored by the store). */

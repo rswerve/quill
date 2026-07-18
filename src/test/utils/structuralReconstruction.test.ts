@@ -395,6 +395,13 @@ describe('reconstructBlockUnions hardening', () => {
           ],
         },
       ],
+      // a mark name absent from the schema (separate from the review-mark denylist)
+      [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'a', marks: [{ type: 'notInThisSchema' }] }],
+        },
+      ],
     ];
     for (const proposed of hostile) {
       const rec = record({ changeId: 'c1', anchor, sourceFingerprint: fp, proposed });

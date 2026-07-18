@@ -1,10 +1,10 @@
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import type { JSONContent } from '@tiptap/core';
-import type { BlockTrackAttr } from '../extensions/BlockTrack';
 import type { StructuralOp, StructuralSuggestionRecord } from '../types';
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
 import { isReviewMarkName } from './canonicalDocument';
+import { analyzeStructuralUnions, type StructuralUnionIndex } from './structuralUnionIndex';
 
 /** Metadata that lives in the canonical record, keyed by changeId. */
 export interface StructuralRecordMetadata {
@@ -33,37 +33,6 @@ function stripReviewMetadata(json: JSONContent): JSONContent {
   return out;
 }
 
-interface UnionGroup {
-  deleteNodes: PMNode[];
-  insertNodes: PMNode[];
-  firstSourceIndex: number;
-}
-
-function groupByChange(reviewDoc: PMNode): Map<string, UnionGroup> {
-  const groups = new Map<string, UnionGroup>();
-  let sourceIndex = 0;
-  reviewDoc.forEach((node) => {
-    const track = node.attrs.blockTrack as BlockTrackAttr | null | undefined;
-    if (!track) {
-      sourceIndex += 1;
-      return;
-    }
-    let group = groups.get(track.changeId);
-    if (!group) {
-      group = { deleteNodes: [], insertNodes: [], firstSourceIndex: -1 };
-      groups.set(track.changeId, group);
-    }
-    if (track.op === 'delete') {
-      if (group.firstSourceIndex < 0) group.firstSourceIndex = sourceIndex;
-      group.deleteNodes.push(node);
-      sourceIndex += 1; // a delete branch stays in the source document
-    } else {
-      group.insertNodes.push(node); // an insert branch is absent from the source
-    }
-  });
-  return groups;
-}
-
 /**
  * Extract persistable structural records from a review document — the inverse of
  * `reconstructBlockUnions`. For each change: the anchor is computed in SOURCE
@@ -79,10 +48,24 @@ export function extractStructuralRecords(
   metadata: Map<string, StructuralRecordMetadata>,
   serialize: MarkdownSerialize,
 ): StructuralSuggestionRecord[] {
+  return extractStructuralRecordsFromIndex(
+    analyzeStructuralUnions(reviewDoc, metadata),
+    metadata,
+    serialize,
+  );
+}
+
+/** Extract from a previously-built index so save uses the exact same union truth. */
+export function extractStructuralRecordsFromIndex(
+  index: StructuralUnionIndex,
+  metadata: ReadonlyMap<string, StructuralRecordMetadata>,
+  serialize: MarkdownSerialize,
+): StructuralSuggestionRecord[] {
   const records: StructuralSuggestionRecord[] = [];
-  for (const [changeId, group] of groupByChange(reviewDoc)) {
+  for (const [changeId, union] of index.persistable) {
     const meta = metadata.get(changeId);
-    if (group.deleteNodes.length === 0 || group.insertNodes.length === 0 || !meta) continue;
+    if (!meta) continue;
+    const deleteNodes = [union.deleteRoot.node];
     records.push({
       changeId,
       author: meta.author,
@@ -91,12 +74,12 @@ export function extractStructuralRecords(
       ...(meta.originCommentId ? { originCommentId: meta.originCommentId } : {}),
       ...(meta.originChatMessageId ? { originChatMessageId: meta.originChatMessageId } : {}),
       anchor: {
-        parentPath: [],
-        childIndex: group.firstSourceIndex,
-        childCount: group.deleteNodes.length,
+        parentPath: [...union.parentPath],
+        childIndex: union.sourceChildIndex,
+        childCount: union.sourceChildCount,
       },
-      sourceFingerprint: structuralFingerprint(Fragment.fromArray(group.deleteNodes), serialize),
-      proposed: group.insertNodes.map((node) => stripReviewMetadata(node.toJSON())),
+      sourceFingerprint: structuralFingerprint(Fragment.fromArray(deleteNodes), serialize),
+      proposed: [stripReviewMetadata(union.insertRoot.node.toJSON())],
     });
   }
   return records;

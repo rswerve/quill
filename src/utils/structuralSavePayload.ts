@@ -4,14 +4,13 @@ import type { StructuralSuggestionRecord } from '../types';
 import { structuralSkeletonEq } from './canonicalDocument';
 import { markdownSerializer } from './structuralFingerprint';
 import { projectBlockUnions } from './blockUnionProjection';
-import { extractStructuralRecords, type StructuralRecordMetadata } from './structuralExtraction';
-import { reconstructBlockUnions } from './structuralReconstruction';
 import {
-  activeRecords,
-  activeStructuralChangeIds,
-  orphanStructuralChangeIds,
-} from '../extensions/StructuralRecordStore';
-import { structuralFootprints } from './structuralFootprints';
+  extractStructuralRecordsFromIndex,
+  type StructuralRecordMetadata,
+} from './structuralExtraction';
+import { reconstructBlockUnions } from './structuralReconstruction';
+import { retainedRecords } from '../extensions/StructuralRecordStore';
+import { analyzeStructuralUnions } from './structuralUnionIndex';
 
 /**
  * The disk projection of a document that may hold block-union structural
@@ -53,51 +52,61 @@ export function buildStructuralSavePayload(
   // ordinary-document path and serialize the live document raw — silently ACCEPTING
   // an orphan insert branch into the source `.md`. The fast path is taken only when
   // there is no block-track markup at all.
-  const footprints = structuralFootprints(state.doc);
-  if (footprints.length === 0) {
+  const retained = retainedRecords(state);
+  const index = analyzeStructuralUnions(state.doc, retained);
+  if (!index.hasStructuralMarkup) {
     // No structural markup — the disk view is the live document. Keep the caller's
     // exact serialization so the write is byte-for-byte what it was before
     // structural support existed.
     return { ok: true, content: fallbackMarkdown, structural: [] };
   }
 
-  // Fail closed on any block-track markup that is not a COMPLETE, recorded union:
-  const activeIds = activeStructuralChangeIds(state.doc);
-  // (a) an incomplete union — a footprint whose change has only one branch live.
-  const incomplete = [...new Set(footprints.map((f) => f.changeId))].filter(
-    (id) => !activeIds.has(id),
+  const incompleteIds = new Set(
+    index.issues
+      .filter((issue) => issue.code === 'branch-count' && issue.changeId)
+      .map((issue) => issue.changeId as string),
   );
-  if (incomplete.length > 0) {
-    return { ok: false, error: `incomplete structural union: ${incomplete.join(', ')}` };
+  if (incompleteIds.size > 0) {
+    return { ok: false, error: `incomplete structural union: ${[...incompleteIds].join(', ')}` };
   }
-  // (b) an orphan — a complete union whose canonical record is missing, so
-  // reconstruction could not restore it and Save/Reject would have no metadata.
-  const orphans = orphanStructuralChangeIds(state);
-  if (orphans.length > 0) {
+  // Any other topology or declared-op disagreement is malformed. Keep the
+  // established reload-parity error surfaced by the old dry-run safeguard.
+  if (index.issues.length > 0) {
+    return { ok: false, error: 'structural union would not survive reload' };
+  }
+  // A complete union without canonical metadata cannot restore its proposal.
+  if (index.missingMetadataIds.size > 0) {
     return {
       ok: false,
-      error: `structural change without a record: ${orphans.join(', ')}`,
+      error: `structural change without a record: ${[...index.missingMetadataIds].join(', ')}`,
     };
   }
 
+  const activeIds = new Set(index.persistable.keys());
+
   const serialize = markdownSerializer(editor);
   const metadata = new Map<string, StructuralRecordMetadata>(
-    activeRecords(state).map((record) => [
-      record.changeId,
-      {
-        op: record.op,
-        author: record.author,
-        createdAt: record.createdAt,
-        ...(record.originCommentId ? { originCommentId: record.originCommentId } : {}),
-        ...(record.originChatMessageId ? { originChatMessageId: record.originChatMessageId } : {}),
-      },
-    ]),
+    [...index.persistable.keys()].map((changeId): [string, StructuralRecordMetadata] => {
+      const record = retained.get(changeId) as StructuralRecordMetadata;
+      return [
+        changeId,
+        {
+          op: record.op,
+          author: record.author,
+          createdAt: record.createdAt,
+          ...(record.originCommentId ? { originCommentId: record.originCommentId } : {}),
+          ...(record.originChatMessageId
+            ? { originChatMessageId: record.originChatMessageId }
+            : {}),
+        },
+      ];
+    }),
   );
 
   let structural: StructuralSuggestionRecord[];
   let sourceDoc: PMNode;
   try {
-    structural = extractStructuralRecords(state.doc, metadata, serialize);
+    structural = extractStructuralRecordsFromIndex(index, metadata, serialize);
     sourceDoc = projectBlockUnions(state.doc, 'source').doc;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };

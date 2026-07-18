@@ -104,5 +104,20 @@ describe('StructuralRecordStore', () => {
     editor.view.dispatch(tr); // no addStructuralRecord
     expect(orphanStructuralChangeIds(editor.state)).toEqual(['orphan']);
     expect(activeRecords(editor.state)).toEqual([]);
+    expect(canMintChangeId(editor.state, 'orphan')).toBe(false);
+  });
+
+  it('does not let mint adopt an id from an incomplete live identity', () => {
+    const { state } = editor;
+    const heading = state.doc.child(0);
+    editor.view.dispatch(
+      state.tr.setNodeMarkup(0, undefined, {
+        ...heading.attrs,
+        blockTrack: { changeId: 'incomplete', op: 'delete' },
+      }),
+    );
+    expect(activeStructuralChangeIds(editor.state.doc)).toEqual(new Set());
+    expect(canMintChangeId(editor.state, 'incomplete')).toBe(false);
+    expect(canMintChangeId(editor.state, 'fresh')).toBe(true);
   });
 });
