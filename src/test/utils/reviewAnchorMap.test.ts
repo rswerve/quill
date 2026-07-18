@@ -576,3 +576,38 @@ describe('reviewAnchorMap: cosmetic block attrs (Codex round 5)', () => {
     expect(buildAnchorMapper(live, canon).map(from, from + 4)).toBeNull();
   });
 });
+
+describe('reviewAnchorMap: real loose-list tight-flip regression (Codex round 5)', () => {
+  const firstListTight = (doc: PMNode): boolean | undefined => {
+    let tight: boolean | undefined;
+    doc.descendants((n) => {
+      if (tight === undefined && (n.type.name === 'bulletList' || n.type.name === 'orderedList')) {
+        tight = Boolean(n.attrs.tight);
+      }
+    });
+    return tight;
+  };
+
+  it('a loose list that loses an item still maps the survivor after canonicalization', () => {
+    // 1. Open a loose two-item list — the real Markdown parse yields tight:false.
+    const ed = makeEditor();
+    ed.commands.setContent('- alpha\n\n- beta', { emitUpdate: false });
+    // 2. Delete the second list item through a real transaction (attr persists false).
+    const items: Array<{ from: number; to: number }> = [];
+    ed.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'listItem') items.push({ from: pos, to: pos + node.nodeSize });
+      return true;
+    });
+    ed.view.dispatch(ed.state.tr.delete(items[1].from, items[1].to));
+    const live = ed.state.doc;
+    expect(firstListTight(live)).toBe(false);
+    // 3. Canonicalize (serialize `- alpha` -> reparse) really flips tight -> true.
+    const canon = canonicalOf(live);
+    expect(firstListTight(canon)).toBe(true);
+    // 4. The survivor's annotation still maps despite the serializer-owned attr flip.
+    const from = nthPos(live, 'alpha');
+    const mapped = buildAnchorMapper(live, canon).map(from, from + 5);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('alpha');
+  });
+});

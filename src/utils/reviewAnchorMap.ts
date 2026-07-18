@@ -323,11 +323,6 @@ export interface MappedRange {
 }
 
 /**
- * A zero-width boundary is safe only when its NON-normalizable neighbours are
- * unchanged: a boundary whose left/right character changed block type, base marks,
- * or leaf identity (H1→H2, plain→bold) sits in altered context and must not map.
- */
-/**
  * One side of a zero-width boundary is safe only when its content neighbours agree
  * SYMMETRICALLY: if EITHER the live or the canonical neighbour on that side is a
  * content cell, both must exist and be fully equal. This rejects a rebind after an
