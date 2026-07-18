@@ -219,23 +219,32 @@ function runMatch(live: Cell[], i: number, iEnd: number, canon: Cell[], j: numbe
   return true;
 }
 
-/** Marks present on the collapsible cells of a gap; null if any cell is NOT collapsible. */
-function collapsibleMarkSet(cells: Cell[], from: number, to: number): Set<string> | null {
-  const marks = new Set<string>();
+/**
+ * Run-length-encoded markSig sequence of a collapsible run — consecutive same-mark cells
+ * fold to ONE entry. Null if the run is empty or holds a non-collapsible cell (block
+ * boundary / leaf). This is exactly what a whitespace collapse preserves: it folds each run
+ * of identical-mark whitespace to a single space, so the SEQUENCE of distinct marks survives
+ * (bold/bold/plain → bold/plain) but a reorder does not (bold/plain/bold → bold/plain).
+ */
+function collapsibleMarkRuns(cells: Cell[], from: number, to: number): string[] | null {
+  if (to <= from) return null;
+  const runs: string[] = [];
   for (let k = from; k < to; k += 1) {
     if (!cells[k].collapsible) return null; // a block boundary / leaf — not pure whitespace
-    marks.add(cells[k].markSig);
+    if (runs.length === 0 || runs[runs.length - 1] !== cells[k].markSig)
+      runs.push(cells[k].markSig);
   }
-  return marks;
+  return runs;
 }
 
 /**
- * A gap is a CLEAN whitespace collapse when both sides are nothing but ordinary
- * collapsible whitespace AND no mark appeared or disappeared across it — only the COUNT
- * changed (e.g. a typed double space renders and reopens as one). That is the sole
- * per-cell removal an anchor may span without drifting. A whitespace run whose FORMATTING
- * changed keeps the same length but a different mark set, so it is NOT clean and still
- * blocks — relocating over it could invert a format delta onto differently-marked text.
+ * A gap is a CLEAN whitespace collapse when both sides are runs of collapsible whitespace
+ * with the SAME run-length-encoded mark sequence AND the canonical run is STRICTLY shorter
+ * than the live one — the only change being that a typed double space rendered and reopened
+ * as one. The sequence check rejects a heterogeneous run whose marks reorder or drop a
+ * transition; the strict length bound rejects both whitespace EXPANSION and equal-length
+ * substitution (a collapse only ever removes). A merged block boundary is not collapsible,
+ * so it fails here too. Anything else still blocks.
  */
 function isCleanWhitespaceCollapse(
   L: Cell[],
@@ -245,11 +254,11 @@ function isCleanWhitespaceCollapse(
   cStart: number,
   cEnd: number,
 ): boolean {
-  const liveMarks = collapsibleMarkSet(L, bStart, bEnd);
-  const canonMarks = collapsibleMarkSet(C, cStart, cEnd);
-  if (!liveMarks || !canonMarks || liveMarks.size !== canonMarks.size) return false;
-  for (const mark of liveMarks) if (!canonMarks.has(mark)) return false;
-  return true;
+  if (cEnd - cStart >= bEnd - bStart) return false; // a collapse strictly shortens the run
+  const liveRuns = collapsibleMarkRuns(L, bStart, bEnd);
+  const canonRuns = collapsibleMarkRuns(C, cStart, cEnd);
+  if (!liveRuns || !canonRuns || liveRuns.length !== canonRuns.length) return false;
+  return liveRuns.every((mark, i) => mark === canonRuns[i]);
 }
 
 interface Alignment {

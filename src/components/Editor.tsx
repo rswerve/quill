@@ -45,6 +45,13 @@ export interface EditorRef {
    */
   parseMarkdown: (md: string) => ProseMirrorNode | null;
   /**
+   * Serialize an arbitrary document node to Markdown with the live editor's serializer —
+   * WITHOUT touching the live editor. Used to persist the CANONICAL document (the one a
+   * reopen rebuilds) so the on-disk bytes match what the editor shows and typed whitespace
+   * that collapses on reparse is stored collapsed. Empty string before the editor is ready.
+   */
+  serializeDoc: (doc: ProseMirrorNode) => string;
+  /**
    * Lossless crash-recovery restore: replace the whole document with a persisted
    * ProseMirror JSON (all review marks embedded) so positions are byte-exact and NOTHING
    * relocates. Fails closed — the JSON is validated (structure + doc↔records bijection)
@@ -291,6 +298,15 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         parseMarkdown(md: string): ProseMirrorNode | null {
           return editor ? parseMarkdownToDoc(editor, md) : null;
+        },
+        serializeDoc(doc: ProseMirrorNode): string {
+          if (!editor) return '';
+          return (
+            editor.storage as unknown as Record<
+              string,
+              { serializer: { serialize: (d: ProseMirrorNode) => string } }
+            >
+          ).markdown.serializer.serialize(doc);
         },
         restoreDocJSON(json, comments, suggestions): DocJSONRestoreResult {
           if (!editor) return { ok: false, reason: 'editor not ready' };

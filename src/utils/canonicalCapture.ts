@@ -72,12 +72,20 @@ export function captureCanonicalReviewState(
     const mapped = suggestion.segments.map((segment) => {
       const range = mapper.map(segment.from, segment.to);
       // A comment simply highlights, so a range that shrinks onto the surviving space is
-      // fine. A suggestion SEGMENT also carries `text` that its range must still spell — so
-      // a mapped range whose canonical text no longer equals `segment.text` means the
-      // collapse fell INSIDE the tracked content itself (e.g. a tracked double space). That
-      // can't be represented faithfully, so treat it as unmappable and fail the save closed.
+      // fine. A TEXT segment also carries `text` that its range must still spell — validated
+      // against BOTH documents: the LIVE range must equal segment.text (else the record is
+      // already stale, e.g. a pre-canonicalized text over a live double space), and the
+      // mapped CANONICAL range must too (else the collapse fell INSIDE the tracked content,
+      // e.g. a tracked double space). Only then is the remap faithful; otherwise fail the
+      // save closed. A LEAF segment (hard break, image) carries a placeholder text ("\n")
+      // that `rangeText` never reproduces (it projects a leaf as a space) — its identity is
+      // validated by the mapper's leaf match instead, so the text check does not apply.
+      const isLeaf = segment.kind !== 'format' && segment.nodeType != null;
       const consistent =
-        range !== null && rangeText(canonDoc, range.from, range.to) === segment.text;
+        range !== null &&
+        (isLeaf ||
+          (rangeText(liveDoc, segment.from, segment.to) === segment.text &&
+            rangeText(canonDoc, range.from, range.to) === segment.text));
       return { segment, range: consistent ? range : null };
     });
     if (!mapped.every((entry) => entry.range !== null)) {

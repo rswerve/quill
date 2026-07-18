@@ -548,12 +548,27 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // Fails closed (ok:false) when an annotation covers text that changes shape on write;
   // the caller then aborts the ENTIRE save. The editor is always present during a save —
   // if somehow absent, fail closed rather than persist non-canonical positions.
-  const getCanonicalReviewState = useCallback((): CanonicalCaptureResult => {
+  const getCanonicalReviewState = useCallback((): {
+    capture: CanonicalCaptureResult;
+    markdown: string;
+  } => {
     const ed = editorRef.current?.getEditor();
-    const canonDoc = editorRef.current?.parseMarkdown(getDocMarkdown());
+    const liveMarkdown = getDocMarkdown();
+    const canonDoc = editorRef.current?.parseMarkdown(liveMarkdown);
     const live = getLiveReviewState();
-    if (!ed || !canonDoc) return { ok: false, unmappable: [] };
-    return captureCanonicalReviewState(ed.state.doc, canonDoc, live.comments, live.suggestions);
+    if (!ed || !canonDoc) return { capture: { ok: false, unmappable: [] }, markdown: liveMarkdown };
+    const capture = captureCanonicalReviewState(
+      ed.state.doc,
+      canonDoc,
+      live.comments,
+      live.suggestions,
+    );
+    // Normalize on write: persist the CANONICAL Markdown — the exact document a reopen
+    // rebuilds — so a typed double space is stored as the single space it always collapses
+    // to and the on-disk bytes match what the editor shows. Coordinates were captured
+    // against THIS canonDoc, so a bound reopen lands every anchor with no drift.
+    const markdown = editorRef.current?.serializeDoc(canonDoc) ?? liveMarkdown;
+    return { capture, markdown };
   }, [getDocMarkdown, getLiveReviewState]);
 
   // The shell owns persistence and asks each mounted tab for a live snapshot.
@@ -1007,10 +1022,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       .catch((error) => console.warn('Could not record Claude session document:', error));
   }, [aiSession, filePath]);
 
-  function getMarkdown(): string {
-    return editorRef.current?.getMarkdown() ?? '';
-  }
-
   // Reduce a typed save outcome to a path for callers that only care whether the
   // save landed, surfacing the outcomes that must not read as silent success:
   // a `blocked` sidecar (text saved, annotations withheld) and an external
@@ -1069,14 +1080,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const performSave = useCallback(async (): Promise<SaveOutcome> => {
     // Canonicalize BEFORE any write. On failure nothing is written and the doc stays
     // dirty — a review annotation covers text that changes shape when saved.
-    const capture = getCanonicalReviewState();
+    const { capture, markdown } = getCanonicalReviewState();
     if (!capture.ok) {
       const outcome: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
       notifySaveOutcome(outcome);
       return outcome;
     }
     const outcome = await saveFile(
-      getMarkdown(),
+      markdown,
       capture.comments,
       capture.suggestions,
       aiSession,
@@ -1215,14 +1226,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
     // Canonicalize before prompting for a path — don't open the dialog for a save that
     // would fail, and never write non-canonical positions under a source hash.
-    const capture = getCanonicalReviewState();
+    const { capture, markdown } = getCanonicalReviewState();
     if (!capture.ok) {
       const blocked: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
       notifySaveOutcome(blocked);
       return blocked;
     }
     const outcome = await saveFileAs(
-      getMarkdown(),
+      markdown,
       capture.comments,
       capture.suggestions,
       aiSession,
@@ -1373,12 +1384,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Overwrite = an explicit same-path Save As: an unconditional write that also
       // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
       const outcome = await runExclusive(async () => {
-        const capture = getCanonicalReviewState();
+        const { capture, markdown } = getCanonicalReviewState();
         if (!capture.ok) {
           return { status: 'review-blocked', unmappable: capture.unmappable } as SaveOutcome;
         }
         return saveFile(
-          getMarkdown(),
+          markdown,
           capture.comments,
           capture.suggestions,
           aiSession,
