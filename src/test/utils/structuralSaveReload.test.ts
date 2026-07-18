@@ -10,9 +10,12 @@ import {
   retainedRecords,
   type CanonicalRecord,
 } from '../../extensions/StructuralRecordStore';
-import { buildStructuralSavePayload } from '../../utils/structuralSavePayload';
+import {
+  buildStructuralSavePayload,
+  resolveStructuralPersist,
+} from '../../utils/structuralSavePayload';
 import { reconstructStructuralIntoEditor } from '../../utils/structuralReload';
-import type { StructuralReviewEnvelope } from '../../types';
+import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../../types';
 
 const editors: Editor[] = [];
 
@@ -204,5 +207,46 @@ describe('structural save -> reload round trip (structural axis)', () => {
 
     expect(result.quarantined).toEqual([]);
     expect(reopened.state.doc.toJSON()).toEqual(reviewJSON);
+  });
+});
+
+describe('resolveStructuralPersist', () => {
+  const rec = (id: string): StructuralSuggestionRecord => ({
+    changeId: id,
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    op: { kind: 'headingToParagraph', level: 1 },
+    anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+    sourceFingerprint: '# Title',
+    proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+  });
+  const loadedEnvelope: StructuralReviewEnvelope = {
+    version: 1,
+    sourceDocumentHash: 'original-hash',
+    records: [rec('q1')],
+  };
+
+  it('rebuilds from live records when nothing quarantined', () => {
+    expect(resolveStructuralPersist([rec('a')], [], loadedEnvelope)).toEqual({
+      records: [rec('a')],
+    });
+  });
+
+  it('preserves the loaded envelope verbatim when records quarantined and none are live', () => {
+    expect(resolveStructuralPersist([], [rec('q1')], loadedEnvelope)).toEqual({
+      envelope: loadedEnvelope,
+    });
+  });
+
+  it('lets fresh live records win over quarantined ones (single-hash envelope)', () => {
+    // The mixed case: a live union AND a quarantined record. The fresh record set
+    // wins (its own new hash); quarantined records are surfaced at load, not here.
+    expect(resolveStructuralPersist([rec('a')], [rec('q1')], loadedEnvelope)).toEqual({
+      records: [rec('a')],
+    });
+  });
+
+  it('rebuilds (empty) when quarantined but no envelope was ever loaded', () => {
+    expect(resolveStructuralPersist([], [rec('q1')], null)).toEqual({ records: [] });
   });
 });

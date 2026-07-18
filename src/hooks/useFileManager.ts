@@ -7,10 +7,10 @@ import type {
   AISessionBinding,
   DocumentChatThread,
   StructuralReviewEnvelope,
-  StructuralSuggestionRecord,
 } from '../types';
 import { sidecarPath } from '../utils/sidecarPath';
 import { parseStructuralEnvelope } from '../utils/structuralEnvelope';
+import type { StructuralSaveInput } from '../utils/structuralSavePayload';
 import { basename } from '../utils/path';
 import {
   sanitizeComments,
@@ -31,6 +31,21 @@ import { stripTransientChatState } from '../utils/chatThread';
 
 function emptySidecar(): SidecarFile {
   return { version: 2, comments: [], suggestions: [] };
+}
+
+/**
+ * The structural envelope to persist: a fresh record set is stamped with the
+ * current `.md` write's hash; a preserved envelope is written verbatim (keeping
+ * its own hash so stale records stay inert); an empty record set writes nothing.
+ */
+function buildStructuralEnvelope(
+  structural: StructuralSaveInput | undefined,
+  docHash: string,
+): StructuralReviewEnvelope | undefined {
+  if (!structural) return undefined;
+  if ('envelope' in structural) return structural.envelope;
+  if (structural.records.length === 0) return undefined;
+  return { version: 1, sourceDocumentHash: docHash, records: structural.records };
 }
 
 /**
@@ -142,7 +157,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     forcePath?: string,
     chat?: DocumentChatThread | null,
-    structural?: StructuralSuggestionRecord[],
+    structural?: StructuralSaveInput,
   ) => Promise<SaveOutcome>;
   saveFileAs: (
     content: string,
@@ -152,7 +167,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
     requestPathOwnership?: (path: string) => boolean,
-    structural?: StructuralSuggestionRecord[],
+    structural?: StructuralSaveInput,
   ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (
@@ -359,7 +374,7 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat: DocumentChatThread | null | undefined,
-      structural: StructuralSuggestionRecord[],
+      structural: StructuralSaveInput | undefined,
       docHash: string,
       expectedSidecar: Fingerprint | null,
     ): Promise<SidecarSaveResult> => {
@@ -376,11 +391,10 @@ export function useFileManager(
       const cleanChat = chat ? { ...chat, messages: stripTransientChatState(chat.messages) } : null;
       // Structural records are the whole reason the union's proposed branch survives
       // a lost sidecar (the .md is source-only), so they count as data to persist —
-      // an empty sidecar with a structural record must NOT be deleted.
-      const envelope: StructuralReviewEnvelope | undefined =
-        structural.length > 0
-          ? { version: 1, sourceDocumentHash: docHash, records: structural }
-          : undefined;
+      // an empty sidecar with a structural record must NOT be deleted. A fresh record
+      // set is stamped with THIS write's `.md` hash; a preserved envelope is written
+      // verbatim, keeping its own (stale) hash so quarantined records stay inert.
+      const envelope = buildStructuralEnvelope(structural, docHash);
       if (
         cleanComments.length === 0 &&
         suggestions.length === 0 &&
@@ -422,7 +436,7 @@ export function useFileManager(
       contextFolder: string | null,
       forcePath?: string,
       chat?: DocumentChatThread | null,
-      structural: StructuralSuggestionRecord[] = [],
+      structural?: StructuralSaveInput,
     ): Promise<SaveOutcome> => {
       // Read the path from the ref, not state: a fresh pass right after a Save As
       // runs before React commits the new filePath, and must target it.
@@ -556,7 +570,7 @@ export function useFileManager(
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
       requestPathOwnership?: (path: string) => boolean,
-      structural: StructuralSuggestionRecord[] = [],
+      structural?: StructuralSaveInput,
     ): Promise<SaveOutcome> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';

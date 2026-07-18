@@ -42,6 +42,13 @@ import {
   restoreReviewMarks,
   suggestionsFromTrackedChanges,
 } from '../utils/reviewPersistence';
+import {
+  buildStructuralSavePayload,
+  resolveStructuralPersist,
+  type StructuralSaveInput,
+} from '../utils/structuralSavePayload';
+import { reconstructStructuralIntoEditor } from '../utils/structuralReload';
+import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
@@ -70,6 +77,8 @@ import type {
   QuillEdit,
   SidecarFile,
   Suggestion,
+  StructuralReviewEnvelope,
+  StructuralSuggestionRecord,
   TrackedChangeInfo,
   TrackedEditOrigin,
   DocumentChatThread,
@@ -447,6 +456,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   } = useComments();
   const { suggestions, setSuggestions } = useSuggestions();
   const quarantinedSuggestionsRef = useRef<Suggestion[]>([]);
+  // Structural records that failed reconstruction on the last load (whole-doc hash
+  // mismatch or a per-record validation failure). Kept so the notice can report
+  // them; re-persistence of quarantined structural records lands with the mint
+  // slice (the only path that puts structural records on disk today), so no real
+  // sidecar can carry one yet.
+  const quarantinedStructuralRef = useRef<StructuralSuggestionRecord[]>([]);
+  // The structural envelope exactly as loaded from disk, kept so that if any of its
+  // records quarantined on reload (source changed outside Quill) a save can preserve
+  // it verbatim — its original hash keeps those records inert — rather than dropping
+  // them. Cleared on New / a load with no structural envelope.
+  const loadedStructuralEnvelopeRef = useRef<StructuralReviewEnvelope | null>(null);
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
@@ -715,6 +735,28 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [onNotice],
   );
 
+  // The structural half of the two-axis reload: rebuild the block unions (and reset
+  // the canonical record store) BEFORE inline/comment marks are restored, then stash
+  // the loaded envelope + any quarantined records and warn about the latter.
+  const restoreStructuralUnions = useCallback(
+    (ed: TiptapEditor, envelope: StructuralReviewEnvelope | null, docHash: string) => {
+      loadedStructuralEnvelopeRef.current = envelope;
+      const result = reconstructStructuralIntoEditor(ed, envelope, docHash);
+      quarantinedStructuralRef.current = result.quarantined;
+      if (result.quarantined.length > 0) {
+        const count = result.quarantined.length;
+        onNotice({
+          title: 'Structural suggestions need review',
+          message:
+            `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored ` +
+            `because the document changed outside Quill. The saved records are preserved on disk but ` +
+            `cannot affect the document until it is reconciled.`,
+        });
+      }
+    },
+    [onNotice],
+  );
+
   // A mounted background tab keeps its editor state, but layout APIs return
   // stale/zero coordinates while its host is display:none. Re-measure after
   // activation so comments and the selection affordance snap back to the
@@ -735,6 +777,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     (
       result: {
         content: string;
+        docHash: string;
         sidecar: SidecarFile;
         filePath: string;
         autoBound?: boolean;
@@ -753,18 +796,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       if (liveEditor) setImageBaseDir(liveEditor, dirname(result.filePath));
       onRecentFile(result.filePath);
       setLastSavedAt(Date.now());
+      // setContent parses the structural SOURCE Markdown (original branches only).
       editorRef.current?.setContent(result.content);
       const loadedComments = result.sidecar.comments ?? [];
       const loadedSuggestions = normalizePersistedSuggestions(result.sidecar.suggestions ?? []);
       setComments(loadedComments);
       setSuggestions(loadedSuggestions);
-      // Stamp the marks back onto the parsed document: highlights, click
-      // linking, and suggestion cards all read live marks, which Markdown
-      // serialization dropped at save time. The restore suppresses the update
-      // event (a load must not look dirty), so the tracked-changes state that
-      // normally follows update events is refreshed by hand.
+      // Two-axis reload. Reconstruct the structural unions FIRST — that rebuilds the
+      // review document whose positions the inline/comment marks were captured
+      // against — THEN stamp those marks back on top. Reconstruction resets the
+      // canonical record store (even with no envelope, clearing a prior document's
+      // records). The mark restore suppresses the update event (a load must not look
+      // dirty), so the tracked-changes state is refreshed by hand.
       const ed = editorRef.current?.getEditor();
       if (ed) {
+        restoreStructuralUnions(ed, result.sidecar.structural ?? null, result.docHash);
         restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions);
       }
       const access = authorizeSidecarAccess(
@@ -860,6 +906,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       chooseContextFolder,
       onOpenSessionPicker,
       restorePersistedReviewMarks,
+      restoreStructuralUnions,
       tabId,
       bumpSchedulerGen,
     ],
@@ -888,9 +935,42 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       .catch((error) => console.warn('Could not record Claude session document:', error));
   }, [aiSession, filePath]);
 
-  function getMarkdown(): string {
-    return editorRef.current?.getMarkdown() ?? '';
-  }
+  // The single synchronous pre-write payload builder every save route funnels
+  // through: the source-projected `.md` plus the structural records for the
+  // envelope. For a document with no structural union it returns getMarkdown()
+  // verbatim (byte-identical to the pre-structural save); a malformed union
+  // returns `{ ok: false }` so the caller aborts BEFORE any byte is written.
+  const captureDiskPayload = useCallback(():
+    | { ok: true; content: string; structural: StructuralSaveInput }
+    | { ok: false; error: string } => {
+    const ed = editorRef.current?.getEditor();
+    const fallback = editorRef.current?.getMarkdown() ?? '';
+    if (!ed) return { ok: true, content: fallback, structural: { records: [] } };
+    const payload = buildStructuralSavePayload(ed, fallback);
+    if (!payload.ok) return payload;
+    // Rebuild from live records, unless the last load quarantined records and there
+    // are no live ones — then preserve the loaded envelope verbatim.
+    const structural = resolveStructuralPersist(
+      payload.structural,
+      quarantinedStructuralRef.current,
+      loadedStructuralEnvelopeRef.current,
+    );
+    return { ok: true, content: payload.content, structural };
+  }, []);
+
+  // A failed structural payload build aborts the save before any byte is written
+  // (fail closed). Presented like any other save failure: loud for a manual save,
+  // quiet (footer + backoff) for autosave.
+  const structuralSaveFailure = useCallback(
+    (error: string): SaveOutcome => ({
+      status: 'failed',
+      message:
+        `This document has a structural suggestion that can't be saved safely (${error}). ` +
+        `Nothing was written — undo the change or reopen the file, then try again.`,
+      ...(filePath ? { path: filePath } : {}),
+    }),
+    [filePath],
+  );
 
   // Reduce a typed save outcome to a path for callers that only care whether the
   // save landed, surfacing the outcomes that must not read as silent success:
@@ -942,15 +1022,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // notices live here so they run exactly once per write, even when several
   // coalesced requests share it.
   const performSave = useCallback(async (): Promise<SaveOutcome> => {
+    const payload = captureDiskPayload();
+    if (!payload.ok) return structuralSaveFailure(payload.error);
     const live = getLiveReviewState();
     const outcome = await saveFile(
-      getMarkdown(),
+      payload.content,
       live.comments,
       live.suggestions,
       aiSession,
       contextFolder,
       undefined,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+      payload.structural,
     );
     if (outcome.status === 'saved') {
       rememberSessionPermission(window.localStorage, outcome.path, aiSession);
@@ -959,7 +1042,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     }
     notifySaveOutcome(outcome);
     return outcome;
-  }, [saveFile, getLiveReviewState, aiSession, contextFolder, documentChat, notifySaveOutcome]);
+  }, [
+    saveFile,
+    captureDiskPayload,
+    structuralSaveFailure,
+    getLiveReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    notifySaveOutcome,
+  ]);
 
   const {
     requestSave,
@@ -1070,15 +1162,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // through the coordinator's exclusive lane — waiting for any in-flight save and
   // blocking new saves until it finishes — so writes never overlap the path change.
   const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
+    const payload = captureDiskPayload();
+    if (!payload.ok) return structuralSaveFailure(payload.error);
     const live = getLiveReviewState();
     const outcome = await saveFileAs(
-      getMarkdown(),
+      payload.content,
       live.comments,
       live.suggestions,
       aiSession,
       contextFolder,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
       (path) => onRequestSavePath(tabId, path),
+      payload.structural,
     );
     if (outcome.status === 'saved') {
       // The document gained (or moved) a directory — relative image paths now
@@ -1094,6 +1189,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return outcome;
   }, [
     saveFileAs,
+    captureDiskPayload,
+    structuralSaveFailure,
     getLiveReviewState,
     aiSession,
     contextFolder,
@@ -1191,9 +1288,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
     editorRef.current?.setContent('');
+    // Clear a prior document's canonical structural records; setContent alone does
+    // not reset the session-retained store.
+    if (liveEditor) {
+      liveEditor.view.dispatch(
+        resetStructuralRecords(liveEditor.state.tr, [])
+          .setMeta('preventUpdate', true)
+          .setMeta('skipTracking', true)
+          .setMeta('addToHistory', false),
+      );
+    }
     setComments([]);
     setSuggestions([]);
     quarantinedSuggestionsRef.current = [];
+    quarantinedStructuralRef.current = [];
+    loadedStructuralEnvelopeRef.current = null;
     onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
@@ -1223,15 +1332,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Overwrite = an explicit same-path Save As: an unconditional write that also
       // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
       const outcome = await runExclusive(async () => {
+        const payload = captureDiskPayload();
+        if (!payload.ok) return structuralSaveFailure(payload.error);
         const live = getLiveReviewState();
         return saveFile(
-          getMarkdown(),
+          payload.content,
           live.comments,
           live.suggestions,
           aiSession,
           contextFolder,
           filePath,
           aiSession ? documentChat.getThread(aiSession.sessionId) : null,
+          payload.structural,
         );
       });
       if (outcome.status === 'saved') {
@@ -1251,6 +1363,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     resolvingConflict,
     runExclusive,
     saveFile,
+    captureDiskPayload,
+    structuralSaveFailure,
     getLiveReviewState,
     aiSession,
     contextFolder,

@@ -1290,9 +1290,9 @@ describe('structural envelope persistence', () => {
     const { result } = renderHook(() => useFileManager());
     await act(async () => {
       // No comments/suggestions/session/folder/chat — only a structural record.
-      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
-        SAMPLE_STRUCTURAL,
-      ]);
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, {
+        records: [SAMPLE_STRUCTURAL],
+      });
     });
     // A delete would signal "nothing to persist"; the record must reach disk instead.
     const deleteCall = mockInvoke.mock.calls.find((call) => call[0] === 'delete_file_if_match');
@@ -1306,9 +1306,9 @@ describe('structural envelope persistence', () => {
     installSaveRouter();
     const { result } = renderHook(() => useFileManager());
     await act(async () => {
-      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
-        SAMPLE_STRUCTURAL,
-      ]);
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, {
+        records: [SAMPLE_STRUCTURAL],
+      });
     });
     const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
     expect(written.structural.version).toBe(1);
@@ -1326,6 +1326,26 @@ describe('structural envelope persistence', () => {
     });
     const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
     expect(written.structural).toBeUndefined();
+  });
+
+  it('writes a preserved envelope verbatim, keeping its original (stale) hash', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    const preserved = {
+      version: 1 as const,
+      sourceDocumentHash: 'original-stale-hash',
+      records: [SAMPLE_STRUCTURAL],
+    };
+    await act(async () => {
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/p.md', null, {
+        envelope: preserved,
+      });
+    });
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    // Verbatim: the ORIGINAL hash survives, NOT this write's .md hash, so the
+    // quarantined records stay gated against the changed source on the next reload.
+    expect(written.structural.sourceDocumentHash).toBe('original-stale-hash');
+    expect(written.structural.sourceDocumentHash).not.toBe(HASH_DOC);
   });
 
   it('preserves a valid structural envelope on open and drops a malformed one', async () => {

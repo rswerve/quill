@@ -1,6 +1,6 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
 import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
-import type { StructuralSuggestionRecord } from '../types';
+import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../types';
 import { projectBlockUnions } from './blockUnionProjection';
 import { extractStructuralRecords, type StructuralRecordMetadata } from './structuralExtraction';
 import {
@@ -19,6 +19,40 @@ import type { MarkdownSerialize } from './structuralFingerprint';
 export type StructuralSavePayload =
   | { ok: true; content: string; structural: StructuralSuggestionRecord[] }
   | { ok: false; error: string };
+
+/**
+ * What the sidecar writer should persist for the structural axis: either a fresh
+ * record set (the writer stamps the envelope hash from THIS `.md` write) or a
+ * loaded envelope preserved verbatim (keeping its own hash, so records that
+ * describe a now-stale source stay inert on reload rather than misbinding).
+ */
+export type StructuralSaveInput =
+  | { records: StructuralSuggestionRecord[] }
+  | { envelope: StructuralReviewEnvelope };
+
+/**
+ * Decide what to persist for the structural axis. Fresh live records rebuild the
+ * envelope under the new `.md` hash. But if the last load QUARANTINED records
+ * (the source changed outside Quill) and there are no fresh live records to
+ * write, preserve the loaded envelope verbatim — its original hash keeps the
+ * records gated against the changed source, so they stay preserved-but-inert
+ * instead of being dropped from disk or rebuilt under a hash that could misbind.
+ *
+ * A single envelope carries one source hash, so it cannot mix fresh records (new
+ * source) with preserved ones (old source); when both exist, the fresh records
+ * win and the quarantined ones are surfaced at load. That mix requires minting a
+ * new union while others are quarantined — unreachable until the mint slice.
+ */
+export function resolveStructuralPersist(
+  liveRecords: StructuralSuggestionRecord[],
+  quarantined: StructuralSuggestionRecord[],
+  loadedEnvelope: StructuralReviewEnvelope | null,
+): StructuralSaveInput {
+  if (quarantined.length > 0 && liveRecords.length === 0 && loadedEnvelope) {
+    return { envelope: loadedEnvelope };
+  }
+  return { records: liveRecords };
+}
 
 interface MarkdownStorage {
   markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
