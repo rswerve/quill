@@ -244,4 +244,31 @@ describe('save→reopen round trip (whitespace-drift fix, end to end)', () => {
     if (capture.ok) return;
     expect(capture.unmappable).toEqual([{ kind: 'comment', id: 'cm1' }]);
   });
+
+  it('a RESOLVED comment over the same collapse does NOT block — detaches and reopens mark-less', () => {
+    // Maz's decision #1: the identical highlight that BLOCKS while active must not block once
+    // resolved. A resolved comment is dismissed (mark-less), so capture detaches it and the
+    // save proceeds; the sidecar keeps resolved+detached; reopen installs no highlight.
+    const live = driftingDoc();
+    const from = posOf(live.state.doc, 'foo');
+    const to = posOf(live.state.doc, 'bar') + 3; // "foo  bar" — includes the double space
+    const record = { ...comment(from, to, 'foo  bar'), resolved: true };
+
+    const md = getMd(live);
+    const canonDoc = parseMarkdownToDoc(live, md);
+    const capture = captureCanonicalReviewState(live.state.doc, canonDoc, [record], []);
+    expect(capture.ok).toBe(true); // save proceeds — no block
+    if (!capture.ok) return;
+    expect(capture.comments[0]).toMatchObject({ resolved: true, detached: true });
+
+    const reopen = makeEditor();
+    reopen.commands.setContent(md, { emitUpdate: false });
+    const restored = restoreReviewMarks(reopen, capture.comments, [], 'bound');
+    // No highlight re-stamped (it's resolved), and the record survives resolved+detached.
+    expect(findAnnotationRange(reopen.state.doc, 'comment', 'cm1')).toBeNull();
+    expect(restored.comments.find((c) => c.id === 'cm1')).toMatchObject({
+      resolved: true,
+      detached: true,
+    });
+  });
 });
