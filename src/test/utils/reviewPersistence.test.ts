@@ -375,7 +375,8 @@ describe('restoreReviewMarks', () => {
     };
 
     const restored = restoreReviewMarks(editor, [], [record]);
-    expect(restored.quarantinedSuggestions).toEqual([record]);
+    // A quarantined suggestion is now marked detached (non-authoritative for future loads).
+    expect(restored.quarantinedSuggestions).toEqual([{ ...record, detached: true }]);
     expect(restored.mismatches).toEqual([
       expect.objectContaining({ suggestionId: 'mismatched-break', expected: '\n', actual: null }),
     ]);
@@ -782,6 +783,37 @@ describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
     );
     const result = restoreReviewMarks(editor, [], [malformed], 'bound');
     expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['malf']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('a quarantined suggestion is marked detached (non-authoritative for future loads)', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const stale = logical([{ kind: 'delete', from: 7, to: 12, text: 'zzz' }], { id: 'sg1' }); // text mismatch
+    const result = restoreReviewMarks(editor, [], [stale], 'bound');
+    expect(result.quarantinedSuggestions[0]).toMatchObject({ id: 'sg1', detached: true });
+  });
+
+  it('bound: a DETACHED suggestion relocates by unique text, never its stale stored range', () => {
+    editor = makeEditor(); // "world" at 7..12
+    // Detached record with a stale range: even in bound mode it must relocate by unique text.
+    const detached = logical([{ kind: 'delete', from: 100, to: 105, text: 'world' }], {
+      id: 'sg1',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [detached], 'bound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(result.relocatedSuggestions[0].detached).toBeUndefined(); // cleared on re-anchor
+    expect(getTrackedChanges(editor)[0].segments[0]).toMatchObject({ from: 7, to: 12 });
+  });
+
+  it('bound: a DETACHED suggestion on ambiguous text stays detached (quarantined)', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const detached = logical([{ kind: 'delete', from: 1, to: 3, text: 'ab' }], {
+      id: 'sg1',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [detached], 'bound');
+    expect(result.quarantinedSuggestions[0]).toMatchObject({ id: 'sg1', detached: true });
     expect(getTrackedChanges(editor)).toEqual([]);
   });
 });

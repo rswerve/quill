@@ -327,6 +327,15 @@ describe('sanitizeSuggestions', () => {
     expect('originCommentId' in numeric).toBe(false);
   });
 
+  it('carries only a literal detached:true on a suggestion (false/invalid omitted)', () => {
+    const [detached] = sanitizeSuggestions([{ ...validSuggestion, detached: true }]);
+    expect(detached.detached).toBe(true);
+    for (const bad of [false, 'true', 1, null]) {
+      const [s] = sanitizeSuggestions([{ ...validSuggestion, detached: bad }]);
+      expect('detached' in s).toBe(false);
+    }
+  });
+
   it('keeps format suggestions and canonicalizes segment and mark order', () => {
     expect(sanitizeSuggestions([validFormatSuggestion])).toEqual([
       {

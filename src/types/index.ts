@@ -111,6 +111,14 @@ interface SuggestionBase {
   author: string;
   createdAt: string;
   status: SuggestionStatus;
+  /**
+   * The suggestion analog of `Comment.detached`: set when restore could not re-anchor
+   * this record (its stored coordinates are stale/non-authoritative). A source-hashed
+   * ("bound") sidecar can then honestly cover it, because a detached suggestion always
+   * relocates by UNIQUE text — never its stored range — even in bound mode. Only ever
+   * literal `true`; a re-anchored record omits the key. See utils/reviewPersistence.
+   */
+  detached?: true;
   /** The comment whose Claude request produced this suggestion, if any. */
   originCommentId?: string;
   /** The document-chat assistant turn that produced this suggestion, if any. */

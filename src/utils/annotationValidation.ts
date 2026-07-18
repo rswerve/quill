@@ -193,6 +193,8 @@ function suggestionBase(raw: Record<string, unknown>) {
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
+    // Only literal true survives, kept independent of status (see Comment.detached).
+    ...(raw.detached === true ? { detached: true as const } : {}),
     ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
     ...(isNonEmptyString(raw.originChatMessageId)
       ? { originChatMessageId: raw.originChatMessageId }

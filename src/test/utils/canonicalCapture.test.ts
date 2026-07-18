@@ -148,6 +148,15 @@ describe('captureCanonicalReviewState: mappable remap (normalization OUTSIDE the
     const result = ok(captureCanonicalReviewState(live, canon, [detached], []));
     expect(result.comments[0]).toEqual(detached);
   });
+
+  it('passes a detached suggestion through untouched — even one that would fail to map', () => {
+    const live = liveDoc(para('a  b')); // its range covers a collapsing double space
+    const canon = canonicalOf(live);
+    const detached = suggestion([{ kind: 'delete', from: 1, to: 5, text: 'a  b' }]);
+    detached.detached = true;
+    const result = ok(captureCanonicalReviewState(live, canon, [], [detached]));
+    expect(result.suggestions[0]).toEqual(detached); // not remapped, not blocking
+  });
 });
 
 describe('captureCanonicalReviewState: fail-closed (normalization INSIDE the annotation)', () => {

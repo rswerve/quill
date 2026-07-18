@@ -24,9 +24,9 @@ export type CanonicalCaptureResult =
  * normalization-changing zone, e.g. a highlight or tracked edit over a collapsing double space —
  * capture fails and returns the offending records; the caller aborts the ENTIRE save before either
  * file is written, rather than delaying a preventable failure until reopen. A suggestion maps
- * all-or-nothing (its segment text is never altered). A `detached` comment already carries a
- * known-bad range and self-declares non-authoritative, so it passes through untouched and never
- * blocks the save.
+ * all-or-nothing (its segment text is never altered). A `detached` comment OR suggestion already
+ * carries a known-bad range and self-declares non-authoritative, so it passes through untouched
+ * and never blocks the save.
  */
 export function captureCanonicalReviewState(
   liveDoc: ProseMirrorNode,
@@ -48,6 +48,7 @@ export function captureCanonicalReviewState(
   });
 
   const mappedSuggestions = suggestions.map((suggestion) => {
+    if (suggestion.detached) return suggestion; // known-bad range; self-declares non-authoritative
     const mapped = suggestion.segments.map((segment) => ({
       segment,
       range: mapper.map(segment.from, segment.to),

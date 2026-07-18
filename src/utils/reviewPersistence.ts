@@ -442,68 +442,76 @@ function partitionByMarkConflict(
   };
 }
 
-/**
- * Bound mode: stored positions are authoritative, validated against the segment text
- * as a corruption defense. A suggestion quarantines if any segment's text no longer sits
- * at its saved position OR its saved position can't hold the tracking mark (e.g. a code
- * block) — otherwise the restore's `addMark` would be a silent no-op yet the record
- * would be treated as restored. Nothing is relocated in bound mode.
- */
-function restoreBoundSuggestions(
-  tr: Transaction,
-  schema: TiptapEditor['schema'],
-  doc: TiptapEditor['state']['doc'],
-  suggestions: LogicalSuggestion[],
-  size: number,
-): SuggestionRestoreOutcome {
-  const mismatches = suggestions
-    .filter((suggestion) => suggestion.status === 'pending')
-    .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
-  const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
-  const isQuarantined = (suggestion: LogicalSuggestion) =>
-    suggestion.status === 'pending' &&
-    // `||` short-circuits so a text-mismatched (possibly out-of-range) suggestion never
-    // reaches the eligibility walk, which resolves positions.
-    (mismatchedIds.has(suggestion.id) || !suggestionMarksAdmissible(doc, suggestion));
-  // Only pending records stamp a mark, so only they can collide.
-  const candidates = suggestions.filter(
-    (suggestion) => suggestion.status === 'pending' && !isQuarantined(suggestion),
-  );
-  const { survivors, conflicted } = partitionByMarkConflict(schema, candidates);
-  restoreSuggestionMarks(tr, schema, survivors, size);
-  return {
-    quarantined: [...suggestions.filter(isQuarantined), ...conflicted],
-    relocated: [],
-    mismatches,
-  };
+/** Mark a record non-authoritative (unless it already is). */
+function markSuggestionDetached(suggestion: Suggestion): Suggestion {
+  return suggestion.detached ? suggestion : { ...suggestion, detached: true };
+}
+
+/** Drop the detached flag on a record that just re-anchored. */
+function clearSuggestionDetached(suggestion: LogicalSuggestion): LogicalSuggestion {
+  if (!suggestion.detached) return suggestion;
+  const next = { ...suggestion };
+  delete next.detached;
+  return next;
 }
 
 /**
- * Unbound mode: stored positions are only hints. Each PENDING suggestion is relocated
- * by the conservative matcher; a relocated one is stamped at its corrected positions,
- * and anything ambiguous/absent/ineligible quarantines. Non-pending records get no live
- * mark either way, so they pass through untouched.
+ * Restore tracked-change marks. A pending suggestion is UNIQUE-relocated whenever the
+ * document is unbound OR the record is already `detached` — its stored range is known-bad,
+ * so it must never re-bind to a coincidental repeat, even in a bound sidecar. Otherwise a
+ * bound record validates at its stored range (segment text + mark eligibility). A record
+ * that re-anchors clears `detached` and adopts its corrected positions and is stamped; one
+ * that cannot re-anchor — or loses a mark-exclusion conflict during stamping — is
+ * quarantined AND marked `detached`, so a source-hashed sidecar can honestly cover it and
+ * later loads treat its coordinates as non-authoritative.
  */
-function restoreUnboundSuggestions(
+function restoreSuggestions(
   tr: Transaction,
   schema: TiptapEditor['schema'],
   doc: TiptapEditor['state']['doc'],
   suggestions: LogicalSuggestion[],
+  mode: ReviewRestoreMode,
   size: number,
 ): SuggestionRestoreOutcome {
+  const toStamp: LogicalSuggestion[] = [];
+  const relocatedIds = new Set<string>();
   const quarantined: Suggestion[] = [];
-  const relocatedCandidates: LogicalSuggestion[] = [];
+  const mismatches: ReviewRestoreMismatch[] = [];
+
   for (const suggestion of suggestions) {
     if (suggestion.status !== 'pending') continue;
-    const outcome = relocateSuggestion(doc, suggestion);
-    if (outcome.status === 'relocated') relocatedCandidates.push(outcome.suggestion);
-    else quarantined.push(suggestion);
+    const requiresUnique = mode === 'unbound' || suggestion.detached === true;
+    if (requiresUnique) {
+      const outcome = relocateSuggestion(doc, suggestion);
+      if (outcome.status === 'relocated') {
+        toStamp.push(clearSuggestionDetached(outcome.suggestion));
+        relocatedIds.add(suggestion.id);
+      } else {
+        quarantined.push(markSuggestionDetached(suggestion));
+      }
+      continue;
+    }
+    // Bound + not detached: trust the stored range, validated as a corruption defense.
+    const segMismatches = suggestionMismatches(doc, suggestion);
+    if (segMismatches.length > 0) {
+      mismatches.push(...segMismatches);
+      quarantined.push(markSuggestionDetached(suggestion));
+    } else if (!suggestionMarksAdmissible(doc, suggestion)) {
+      quarantined.push(markSuggestionDetached(suggestion));
+    } else {
+      toStamp.push(suggestion);
+    }
   }
-  // Two suggestions can each relocate onto the same unique span; if their marks exclude
-  // one another, stamping both would evict one. Quarantine the conflicting group.
-  const { survivors, conflicted } = partitionByMarkConflict(schema, relocatedCandidates);
+
+  // Independently-valid candidates can still collide once stamped (excluding mark types
+  // over an overlapping span, or a malformed internally-conflicting record).
+  const { survivors, conflicted } = partitionByMarkConflict(schema, toStamp);
   restoreSuggestionMarks(tr, schema, survivors, size);
-  return { quarantined: [...quarantined, ...conflicted], relocated: survivors, mismatches: [] };
+  return {
+    quarantined: [...quarantined, ...conflicted.map(markSuggestionDetached)],
+    relocated: survivors.filter((suggestion) => relocatedIds.has(suggestion.id)),
+    mismatches,
+  };
 }
 
 /**
@@ -528,10 +536,7 @@ export function restoreReviewMarks(
   const size = doc.content.size;
   const logicalSuggestions = normalizePersistedSuggestions(suggestions);
 
-  const suggestionOutcome =
-    mode === 'bound'
-      ? restoreBoundSuggestions(tr, schema, doc, logicalSuggestions, size)
-      : restoreUnboundSuggestions(tr, schema, doc, logicalSuggestions, size);
+  const suggestionOutcome = restoreSuggestions(tr, schema, doc, logicalSuggestions, mode, size);
   const commentOutcome = restoreComments(tr, commentType, doc, comments, mode);
 
   if (tr.steps.length) {
