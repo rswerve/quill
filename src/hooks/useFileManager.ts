@@ -25,6 +25,8 @@ import {
   type Expected,
 } from '../utils/atomicFile';
 import { stripTransientChatState } from '../utils/chatThread';
+import { REVIEW_ANCHOR_VERSION } from '../utils/reviewAnchorMap';
+import type { UnmappableAnchor } from '../utils/canonicalCapture';
 
 function emptySidecar(): SidecarFile {
   return { version: 2, comments: [], suggestions: [] };
@@ -63,6 +65,14 @@ function normalizeSidecar(raw: unknown): SidecarFile {
     aiSession: sanitizeAISession(parsed.aiSession),
     contextFolder: sanitizeContextFolder(parsed.contextFolder),
     chat: sanitizeDocumentChat(parsed.chat),
+    // Anchor provenance is preserved so the load can decide bound vs unbound. Absent or
+    // malformed values simply read as "no provenance" (→ unbound / conservative).
+    ...(typeof parsed.reviewSourceHash === 'string'
+      ? { reviewSourceHash: parsed.reviewSourceHash }
+      : {}),
+    ...(typeof parsed.reviewAnchorVersion === 'number'
+      ? { reviewAnchorVersion: parsed.reviewAnchorVersion }
+      : {}),
   };
 }
 
@@ -87,13 +97,20 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 `path` (when known) is the destination that failed, so a manual save's
  *                 notice can name the file. The caller presents it — useFileManager does
  *                 not, so an autosave failure stays quiet.
+ * - `review-blocked` — canonical capture refused: a review annotation covers text that
+ *                 changes shape when written (e.g. a collapsing double space), so NOTHING
+ *                 was written (distinct from `blocked`, where the `.md` was written). The
+ *                 document stays dirty; `unmappable` names the offending records so a
+ *                 manual notice can point the user at them. Synthesized by the caller
+ *                 BEFORE `saveFile` — `saveFile` itself never returns it.
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
   | { status: 'blocked'; reason: 'sidecar-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
-  | { status: 'failed'; message: string; path?: string };
+  | { status: 'failed'; message: string; path?: string }
+  | { status: 'review-blocked'; unmappable: UnmappableAnchor[] };
 
 /**
  * Result of persisting the sidecar: its new on-disk fingerprint on success, or the
@@ -348,6 +365,10 @@ export function useFileManager(
       contextFolder: string | null,
       chat: DocumentChatThread | null | undefined,
       expectedSidecar: Fingerprint | null,
+      // The `.md`'s content hash. The caller passes canonicalized positions, so stamping
+      // this proves the sidecar corresponds to those exact bytes — the load reads it back
+      // as "bound" and trusts the positions. See utils/canonicalCapture + reviewAnchorMap.
+      reviewSourceHash: string,
     ): Promise<SidecarSaveResult> => {
       const scPath = sidecarPath(path);
       // Gate the write/delete on the sidecar's last-known on-disk state: an external
@@ -375,6 +396,9 @@ export function useFileManager(
         if (result.status === 'conflict') return { ok: false, conflict: result.actual };
         return { ok: true, fingerprint: { state: 'absent' } };
       }
+      // Anchor provenance is meaningful only for REVIEW records. A chat/session-only
+      // sidecar needs no source hash and stays byte-compatible with older Quill.
+      const hasReviewRecords = cleanComments.length > 0 || suggestions.length > 0;
       const sidecar: SidecarFile = {
         version: 2,
         comments: cleanComments,
@@ -382,6 +406,9 @@ export function useFileManager(
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
         ...(cleanChat ? { chat: cleanChat } : {}),
+        ...(hasReviewRecords
+          ? { reviewSourceHash, reviewAnchorVersion: REVIEW_ANCHOR_VERSION }
+          : {}),
       };
       const result = await writeFileAtomic(scPath, JSON.stringify(sidecar, null, 2), expected);
       if (result.status === 'conflict') return { ok: false, conflict: result.actual };
@@ -463,6 +490,7 @@ export function useFileManager(
           contextFolder,
           chat,
           usingExpected ? expectedSidecarRef.current : null,
+          docResult.hash,
         );
         if (!sidecarResult.ok) {
           // The sidecar changed underneath us. For a current-path save the .md is

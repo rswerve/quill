@@ -10,6 +10,9 @@ export type SaveStatus =
   | { state: 'saving' }
   | { state: 'saved' }
   | { state: 'blocked' }
+  // Canonical capture refused: nothing was written. Latched like a block (not I/O
+  // backoff), cleared when the document/review state changes and a save can retry.
+  | { state: 'review-blocked' }
   | { state: 'conflict' }
   | { state: 'failed'; message: string };
 
@@ -86,6 +89,8 @@ function statusFor(outcome: SaveOutcome): SaveStatus {
       return { state: 'conflict' };
     case 'failed':
       return { state: 'failed', message: outcome.message };
+    case 'review-blocked':
+      return { state: 'review-blocked' };
     case 'cancelled':
       return { state: 'idle' };
   }

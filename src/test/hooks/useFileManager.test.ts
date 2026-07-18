@@ -315,6 +315,40 @@ describe('useFileManager', () => {
       expect(written.comments).toHaveLength(1);
     });
 
+    const writtenSidecar = () => {
+      const call = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === 'write_file_atomic' &&
+          typeof c[1] === 'object' &&
+          (c[1] as { path: string }).path.endsWith('.comments.json'),
+      );
+      return JSON.parse((call![1] as { content: string }).content);
+    };
+
+    it('stamps reviewSourceHash (the .md hash) + version when the sidecar holds review records', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.saveFile('content', [SAMPLE_COMMENT], [], null, null, '/docs/test.md');
+      });
+      const written = writtenSidecar();
+      expect(written.reviewSourceHash).toBe(HASH_DOC);
+      expect(written.reviewAnchorVersion).toBe(1);
+    });
+
+    it('does NOT stamp anchor provenance for a review-free sidecar (byte-compatible)', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        // Only a context folder — no comments/suggestions, so no anchor provenance.
+        await result.current.saveFile('content', [], [], null, '/ref/folder', '/docs/test.md');
+      });
+      const written = writtenSidecar();
+      expect(written.contextFolder).toBe('/ref/folder');
+      expect('reviewSourceHash' in written).toBe(false);
+      expect('reviewAnchorVersion' in written).toBe(false);
+    });
+
     it('strips transient AI replies from the written sidecar', async () => {
       installSaveRouter();
       const commentWithReplies: Comment = {

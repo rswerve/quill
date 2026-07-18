@@ -46,6 +46,10 @@ import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateCommentForRepair } from '../utils/commentAnchors';
 import {
+  captureCanonicalReviewState,
+  type CanonicalCaptureResult,
+} from '../utils/canonicalCapture';
+import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
   captureCommentsResolvedByAccept,
@@ -462,6 +466,19 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       suggestions: mergeQuarantinedSuggestions(liveSuggestions, quarantinedSuggestionsRef.current),
     };
   }, [comments, suggestions]);
+
+  // Every WRITE path (save, Save As, overwrite, workspace snapshot) canonicalizes review
+  // coordinates to the document a reopen produces, so a source-hashed sidecar's positions
+  // are honest. Fails closed (ok:false) when an annotation covers text that changes shape
+  // on write; the caller then aborts the ENTIRE save. The editor is always present during
+  // a save — if somehow absent, fail closed rather than persist non-canonical positions.
+  const getCanonicalReviewState = useCallback((): CanonicalCaptureResult => {
+    const ed = editorRef.current?.getEditor();
+    const canonDoc = editorRef.current?.parseMarkdown(getDocMarkdown());
+    const live = getLiveReviewState();
+    if (!ed || !canonDoc) return { ok: false, unmappable: [] };
+    return captureCanonicalReviewState(ed.state.doc, canonDoc, live.comments, live.suggestions);
+  }, [getDocMarkdown, getLiveReviewState]);
 
   // The shell owns persistence and asks each mounted tab for a live snapshot.
   // Keep transient AI reply state out of this second on-disk write path just as
@@ -932,9 +949,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Name the destination that failed when we know it (actionable), else just why.
         const detail = outcome.path ? `${outcome.path}\n\n${outcome.message}` : outcome.message;
         showError('Could not save file', detail);
+      } else if (outcome.status === 'review-blocked') {
+        // Focus the first offending annotation so the user can find and fix it.
+        const [first] = outcome.unmappable;
+        if (first) setActiveAnnotation({ kind: first.kind, id: first.id });
+        const comments = outcome.unmappable.filter((u) => u.kind === 'comment').length;
+        const suggestions = outcome.unmappable.length - comments;
+        const parts: string[] = [];
+        if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
+        if (suggestions) parts.push(`${suggestions} suggestion${suggestions === 1 ? '' : 's'}`);
+        showError(
+          "Save blocked — an annotation can't be anchored",
+          `${parts.join(' and ')} cover text that changes shape when the file is written ` +
+            '(for example, extra spaces that collapse on save), so Quill can’t save without ' +
+            'risking a mismatched anchor. The first is highlighted — adjust or remove it, then save again.',
+        );
       }
     },
-    [showError],
+    [showError, setActiveAnnotation],
   );
 
   // The coordinator's default-save job: capture the live payload NOW (at
@@ -942,11 +974,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // notices live here so they run exactly once per write, even when several
   // coalesced requests share it.
   const performSave = useCallback(async (): Promise<SaveOutcome> => {
-    const live = getLiveReviewState();
+    // Canonicalize BEFORE any write. On failure nothing is written and the doc stays
+    // dirty — a review annotation covers text that changes shape when saved.
+    const capture = getCanonicalReviewState();
+    if (!capture.ok) {
+      const outcome: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+      notifySaveOutcome(outcome);
+      return outcome;
+    }
     const outcome = await saveFile(
       getMarkdown(),
-      live.comments,
-      live.suggestions,
+      capture.comments,
+      capture.suggestions,
       aiSession,
       contextFolder,
       undefined,
@@ -959,7 +998,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     }
     notifySaveOutcome(outcome);
     return outcome;
-  }, [saveFile, getLiveReviewState, aiSession, contextFolder, documentChat, notifySaveOutcome]);
+  }, [
+    saveFile,
+    getCanonicalReviewState,
+    aiSession,
+    contextFolder,
+    documentChat,
+    notifySaveOutcome,
+  ]);
 
   const {
     requestSave,
@@ -1045,6 +1091,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     if (autosaveStatus.state === 'failed') setAutosaveAttention('failed');
     else if (autosaveStatus.state === 'stopped' && autosaveStatus.reason === 'blocked') {
       setAutosaveAttention('blocked');
+    } else if (autosaveStatus.state === 'review-blocked') {
+      setAutosaveAttention('blocked'); // a stuck save the user must resolve (like a block)
     } else if (autosaveStatus.state === 'saved') setAutosaveAttention(null);
   }, [autosaveStatus]);
   useEffect(() => {
@@ -1070,11 +1118,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // through the coordinator's exclusive lane — waiting for any in-flight save and
   // blocking new saves until it finishes — so writes never overlap the path change.
   const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
-    const live = getLiveReviewState();
+    // Canonicalize before prompting for a path — don't open the dialog for a save that
+    // would fail, and never write non-canonical positions under a source hash.
+    const capture = getCanonicalReviewState();
+    if (!capture.ok) {
+      const blocked: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+      notifySaveOutcome(blocked);
+      return blocked;
+    }
     const outcome = await saveFileAs(
       getMarkdown(),
-      live.comments,
-      live.suggestions,
+      capture.comments,
+      capture.suggestions,
       aiSession,
       contextFolder,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
@@ -1094,7 +1149,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return outcome;
   }, [
     saveFileAs,
-    getLiveReviewState,
+    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1223,11 +1278,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Overwrite = an explicit same-path Save As: an unconditional write that also
       // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
       const outcome = await runExclusive(async () => {
-        const live = getLiveReviewState();
+        const capture = getCanonicalReviewState();
+        if (!capture.ok) {
+          return { status: 'review-blocked', unmappable: capture.unmappable } as SaveOutcome;
+        }
         return saveFile(
           getMarkdown(),
-          live.comments,
-          live.suggestions,
+          capture.comments,
+          capture.suggestions,
           aiSession,
           contextFolder,
           filePath,
@@ -1241,7 +1299,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
         setLastSavedAt(Date.now());
       } else {
-        presentManualSaveFailure(outcome); // e.g. a protected sidecar still blocks
+        presentManualSaveFailure(outcome); // e.g. a protected sidecar or unanchored annotation
       }
     } finally {
       setResolvingConflict(false);
@@ -1251,7 +1309,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     resolvingConflict,
     runExclusive,
     saveFile,
-    getLiveReviewState,
+    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
