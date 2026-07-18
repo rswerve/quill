@@ -11,11 +11,21 @@ export interface TabStripItem {
   autosaveAttention?: 'failed' | 'blocked' | 'review-blocked' | null;
 }
 
-/** Tooltip/label for a tab's latched autosave attention. */
+/** Verbose tooltip (`title`) for a tab's latched autosave attention. */
 export function autosaveAttentionLabel(attention: 'failed' | 'blocked' | 'review-blocked'): string {
   if (attention === 'review-blocked') return 'Save blocked — fix annotation';
   if (attention === 'blocked') return 'Autosave paused — needs attention';
   return 'Autosave failed — retrying';
+}
+
+/** Short, stable accessible name for the marker — the `title` carries the fuller,
+ *  changeable wording, so the `aria-label` stays a concise, test-stable identity. */
+export function autosaveAttentionAriaLabel(
+  attention: 'failed' | 'blocked' | 'review-blocked',
+): string {
+  if (attention === 'review-blocked') return 'Save blocked';
+  if (attention === 'blocked') return 'Autosave paused';
+  return 'Autosave failed';
 }
 
 interface TabStripProps {
@@ -122,7 +132,7 @@ export default function TabStrip({ tabs, activeTabId, onActivate, onClose, onNew
               <span
                 className="document-tab-conflict"
                 title={autosaveAttentionLabel(tab.autosaveAttention)}
-                aria-label={autosaveAttentionLabel(tab.autosaveAttention)}
+                aria-label={autosaveAttentionAriaLabel(tab.autosaveAttention)}
               >
                 ⚠
               </span>
