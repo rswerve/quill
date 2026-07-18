@@ -689,4 +689,47 @@ describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
     expect(afterUpdate[0]).toMatchObject({ id: 'cm1', detached: true });
     expect(hasCommentMark(editor, 'cm1')).toBe(false); // still no mark, not reattached
   });
+
+  it('unbound: a RESOLVED comment on repeated text is detached but stays resolved (no mark)', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const resolved = comment({ resolved: true, anchorText: 'ab', from: 1, to: 3 });
+    const result = restoreReviewMarks(editor, [resolved], [], 'unbound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('unbound: a RESOLVED comment with drifted coords is corrected but not stamped', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const resolved = comment({ resolved: true, from: 100, to: 105 }); // stale coords, unique "world"
+    const result = restoreReviewMarks(editor, [resolved], [], 'unbound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, from: 7, to: 12 });
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(hasCommentMark(editor, 'cm1')).toBe(false); // resolved => no live mark
+  });
+
+  it('bound: a persisted detached comment never re-binds via its stale range (stays detached)', () => {
+    // "ab" repeats; the stale range [1,3] contains "ab", but a detached record must go
+    // through unique-only relocation even in bound mode — so it stays detached.
+    editor = makeEditor('<p>ab ab</p>');
+    const persistedDetached = comment({ anchorText: 'ab', from: 1, to: 3, detached: true });
+    const result = restoreReviewMarks(editor, [persistedDetached], [], 'bound');
+    expect(result.comments[0].detached).toBe(true);
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('bound: an in-range code-block comment is detached, never silently no-op "restored"', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>'); // "codeword" at 1..9
+    const inCode = comment({ anchorText: 'codeword', from: 1, to: 9 });
+    const result = restoreReviewMarks(editor, [inCode], [], 'bound');
+    expect(result.comments[0].detached).toBe(true);
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('bound: an in-range code-block suggestion is quarantined, never "restored"', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>');
+    const inCode = logical([{ kind: 'delete', from: 1, to: 9, text: 'codeword' }]);
+    const result = restoreReviewMarks(editor, [], [inCode], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
 });

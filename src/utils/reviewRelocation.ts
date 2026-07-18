@@ -116,7 +116,12 @@ const SEGMENT_MARK: Record<string, string> = {
  * type the schema lacks. (A suggestion span is intra-block, but nodesBetween covers the
  * general case.)
  */
-function spanAdmitsMark(doc: ProseMirrorNode, from: number, to: number, markName: string): boolean {
+export function spanAdmitsMark(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+  markName: string,
+): boolean {
   const markType = doc.type.schema.marks[markName];
   if (!markType) return false;
   let ok = true;
@@ -125,6 +130,21 @@ function spanAdmitsMark(doc: ProseMirrorNode, from: number, to: number, markName
     return ok;
   });
   return ok;
+}
+
+/**
+ * Whether every segment of a suggestion sits where its tracking mark can live — the
+ * eligibility preflight the unbound matcher already runs, exposed so the BOUND restore
+ * can apply it too (otherwise a stored position in a code block would `addMark` into a
+ * silent no-op yet be classified as restored).
+ */
+export function suggestionMarksAdmissible(
+  doc: ProseMirrorNode,
+  suggestion: LogicalSuggestion,
+): boolean {
+  return suggestion.segments.every((segment) =>
+    spanAdmitsMark(doc, segment.from, segment.to, SEGMENT_MARK[segment.kind]),
+  );
 }
 
 export function relocateSuggestion(

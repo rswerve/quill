@@ -11,7 +11,12 @@ import type {
   TrackedChangeInfo,
   TrackedChangeSegment,
 } from '../types';
-import { relocateComment, relocateSuggestion } from './reviewRelocation';
+import {
+  relocateComment,
+  relocateSuggestion,
+  spanAdmitsMark,
+  suggestionMarksAdmissible,
+} from './reviewRelocation';
 import { rangeText } from './trackedEdits';
 
 export interface ReviewRestoreMismatch {
@@ -185,11 +190,14 @@ function locateBoundComment(
 }
 
 /**
- * Restore comment marks and classify each comment. Resolved comments pass through
- * (mark-less by design). Otherwise the mode's locator finds the live range — bound:
- * validate at the stored range; unbound: relocate to a globally-unique occurrence. A
- * located comment is stamped and adopts the range (clearing any `detached`); an
- * unlocatable one is preserved `detached` with no mark.
+ * Restore comment marks and classify each comment. Resolution controls only whether a
+ * MARK is stamped — never whether the anchor is validated, so a resolved comment's
+ * coordinates are still checked/corrected (a later unresolve must not trust a stale
+ * range). The locator is unique-only whenever the record is already `detached` OR the
+ * document is unbound: a persisted detached comment must never re-bind through its stale
+ * range on a bound reload. Otherwise a bound comment validates at its stored range. A
+ * located range that will be stamped must also ADMIT the comment mark; an unlocatable or
+ * ineligible one is preserved `detached` (keeping any `resolved`), with no mark.
  */
 function restoreComments(
   tr: Transaction,
@@ -202,19 +210,21 @@ function restoreComments(
   const relocated: Comment[] = [];
   const detached: Comment[] = [];
   for (const comment of comments) {
-    if (comment.resolved) {
-      result.push(comment);
-      continue;
+    const requiresUnique = mode === 'unbound' || comment.detached === true;
+    const willStamp = !comment.resolved;
+    let located = requiresUnique ? relocateComment(doc, comment) : locateBoundComment(doc, comment);
+    // A comment we intend to stamp must land where the mark can live. (The unbound
+    // `relocateComment` already enforces this; the bound stored-range path does not.)
+    if (located && willStamp && !spanAdmitsMark(doc, located.from, located.to, 'comment')) {
+      located = null;
     }
-    const located =
-      mode === 'bound' ? locateBoundComment(doc, comment) : relocateComment(doc, comment);
     if (!located) {
       const record = comment.detached ? comment : { ...comment, detached: true as const };
       result.push(record);
       if (!comment.detached) detached.push(record);
       continue;
     }
-    if (commentType) {
+    if (willStamp && commentType) {
       tr.addMark(
         located.from,
         located.to,
@@ -226,7 +236,7 @@ function restoreComments(
     result.push(record);
     const moved =
       located.from !== comment.from || located.to !== comment.to || comment.detached === true;
-    if (mode === 'unbound' && moved) relocated.push(record);
+    if (requiresUnique && moved) relocated.push(record);
   }
   return { comments: result, relocated, detached };
 }
@@ -365,8 +375,10 @@ interface SuggestionRestoreOutcome {
 
 /**
  * Bound mode: stored positions are authoritative, validated against the segment text
- * as a corruption defense. Any segment whose text no longer sits at its saved position
- * quarantines its whole suggestion (nothing is relocated).
+ * as a corruption defense. A suggestion quarantines if any segment's text no longer sits
+ * at its saved position OR its saved position can't hold the tracking mark (e.g. a code
+ * block) — otherwise the restore's `addMark` would be a silent no-op yet the record
+ * would be treated as restored. Nothing is relocated in bound mode.
  */
 function restoreBoundSuggestions(
   tr: Transaction,
@@ -379,8 +391,11 @@ function restoreBoundSuggestions(
     .filter((suggestion) => suggestion.status === 'pending')
     .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
   const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
-  const isQuarantined = (suggestion: Suggestion) =>
-    suggestion.status === 'pending' && mismatchedIds.has(suggestion.id);
+  const isQuarantined = (suggestion: LogicalSuggestion) =>
+    suggestion.status === 'pending' &&
+    // `||` short-circuits so a text-mismatched (possibly out-of-range) suggestion never
+    // reaches the eligibility walk, which resolves positions.
+    (mismatchedIds.has(suggestion.id) || !suggestionMarksAdmissible(doc, suggestion));
   const restorable = suggestions.filter((suggestion) => !isQuarantined(suggestion));
   restoreSuggestionMarks(tr, schema, restorable, size);
   return { quarantined: suggestions.filter(isQuarantined), relocated: [], mismatches };
