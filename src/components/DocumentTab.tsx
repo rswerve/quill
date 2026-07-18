@@ -13,6 +13,7 @@ import {
   stripTransientReplyState,
   type SaveOutcome,
   type OpenResult,
+  type ReviewUnboundReason,
 } from '../hooks/useFileManager';
 import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
 import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
@@ -43,6 +44,7 @@ import {
   restoreReviewMarks,
   suggestionsFromTrackedChanges,
   type ReviewRestoreMode,
+  type ReviewRestoreResult,
 } from '../utils/reviewPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
@@ -149,6 +151,33 @@ export const newestObservedEffort = (comments: Comment[], thread: DocumentChatTh
     (record) => (isEffort(record.effort) ? record.effort : null),
     (record) => record.effortObservedAt ?? record.createdAt,
   );
+
+/** The lead sentence, tailored to WHY the load was unbound (Maz's wording). */
+function unboundLead(context: ReviewUnboundReason | 'recovery'): string {
+  if (context === 'source-mismatch') return 'This file was changed outside Quill.';
+  if (context === 'recovery') return 'Quill recovered unsaved work from a previous session.';
+  return 'This file was saved in an older version of Quill.'; // legacy / version-mismatch
+}
+
+/**
+ * The notice for a load that had to relocate anchors by text (an unbound file or crash
+ * recovery). Silent when nothing was set aside — don't nag when there's nothing to act on.
+ * The lead sentence is tailored to the reason; the body and its "open the review panel"
+ * call-to-action are shared across reasons.
+ */
+export function unboundRecoveryNotice(
+  context: ReviewUnboundReason | 'recovery',
+  setAsideCount: number,
+): { title: string; message: string } | null {
+  if (setAsideCount <= 0) return null;
+  const n = setAsideCount;
+  return {
+    title: 'Some annotations need review',
+    message:
+      `${unboundLead(context)} We re-anchored your comments and suggestions to the new text; ${n} ` +
+      `couldn’t be placed and ${n === 1 ? 'is' : 'are'} set aside — open the review panel to see them.`,
+  };
+}
 
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
@@ -732,17 +761,23 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setComments(result.comments);
       quarantinedSuggestionsRef.current = result.quarantinedSuggestions;
       setTrackedChanges(getTrackedChanges(ed));
-      if (result.quarantinedSuggestions.length > 0) {
-        const count = result.quarantinedSuggestions.length;
-        onNotice({
-          title: 'Saved suggestions need review',
-          message:
-            `${count} saved suggestion${count === 1 ? '' : 's'} no longer matched the document text and ` +
-            `was not restored. The saved record remains preserved, but it cannot affect the document until its anchor is repaired.`,
-        });
-      }
+      // The caller decides the notice: the wording depends on WHY the load was unbound
+      // (a file's provenance vs. crash recovery), which only the caller knows.
+      return result;
     },
-    [onNotice, setComments],
+    [setComments],
+  );
+
+  // Announce a text-relocated (unbound) load, once, tailored to the reason — but only when
+  // something couldn't be placed. `null` context = a bound load, nothing to say.
+  const announceUnboundLoad = useCallback(
+    (context: ReviewUnboundReason | 'recovery' | null, restored: ReviewRestoreResult) => {
+      if (!context) return;
+      const setAside = restored.detachedComments.length + restored.quarantinedSuggestions.length;
+      const notice = unboundRecoveryNotice(context, setAside);
+      if (notice) onNotice(notice);
+    },
+    [onNotice],
   );
 
   // A mounted background tab keeps its editor state, but layout APIs return
@@ -789,7 +824,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Apply the load's detected authority: a legacy/externally-edited file (unbound)
         // relocates its anchors instead of trusting stale coordinates. No fallback — a
         // missing mode is a compile error, never a silent trust-granting default.
-        restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions, result.reviewMode);
+        const restored = restorePersistedReviewMarks(
+          ed,
+          loadedComments,
+          loadedSuggestions,
+          result.reviewMode,
+        );
+        // An unbound load relocates by text; tell the user, tailored to WHY it was unbound,
+        // and only when something couldn't be placed. `reviewUnboundReason` is present iff
+        // the load was unbound, so it doubles as the bound/unbound gate (null ⇒ silent).
+        announceUnboundLoad(result.reviewUnboundReason ?? null, restored);
       }
       const access = authorizeSidecarAccess(
         window.localStorage,
@@ -884,6 +928,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       chooseContextFolder,
       onOpenSessionPicker,
       restorePersistedReviewMarks,
+      announceUnboundLoad,
       tabId,
       bumpSchedulerGen,
     ],
@@ -1392,7 +1437,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // A recovered draft carries no anchor provenance (its coordinates were captured
         // against its own embedded content but are not source-hash bound), so it restores
         // UNBOUND — relocate conservatively rather than trust the snapshot's positions.
-        restorePersistedReviewMarks(ed, draftComments, draftSuggestions, 'unbound');
+        const restored = restorePersistedReviewMarks(
+          ed,
+          draftComments,
+          draftSuggestions,
+          'unbound',
+        );
+        announceUnboundLoad('recovery', restored);
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);
@@ -1410,6 +1461,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       documentChat,
       restoreDraft,
       restorePersistedReviewMarks,
+      announceUnboundLoad,
       setComments,
       setSuggestions,
     ],

@@ -522,7 +522,10 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     expect(unique.detached).toBeUndefined();
     const ambig = snap.suggestions.find((s) => s.id === 's-ambig')!;
     expect(ambig.detached).toBe(true);
-    // The quarantine surfaced its "needs review" notice.
-    expect(m.notices.some((n) => n.title === 'Saved suggestions need review')).toBe(true);
+    // The quarantine surfaced its per-reason notice — source-mismatch ⇒ "changed outside Quill".
+    const notice = m.notices.find((n) => n.title === 'Some annotations need review');
+    expect(notice).toBeTruthy();
+    expect(notice!.message).toContain('changed outside Quill');
+    expect(notice!.message).toContain('open the review panel');
   });
 });
