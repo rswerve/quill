@@ -7,6 +7,7 @@ import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
 import { parseMarkdownToDoc } from '../utils/markdownDoc';
+import { restoreDocJSONInto, type DocJSONRestoreResult } from '../utils/docJSONRestore';
 import { MarkdownImage } from '../extensions/MarkdownImage';
 import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
@@ -22,6 +23,9 @@ import {
   TrackChanges,
 } from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
+import type { Comment, JSONContent, Suggestion } from '../types';
+
+export type { DocJSONRestoreResult };
 
 export const toolbarSelectionStore = {
   value: null as { from: number; to: number; editor: TiptapEditor } | null,
@@ -40,6 +44,20 @@ export interface EditorRef {
    * document into the document a reload will actually produce. Null before ready.
    */
   parseMarkdown: (md: string) => ProseMirrorNode | null;
+  /**
+   * Lossless crash-recovery restore: replace the whole document with a persisted
+   * ProseMirror JSON (all review marks embedded) so positions are byte-exact and NOTHING
+   * relocates. Fails closed — the JSON is validated (structure + doc↔records bijection)
+   * BEFORE any mutation, and the caller must not install records unless this returns ok.
+   * The single replacement transaction bypasses TrackChanges (skipTracking) and the
+   * dirty/undo machinery, resets the selection and stored marks, and clears transient
+   * plugin decorations, so a restore never re-tracks itself or inherits stale UI state.
+   */
+  restoreDocJSON: (
+    json: JSONContent,
+    comments: Comment[],
+    suggestions: Suggestion[],
+  ) => DocJSONRestoreResult;
 }
 
 interface EditorProps {
@@ -273,6 +291,12 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         parseMarkdown(md: string): ProseMirrorNode | null {
           return editor ? parseMarkdownToDoc(editor, md) : null;
+        },
+        restoreDocJSON(json, comments, suggestions): DocJSONRestoreResult {
+          if (!editor) return { ok: false, reason: 'editor not ready' };
+          const result = restoreDocJSONInto(editor, json, comments, suggestions);
+          if (result.ok) setIsEmpty(editor.isEmpty);
+          return result;
         },
       }),
       [editor],
