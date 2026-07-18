@@ -151,6 +151,21 @@ describe('relocateSuggestion (unbound mode)', () => {
     expect(result).toEqual({ status: 'quarantined', reason: 'leaf-span' });
   });
 
+  it('refuses a format suggestion — text alone cannot verify its formatting delta', () => {
+    const doc = docFrom(para('hello world'));
+    const real = posOf(doc, 'world');
+    const formatSegment: TrackedChangeSegment = {
+      kind: 'format',
+      from: real,
+      to: real + 5,
+      text: 'world',
+      adds: ['bold'],
+      removes: [],
+    };
+    const result = relocateSuggestion(doc, suggestion([formatSegment]));
+    expect(result).toEqual({ status: 'quarantined', reason: 'format-unsupported' });
+  });
+
   it('quarantines a legacy flattened span that is ambiguous between a break and plain text', () => {
     // One paragraph has a real hard break ("one two" via break), another has plain
     // "one two". Both match under the legacy projection => two candidates => ambiguous.
@@ -189,5 +204,24 @@ describe('relocateComment (unbound mode)', () => {
   it('returns null when the anchor text is gone', () => {
     const doc = docFrom(para('nothing to see'));
     expect(relocateComment(doc, { anchorText: 'absent' })).toBeNull();
+  });
+
+  it('does not relocate onto a span that touches a hard break (leaf-provenance gate)', () => {
+    const doc = docFrom({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'one' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'two' },
+          ],
+        },
+      ],
+    });
+    // Legacy projection reads "one two" (break as space) uniquely, but the span
+    // crosses a hard break, so the highlight must not bind.
+    expect(relocateComment(doc, { anchorText: 'one two' })).toBeNull();
   });
 });

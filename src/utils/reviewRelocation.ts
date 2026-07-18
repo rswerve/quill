@@ -30,6 +30,7 @@ export type SuggestionRelocation =
       reason:
         | 'non-contiguous'
         | 'leaf-segment'
+        | 'format-unsupported'
         | 'not-found'
         | 'ambiguous'
         | 'leaf-span'
@@ -48,13 +49,20 @@ function sortedSegments(suggestion: LogicalSuggestion): TrackedChangeSegment[] {
  */
 function reconstructSpan(
   suggestion: LogicalSuggestion,
-): { text: string; from: number } | { reason: 'non-contiguous' | 'leaf-segment' } {
+):
+  | { text: string; from: number }
+  | { reason: 'non-contiguous' | 'leaf-segment' | 'format-unsupported' } {
   const segments = sortedSegments(suggestion);
   if (segments.length === 0) return { reason: 'non-contiguous' };
   for (let i = 0; i < segments.length; i += 1) {
     const segment = segments[i];
+    // A format suggestion's meaning is its net mark delta relative to the target's
+    // CURRENT marks, which text alone can't verify — relocating it by text could bind
+    // onto differently-formatted text, so Reject would invert the delta and MUTATE
+    // externally-changed formatting. Refuse (quarantine) until mark-context validation.
+    if (segment.kind === 'format') return { reason: 'format-unsupported' };
     // An explicitly identified leaf (hard break) cannot be relocated by text in v1.
-    if (segment.kind !== 'format' && segment.nodeType) return { reason: 'leaf-segment' };
+    if (segment.nodeType) return { reason: 'leaf-segment' };
     if (i > 0 && segments[i - 1].to !== segment.from) return { reason: 'non-contiguous' };
   }
   return { text: segments.map((segment) => segment.text).join(''), from: segments[0].from };
@@ -135,6 +143,12 @@ export function relocateComment(
   const matches = allIndexesOf(projection.text, comment.anchorText);
   if (matches.length !== 1) return null;
   const start = matches[0];
+  // Same leaf-provenance gate as suggestions: a unique legacy-projection match on a
+  // span touching a hard break (or other non-text leaf) must not bind — the highlight
+  // would land across a break the stored anchor text can't have described.
+  for (let k = 0; k < comment.anchorText.length; k += 1) {
+    if (projection.sources[start + k] !== 'text') return null;
+  }
   const from = projection.positions[start];
   const to = projection.positions[start + comment.anchorText.length];
   if (from === undefined || to === undefined) return null;
