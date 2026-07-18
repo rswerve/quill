@@ -95,9 +95,14 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 Carries the document hash and the sidecar's fingerprint (present with
  *                 its hash, or absent when an empty sidecar was removed) so callers can
  *                 track expected on-disk state for external-conflict detection.
- * - `blocked`   — the document was written but the sidecar was deliberately NOT, because
- *                 the on-disk sidecar is unreadable and we won't clobber recoverable
- *                 data. The document stays dirty; this is not a completed save.
+ * - `blocked`   — a deliberate, non-error refusal to complete the save. `sidecar-protected`:
+ *                 the `.md` was written but the sidecar was NOT, because the on-disk sidecar
+ *                 is unreadable and we won't clobber recoverable comments. `structural-protected`:
+ *                 NEITHER file was written — the sidecar's structural block is malformed and holds
+ *                 the only copy of a proposal whose anchors depend on the current `.md` source, so
+ *                 overwriting the `.md` would make it unrepairable. `baseline-unknown`: neither was
+ *                 written because the on-disk baseline can't be verified. The document stays dirty;
+ *                 none of these is a completed save.
  * - `conflict`  — a fingerprint-gated write found the file changed underneath us and
  *                 wrote nothing. (Not produced by unconditional saves; reserved for
  *                 conflict-aware callers.)
@@ -110,7 +115,7 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
-  | { status: 'blocked'; reason: 'sidecar-protected' | 'baseline-unknown' }
+  | { status: 'blocked'; reason: 'sidecar-protected' | 'structural-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
   | { status: 'failed'; message: string; path?: string };
@@ -239,14 +244,20 @@ export function useFileManager(
   // saves read it synchronously (they can run before React commits) and nothing
   // renders from it directly.
   const sidecarProtectedRef = useRef(false);
+  // Stronger than sidecarProtected: the sidecar parsed, but its STRUCTURAL block is
+  // malformed and may hold the only copy of a proposal whose anchors depend on the
+  // current `.md` source. Unlike a corrupt comments sidecar (which still lets the
+  // text save), this blocks BOTH files so the source stays intact for repair.
+  const structuralProtectedRef = useRef(false);
 
   const markDirty = useCallback(() => {
     changeRevisionRef.current += 1;
     setIsDirty(true);
   }, [setIsDirty]);
 
-  const setProtected = useCallback((value: boolean) => {
+  const setProtected = useCallback((value: boolean, structural = false) => {
     sidecarProtectedRef.current = value;
+    structuralProtectedRef.current = value && structural;
   }, []);
 
   // Snapshot the current on-disk baselines + protection for the workspace recovery
@@ -283,6 +294,7 @@ export function useFileManager(
         // drop or silently overwrite). On a load error we block the next save from
         // clobbering the file so the user can recover it.
         let sidecarError: string | null = null;
+        let structuralMalformed = false;
         let sidecarFingerprint: Fingerprint | null = { state: 'absent' };
         try {
           const scRead = await readFileWithFingerprint(sidecarPath(path));
@@ -293,8 +305,9 @@ export function useFileManager(
               sidecar = normalizeSidecar(raw);
               // A present-but-malformed structural envelope may hold the only copy of
               // the proposed content. normalizeSidecar drops the shape-invalid field;
-              // protect the file (like a corrupt sidecar) so the next save can't
-              // overwrite it, rather than silently discarding those proposals.
+              // protect the file (STRUCTURALLY — block BOTH files, since the source
+              // the proposal is anchored to must stay intact) rather than silently
+              // discarding those proposals.
               if (
                 typeof raw === 'object' &&
                 raw !== null &&
@@ -302,6 +315,7 @@ export function useFileManager(
                 parseStructuralEnvelope((raw as Record<string, unknown>).structural) === null
               ) {
                 sidecarError = `structural suggestions block is malformed`;
+                structuralMalformed = true;
                 console.error(`Sidecar at ${sidecarPath(path)} has a malformed structural block`);
               }
             } catch (e) {
@@ -322,7 +336,7 @@ export function useFileManager(
           sidecarFingerprint = null;
           console.error(`Sidecar at ${sidecarPath(path)} could not be read:`, e);
         }
-        setProtected(sidecarError !== null);
+        setProtected(sidecarError !== null, structuralMalformed);
 
         let autoBound = false;
         if (!sidecar.aiSession) {
@@ -438,6 +452,34 @@ export function useFileManager(
     [],
   );
 
+  // The pre-write fail-closed guards, evaluated before any byte is written:
+  //  - baseline-unknown: a conditional save to an existing path whose baseline is
+  //    UNKNOWN (a recovered draft with no persisted fingerprint) — we can't tell if
+  //    the file changed on disk while away, and an unconditional write would clobber
+  //    it. Only Untitled (no path) and an explicit Save As are legitimately
+  //    unconditional.
+  //  - structural-protected: a malformed structural sidecar block that may hold the
+  //    only copy of a proposal. Unlike a corrupt comments sidecar (which still saves
+  //    the text), block BOTH files so the source the proposal is anchored to stays
+  //    intact for repair. A Save As to a DIFFERENT path writes a fresh file and
+  //    leaves the protected original untouched, so it escapes (isCurrentTarget).
+  const earlyWriteBlock = useCallback(
+    (
+      usingExpected: boolean,
+      currentPath: string | null,
+      isCurrentTarget: boolean,
+    ): SaveOutcome | null => {
+      if (usingExpected && currentPath !== null && expectedDocRef.current === null) {
+        return { status: 'blocked', reason: 'baseline-unknown' };
+      }
+      if (structuralProtectedRef.current && isCurrentTarget) {
+        return { status: 'blocked', reason: 'structural-protected' };
+      }
+      return null;
+    },
+    [],
+  );
+
   const saveFile = useCallback(
     async (
       content: string,
@@ -469,14 +511,10 @@ export function useFileManager(
       const isExplicitSaveAs = forcePath !== undefined;
       const isCurrentTarget = targetPath === currentPath;
       const usingExpected = !isExplicitSaveAs;
-      // Fail CLOSED: a conditional save to an existing path whose baseline is UNKNOWN
-      // (a recovered draft with no persisted fingerprint) must NOT write — we can't
-      // tell whether the file changed on disk while we were away, and an unconditional
-      // write would silently overwrite it. Only Untitled (no path) and explicit Save As
-      // are legitimately unconditional. Block before touching disk.
-      if (usingExpected && currentPath !== null && expectedDocRef.current === null) {
-        return { status: 'blocked', reason: 'baseline-unknown' };
-      }
+      // Fail CLOSED before touching disk on either pre-write guard (baseline-unknown
+      // or a malformed structural block); see earlyWriteBlock.
+      const blocked = earlyWriteBlock(usingExpected, currentPath, isCurrentTarget);
+      if (blocked) return blocked;
       // Protect a corrupt/ambiguous sidecar from being clobbered on a same-path save.
       const skipSidecar = sidecarProtectedRef.current && isCurrentTarget;
       const sameDocument = () => documentEpochRef.current === saveEpoch;
@@ -569,7 +607,7 @@ export function useFileManager(
         return { status: 'failed', message, path: targetPath };
       }
     },
-    [saveSidecar, updateFilePath, setProtected, setIsDirty],
+    [saveSidecar, earlyWriteBlock, updateFilePath, setProtected, setIsDirty],
   );
 
   const saveFileAs = useCallback(

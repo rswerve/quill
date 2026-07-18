@@ -488,6 +488,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // Keep transient AI reply state out of this second on-disk write path just as
   // the regular sidecar serializer does.
   const getWorkspaceSnapshot = useCallback((): DraftSnapshot | null => {
+    // Symmetric with captureDiskPayload's fail-closed: while there are unreconciled
+    // quarantined structural records (the on-disk sidecar holds the only copy), do
+    // NOT produce a snapshot that would launder that state away. Retain the last
+    // good snapshot so recovery re-reads the sidecar — which still holds the
+    // records — instead of restoring a quarantine-free doc and then overwriting the
+    // sidecar on the next save. A crash here reopens the file from disk, which
+    // re-establishes the quarantine; the un-saveable edits were already blocked.
+    if (quarantinedStructuralRef.current.length > 0) {
+      return lastGoodWorkspaceSnapshotRef.current;
+    }
     const reviewMd = getDocMarkdown();
     const ed = editorRef.current?.getEditor();
     // Capture the structural SOURCE (the `.md` view) + records, mirroring a disk
@@ -757,24 +767,34 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       onNotice({
         title: 'Structural suggestions need review',
         message:
-          `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored ` +
-          `because the document changed outside Quill. The saved records are preserved on disk but ` +
-          `cannot affect the document until it is reconciled.`,
+          `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored — ` +
+          `the document may have changed outside Quill, or a saved record is no longer valid. ` +
+          `Quill will not overwrite the saved data while this is unresolved; reconcile the ` +
+          `document (reopen or fix it) to clear this.`,
       });
     },
     [onNotice],
   );
 
+  // A document-identity reconciliation (New / Open / recover). Clear the per-document
+  // structural refs so a payload failure can't return a prior document's last-good
+  // snapshot, and quarantine/last-good state never leaks across documents.
+  const resetStructuralIdentity = useCallback(() => {
+    quarantinedStructuralRef.current = [];
+    lastGoodWorkspaceSnapshotRef.current = null;
+  }, []);
+
   // The structural half of the two-axis FILE reload: rebuild the block unions (and
   // reset the canonical record store) BEFORE inline/comment marks are restored, then
-  // stash the loaded envelope + any quarantined records and warn about the latter.
+  // stash any quarantined records and warn about them.
   const restoreStructuralUnions = useCallback(
     (ed: TiptapEditor, envelope: StructuralReviewEnvelope | null, docHash: string) => {
+      resetStructuralIdentity();
       const result = reconstructStructuralIntoEditor(ed, envelope, docHash);
       quarantinedStructuralRef.current = result.quarantined;
       warnStructuralQuarantine(result.quarantined.length);
     },
-    [warnStructuralQuarantine],
+    [resetStructuralIdentity, warnStructuralQuarantine],
   );
 
   // The workspace-RECOVERY counterpart: reconstruct from in-memory records (no hash
@@ -782,11 +802,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // on-disk envelope to preserve, so a save after recovery rebuilds from live state.
   const restoreStructuralFromDraft = useCallback(
     (ed: TiptapEditor, records: StructuralSuggestionRecord[]) => {
+      resetStructuralIdentity();
       const result = reconstructStructuralFromRecords(ed, records);
       quarantinedStructuralRef.current = result.quarantined;
       warnStructuralQuarantine(result.quarantined.length);
     },
-    [warnStructuralQuarantine],
+    [resetStructuralIdentity, warnStructuralQuarantine],
   );
 
   // A mounted background tab keeps its editor state, but layout APIs return
@@ -1029,6 +1050,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           'The document text was saved, but its comments and suggestions could not be ' +
             "written: the existing .comments.json file is unreadable and Quill won't " +
             'overwrite it. Recover or remove that file, then save again.',
+        );
+      } else if (outcome.status === 'blocked' && outcome.reason === 'structural-protected') {
+        showError(
+          'Nothing saved — structural suggestions file is unreadable',
+          "This document's .comments.json has a damaged structural-suggestions block, which " +
+            'may hold the only copy of a proposed change. Quill did NOT save (neither the ' +
+            'document nor the comments file) so the original text those suggestions point at ' +
+            'stays intact. Repair or remove that file, then save again.',
         );
       } else if (outcome.status === 'blocked') {
         // baseline-unknown: a recovered draft with no trustworthy on-disk baseline.
@@ -1332,6 +1361,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setSuggestions([]);
     quarantinedSuggestionsRef.current = [];
     quarantinedStructuralRef.current = [];
+    lastGoodWorkspaceSnapshotRef.current = null; // new identity: forget prior last-good
     onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();

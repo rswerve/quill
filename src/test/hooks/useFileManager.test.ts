@@ -1365,15 +1365,19 @@ describe('structural envelope persistence', () => {
     await act(async () => {
       bad = await result.current.openFilePath('/docs/b.md');
     });
-    // The shape-invalid field is not loaded, but the file is now protected: a later
-    // same-path save reports blocked and never overwrites the on-disk sidecar.
+    // The shape-invalid field is not loaded, but the file is now STRUCTURALLY
+    // protected: a same-path save reports structural-protected and writes NEITHER
+    // file — the `.md` source the proposal is anchored to must stay intact for repair.
     expect(bad!.sidecar.structural).toBeUndefined();
     expect(bad!.sidecarError).toBeTruthy();
     let outcome: SaveOutcome;
     await act(async () => {
-      outcome = await result.current.saveFile('# Title', [], [], null, null);
+      outcome = await result.current.saveFile('# Title changed', [], [], null, null);
     });
-    expect(outcome!).toEqual({ status: 'blocked', reason: 'sidecar-protected' });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    // Zero writes: neither the `.md` nor the sidecar was touched.
+    const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(writes).toHaveLength(0);
   });
 });
 
