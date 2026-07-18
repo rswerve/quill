@@ -44,7 +44,7 @@ import {
 } from '../utils/reviewPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
-import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
+import { locateCommentForRepair } from '../utils/commentAnchors';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
@@ -1686,7 +1686,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     (commentId: string) => {
       const comment = comments.find((c) => c.id === commentId);
       if (!comment || !editor) return false;
-      const anchor = locateDetachedCommentAnchor(editor.state.doc, comment);
+      // A detached record's stored range is known-bad, so repair relocates by unique
+      // text only; a resolved-but-attached record keeps the trust-range rule.
+      const anchor = locateCommentForRepair(editor.state.doc, comment);
       if (!anchor) return false;
       // Queue the validated range and unresolved state before restoring the
       // mark, so the mark transaction reconciles against the updated record.
