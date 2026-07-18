@@ -170,13 +170,11 @@ function cellsMatch(a: Cell, b: Cell): boolean {
   );
 }
 
-/** Two normalization runs are identical (so they map 1:1, no drift). */
-function runsEqual(live: Cell[], i: number, iEnd: number, canon: Cell[], j: number, jEnd: number) {
+/** Two runs map 1:1 only with identical length AND full semantic equality. */
+function runMatch(live: Cell[], i: number, iEnd: number, canon: Cell[], j: number, jEnd: number) {
   if (iEnd - i !== jEnd - j) return false;
   for (let k = 0; k < iEnd - i; k += 1) {
-    if (live[i + k].char !== canon[j + k].char || live[i + k].source !== canon[j + k].source) {
-      return false;
-    }
+    if (!cellsMatch(live[i + k], canon[j + k])) return false;
   }
   return true;
 }
@@ -184,59 +182,119 @@ function runsEqual(live: Cell[], i: number, iEnd: number, canon: Cell[], j: numb
 interface Alignment {
   /** live char index -> canonical char index, or -1 (removed/changed/unmapped). */
   charMap: Int32Array;
-  /** live boundary index (0..n) -> canonical PM position, or -1 (invalid boundary). */
+  /** live boundary index (0..n) -> canonical BOUNDARY index, or -1 (invalid). */
   boundMap: Int32Array;
 }
 
+const isCollapsible = (cell: Cell) => cell.collapsible;
+const isBoundary = (cell: Cell) => cell.source === 'blockBoundary';
+
+function runEnd(cells: Cell[], start: number, end: number, pred: (c: Cell) => boolean): number {
+  let k = start;
+  while (k < end && pred(cells[k])) k += 1;
+  return k;
+}
+
+/** Write a normalization run to the maps (1:1 only if unchanged) and advance. */
+function applyRun(
+  charMap: Int32Array,
+  boundMap: Int32Array,
+  i: number,
+  j: number,
+  iEnd: number,
+  jEnd: number,
+  equal: boolean,
+): [number, number] {
+  boundMap[i] = j; // outer boundary before the run
+  if (equal) {
+    for (let k = 0; k < iEnd - i; k += 1) {
+      charMap[i + k] = j + k;
+      boundMap[i + k] = j + k;
+    }
+  }
+  boundMap[iEnd] = jEnd; // outer boundary after the run
+  return [iEnd, jEnd];
+}
+
+interface Step {
+  i: number;
+  j: number;
+  brk: boolean;
+}
+
+/** One alignment step from (i, j): a matched char, a normalization run, or a break. */
+function alignStep(
+  L: Cell[],
+  C: Cell[],
+  n: number,
+  m: number,
+  i: number,
+  j: number,
+  charMap: Int32Array,
+  boundMap: Int32Array,
+): Step {
+  const li = L[i];
+  const cj = C[j];
+
+  if (!isNormalizable(li) && !isNormalizable(cj)) {
+    if (!cellsMatch(li, cj)) return { i, j, brk: true }; // genuine divergence — fail forward
+    charMap[i] = j;
+    boundMap[i] = j;
+    boundMap[i + 1] = j + 1;
+    return { i: i + 1, j: j + 1, brk: false };
+  }
+
+  // Whitespace-class run: only text whitespace aligns with text whitespace.
+  if (li.collapsible || cj.collapsible) {
+    const iEnd = runEnd(L, i, n, isCollapsible);
+    const jEnd = runEnd(C, j, m, isCollapsible);
+    const [ni, nj] = applyRun(
+      charMap,
+      boundMap,
+      i,
+      j,
+      iEnd,
+      jEnd,
+      runMatch(L, i, iEnd, C, j, jEnd),
+    );
+    return { i: ni, j: nj, brk: false };
+  }
+
+  // Block-boundary run: boundaries align only with boundaries. An unequal count is a
+  // valid empty-block removal only while a boundary survives on both sides; a live
+  // boundary that vanished (merge) or a canonical-only boundary (split) fails.
+  const iEnd = runEnd(L, i, n, isBoundary);
+  const jEnd = runEnd(C, j, m, isBoundary);
+  if ((iEnd > i && jEnd === j) || (iEnd === i && jEnd > j)) return { i, j, brk: true };
+  const [ni, nj] = applyRun(charMap, boundMap, i, j, iEnd, jEnd, runMatch(L, i, iEnd, C, j, jEnd));
+  return { i: ni, j: nj, brk: false };
+}
+
 /**
- * Align the live projection to the canonical one. Matched non-normalizable cells
- * map 1:1; a normalization run maps 1:1 only if unchanged, otherwise its interior
- * is invalid and only its outer boundaries map; a genuine divergence fails forward.
+ * Align the live projection to the canonical one. Whitespace runs align only with
+ * whitespace runs and block-boundary runs only with block-boundary runs — the two
+ * never cross, so a paragraph merge/split is a genuine divergence, not recoverable
+ * normalization.
  */
 function align(live: AnchorProjection, canon: AnchorProjection): Alignment {
-  const n = live.cells.length;
+  const L = live.cells;
+  const C = canon.cells;
+  const n = L.length;
+  const m = C.length;
   const charMap = new Int32Array(n).fill(-1);
   const boundMap = new Int32Array(n + 1).fill(-1);
   let i = 0;
   let j = 0;
-  boundMap[0] = canon.positions[0]; // documents share a start boundary
+  boundMap[0] = 0; // both documents start at boundary 0
 
-  while (i < n && j < canon.cells.length) {
-    const li = live.cells[i];
-    const cj = canon.cells[j];
-
-    if (!isNormalizable(li) && !isNormalizable(cj)) {
-      if (cellsMatch(li, cj)) {
-        charMap[i] = j;
-        boundMap[i] = canon.positions[j]; // boundary before the matched char
-        boundMap[i + 1] = canon.positions[j + 1]; // and the boundary after it
-        i += 1;
-        j += 1;
-        continue;
-      }
-      break; // genuine divergence — fail forward, leaving the rest unmapped
-    }
-
-    // A normalization run on either side: consume the maximal run in both streams.
-    let iEnd = i;
-    while (iEnd < n && isNormalizable(live.cells[iEnd])) iEnd += 1;
-    let jEnd = j;
-    while (jEnd < canon.cells.length && isNormalizable(canon.cells[jEnd])) jEnd += 1;
-
-    boundMap[i] = canon.positions[j]; // boundary before the run always maps
-    if (runsEqual(live.cells, i, iEnd, canon.cells, j, jEnd)) {
-      for (let k = 0; k < iEnd - i; k += 1) {
-        charMap[i + k] = j + k;
-        boundMap[i + k] = canon.positions[j + k];
-      }
-    }
-    // else: interior chars / boundaries stay invalid (the run changed).
-    boundMap[iEnd] = canon.positions[jEnd]; // boundary after the run maps
-    i = iEnd;
-    j = jEnd;
+  while (i < n && j < m) {
+    const step = alignStep(L, C, n, m, i, j, charMap, boundMap);
+    if (step.brk) break;
+    i = step.i;
+    j = step.j;
   }
 
-  if (i === n) boundMap[n] = canon.positions[j];
+  if (i === n) boundMap[n] = j;
   return { charMap, boundMap };
 }
 
@@ -245,8 +303,37 @@ export interface MappedRange {
   to: number;
 }
 
+/**
+ * A zero-width boundary is safe only when its NON-normalizable neighbours are
+ * unchanged: a boundary whose left/right character changed block type, base marks,
+ * or leaf identity (H1→H2, plain→bold) sits in altered context and must not map.
+ */
+function boundaryContextOk(
+  live: AnchorProjection,
+  canon: AnchorProjection,
+  b: number,
+  cb: number,
+): boolean {
+  const leftLive = b > 0 ? live.cells[b - 1] : null;
+  const rightLive = b < live.cells.length ? live.cells[b] : null;
+  const leftCanon = cb > 0 ? canon.cells[cb - 1] : null;
+  const rightCanon = cb < canon.cells.length ? canon.cells[cb] : null;
+  if (leftLive && !isNormalizable(leftLive) && (!leftCanon || !cellsMatch(leftLive, leftCanon))) {
+    return false;
+  }
+  if (
+    rightLive &&
+    !isNormalizable(rightLive) &&
+    (!rightCanon || !cellsMatch(rightLive, rightCanon))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function mapRange(
   live: AnchorProjection,
+  canon: AnchorProjection,
   { charMap, boundMap }: Alignment,
   from: number,
   to: number,
@@ -255,10 +342,14 @@ function mapRange(
   const bTo = live.boundaryByPosition.get(to);
   if (bFrom === undefined || bTo === undefined || bTo < bFrom) return null;
 
-  const canonFrom = boundMap[bFrom];
-  const canonTo = boundMap[bTo];
-  if (canonFrom === -1 || canonTo === -1) return null;
-  if (bFrom === bTo) return { from: canonFrom, to: canonTo };
+  const cFrom = boundMap[bFrom];
+  const cTo = boundMap[bTo];
+  if (cFrom === -1 || cTo === -1) return null;
+
+  if (bFrom === bTo) {
+    if (!boundaryContextOk(live, canon, bFrom, cFrom)) return null;
+    return { from: canon.positions[cFrom], to: canon.positions[cFrom] };
+  }
 
   // Every content character must map, contiguously — any collapse/expansion, or a
   // mark/block change inside the range (all leave a -1 or a jump), fails the range.
@@ -267,7 +358,7 @@ function mapRange(
   for (let k = bFrom; k < bTo; k += 1) {
     if (charMap[k] !== first + (k - bFrom)) return null;
   }
-  return { from: canonFrom, to: canonTo };
+  return { from: canon.positions[cFrom], to: canon.positions[cTo] };
 }
 
 export interface AnchorMapper {
@@ -287,5 +378,5 @@ export function buildAnchorMapper(
   const live = buildAnchorProjection(liveDoc);
   const canon = buildAnchorProjection(canonDoc);
   const alignment = align(live, canon);
-  return { map: (from, to) => mapRange(live, alignment, from, to) };
+  return { map: (from, to) => mapRange(live, canon, alignment, from, to) };
 }

@@ -265,3 +265,73 @@ describe('reviewAnchorMap: Codex counterexamples', () => {
     expect(mapper.map(a, b + 1)).toBeNull();
   });
 });
+
+describe('reviewAnchorMap: Codex counterexamples round 2', () => {
+  it('gap 1: an unchanged-length whitespace run whose formatting changed does not map', () => {
+    const boldSpace = { type: 'text', text: ' ', marks: [{ type: 'bold' }] };
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'a' }, boldSpace, { type: 'text', text: 'b' }],
+        },
+      ],
+    });
+    const canon = liveDoc(para('a b')); // plain space
+    const mapper = buildAnchorMapper(live, canon);
+    const a = nthPos(live, 'a');
+    expect(mapper.map(a + 1, a + 2)).toBeNull(); // the (bold->plain) space itself
+    expect(mapper.map(a, a + 3)).toBeNull(); // "a b" spanning the changed space
+  });
+
+  it('gap 2: a paragraph MERGE does not map (block boundary never crosses to text space)', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const canon = liveDoc(para('a b')); // the two paragraphs merged into one
+    const b = nthPos(live, 'b');
+    expect(buildAnchorMapper(live, canon).map(b, b + 1)).toBeNull();
+  });
+
+  it('gap 3: a zero-width boundary in a reinterpreted block (H1->H2) does not map', () => {
+    const h = (level: number) => ({
+      type: 'doc',
+      content: [{ type: 'heading', attrs: { level }, content: [{ type: 'text', text: 'abc' }] }],
+    });
+    const live = liveDoc(h(1));
+    const canon = liveDoc(h(2));
+    const a = nthPos(live, 'abc');
+    expect(buildAnchorMapper(live, canon).map(a, a)).toBeNull(); // insertion point before "a"
+  });
+
+  it('gap 3: a zero-width boundary whose neighbour gained a mark does not map', () => {
+    const live = liveDoc(para('ab'));
+    const canon = liveDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'a' },
+            { type: 'text', text: 'b', marks: [{ type: 'bold' }] },
+          ],
+        },
+      ],
+    });
+    const b = nthPos(live, 'b');
+    expect(buildAnchorMapper(live, canon).map(b, b)).toBeNull(); // insertion point between a|b
+  });
+
+  it('gap 3: a valid zero-width insertion in unchanged text still maps', () => {
+    const live = liveDoc(para('foo  bar')); // double space upstream of the point
+    const canon = canonicalOf(live);
+    const bar = nthPos(live, 'bar');
+    // Insertion point just before "bar" (after the collapsed run) must still map.
+    expect(buildAnchorMapper(live, canon).map(bar, bar)).not.toBeNull();
+  });
+});
