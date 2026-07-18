@@ -258,7 +258,7 @@ describe('reconstructBlockUnions hardening', () => {
     });
     const { doc, restored, quarantined } = reconstructBlockUnions(source, [good, bad], serialize);
     expect(restored.map((r) => r.changeId)).toEqual(['g']);
-    expect(quarantined.map((r) => r.changeId)).toEqual(['b']);
+    expect(quarantined).toEqual([bad]);
     expect(topTexts(doc)).toEqual(['H0', 'H0', 'H2']);
   });
 
@@ -317,6 +317,26 @@ describe('reconstructBlockUnions hardening', () => {
     expect(quarantined).toHaveLength(2);
     expect(restored).toHaveLength(0);
     expect(doc.childCount).toBe(2);
+  });
+
+  it('does not let a typed-valid record adopt an id duplicated by a malformed raw record', () => {
+    const source = docFrom([heading('H0')]);
+    const valid = record({
+      changeId: 'dup',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('H0')],
+    });
+    const malformed = { changeId: 'dup', proposed: 'not-json' };
+    const { doc, quarantined, restored } = reconstructBlockUnions(
+      source,
+      [valid, malformed],
+      serialize,
+    );
+
+    expect(restored).toEqual([]);
+    expect(quarantined).toEqual([malformed, valid]);
+    expect(doc.eq(source)).toBe(true);
   });
 
   it('quarantines forbidden marks and unknown attributes in proposed JSON', () => {
@@ -462,7 +482,7 @@ describe('reconstructBlockUnions hardening', () => {
         sourceFingerprint: fp,
         proposed: 'nope',
       },
-    ] as unknown as StructuralSuggestionRecord[];
+    ];
     const { doc, quarantined } = reconstructBlockUnions(source, hostile, serialize);
     expect(quarantined).toHaveLength(3);
     expect(doc.childCount).toBe(1);

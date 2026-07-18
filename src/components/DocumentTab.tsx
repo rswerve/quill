@@ -543,7 +543,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // them; re-persistence of quarantined structural records lands with the mint
   // slice (the only path that puts structural records on disk today), so no real
   // sidecar can carry one yet.
-  const quarantinedStructuralRef = useRef<StructuralSuggestionRecord[]>([]);
+  const quarantinedStructuralRef = useRef<unknown[]>([]);
   // The most recent successfully-built workspace snapshot, retained so that if the
   // structural payload can't be built the recovery data is kept intact rather than
   // degraded (Codex's crash-recovery correction). Never source-flattened.
@@ -929,7 +929,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // gate — the snapshot's source and records were captured together). There is no
   // on-disk envelope to preserve, so a save after recovery rebuilds from live state.
   const restoreStructuralFromDraft = useCallback(
-    (ed: TiptapEditor, records: StructuralSuggestionRecord[]) => {
+    (ed: TiptapEditor, records: readonly unknown[]) => {
       resetStructuralIdentity();
       const result = reconstructStructuralFromRecords(ed, records);
       quarantinedStructuralRef.current = result.quarantined;

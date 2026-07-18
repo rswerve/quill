@@ -1,16 +1,12 @@
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
 import { Transform, type Mapping } from '@tiptap/pm/transform';
-import type {
-  HeadingLevel,
-  StructuralListType,
-  StructuralOp,
-  StructuralSuggestionRecord,
-} from '../types';
+import type { StructuralSuggestionRecord } from '../types';
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
 import { BLOCK_TRACK_TYPES } from '../extensions/BlockTrack';
 import { isReviewMarkName } from './canonicalDocument';
 import { structuralOpShapeValid } from './structuralUnionIndex';
+import { partitionStructuralRecords } from './structuralRecordValidation';
 
 const TRACKABLE = new Set<string>(BLOCK_TRACK_TYPES);
 
@@ -21,8 +17,8 @@ export interface ReconstructionResult {
   mapping: Mapping;
   /** Records reconstructed into the review document. */
   restored: StructuralSuggestionRecord[];
-  /** Records that failed validation; preserved verbatim, never applied. */
-  quarantined: StructuralSuggestionRecord[];
+  /** Raw records that failed validation; preserved verbatim, never applied. */
+  quarantined: unknown[];
 }
 
 interface ResolvedRange {
@@ -31,60 +27,8 @@ interface ResolvedRange {
   blockPositions: number[];
 }
 
-function isFiniteInt(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v);
-}
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.length > 0;
-}
-
-function isHeadingLevel(v: unknown): v is HeadingLevel {
-  return isFiniteInt(v) && v >= 1 && v <= 6;
-}
-
-function isStructuralListType(v: unknown): v is StructuralListType {
-  return v === 'bulletList' || v === 'orderedList' || v === 'taskList';
-}
-
-/** Exhaustive runtime validation of a typed structural operation. */
-function opIsValid(op: unknown): op is StructuralOp {
-  if (!isPlainObject(op)) return false;
-  switch (op.kind) {
-    case 'headingToParagraph':
-    case 'paragraphToHeading':
-      return isHeadingLevel(op.level);
-    case 'listToParagraph':
-    case 'paragraphToList':
-      return isStructuralListType(op.listType);
-    default:
-      return false;
-  }
-}
-
-/** Canonical metadata is validated at the deserialization boundary. */
-function metadataValid(r: Record<string, unknown>): boolean {
-  if (!isNonEmptyString(r.changeId) || !isNonEmptyString(r.author)) return false;
-  if (!isNonEmptyString(r.createdAt) || !Number.isFinite(Date.parse(r.createdAt))) return false;
-  if (r.originCommentId !== undefined && !isNonEmptyString(r.originCommentId)) return false;
-  if (r.originChatMessageId !== undefined && !isNonEmptyString(r.originChatMessageId)) return false;
-  if (r.originCommentId !== undefined && r.originChatMessageId !== undefined) return false;
-  return opIsValid(r.op);
-}
-
-/** Deserialized JSON is untyped; validate the record's shape before dereferencing. */
-function recordShapeValid(r: unknown): r is StructuralSuggestionRecord {
-  if (!isPlainObject(r) || !metadataValid(r)) return false;
-  if (typeof r.sourceFingerprint !== 'string') return false;
-  if (!Array.isArray(r.proposed) || r.proposed.length === 0) return false;
-  const a = r.anchor;
-  if (!isPlainObject(a)) return false;
-  if (!Array.isArray(a.parentPath) || !a.parentPath.every(isFiniteInt)) return false;
-  return isFiniteInt(a.childIndex) && isFiniteInt(a.childCount);
 }
 
 /** Resolve a top-level source-branch anchor. V1 supports only top-level unions. */
@@ -182,10 +126,10 @@ function parseProposedNodes(schema: Schema, proposedJson: unknown[]): PMNode[] |
 /** Validate one record against the pristine source; null if anything is off. */
 function validateRecord(
   sourceDoc: PMNode,
-  record: unknown,
+  record: StructuralSuggestionRecord,
   serialize: MarkdownSerialize,
 ): ValidRecord | null {
-  if (!recordShapeValid(record) || record.anchor.parentPath.length !== 0) return null;
+  if (record.anchor.parentPath.length !== 0) return null;
 
   const range = resolveTopLevelRange(sourceDoc, record.anchor.childIndex, record.anchor.childCount);
   if (!range || !sourceBranchTrackable(sourceDoc, range)) return null;
@@ -222,7 +166,7 @@ function validateRecord(
  * caller's responsibility.
  */
 /** Change ids that appear on more than one record (all such records quarantine). */
-function duplicateChangeIds(records: unknown[]): Set<string> {
+function duplicateChangeIds(records: readonly unknown[]): Set<string> {
   const counts = new Map<string, number>();
   for (const r of records) {
     const id = isPlainObject(r) ? r.changeId : undefined;
@@ -275,15 +219,15 @@ function applyRecords(
 
 export function reconstructBlockUnions(
   sourceDoc: PMNode,
-  records: StructuralSuggestionRecord[],
+  records: readonly unknown[],
   serialize: MarkdownSerialize,
 ): ReconstructionResult {
   const duplicates = duplicateChangeIds(records);
+  const partitioned = partitionStructuralRecords(records);
   const valid: ValidRecord[] = [];
-  const quarantined: StructuralSuggestionRecord[] = [];
-  for (const record of records) {
-    const id = isPlainObject(record) ? record.changeId : undefined;
-    const isDuplicate = typeof id === 'string' && duplicates.has(id);
+  const quarantined: unknown[] = [...partitioned.quarantined];
+  for (const record of partitioned.valid) {
+    const isDuplicate = duplicates.has(record.changeId);
     const v = isDuplicate ? null : validateRecord(sourceDoc, record, serialize);
     if (v) valid.push(v);
     else quarantined.push(record);

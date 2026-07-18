@@ -8,16 +8,22 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function isStructuralEnvelopeShape(raw: unknown): raw is StructuralReviewEnvelope {
+  return (
+    isPlainObject(raw) &&
+    raw.version === 1 &&
+    typeof raw.sourceDocumentHash === 'string' &&
+    raw.sourceDocumentHash.length > 0 &&
+    Array.isArray(raw.records)
+  );
+}
+
 /**
  * Validate the persisted structural envelope's shape; null if malformed. Records
  * are NOT deeply validated here — reconstruction is the per-record trust boundary.
  */
 export function parseStructuralEnvelope(raw: unknown): StructuralReviewEnvelope | null {
-  if (!isPlainObject(raw) || raw.version !== 1) return null;
-  if (typeof raw.sourceDocumentHash !== 'string' || raw.sourceDocumentHash.length === 0)
-    return null;
-  if (!Array.isArray(raw.records)) return null;
-  return raw as unknown as StructuralReviewEnvelope;
+  return isStructuralEnvelopeShape(raw) ? raw : null;
 }
 
 /**

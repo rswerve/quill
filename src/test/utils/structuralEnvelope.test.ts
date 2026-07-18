@@ -65,6 +65,13 @@ describe('parseStructuralEnvelope', () => {
     expect(parseStructuralEnvelope({ version: 1, sourceDocumentHash: 'abc' })).toBeNull();
     expect(parseStructuralEnvelope(null)).toBeNull();
   });
+
+  it('keeps an envelope record array untrusted until reconstruction', () => {
+    const malformed = { version: 1, sourceDocumentHash: 'abc', records: ['raw-proposal'] };
+    const parsed = parseStructuralEnvelope(malformed);
+    expect(parsed).toBe(malformed);
+    expect(parsed?.records).toEqual(['raw-proposal']);
+  });
 });
 
 describe('reconstructFromEnvelope', () => {

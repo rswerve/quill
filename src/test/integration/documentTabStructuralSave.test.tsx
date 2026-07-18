@@ -24,6 +24,7 @@ import {
 import { buildCanonicalStructuralReview } from '../../utils/structuralCanonical';
 import type { MarkdownSerialize } from '../../utils/structuralFingerprint';
 import { parseMarkdownToDoc } from '../../utils/markdownDoc';
+import { partitionStructuralRecords } from '../../utils/structuralRecordValidation';
 import type { Comment, SidecarFile } from '../../types';
 
 const mockInvoke = vi.mocked(invoke);
@@ -292,7 +293,9 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
     expect(sidecar.reviewSourceHash).toBe(DOC_HASH);
     expect(sidecar.structural?.sourceDocumentHash).toBe(DOC_HASH);
     expect(sidecar.structural?.records).toHaveLength(1);
-    const structural = sidecar.structural!.records[0];
+    const persistedStructural = partitionStructuralRecords(sidecar.structural!.records);
+    expect(persistedStructural.quarantined).toEqual([]);
+    const structural = persistedStructural.valid[0];
     expect(structural.sourceFingerprint).toBe('# Title Here');
     expect(structural.anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
     expect(structural.proposed[0].content?.[0].text).toBe('Title  Here');
@@ -304,7 +307,7 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
     const canonicalSource = parseMarkdownToDoc(live, docWrite!.content!);
     const expectedUnion = buildCanonicalStructuralReview(
       canonicalSource,
-      sidecar.structural!.records,
+      persistedStructural.valid,
       serializer(live),
     );
     expect(expectedUnion.ok).toBe(true);

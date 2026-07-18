@@ -205,7 +205,8 @@ export interface StructuralSuggestionRecord {
 export interface StructuralReviewEnvelope {
   version: 1;
   sourceDocumentHash: string;
-  records: StructuralSuggestionRecord[];
+  /** Untrusted until `partitionStructuralRecords` + reconstruction validate each entry. */
+  records: unknown[];
 }
 
 export interface SidecarFile {

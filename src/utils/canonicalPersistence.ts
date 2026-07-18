@@ -53,7 +53,7 @@ export type CanonicalSaveState =
 export function prepareCanonicalPersistence(
   editor: TiptapEditor,
   liveMarkdown: string,
-  quarantinedStructural: readonly StructuralSuggestionRecord[],
+  quarantinedStructural: readonly unknown[],
   live: LiveReviewState,
 ): CanonicalSaveState {
   // 1. Structural source payload; fail closed while unreconciled quarantined records exist.

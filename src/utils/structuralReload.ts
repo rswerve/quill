@@ -7,7 +7,7 @@ import { markdownSerializer } from './structuralFingerprint';
 
 export interface StructuralReloadResult {
   restored: StructuralSuggestionRecord[];
-  quarantined: StructuralSuggestionRecord[];
+  quarantined: unknown[];
 }
 
 /**
@@ -74,7 +74,7 @@ export function reconstructStructuralIntoEditor(
  */
 export function reconstructStructuralFromRecords(
   editor: TiptapEditor,
-  records: StructuralSuggestionRecord[],
+  records: readonly unknown[],
 ): StructuralReloadResult {
   if (records.length === 0) return applyReconstruction(editor, emptyReconstruction(editor));
   const serialize = markdownSerializer(editor);
