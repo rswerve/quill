@@ -1,9 +1,14 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
+import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { Markdown } from 'tiptap-markdown';
 import { describe, it, expect, afterEach } from 'vitest';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
 import { CommentMark } from '../../extensions/Comment';
+import { MarkdownImage } from '../../extensions/MarkdownImage';
+import { MarkdownLinkSyntax } from '../../extensions/MarkdownLinkSyntax';
+import { StrikeWithoutSaveShortcut } from '../../extensions/StrikeWithoutSaveShortcut';
 import {
   TrackChanges,
   TrackedInsert,
@@ -13,13 +18,33 @@ import {
 import { parseMarkdownToDoc } from '../../utils/markdownDoc';
 
 const editors: Editor[] = [];
+
+// Mirror the PRODUCTION schema (src/components/Editor.tsx): same nodes/marks, and
+// crucially `trailingNode: false`, so `setContent` does not append a filler paragraph
+// and `parseMarkdownToDoc` matches a reopen byte-for-byte. Keep this list in sync with
+// Editor.tsx's schema-affecting extensions.
 function makeEditor(): Editor {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const editor = new Editor({
     element: el,
     extensions: [
-      StarterKit.configure({ code: false }),
+      MarkdownLinkSyntax,
+      StarterKit.configure({
+        trailingNode: false,
+        link: { openOnClick: false },
+        code: false,
+        underline: false,
+        strike: false,
+      }),
+      StrikeWithoutSaveShortcut,
+      Table,
+      TableRow,
+      TableCell,
+      TableHeader,
+      TaskList,
+      TaskItem,
+      MarkdownImage,
       ReviewableCode,
       TrackedInsert,
       TrackedDelete,
@@ -39,28 +64,13 @@ afterEach(() => {
 
 /**
  * The document a real REOPEN produces: `setContent(md)` on a fresh editor with the same
- * schema. `parseMarkdownToDoc` must match this for all real content, or canonical-capture
+ * (production) schema. `parseMarkdownToDoc` must equal this EXACTLY, or canonical-capture
  * maps review anchors into a document that differs from what a reload builds.
  */
 function reopen(md: string) {
   const editor = makeEditor();
   editor.commands.setContent(md, { emitUpdate: false });
   return editor.state.doc;
-}
-
-/**
- * Strip the trailing empty filler paragraph StarterKit appends when a doc is applied to
- * the editor STATE (setContent) after ending in a non-paragraph block. It's appended
- * AFTER all content, so it shifts no real position — canonical-capture is immune to it
- * (and the mapper handles a live trailing empty block). Normalizing it away lets the
- * fidelity check still catch any OTHER structural divergence.
- */
-type DocJSON = { type: string; content?: DocJSON[] };
-function withoutTrailingFiller(json: DocJSON): DocJSON {
-  const content = json.content ? [...json.content] : [];
-  const last = content[content.length - 1];
-  if (last && last.type === 'paragraph' && (last.content?.length ?? 0) === 0) content.pop();
-  return { ...json, content };
 }
 
 describe('parseMarkdownToDoc: byte-for-byte fidelity to setContent reopen', () => {
@@ -74,24 +84,25 @@ describe('parseMarkdownToDoc: byte-for-byte fidelity to setContent reopen', () =
     ['bullet list', '- one\n- two\n- three'],
     ['loose list', '- one\n\n  para two\n\n- three'],
     ['ordered list', '1. first\n2. second'],
+    ['task list', '- [ ] todo\n- [x] done'],
+    ['table', '| a | b |\n| --- | --- |\n| 1 | 2 |'],
+    ['image', '![alt](image.png)'],
     ['blockquote', '> quoted line\n> continued'],
     ['fenced code block', '```\nconst a =  1;\n  indented\n```'],
     ['inline code and emphasis', 'a `code` and *em* and **bold** word'],
     ['hard break', 'line one  \nline two'],
     ['link', '[label](https://example.com)'],
+    ['list then trailing paragraph', '- item\n\ntrailing text'],
     ['unicode + emoji', '# 日本語\n\nHello 🌍 world with  spaces'],
-    ['nbsp preserved', 'foo  bar'],
+    ['nbsp preserved', 'foo  bar'],
   ];
 
-  // Compared via toJSON, not Node.eq: the two docs come from different editor
-  // instances whose NodeType objects aren't reference-equal, which alone fails eq. In
-  // production canonical-capture parses with the LIVE editor's own schema (same as the
-  // live doc), so structural JSON equality is the faithful check.
-  it.each(cases)('matches reopen for %s (modulo trailing filler)', (_label, md) => {
+  // Exact equality via toJSON (Node.eq would fail only because the two docs come from
+  // different editor instances whose NodeType objects aren't reference-equal; production
+  // canonical-capture parses with the LIVE editor's own schema, same as the live doc).
+  it.each(cases)('matches reopen exactly for %s', (_label, md) => {
     const parsed = parseMarkdownToDoc(makeEditor(), md);
-    expect(withoutTrailingFiller(parsed.toJSON() as DocJSON)).toEqual(
-      withoutTrailingFiller(reopen(md).toJSON() as DocJSON),
-    );
+    expect(parsed.toJSON()).toEqual(reopen(md).toJSON());
   });
 
   it('never mutates the source editor', () => {
