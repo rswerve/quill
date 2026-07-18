@@ -58,6 +58,13 @@ interface AnchorProjection {
   positions: number[];
   /** PM position -> boundary index. */
   boundaryByPosition: Map<number, number>;
+  /**
+   * Enclosing-block signature AT each boundary (length cells.length + 1). Lets a
+   * zero-width map validate its OWN block context even when it has no neighbouring
+   * content cell — e.g. the interior cursor of an empty heading vs an empty
+   * paragraph, which `boundaryContextOk`'s neighbour comparison cannot tell apart.
+   */
+  positionBlockSig: string[];
 }
 
 // EXACTLY the whitespace ProseMirror's HTML parse collapses — ASCII only. NBSP and
@@ -117,6 +124,11 @@ function buildAnchorProjection(doc: ProseMirrorNode): AnchorProjection {
           blockSig: '',
         });
       }
+      // Advance to this textblock's interior-start cursor so an EMPTY textblock
+      // still registers a boundary (its pos+1) and consecutive empty blocks don't
+      // collide at the previous block's end. A non-empty textblock's first char
+      // then re-pushes the same position; a leaf block's own branch overwrites this.
+      if (node.isTextblock) lastEnd = pos + 1;
     }
     if (node.isText) {
       const text = node.text ?? '';
@@ -140,7 +152,8 @@ function buildAnchorProjection(doc: ProseMirrorNode): AnchorProjection {
         char: node.type.name === 'hardBreak' ? '\n' : ' ',
         source: node.type.name === 'hardBreak' ? 'hardBreak' : 'otherLeaf',
         collapsible: false,
-        leafType: node.type.name,
+        // Type AND attrs, so two images with different src/alt/title are distinct.
+        leafType: `${node.type.name}:${JSON.stringify(node.attrs)}`,
         markSig: markSignature(node.marks),
         blockSig: blockSignature(doc, pos),
       });
@@ -151,7 +164,8 @@ function buildAnchorProjection(doc: ProseMirrorNode): AnchorProjection {
 
   positions.push(lastEnd);
   if (!boundaryByPosition.has(lastEnd)) boundaryByPosition.set(lastEnd, cells.length);
-  return { cells, positions, boundaryByPosition };
+  const positionBlockSig = positions.map((position) => blockSignature(doc, position));
+  return { cells, positions, boundaryByPosition, positionBlockSig };
 }
 
 /** A cell that participates in whitespace / block-boundary normalization runs. */
@@ -186,115 +200,104 @@ interface Alignment {
   boundMap: Int32Array;
 }
 
-const isCollapsible = (cell: Cell) => cell.collapsible;
-const isBoundary = (cell: Cell) => cell.source === 'blockBoundary';
-
-function runEnd(cells: Cell[], start: number, end: number, pred: (c: Cell) => boolean): number {
-  let k = start;
-  while (k < end && pred(cells[k])) k += 1;
-  return k;
+/** Cells that carry real anchor identity; the rest is normalization filler. */
+function contentIndices(cells: Cell[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < cells.length; i += 1) if (!isNormalizable(cells[i])) out.push(i);
+  return out;
 }
 
-/** Write a normalization run to the maps (1:1 only if unchanged) and advance. */
-function applyRun(
-  charMap: Int32Array,
-  boundMap: Int32Array,
-  i: number,
-  j: number,
-  iEnd: number,
-  jEnd: number,
-  equal: boolean,
-): [number, number] {
-  boundMap[i] = j; // outer boundary before the run
-  if (equal) {
-    for (let k = 0; k < iEnd - i; k += 1) {
-      charMap[i + k] = j + k;
-      boundMap[i + k] = j + k;
-    }
-  }
-  boundMap[iEnd] = jEnd; // outer boundary after the run
-  return [iEnd, jEnd];
-}
-
-interface Step {
-  i: number;
-  j: number;
-  brk: boolean;
-}
-
-/** One alignment step from (i, j): a matched char, a normalization run, or a break. */
-function alignStep(
-  L: Cell[],
-  C: Cell[],
-  n: number,
-  m: number,
-  i: number,
-  j: number,
-  charMap: Int32Array,
-  boundMap: Int32Array,
-): Step {
-  const li = L[i];
-  const cj = C[j];
-
-  if (!isNormalizable(li) && !isNormalizable(cj)) {
-    if (!cellsMatch(li, cj)) return { i, j, brk: true }; // genuine divergence — fail forward
-    charMap[i] = j;
-    boundMap[i] = j;
-    boundMap[i + 1] = j + 1;
-    return { i: i + 1, j: j + 1, brk: false };
-  }
-
-  // Whitespace-class run: only text whitespace aligns with text whitespace.
-  if (li.collapsible || cj.collapsible) {
-    const iEnd = runEnd(L, i, n, isCollapsible);
-    const jEnd = runEnd(C, j, m, isCollapsible);
-    const [ni, nj] = applyRun(
-      charMap,
-      boundMap,
-      i,
-      j,
-      iEnd,
-      jEnd,
-      runMatch(L, i, iEnd, C, j, jEnd),
-    );
-    return { i: ni, j: nj, brk: false };
-  }
-
-  // Block-boundary run: boundaries align only with boundaries. An unequal count is a
-  // valid empty-block removal only while a boundary survives on both sides; a live
-  // boundary that vanished (merge) or a canonical-only boundary (split) fails.
-  const iEnd = runEnd(L, i, n, isBoundary);
-  const jEnd = runEnd(C, j, m, isBoundary);
-  if ((iEnd > i && jEnd === j) || (iEnd === i && jEnd > j)) return { i, j, brk: true };
-  const [ni, nj] = applyRun(charMap, boundMap, i, j, iEnd, jEnd, runMatch(L, i, iEnd, C, j, jEnd));
-  return { i: ni, j: nj, brk: false };
+function countBoundaries(cells: Cell[], from: number, to: number): number {
+  let count = 0;
+  for (let k = from; k < to; k += 1) if (cells[k].source === 'blockBoundary') count += 1;
+  return count;
 }
 
 /**
- * Align the live projection to the canonical one. Whitespace runs align only with
- * whitespace runs and block-boundary runs only with block-boundary runs — the two
- * never cross, so a paragraph merge/split is a genuine divergence, not recoverable
- * normalization.
+ * Reconcile the normalization gap (whitespace + block boundaries) between two mapped
+ * content anchors. Always maps the gap's two outer boundaries; if the gap is
+ * unchanged it also maps the interior 1:1 (a preserved single space survives),
+ * otherwise the interior stays invalid. An `interior` gap (content on BOTH sides)
+ * enforces the merge/split guard: a block separation present on exactly one side is a
+ * genuine structural divergence, so it returns false and the caller fails forward —
+ * a merged boundary is never mapped. Leading/trailing/edge gaps skip the guard, so
+ * removing an empty block at a document edge is ordinary normalization.
+ */
+function reconcileGap(
+  L: Cell[],
+  C: Cell[],
+  charMap: Int32Array,
+  boundMap: Int32Array,
+  bStart: number,
+  bEnd: number,
+  cStart: number,
+  cEnd: number,
+  interior: boolean,
+): boolean {
+  if (interior) {
+    const bbLive = countBoundaries(L, bStart, bEnd);
+    const bbCanon = countBoundaries(C, cStart, cEnd);
+    if (bbLive > 0 !== bbCanon > 0) return false; // a block merge or split
+  }
+  boundMap[bStart] = cStart;
+  boundMap[bEnd] = cEnd;
+  if (bEnd - bStart === cEnd - cStart && runMatch(L, bStart, bEnd, C, cStart, cEnd)) {
+    for (let k = 0; k < bEnd - bStart; k += 1) {
+      charMap[bStart + k] = cStart + k;
+      boundMap[bStart + k] = cStart + k;
+    }
+  }
+  return true;
+}
+
+/**
+ * Align the live projection to the canonical one by walking their CONTENT cells in
+ * lockstep — the honest structure of parse∘serialize, which for lossless constructs
+ * changes only the whitespace/boundaries BETWEEN content, not the content itself. It
+ * is not assumed: each content pair must be fully semantically equal or alignment
+ * fails forward, so a lossy construct that DID alter non-whitespace content is caught
+ * rather than mismapped. The normalization gap between consecutive anchors is
+ * reconciled with the merge/split guard above.
  */
 function align(live: AnchorProjection, canon: AnchorProjection): Alignment {
   const L = live.cells;
   const C = canon.cells;
-  const n = L.length;
-  const m = C.length;
-  const charMap = new Int32Array(n).fill(-1);
-  const boundMap = new Int32Array(n + 1).fill(-1);
-  let i = 0;
-  let j = 0;
+  const charMap = new Int32Array(L.length).fill(-1);
+  const boundMap = new Int32Array(L.length + 1).fill(-1);
   boundMap[0] = 0; // both documents start at boundary 0
 
-  while (i < n && j < m) {
-    const step = alignStep(L, C, n, m, i, j, charMap, boundMap);
-    if (step.brk) break;
-    i = step.i;
-    j = step.j;
+  const liveContent = contentIndices(L);
+  const canonContent = contentIndices(C);
+  const pairs = Math.min(liveContent.length, canonContent.length);
+
+  let prevLi = 0;
+  let prevCi = 0;
+  let broke = false;
+  for (let p = 0; p < pairs; p += 1) {
+    const li = liveContent[p];
+    const ci = canonContent[p];
+    // A content divergence (glyph, marks, block ancestry) is a genuine change.
+    if (!cellsMatch(L[li], C[ci])) {
+      broke = true;
+      break;
+    }
+    // The gap before the FIRST anchor is a leading (edge) gap; later gaps are interior.
+    if (!reconcileGap(L, C, charMap, boundMap, prevLi, li, prevCi, ci, p > 0)) {
+      broke = true;
+      break;
+    }
+    charMap[li] = ci;
+    boundMap[li] = ci;
+    boundMap[li + 1] = ci + 1;
+    prevLi = li + 1;
+    prevCi = ci + 1;
   }
 
-  if (i === n) boundMap[n] = j;
+  // The trailing gap maps only when both content streams were fully, equally consumed
+  // (a content-count divergence fails forward, leaving the tail unmapped).
+  if (!broke && liveContent.length === canonContent.length) {
+    reconcileGap(L, C, charMap, boundMap, prevLi, L.length, prevCi, C.length, false);
+  }
   return { charMap, boundMap };
 }
 
@@ -314,6 +317,9 @@ function boundaryContextOk(
   b: number,
   cb: number,
 ): boolean {
+  // The boundary owns its block context: an empty heading's interior cursor must not
+  // map to an empty paragraph's, even though neither has a neighbouring content cell.
+  if (live.positionBlockSig[b] !== canon.positionBlockSig[cb]) return false;
   const leftLive = b > 0 ? live.cells[b - 1] : null;
   const rightLive = b < live.cells.length ? live.cells[b] : null;
   const leftCanon = cb > 0 ? canon.cells[cb - 1] : null;

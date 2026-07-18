@@ -226,7 +226,7 @@ describe('reviewAnchorMap: Codex counterexamples', () => {
   it('does not map a doc-end insertion point through an unmatched suffix (abcX vs abcY)', () => {
     const live = liveDoc(para('abcX'));
     const canon = liveDoc(para('abcY'));
-    const end = live.content.size; // doc-end insertion point
+    const end = nthPos(live, 'X') + 1; // the textblock-end cursor after X (a real one)
     // The insertion point after the diverged suffix must not map.
     expect(buildAnchorMapper(live, canon).map(end, end)).toBeNull();
   });
@@ -333,5 +333,95 @@ describe('reviewAnchorMap: Codex counterexamples round 2', () => {
     const bar = nthPos(live, 'bar');
     // Insertion point just before "bar" (after the collapsed run) must still map.
     expect(buildAnchorMapper(live, canon).map(bar, bar)).not.toBeNull();
+  });
+});
+
+describe('reviewAnchorMap: empty and whitespace-only blocks (Codex round 3)', () => {
+  const emptyPara = { type: 'doc', content: [{ type: 'paragraph' }] };
+  const wsOnlyPara = {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: ' ' }] }],
+  };
+
+  it('interior whitespace-only block removal still maps content after it', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: ' ' }] }, // canonicalizes away
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const b = nthPos(live, 'b');
+    const mapped = buildAnchorMapper(live, canon).map(b, b + 1);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('b');
+  });
+
+  it('a range touching the disappearing whitespace-only block fails', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: ' ' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const space = nthPos(live, ' ');
+    expect(buildAnchorMapper(live, canon).map(space, space + 1)).toBeNull();
+  });
+
+  it('a whitespace-only SOLE block maps its interior cursors into the emptied block', () => {
+    const live = liveDoc(wsOnlyPara);
+    const canon = liveDoc(emptyPara);
+    const mapper = buildAnchorMapper(live, canon);
+    expect(mapper.map(1, 1)).toEqual({ from: 1, to: 1 }); // before the collapsed space
+    expect(mapper.map(2, 2)).toEqual({ from: 1, to: 1 }); // after it — same empty interior
+  });
+
+  it('identical empty paragraphs map their interior cursor 1:1', () => {
+    const live = liveDoc(emptyPara);
+    const canon = liveDoc(emptyPara);
+    expect(buildAnchorMapper(live, canon).map(1, 1)).toEqual({ from: 1, to: 1 });
+  });
+
+  it('leading empty-paragraph removal maps the surviving content', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph' },
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const a = nthPos(live, 'a');
+    const mapped = buildAnchorMapper(live, canon).map(a, a + 1);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('a');
+  });
+
+  it('trailing empty-paragraph removal maps the surviving content', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph' },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const a = nthPos(live, 'a');
+    const mapped = buildAnchorMapper(live, canon).map(a, a + 1);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('a');
+  });
+
+  it('an empty heading interior does NOT map to an empty paragraph interior', () => {
+    const live = liveDoc({ type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] });
+    const canon = liveDoc(emptyPara);
+    // No neighbouring content cell exists — only the boundary block signature can tell
+    // these apart, and it must.
+    expect(buildAnchorMapper(live, canon).map(1, 1)).toBeNull();
   });
 });
