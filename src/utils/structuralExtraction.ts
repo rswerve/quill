@@ -4,6 +4,7 @@ import type { BlockTrackAttr } from '../extensions/BlockTrack';
 import type { StructuralOp, StructuralSuggestionRecord } from '../types';
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
+import { isReviewMarkName } from './canonicalDocument';
 
 /** Metadata that lives in the canonical record, keyed by changeId. */
 export interface StructuralRecordMetadata {
@@ -13,8 +14,6 @@ export interface StructuralRecordMetadata {
   originCommentId?: string;
   originChatMessageId?: string;
 }
-
-const STRIP_MARKS = new Set(['tracked_insert', 'tracked_delete', 'tracked_format', 'comment']);
 
 /**
  * Strip review-only metadata from a proposed subtree's JSON so the persisted
@@ -29,7 +28,7 @@ function stripReviewMetadata(json: JSONContent): JSONContent {
     delete rest.blockTrack;
     out.attrs = rest;
   }
-  if (out.marks) out.marks = out.marks.filter((mark) => !STRIP_MARKS.has(mark.type));
+  if (out.marks) out.marks = out.marks.filter((mark) => !isReviewMarkName(mark.type));
   if (out.content) out.content = out.content.map(stripReviewMetadata);
   return out;
 }

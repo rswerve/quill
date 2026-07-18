@@ -59,8 +59,7 @@ import {
   buildCanonicalStructuralReview,
   rebaseStructuralRecordsToCanonicalSource,
 } from '../utils/structuralCanonical';
-import type { MarkdownSerialize } from '../utils/structuralFingerprint';
-import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
+import { markdownSerializer } from '../utils/structuralFingerprint';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateCommentForRepair } from '../utils/commentAnchors';
@@ -597,12 +596,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const captureCanonicalSaveState = useCallback((): CanonicalSaveState => {
     const ed = editorRef.current?.getEditor();
     if (!ed) return { ok: false, reason: 'structural', error: 'editor not ready' };
-    const serialize: MarkdownSerialize = (content) =>
-      (
-        ed.storage as unknown as {
-          markdown: { serializer: { serialize: (c: PMNode | Fragment) => string } };
-        }
-      ).markdown.serializer.serialize(content);
+    const serialize = markdownSerializer(ed);
     // 1. Structural source payload; fail closed while unreconciled quarantined records exist.
     const liveMarkdown = getDocMarkdown();
     if (quarantinedStructuralRef.current.length > 0) {

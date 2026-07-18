@@ -1,4 +1,5 @@
 import type { Mark, Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { isReviewMarkName } from './canonicalDocument';
 
 /**
  * Deterministic re-anchoring of review marks across a markdown round-trip.
@@ -80,16 +81,9 @@ interface AnchorProjection {
 // EXACTLY the whitespace ProseMirror's HTML parse collapses — ASCII only. NBSP and
 // other Unicode whitespace are meaningful and preserved, so \s would be wrong.
 const COLLAPSIBLE_WS = new Set([' ', '\t', '\n', '\r', '\f']);
-const REVIEW_MARK_TYPES = new Set([
-  'tracked_insert',
-  'tracked_delete',
-  'tracked_format',
-  'comment',
-]);
-
 function markSignature(marks: readonly Mark[]): string {
   return marks
-    .filter((mark) => !REVIEW_MARK_TYPES.has(mark.type.name))
+    .filter((mark) => !isReviewMarkName(mark.type.name))
     .map((mark) => `${mark.type.name}:${JSON.stringify(mark.attrs)}`)
     .sort()
     .join('|');

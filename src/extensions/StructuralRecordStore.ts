@@ -3,6 +3,7 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/p
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralRecordMetadata } from '../utils/structuralExtraction';
 import { structuralFootprints } from '../utils/structuralFootprints';
+import type { StructuralSuggestionRecord } from '../types';
 
 /** The authoritative, immutable metadata for one structural change. */
 export interface CanonicalRecord extends StructuralRecordMetadata {
@@ -98,4 +99,20 @@ export function addStructuralRecord(tr: Transaction, record: CanonicalRecord): T
 /** Replace the whole map on New/Open/load — never merges with the prior document. */
 export function resetStructuralRecords(tr: Transaction, records: CanonicalRecord[]): Transaction {
   return tr.setMeta(structuralRecordStoreKey, { kind: 'reset', records } satisfies StoreMeta);
+}
+
+/**
+ * Project a persisted structural record to the canonical metadata the store
+ * retains — proposed/anchor/fingerprint data never enters plugin state. The ONE
+ * place that knows how to build a `CanonicalRecord` from a persisted record.
+ */
+export function toCanonicalRecord(record: StructuralSuggestionRecord): CanonicalRecord {
+  return {
+    changeId: record.changeId,
+    op: record.op,
+    author: record.author,
+    createdAt: record.createdAt,
+    ...(record.originCommentId ? { originCommentId: record.originCommentId } : {}),
+    ...(record.originChatMessageId ? { originChatMessageId: record.originChatMessageId } : {}),
+  };
 }

@@ -1,7 +1,23 @@
+import type { Editor as TiptapEditor } from '@tiptap/core';
 import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 
 /** Serializes a node or fragment to Markdown — the editor's Markdown serializer. */
 export type MarkdownSerialize = (content: PMNode | Fragment) => string;
+
+interface MarkdownStorage {
+  markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
+}
+
+/**
+ * The ONE typed accessor for tiptap-markdown's serializer on an editor's storage.
+ * The cast is unavoidable — the plugin augments `storage` at runtime without a
+ * public type — so it is isolated here, beside `MarkdownSerialize`, instead of
+ * being rewritten at every call site.
+ */
+export function markdownSerializer(editor: TiptapEditor): MarkdownSerialize {
+  const storage = editor.storage as unknown as MarkdownStorage;
+  return (content) => storage.markdown.serializer.serialize(content);
+}
 
 /**
  * Canonical fingerprint of a structural change's source subtree: its Markdown

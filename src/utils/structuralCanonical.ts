@@ -1,8 +1,9 @@
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
-import { Transform } from '@tiptap/pm/transform';
 import type { StructuralSuggestionRecord } from '../types';
+import { structuralSkeletonEq } from './canonicalDocument';
 import {
   activeStructuralChangeIds,
+  toCanonicalRecord,
   type CanonicalRecord,
 } from '../extensions/StructuralRecordStore';
 import { projectBlockUnions } from './blockUnionProjection';
@@ -97,34 +98,6 @@ function idsAreExact(
     expectedSet.size === restoredSet.size &&
     [...expectedSet].every((id) => restoredSet.has(id))
   );
-}
-
-/** Canonical metadata only; proposed/anchor/fingerprint data never enters plugin state. */
-function toCanonicalRecord(record: StructuralSuggestionRecord): CanonicalRecord {
-  return {
-    changeId: record.changeId,
-    op: record.op,
-    author: record.author,
-    createdAt: record.createdAt,
-    ...(record.originCommentId ? { originCommentId: record.originCommentId } : {}),
-    ...(record.originChatMessageId ? { originChatMessageId: record.originChatMessageId } : {}),
-  };
-}
-
-const REVIEW_MARK_TYPES = ['tracked_insert', 'tracked_delete', 'tracked_format', 'comment'];
-
-/** Exact structural/content parity after removing the independently-persisted review marks. */
-function structuralSkeletonEq(a: PMNode, b: PMNode): boolean {
-  return stripReviewMarks(a).eq(stripReviewMarks(b));
-}
-
-function stripReviewMarks(doc: PMNode): PMNode {
-  const tr = new Transform(doc);
-  for (const name of REVIEW_MARK_TYPES) {
-    const markType = doc.type.schema.marks[name];
-    if (markType) tr.removeMark(0, tr.doc.content.size, markType);
-  }
-  return tr.doc;
 }
 
 /**

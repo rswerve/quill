@@ -1,30 +1,9 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../types';
 import { reconstructFromEnvelope } from './structuralEnvelope';
 import { reconstructBlockUnions, type ReconstructionResult } from './structuralReconstruction';
-import { resetStructuralRecords, type CanonicalRecord } from '../extensions/StructuralRecordStore';
-import type { MarkdownSerialize } from './structuralFingerprint';
-
-interface MarkdownStorage {
-  markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
-}
-
-function markdownSerializer(editor: TiptapEditor): MarkdownSerialize {
-  const storage = editor.storage as unknown as MarkdownStorage;
-  return (content) => storage.markdown.serializer.serialize(content);
-}
-
-function toCanonicalRecord(record: StructuralSuggestionRecord): CanonicalRecord {
-  return {
-    changeId: record.changeId,
-    op: record.op,
-    author: record.author,
-    createdAt: record.createdAt,
-    ...(record.originCommentId ? { originCommentId: record.originCommentId } : {}),
-    ...(record.originChatMessageId ? { originChatMessageId: record.originChatMessageId } : {}),
-  };
-}
+import { resetStructuralRecords, toCanonicalRecord } from '../extensions/StructuralRecordStore';
+import { markdownSerializer } from './structuralFingerprint';
 
 export interface StructuralReloadResult {
   restored: StructuralSuggestionRecord[];

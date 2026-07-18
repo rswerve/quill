@@ -1,9 +1,8 @@
 import { TextSelection } from '@tiptap/pm/state';
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import { validateSnapshot } from './reviewSnapshotIntegrity';
 import { prepareStructuralRecordSeed } from './structuralCanonical';
-import type { MarkdownSerialize } from './structuralFingerprint';
+import { markdownSerializer } from './structuralFingerprint';
 import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { FIND_KEY } from '../extensions/Find';
 import { PENDING_COMMENT_KEY } from '../extensions/PendingComment';
@@ -40,12 +39,7 @@ export function restoreDocJSONInto(
   // failure leaves the editor untouched so the caller degrades. The seed is metadata only
   // (CanonicalRecord[]) — seeding it in the SAME transaction preserves the restored docJSON
   // byte-for-byte, unlike a reconstruction, which would mutate the losslessly-restored document.
-  const serialize: MarkdownSerialize = (content) =>
-    (
-      editor.storage as unknown as {
-        markdown: { serializer: { serialize: (c: PMNode | Fragment) => string } };
-      }
-    ).markdown.serializer.serialize(content);
+  const serialize = markdownSerializer(editor);
   const seed = prepareStructuralRecordSeed(validation.doc, [...structural], serialize);
   if (!seed.ok) return { ok: false, reason: seed.error };
 

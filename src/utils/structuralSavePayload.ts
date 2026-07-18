@@ -1,7 +1,8 @@
 import type { Editor as TiptapEditor } from '@tiptap/core';
-import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
-import { Transform } from '@tiptap/pm/transform';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralSuggestionRecord } from '../types';
+import { structuralSkeletonEq } from './canonicalDocument';
+import { markdownSerializer } from './structuralFingerprint';
 import { projectBlockUnions } from './blockUnionProjection';
 import { extractStructuralRecords, type StructuralRecordMetadata } from './structuralExtraction';
 import { reconstructBlockUnions } from './structuralReconstruction';
@@ -11,7 +12,6 @@ import {
   orphanStructuralChangeIds,
 } from '../extensions/StructuralRecordStore';
 import { structuralFootprints } from './structuralFootprints';
-import type { MarkdownSerialize } from './structuralFingerprint';
 
 /**
  * The disk projection of a document that may hold block-union structural
@@ -22,15 +22,6 @@ import type { MarkdownSerialize } from './structuralFingerprint';
 export type StructuralSavePayload =
   | { ok: true; content: string; structural: StructuralSuggestionRecord[] }
   | { ok: false; error: string };
-
-interface MarkdownStorage {
-  markdown: { serializer: { serialize: (content: PMNode | Fragment) => string } };
-}
-
-function markdownSerializer(editor: TiptapEditor): MarkdownSerialize {
-  const storage = editor.storage as unknown as MarkdownStorage;
-  return (content) => storage.markdown.serializer.serialize(content);
-}
 
 /**
  * Build the two-axis disk payload for a save. This is the ONE synchronous
@@ -139,26 +130,4 @@ export function buildStructuralSavePayload(
   }
 
   return { ok: true, content: serialize(sourceDoc), structural };
-}
-
-const REVIEW_MARK_TYPES = ['tracked_insert', 'tracked_delete', 'tracked_format', 'comment'];
-
-/**
- * Compare two documents' structural skeletons (block tree + `blockTrack` identity),
- * ignoring the inline review axis. Structural reconstruction restores blocks and
- * their branch flags but not inline tracked/comment marks (those are Markdown-
- * dropped and restored on top), so an exact `Node.eq` after stripping those marks
- * is the right "same structural arrangement" test.
- */
-function structuralSkeletonEq(a: PMNode, b: PMNode): boolean {
-  return stripReviewMarks(a).eq(stripReviewMarks(b));
-}
-
-function stripReviewMarks(doc: PMNode): PMNode {
-  const tr = new Transform(doc);
-  for (const name of REVIEW_MARK_TYPES) {
-    const markType = doc.type.schema.marks[name];
-    if (markType) tr.removeMark(0, tr.doc.content.size, markType);
-  }
-  return tr.doc;
 }

@@ -9,8 +9,8 @@ import type {
 import type { MarkdownSerialize } from './structuralFingerprint';
 import { structuralFingerprint } from './structuralFingerprint';
 import { BLOCK_TRACK_TYPES } from '../extensions/BlockTrack';
+import { isReviewMarkName } from './canonicalDocument';
 
-const FORBIDDEN_MARKS = new Set(['tracked_insert', 'tracked_delete', 'tracked_format', 'comment']);
 const TRACKABLE = new Set<string>(BLOCK_TRACK_TYPES);
 
 export interface ReconstructionResult {
@@ -147,7 +147,7 @@ function attrsAreClean(json: Record<string, unknown>, nodeType: NodeType): boole
 
 function markIsClean(schema: Schema, mark: unknown): boolean {
   if (!isPlainObject(mark) || typeof mark.type !== 'string') return false;
-  if (FORBIDDEN_MARKS.has(mark.type) || !schema.marks[mark.type]) return false;
+  if (isReviewMarkName(mark.type) || !schema.marks[mark.type]) return false;
   if (mark.attrs === undefined) return true;
   if (!isPlainObject(mark.attrs)) return false;
   const allowed = new Set(Object.keys(schema.marks[mark.type].spec.attrs ?? {}));
