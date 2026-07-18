@@ -219,11 +219,46 @@ function runMatch(live: Cell[], i: number, iEnd: number, canon: Cell[], j: numbe
   return true;
 }
 
+/** Marks present on the collapsible cells of a gap; null if any cell is NOT collapsible. */
+function collapsibleMarkSet(cells: Cell[], from: number, to: number): Set<string> | null {
+  const marks = new Set<string>();
+  for (let k = from; k < to; k += 1) {
+    if (!cells[k].collapsible) return null; // a block boundary / leaf — not pure whitespace
+    marks.add(cells[k].markSig);
+  }
+  return marks;
+}
+
+/**
+ * A gap is a CLEAN whitespace collapse when both sides are nothing but ordinary
+ * collapsible whitespace AND no mark appeared or disappeared across it — only the COUNT
+ * changed (e.g. a typed double space renders and reopens as one). That is the sole
+ * per-cell removal an anchor may span without drifting. A whitespace run whose FORMATTING
+ * changed keeps the same length but a different mark set, so it is NOT clean and still
+ * blocks — relocating over it could invert a format delta onto differently-marked text.
+ */
+function isCleanWhitespaceCollapse(
+  L: Cell[],
+  C: Cell[],
+  bStart: number,
+  bEnd: number,
+  cStart: number,
+  cEnd: number,
+): boolean {
+  const liveMarks = collapsibleMarkSet(L, bStart, bEnd);
+  const canonMarks = collapsibleMarkSet(C, cStart, cEnd);
+  if (!liveMarks || !canonMarks || liveMarks.size !== canonMarks.size) return false;
+  for (const mark of liveMarks) if (!canonMarks.has(mark)) return false;
+  return true;
+}
+
 interface Alignment {
   /** live char index -> canonical char index, or -1 (removed/changed/unmapped). */
   charMap: Int32Array;
   /** live boundary index (0..n) -> canonical BOUNDARY index, or -1 (invalid). */
   boundMap: Int32Array;
+  /** 1 at each live cell that a CLEAN whitespace collapse faithfully removed. */
+  cleanCollapse: Uint8Array;
 }
 
 /** Cells that carry real anchor identity; the rest is normalization filler. */
@@ -254,6 +289,7 @@ function reconcileGap(
   C: Cell[],
   charMap: Int32Array,
   boundMap: Int32Array,
+  cleanCollapse: Uint8Array,
   bStart: number,
   bEnd: number,
   cStart: number,
@@ -272,6 +308,11 @@ function reconcileGap(
       charMap[bStart + k] = cStart + k;
       boundMap[bStart + k] = cStart + k;
     }
+  } else if (isCleanWhitespaceCollapse(L, C, bStart, bEnd, cStart, cEnd)) {
+    // Length changed but it is pure, identity-preserving whitespace: an anchor may span
+    // the removed cells. Only the outer boundaries (already set) map — the interior
+    // positions stay invalid, so a zero-width anchor INSIDE the run still fails closed.
+    for (let k = bStart; k < bEnd; k += 1) cleanCollapse[k] = 1;
   }
   return true;
 }
@@ -290,6 +331,7 @@ function align(live: AnchorProjection, canon: AnchorProjection): Alignment {
   const C = canon.cells;
   const charMap = new Int32Array(L.length).fill(-1);
   const boundMap = new Int32Array(L.length + 1).fill(-1);
+  const cleanCollapse = new Uint8Array(L.length); // live cells a clean collapse removed
   boundMap[0] = 0; // both documents start at boundary 0
 
   const liveContent = contentIndices(L);
@@ -308,7 +350,7 @@ function align(live: AnchorProjection, canon: AnchorProjection): Alignment {
       break;
     }
     // The gap before the FIRST anchor is a leading (edge) gap; later gaps are interior.
-    if (!reconcileGap(L, C, charMap, boundMap, prevLi, li, prevCi, ci, p > 0)) {
+    if (!reconcileGap(L, C, charMap, boundMap, cleanCollapse, prevLi, li, prevCi, ci, p > 0)) {
       broke = true;
       break;
     }
@@ -322,9 +364,9 @@ function align(live: AnchorProjection, canon: AnchorProjection): Alignment {
   // The trailing gap maps only when both content streams were fully, equally consumed
   // (a content-count divergence fails forward, leaving the tail unmapped).
   if (!broke && liveContent.length === canonContent.length) {
-    reconcileGap(L, C, charMap, boundMap, prevLi, L.length, prevCi, C.length, false);
+    reconcileGap(L, C, charMap, boundMap, cleanCollapse, prevLi, L.length, prevCi, C.length, false);
   }
-  return { charMap, boundMap };
+  return { charMap, boundMap, cleanCollapse };
 }
 
 export interface MappedRange {
@@ -368,7 +410,7 @@ function boundaryContextOk(
 function mapRange(
   live: AnchorProjection,
   canon: AnchorProjection,
-  { charMap, boundMap }: Alignment,
+  { charMap, boundMap, cleanCollapse }: Alignment,
   from: number,
   to: number,
 ): MappedRange | null {
@@ -385,12 +427,18 @@ function mapRange(
     return { from: canon.positions[cFrom], to: canon.positions[cFrom] };
   }
 
-  // Every content character must map, contiguously — any collapse/expansion, or a
-  // mark/block change inside the range (all leave a -1 or a jump), fails the range.
-  const first = charMap[bFrom];
-  if (first === -1) return null;
+  // Content must survive faithfully; ordinary collapsible whitespace INSIDE the range
+  // may normalize away — a highlight across a double space just tucks onto the single
+  // surviving one, so a save neither drifts nor blocks over spacing. `align` maps
+  // content 1:1 in order, so a range whose endpoints both map (checked above) and whose
+  // every non-whitespace cell maps in strictly increasing order is a faithful anchor:
+  // its canonical image is the endpoint-mapped span. A genuine change — unmapped content
+  // or a merged/added block boundary, both of which leave a -1 — still fails closed.
+  let prevContent = -1;
   for (let k = bFrom; k < bTo; k += 1) {
-    if (charMap[k] !== first + (k - bFrom)) return null;
+    if (cleanCollapse[k]) continue; // whitespace a clean collapse removed — not a change
+    if (charMap[k] === -1 || charMap[k] <= prevContent) return null;
+    prevContent = charMap[k];
   }
   return { from: canon.positions[cFrom], to: canon.positions[cTo] };
 }

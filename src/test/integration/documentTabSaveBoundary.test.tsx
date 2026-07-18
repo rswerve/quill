@@ -8,10 +8,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  *
  * Slice 5a proved canonical capture in isolation; this proves the wiring holds where it
  * actually matters — inside the mounted DocumentTab, across every save route. The load
- * path canonicalizes on open, so a file's stored positions are always honest at rest;
- * the danger is a LIVE edit that makes an annotation straddle whitespace that collapses
- * on write. When that happens the contract is: capture fails closed, NOTHING is written,
- * the tab stays dirty, and every route (manual Save, Save As, overwrite, autosave)
+ * path canonicalizes on open, so a file's stored positions are always honest at rest.
+ * An ordinary highlight ACROSS a collapsing double space now maps gracefully (it tucks
+ * onto the single surviving space); the remaining danger is a LIVE edit that leaves an
+ * anchor GENUINELY unmappable — here, a comment whose endpoint is stranded in the interior
+ * of a collapsing run. When that happens the contract is: capture fails closed, NOTHING is
+ * written, the tab stays dirty, and every route (manual Save, Save As, overwrite, autosave)
  * reports `review-blocked` rather than persisting a position it knows is wrong.
  *
  * The load half proves the mirror image: a legacy or externally-edited (source-hash
@@ -206,15 +208,23 @@ const commentText = (ed: Editor, id = 'c1'): string | null => {
 };
 
 /**
- * Insert a second space inside the comment's marked span so its highlight covers a double
- * space — the exact shape that collapses on write. The insert lands interior to the mark,
- * so the new space inherits the comment mark and the highlight grows to "foo  bar".
+ * Make the comment GENUINELY unmappable: grow it so its END boundary sits BETWEEN two
+ * spaces. An ordinary highlight ACROSS a double space now maps gracefully (it tucks onto
+ * the single surviving space), so the shape that still fails a save closed is an endpoint
+ * with no survivor once the run collapses on write. Insert two unmarked spaces just past
+ * the highlight and mark only the FIRST, so the comment terminates in the run's interior.
  */
-function breakCommentWithDoubleSpace(ed: Editor): void {
+function breakCommentInsideCollapse(ed: Editor): void {
   const range = findAnnotationRange(ed.state.doc, 'comment', 'c1')!;
-  const at = range.from + 3; // just after "foo", inside the marked span
+  const commentMark = ed.state.doc
+    .nodeAt(range.from)!
+    .marks.find((mk) => mk.type === ed.state.schema.marks.comment)!;
   act(() => {
-    ed.view.dispatch(ed.state.tr.insertText(' ', at));
+    ed.view.dispatch(
+      ed.state.tr
+        .insert(range.to, ed.state.schema.text('  '))
+        .addMark(range.to, range.to + 1, commentMark),
+    );
   });
 }
 
@@ -270,8 +280,8 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     // Precondition: the bound comment anchored cleanly over "foo bar".
     expect(commentText(ed)).toBe('foo bar');
 
-    breakCommentWithDoubleSpace(ed);
-    expect(commentText(ed)).toBe('foo  bar'); // now straddles the collapsing double space
+    breakCommentInsideCollapse(ed);
+    expect(commentText(ed)).toBe('foo bar '); // ends BETWEEN the collapsing spaces — unmappable
 
     let saved: string | null = 'unset';
     await act(async () => {
@@ -290,7 +300,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
       reads: boundReads(),
       saveDialogPath: '/docs/copy.md',
     });
-    breakCommentWithDoubleSpace(editorOf(m.handle));
+    breakCommentInsideCollapse(editorOf(m.handle));
 
     let saved: string | null = 'unset';
     await act(async () => {
@@ -306,7 +316,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
 
   it('autosave flush: capture failure writes nothing and reports the tab still dirty', async () => {
     const m = await mountTab({ reads: boundReads() });
-    breakCommentWithDoubleSpace(editorOf(m.handle));
+    breakCommentInsideCollapse(editorOf(m.handle));
 
     let stillDirty = false;
     await act(async () => {
@@ -346,7 +356,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
 
     // Now break the comment and overwrite: capture must fail before any write.
-    breakCommentWithDoubleSpace(ed);
+    breakCommentInsideCollapse(ed);
     conflictArmed = false; // if a write DID happen it would succeed — makes a leak visible
     m.mutations.length = 0;
 
@@ -364,7 +374,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
   it('recovery is policy-neutral: normalizing the whitespace lets the save through', async () => {
     const m = await mountTab({ reads: boundReads() });
     const ed = editorOf(m.handle);
-    breakCommentWithDoubleSpace(ed);
+    breakCommentInsideCollapse(ed);
 
     // Blocked first.
     await act(async () => {
@@ -372,11 +382,11 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
     expect(m.mutations).toHaveLength(0);
 
-    // Normalize: delete the extra space so the highlight no longer straddles a collapse.
+    // Normalize: drop the marked trailing space so the highlight ends on content again —
+    // its endpoint is no longer stranded in the interior of the collapsing run.
     const range = findAnnotationRange(ed.state.doc, 'comment', 'c1')!;
     act(() => {
-      // The span is "foo  bar"; drop one interior space.
-      ed.view.dispatch(ed.state.tr.delete(range.from + 3, range.from + 4));
+      ed.view.dispatch(ed.state.tr.delete(range.to - 1, range.to));
     });
     expect(commentText(ed)).toBe('foo bar');
 
@@ -393,7 +403,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
   it('recovery is policy-neutral: removing the offending comment lets the save through', async () => {
     const m = await mountTab({ reads: boundReads() });
     const ed = editorOf(m.handle);
-    breakCommentWithDoubleSpace(ed);
+    breakCommentInsideCollapse(ed);
     await act(async () => {
       await m.handle.save();
     });

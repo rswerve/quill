@@ -75,12 +75,24 @@ describe('reviewAnchorMap: outside-vs-inside invariant', () => {
     expect(mapped!.from).toBe(from - 1); // one collapsed space upstream
   });
 
-  it('a range CONTAINING a collapsed double space fails (null)', () => {
+  it('a range CONTAINING a collapsed double space maps onto the surviving space', () => {
+    // The graceful path: a highlight spanning a double space is not a change — it just
+    // tucks onto the single surviving space. Only genuine content/block changes fail.
     const live = liveDoc(para('foo  bar baz'));
-    const canon = canonicalOf(live);
+    const canon = canonicalOf(live); // "foo bar baz"
     const from = nthPos(live, 'foo');
     const mapped = buildAnchorMapper(live, canon).map(from, nthPos(live, 'bar') + 3);
-    expect(mapped).toBeNull();
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('foo bar');
+  });
+
+  it('a range whose ENDPOINT is inside a collapsing run has no surviving boundary — fails', () => {
+    const live = liveDoc(para('foo  bar')); // two spaces between foo and bar
+    const canon = canonicalOf(live);
+    const insideCollapse = nthPos(live, '  ') + 1; // between the two spaces — collapses away
+    const mapper = buildAnchorMapper(live, canon);
+    expect(mapper.map(insideCollapse, nthPos(live, 'bar') + 3)).toBeNull();
+    expect(mapper.map(nthPos(live, 'foo'), insideCollapse)).toBeNull();
   });
 });
 

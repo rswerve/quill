@@ -159,10 +159,20 @@ describe('captureCanonicalReviewState: mappable remap (normalization OUTSIDE the
   });
 });
 
-describe('captureCanonicalReviewState: fail-closed (normalization INSIDE the annotation)', () => {
-  it('fails when a suggestion covers whitespace that serialization collapses', () => {
-    // A tracked insertion of a double space: on reopen it collapses, so its range
-    // cannot map — capture must fail the whole save, never store a wrong position.
+describe('captureCanonicalReviewState: whitespace collapse is graceful; genuine changes fail closed', () => {
+  it('maps a comment whose highlight spans a collapsing double space onto the surviving space', () => {
+    const live = liveDoc(para('a  b')); // highlight includes the collapsing double space
+    const canon = canonicalOf(live); // "a b"
+    const [mapped] = ok(
+      captureCanonicalReviewState(live, canon, [comment(1, 5, { anchorText: 'a  b' })], []),
+    ).comments;
+    // The save proceeds; the highlight simply tucks onto the single surviving space.
+    expect(canon.textBetween(mapped.from, mapped.to)).toBe('a b');
+  });
+
+  it('still fails when a SUGGESTION covers whitespace its own tracked content collapses', () => {
+    // A tracked insertion of a double space: the collapse falls INSIDE the tracked text, so
+    // the segment can no longer spell its range — capture must fail the whole save.
     const live = liveDoc(para('x  y')); // the two spaces are the tracked content
     const canon = canonicalOf(live); // "x y"
     const dbl = posOf(live, '  ');
@@ -177,43 +187,61 @@ describe('captureCanonicalReviewState: fail-closed (normalization INSIDE the ann
     expect(result.unmappable).toEqual([{ kind: 'suggestion', id: expect.any(String) }]);
   });
 
-  it('fails when a comment highlights across a collapsing double space', () => {
-    const live = liveDoc(para('a  b')); // highlight includes the double space
-    const canon = canonicalOf(live); // "a b"
-    const result = captureCanonicalReviewState(
-      live,
-      canon,
-      [comment(1, 5, { anchorText: 'a  b' })],
-      [],
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.unmappable).toEqual([{ kind: 'comment', id: expect.any(String) }]);
-  });
-
   it('fails atomically: one unmappable record fails the whole batch (no partial capture)', () => {
-    const live = liveDoc(para('a  b clean'));
+    const live = liveDoc(para('x  y clean'));
     const canon = canonicalOf(live);
+    const dbl = posOf(live, '  ');
     const clean = posOf(live, 'clean');
     const result = captureCanonicalReviewState(
       live,
       canon,
-      [comment(1, 5, { anchorText: 'a  b' })], // unmappable
-      [suggestion([{ kind: 'delete', from: clean, to: clean + 5, text: 'clean' }])], // mappable
+      [comment(clean, clean + 5, { anchorText: 'clean' })], // mappable
+      [suggestion([{ kind: 'insert', from: dbl, to: dbl + 2, text: '  ' }])], // unmappable (own collapse)
     );
     expect(result.ok).toBe(false); // the whole capture fails, not a partial write
+  });
+
+  it('fails a comment whose endpoint lands INSIDE a collapsing run (no surviving boundary)', () => {
+    const live = liveDoc(para('a  b'));
+    const canon = canonicalOf(live);
+    const insideCollapse = posOf(live, '  ') + 1; // between the two spaces — collapses away
+    const end = posOf(live, 'b') + 1;
+    const result = captureCanonicalReviewState(
+      live,
+      canon,
+      [comment(insideCollapse, end, { anchorText: ' b' })],
+      [],
+    );
+    expect(result.ok).toBe(false);
   });
 });
 
 describe('captureCanonicalReviewState: a RESOLVED comment never blocks (Maz decision — detach)', () => {
-  it('detaches a resolved comment whose highlight covers a collapse, instead of blocking', () => {
-    const live = liveDoc(para('a  b')); // highlight includes the collapsing double space
+  it('maps a resolved comment over a whitespace collapse gracefully — no detach needed', () => {
+    const live = liveDoc(para('a  b'));
     const canon = canonicalOf(live); // "a b"
-    const result = ok(
+    const [mapped] = ok(
       captureCanonicalReviewState(
         live,
         canon,
         [comment(1, 5, { anchorText: 'a  b', resolved: true })],
+        [],
+      ),
+    ).comments;
+    expect(mapped.detached).toBeUndefined();
+    expect(canon.textBetween(mapped.from, mapped.to)).toBe('a b');
+  });
+
+  it('detaches a resolved comment that is GENUINELY unmappable, instead of blocking', () => {
+    const live = liveDoc(para('a  b'));
+    const canon = canonicalOf(live);
+    const insideCollapse = posOf(live, '  ') + 1; // endpoint with no surviving boundary
+    const end = posOf(live, 'b') + 1;
+    const result = ok(
+      captureCanonicalReviewState(
+        live,
+        canon,
+        [comment(insideCollapse, end, { anchorText: ' b', resolved: true })],
         [],
       ),
     );
@@ -222,13 +250,15 @@ describe('captureCanonicalReviewState: a RESOLVED comment never blocks (Maz deci
     expect(result.comments[0].resolved).toBe(true);
   });
 
-  it('still BLOCKS an active comment over the same collapse — only a resolved one detaches', () => {
+  it('still BLOCKS an active comment that is genuinely unmappable — only a resolved one detaches', () => {
     const live = liveDoc(para('a  b'));
     const canon = canonicalOf(live);
+    const insideCollapse = posOf(live, '  ') + 1;
+    const end = posOf(live, 'b') + 1;
     const result = captureCanonicalReviewState(
       live,
       canon,
-      [comment(1, 5, { anchorText: 'a  b', resolved: false })],
+      [comment(insideCollapse, end, { anchorText: ' b', resolved: false })],
       [],
     );
     expect(result.ok).toBe(false);

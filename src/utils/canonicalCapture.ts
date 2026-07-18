@@ -1,6 +1,7 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { Comment, Suggestion } from '../types';
 import { buildAnchorMapper } from './reviewAnchorMap';
+import { rangeText } from './trackedEdits';
 
 /** One annotation whose live range could not be mapped into the canonical document. */
 export interface UnmappableAnchor {
@@ -54,15 +55,31 @@ export function captureCanonicalReviewState(
       unmappable.push({ kind: 'comment', id: comment.id });
       return comment;
     }
-    return { ...comment, from: mapped.from, to: mapped.to };
+    // Refresh the anchor text to the canonical range it now covers: a highlight that spanned
+    // a collapsing double space anchors "foo bar", not the stale "foo  bar". The load path
+    // validates a bound comment's anchorText against its range, so a stale one would be
+    // dropped; keeping it in step also leaves the record honest for unbound relocation.
+    return {
+      ...comment,
+      from: mapped.from,
+      to: mapped.to,
+      anchorText: rangeText(canonDoc, mapped.from, mapped.to),
+    };
   });
 
   const mappedSuggestions = suggestions.map((suggestion) => {
     if (suggestion.detached) return suggestion; // known-bad range; self-declares non-authoritative
-    const mapped = suggestion.segments.map((segment) => ({
-      segment,
-      range: mapper.map(segment.from, segment.to),
-    }));
+    const mapped = suggestion.segments.map((segment) => {
+      const range = mapper.map(segment.from, segment.to);
+      // A comment simply highlights, so a range that shrinks onto the surviving space is
+      // fine. A suggestion SEGMENT also carries `text` that its range must still spell — so
+      // a mapped range whose canonical text no longer equals `segment.text` means the
+      // collapse fell INSIDE the tracked content itself (e.g. a tracked double space). That
+      // can't be represented faithfully, so treat it as unmappable and fail the save closed.
+      const consistent =
+        range !== null && rangeText(canonDoc, range.from, range.to) === segment.text;
+      return { segment, range: consistent ? range : null };
+    });
     if (!mapped.every((entry) => entry.range !== null)) {
       unmappable.push({ kind: 'suggestion', id: suggestion.id });
       return suggestion;

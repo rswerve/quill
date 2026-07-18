@@ -194,6 +194,26 @@ export function degradedRecoveryNotice(): { title: string; message: string } {
   };
 }
 
+/** The manual-save "Save blocked" notice, pluralized for the offending records. */
+export function reviewBlockedNotice(
+  unmappable: ReadonlyArray<{ kind: 'comment' | 'suggestion'; id: string }>,
+): { title: string; message: string } {
+  const comments = unmappable.filter((u) => u.kind === 'comment').length;
+  const suggestions = unmappable.length - comments;
+  const parts: string[] = [];
+  if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
+  if (suggestions) parts.push(`${suggestions} suggestion${suggestions === 1 ? '' : 's'}`);
+  const verb = unmappable.length === 1 ? 'covers' : 'cover';
+  const pointer = unmappable.length === 1 ? "It's highlighted" : 'The first is highlighted';
+  return {
+    title: "Save blocked — an annotation can't be anchored",
+    message:
+      `${parts.join(' and ')} ${verb} text that changes shape when the file is written ` +
+      '(for example, extra spaces that collapse on save), so Quill can’t save without ' +
+      `risking a mismatched anchor. ${pointer} — adjust or remove it, then save again.`,
+  };
+}
+
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
   filePath: string | null;
@@ -1035,17 +1055,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Focus the first offending annotation so the user can find and fix it.
         const [first] = outcome.unmappable;
         if (first) setActiveAnnotation({ kind: first.kind, id: first.id });
-        const comments = outcome.unmappable.filter((u) => u.kind === 'comment').length;
-        const suggestions = outcome.unmappable.length - comments;
-        const parts: string[] = [];
-        if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
-        if (suggestions) parts.push(`${suggestions} suggestion${suggestions === 1 ? '' : 's'}`);
-        showError(
-          "Save blocked — an annotation can't be anchored",
-          `${parts.join(' and ')} cover text that changes shape when the file is written ` +
-            '(for example, extra spaces that collapse on save), so Quill can’t save without ' +
-            'risking a mismatched anchor. The first is highlighted — adjust or remove it, then save again.',
-        );
+        const notice = reviewBlockedNotice(outcome.unmappable);
+        showError(notice.title, notice.message);
       }
     },
     [showError, setActiveAnnotation],
