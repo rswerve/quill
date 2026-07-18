@@ -243,6 +243,184 @@ describe('validateSnapshot: malformed tracked-mark attributes fail closed (no th
   });
 });
 
+describe('validateSnapshot: raw tracked-mark exactness (Codex round 2)', () => {
+  // Walk a doc JSON and mutate every tracked mark's dataTracked / attrs.
+  function forEachTrackedMark(
+    json: Record<string, unknown>,
+    fn: (data: Record<string, unknown>, attrs: Record<string, unknown>) => void,
+  ): void {
+    const walk = (node: Record<string, unknown>) => {
+      for (const mark of (node.marks as Array<Record<string, unknown>>) ?? []) {
+        const type = mark.type as string | undefined;
+        const attrs = mark.attrs as Record<string, unknown> | undefined;
+        const data = attrs?.dataTracked as Record<string, unknown> | undefined;
+        if (type?.startsWith('tracked_') && attrs && data) fn(data, attrs);
+      }
+      for (const child of (node.content as Array<Record<string, unknown>>) ?? []) walk(child);
+    };
+    walk(json);
+  }
+
+  function mintFormat(): Editor {
+    const editor = makeEditor();
+    editor.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'bold me' }] }],
+      },
+      { emitUpdate: false },
+    );
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 5 }).toggleBold().run();
+    return editor;
+  }
+
+  function firstTrackedId(json: Record<string, unknown>): string {
+    let id = '';
+    forEachTrackedMark(json, (data) => {
+      if (!id) id = data.id as string;
+    });
+    return id;
+  }
+
+  it('rejects an ACCEPTED tracked mark (persisted marks are always pending)', () => {
+    const { editor } = coherent();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.status = 'accepted'));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('not pending');
+  });
+
+  it('rejects a changeId that disagrees with dataTracked.id', () => {
+    const { editor } = coherent();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (_data, attrs) => (attrs.changeId = 'mismatched'));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('changeId');
+  });
+
+  it('rejects a format delta on a non-format (delete) operation', () => {
+    const { editor } = coherent(); // a tracked delete
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.delta = { adds: ['bold'], removes: [] }));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('must not carry a format delta');
+  });
+
+  it('rejects a format mark with no delta', () => {
+    const editor = mintFormat();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => delete data.delta);
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('no delta');
+  });
+
+  it('rejects a format delta naming an unsupported mark', () => {
+    const editor = mintFormat();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.delta = { adds: ['rainbow'], removes: [] }));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('unsupported format');
+  });
+
+  it('rejects a format delta whose adds and removes overlap', () => {
+    const editor = mintFormat();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.delta = { adds: ['bold'], removes: ['bold'] }));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('overlap');
+  });
+
+  it('rejects an empty format delta', () => {
+    const editor = mintFormat();
+    const json = jsonOf(editor);
+    forEachTrackedMark(json, (data) => (data.delta = { adds: [], removes: [] }));
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('empty format delta');
+  });
+
+  it('rejects inconsistent origins across same-id replacement fragments', () => {
+    // A replacement (type-over) mints an insert + delete under one id.
+    const editor = makeEditor();
+    editor.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'alpha beta' }] }],
+      },
+      { emitUpdate: false },
+    );
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).insertContent('ALPHA').run();
+    const json = jsonOf(editor);
+    let flipped = false;
+    forEachTrackedMark(json, (data) => {
+      // Give only the DELETE half a divergent origin so the two fragments disagree.
+      if (data.operation === 'delete' && !flipped) {
+        data.originCommentId = 'origin-x';
+        flipped = true;
+      }
+    });
+    expect(flipped).toBe(true);
+    const result = validateSnapshot(editor.schema, json, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('inconsistent metadata across fragments');
+  });
+
+  it('rejects a disjoint comment: one id on two spans whose envelope matches the record', () => {
+    const editor = makeEditor();
+    const commentMark = {
+      type: 'comment',
+      attrs: { commentId: 'c1', kind: 'note', resolved: false },
+    };
+    // "aaa " and "ccc" carry the mark; "bbb " between them does NOT → a coverage gap the
+    // reconcile/envelope check alone misses (the outer range [1,12] reads "aaa bbb ccc").
+    const disjoint = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'aaa ', marks: [commentMark] },
+            { type: 'text', text: 'bbb ' },
+            { type: 'text', text: 'ccc', marks: [commentMark] },
+          ],
+        },
+      ],
+    };
+    const record: Comment = {
+      id: 'c1',
+      anchorText: 'aaa bbb ccc',
+      from: 1,
+      to: 12,
+      author: 'R',
+      createdAt: '2026-01-01T00:00:00Z',
+      resolved: false,
+      kind: 'note',
+      replies: [],
+    };
+    const result = validateSnapshot(editor.schema, disjoint, [record], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('gap');
+  });
+
+  it('still accepts a coherent format suggestion (no false positive)', () => {
+    const editor = mintFormat();
+    const suggestions = suggestionsFromTrackedChanges(getTrackedChanges(editor));
+    void firstTrackedId(jsonOf(editor));
+    const result = validateSnapshot(editor.schema, jsonOf(editor), [], suggestions);
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('validateSnapshot: comment bijection', () => {
   it('fails when an active comment record has no mark', () => {
     const { editor, comment, suggestions } = coherent();

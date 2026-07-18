@@ -1,9 +1,15 @@
 import type { Node as ProseMirrorNode, Schema } from '@tiptap/pm/model';
 import { getTrackedChanges } from '../extensions/TrackChanges';
+import { INLINE_FORMAT_POLICIES } from '../extensions/trackChangesPolicy';
 import { reconcileCommentsWithDocument } from './commentReconciler';
 import { normalizePersistedSuggestions, suggestionsFromTrackedChanges } from './reviewPersistence';
 import { sanitizeSuggestions } from './annotationValidation';
 import type { Comment, JSONContent, LogicalSuggestion, Suggestion } from '../types';
+
+/** The inline marks a format suggestion may add/remove (bold/italic/strike/code). */
+const TRACKABLE_FORMATS = new Set(Object.keys(INLINE_FORMAT_POLICIES));
+/** The operation sets one logical change may present, as a sorted-join key. */
+const ALLOWED_OP_SETS = new Set(['insert', 'delete', 'delete|insert', 'format']);
 
 /**
  * Validation for the lossless (PM-JSON) crash-recovery path. `workspace.json` is untrusted
@@ -66,7 +72,14 @@ function parseSnapshotDoc(schema: Schema, json: JSONContent): SnapshotValidation
 }
 
 type TrackedOp = 'insert' | 'delete' | 'format';
-type MarkMeta = { authorID: unknown; status: unknown; createdAt: unknown };
+type MarkMeta = {
+  authorID: unknown;
+  status: unknown;
+  createdAt: unknown;
+  originCommentId: unknown;
+  originChatMessageId: unknown;
+  ops: Set<TrackedOp>;
+};
 
 function trackedOp(mark: { type: unknown }, schema: Schema): TrackedOp | null {
   if (mark.type === schema.marks['tracked_insert']) return 'insert';
@@ -75,34 +88,54 @@ function trackedOp(mark: { type: unknown }, schema: Schema): TrackedOp | null {
   return null;
 }
 
-/** A format delta must be `{ adds?: string[]; removes?: string[] }` — nothing else. */
+/**
+ * A format delta must be `{ adds: string[]; removes: string[] }` of SUPPORTED format-mark
+ * names, disjoint, and non-empty — the exact shape a real format suggestion carries. An empty
+ * or absent delta, an unknown mark name, or an add that is also a remove is corruption.
+ */
 function formatDeltaError(id: string, delta: unknown): string | null {
   if (typeof delta !== 'object' || delta === null)
     return `tracked mark ${id} has a malformed delta`;
   const d = delta as Record<string, unknown>;
+  const seen: Record<'adds' | 'removes', string[]> = { adds: [], removes: [] };
   for (const key of ['adds', 'removes'] as const) {
     const v = d[key];
-    if (v !== undefined && (!Array.isArray(v) || !v.every((x) => typeof x === 'string')))
+    if (v === undefined) continue;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string'))
       return `tracked mark ${id} delta.${key} is not a string array`;
+    for (const name of v)
+      if (!TRACKABLE_FORMATS.has(name))
+        return `tracked mark ${id} delta.${key} names an unsupported format "${name}"`;
+    seen[key] = v;
   }
+  if (seen.adds.length + seen.removes.length === 0)
+    return `tracked mark ${id} has an empty format delta`;
+  const removes = new Set(seen.removes);
+  if (seen.adds.some((a) => removes.has(a)))
+    return `tracked mark ${id} format delta adds and removes overlap`;
   return null;
 }
 
-/** Shape-check one tracked mark's `dataTracked` (its operation must match the mark type). */
-function trackedMarkDataError(
-  op: TrackedOp,
-  data: Record<string, unknown> | undefined,
-): string | null {
+/** Shape-check one tracked mark's attrs (dataTracked + changeId must agree with the mark type). */
+function trackedMarkDataError(op: TrackedOp, attrs: Record<string, unknown>): string | null {
+  const data = attrs.dataTracked as Record<string, unknown> | undefined;
   if (!data || typeof data !== 'object') return 'tracked mark has no dataTracked';
   const id = data.id;
   if (typeof id !== 'string' || !id) return 'tracked mark is missing its id';
+  if (attrs.changeId !== id)
+    return `tracked mark ${id} changeId "${String(attrs.changeId)}" != dataTracked.id`;
   if (data.operation !== op)
     return `tracked mark ${id} operation "${String(data.operation)}" != ${op}`;
   if (typeof data.authorID !== 'string') return `tracked mark ${id} has a non-string authorID`;
-  if (data.status !== 'pending' && data.status !== 'accepted' && data.status !== 'rejected')
-    return `tracked mark ${id} has an invalid status`;
+  // A persisted tracked mark is always unresolved — accepted/rejected changes drop their marks.
+  if (data.status !== 'pending')
+    return `tracked mark ${id} is "${String(data.status)}", not pending`;
   if (typeof data.createdAt !== 'number') return `tracked mark ${id} has a non-numeric createdAt`;
-  if (op === 'format' && data.delta !== undefined) return formatDeltaError(id, data.delta);
+  if (op === 'format') {
+    if (data.delta === undefined) return `format mark ${id} has no delta`;
+    return formatDeltaError(id, data.delta);
+  }
+  if (data.delta !== undefined) return `tracked mark ${id} (${op}) must not carry a format delta`;
   return null;
 }
 
@@ -113,6 +146,23 @@ function trackedMarkDataError(
  * (e.g. a `delta.adds` that isn't an array). Fragments sharing an id must agree on identity
  * (operation may differ — a replacement carries both an insert and a delete under one id).
  */
+function fragmentMetaError(
+  id: string,
+  prior: MarkMeta,
+  data: Record<string, unknown>,
+): string | null {
+  if (
+    prior.authorID !== data.authorID ||
+    prior.status !== data.status ||
+    prior.createdAt !== data.createdAt ||
+    prior.originCommentId !== data.originCommentId ||
+    prior.originChatMessageId !== data.originChatMessageId
+  ) {
+    return `tracked mark ${id} has inconsistent metadata across fragments`;
+  }
+  return null;
+}
+
 function validateRawTrackedMarks(doc: ProseMirrorNode, schema: Schema): string | null {
   const meta = new Map<string, MarkMeta>();
   let error: string | null = null;
@@ -122,29 +172,36 @@ function validateRawTrackedMarks(doc: ProseMirrorNode, schema: Schema): string |
     for (const mark of node.marks) {
       const op = trackedOp(mark, schema);
       if (!op) continue;
-      const data = mark.attrs.dataTracked as Record<string, unknown> | undefined;
-      error = trackedMarkDataError(op, data);
+      error = trackedMarkDataError(op, mark.attrs);
       if (error) return false;
-      const id = data!.id as string;
+      const data = mark.attrs.dataTracked as Record<string, unknown>;
+      const id = data.id as string;
       const prior = meta.get(id);
-      if (
-        prior &&
-        (prior.authorID !== data!.authorID ||
-          prior.status !== data!.status ||
-          prior.createdAt !== data!.createdAt)
-      ) {
-        error = `tracked mark ${id} has inconsistent metadata across fragments`;
-        return false;
-      }
-      if (!prior)
+      if (prior) {
+        error = fragmentMetaError(id, prior, data);
+        if (error) return false;
+        prior.ops.add(op);
+      } else {
         meta.set(id, {
-          authorID: data!.authorID,
-          status: data!.status,
-          createdAt: data!.createdAt,
+          authorID: data.authorID,
+          status: data.status,
+          createdAt: data.createdAt,
+          originCommentId: data.originCommentId,
+          originChatMessageId: data.originChatMessageId,
+          ops: new Set([op]),
         });
+      }
     }
   });
-  return error;
+  if (error) return error;
+  // Each logical change must present an allowed operation shape: an insertion, a deletion, an
+  // insert+delete replacement, or a format — never an arbitrary mix.
+  for (const [id, m] of meta) {
+    const shape = [...m.ops].sort().join('|');
+    if (!ALLOWED_OP_SETS.has(shape))
+      return `tracked mark ${id} has an invalid operation set {${shape}}`;
+  }
+  return null;
 }
 
 /** Canonical form both sides run through, so legitimate serialization can't false-positive. */
@@ -225,7 +282,32 @@ function markedCommentIds(doc: ProseMirrorNode): Set<string> {
  * record's mark carries its `kind` and is unresolved, resolved/detached records are mark-less,
  * and no mark lacks a record.
  */
-/** Mark attributes must agree with the record: active ↔ its kind + unresolved, else mark-less. */
+/**
+ * The active comment's mark must cover [from, to] CONTIGUOUSLY and stay within it. Coverage is
+ * measured over mark-admissible inline content (text nodes) only — block boundaries can't carry
+ * a comment mark, so they are not gaps. This rejects disjoint same-id spans whose outer envelope
+ * happens to match the record range, which the reconcile/envelope check alone would miss.
+ */
+function commentCoverageError(doc: ProseMirrorNode, c: Comment): string | null {
+  let error: string | null = null;
+  doc.descendants((node, pos) => {
+    if (error) return false;
+    if (!node.isText) return; // block boundaries / atoms are not mark-admissible → not gaps
+    const from = pos;
+    const to = pos + node.nodeSize;
+    const marked = node.marks.some(
+      (mark) => mark.type.name === 'comment' && mark.attrs.commentId === c.id,
+    );
+    if (marked && (from < c.from || to > c.to)) {
+      error = `comment ${c.id} is marked outside its record range`;
+    } else if (!marked && from < c.to && to > c.from) {
+      error = `comment ${c.id} range has an uncovered gap (disjoint marks)`;
+    }
+  });
+  return error;
+}
+
+/** Mark attributes must agree with the record: active ↔ its kind + unresolved + contiguous, else mark-less. */
 function commentMarkError(doc: ProseMirrorNode, c: Comment): string | null {
   const attrs = commentMarkAttrs(doc, c.id);
   if (c.resolved || c.detached) {
@@ -235,7 +317,7 @@ function commentMarkError(doc: ProseMirrorNode, c: Comment): string | null {
   if (attrs.some((a) => a.kind !== c.kind))
     return `comment ${c.id} mark kind does not match record`;
   if (attrs.some((a) => a.resolved === true)) return `active comment ${c.id} has a resolved mark`;
-  return null;
+  return commentCoverageError(doc, c);
 }
 
 function validateComments(doc: ProseMirrorNode, comments: Comment[]): string | null {
