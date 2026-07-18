@@ -1,11 +1,15 @@
 import { TextSelection } from '@tiptap/pm/state';
 import type { Editor as TiptapEditor } from '@tiptap/core';
+import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import { validateSnapshot } from './reviewSnapshotIntegrity';
+import { prepareStructuralRecordSeed } from './structuralCanonical';
+import type { MarkdownSerialize } from './structuralFingerprint';
+import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { FIND_KEY } from '../extensions/Find';
 import { PENDING_COMMENT_KEY } from '../extensions/PendingComment';
 import { ANNOTATION_FOCUS_KEY } from '../extensions/AnnotationFocus';
 import { SKIP_TRACKING_META } from '../extensions/trackChangesMeta';
-import type { Comment, JSONContent, Suggestion } from '../types';
+import type { Comment, JSONContent, StructuralSuggestionRecord, Suggestion } from '../types';
 
 /** Outcome of a lossless (PM-JSON) recovery restore. */
 export type DocJSONRestoreResult = { ok: true } | { ok: false; reason: string };
@@ -28,9 +32,22 @@ export function restoreDocJSONInto(
   json: JSONContent,
   comments: Comment[],
   suggestions: Suggestion[],
+  structural: readonly StructuralSuggestionRecord[] = [],
 ): DocJSONRestoreResult {
   const validation = validateSnapshot(editor.schema, json, comments, suggestions);
   if (!validation.ok) return { ok: false, reason: validation.reason };
+  // Validate the structural records against the to-be-restored review union BEFORE mutating: a
+  // failure leaves the editor untouched so the caller degrades. The seed is metadata only
+  // (CanonicalRecord[]) — seeding it in the SAME transaction preserves the restored docJSON
+  // byte-for-byte, unlike a reconstruction, which would mutate the losslessly-restored document.
+  const serialize: MarkdownSerialize = (content) =>
+    (
+      editor.storage as unknown as {
+        markdown: { serializer: { serialize: (c: PMNode | Fragment) => string } };
+      }
+    ).markdown.serializer.serialize(content);
+  const seed = prepareStructuralRecordSeed(validation.doc, [...structural], serialize);
+  if (!seed.ok) return { ok: false, reason: seed.error };
 
   const { state, view } = editor;
   const tr = state.tr;
@@ -43,6 +60,7 @@ export function restoreDocJSONInto(
   tr.setMeta(PENDING_COMMENT_KEY, null);
   tr.setMeta(ANNOTATION_FOCUS_KEY, null);
   tr.setMeta(FIND_KEY, { type: 'query', query: '' });
+  resetStructuralRecords(tr, seed.records);
   view.dispatch(tr);
   return { ok: true };
 }

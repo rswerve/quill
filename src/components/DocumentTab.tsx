@@ -55,13 +55,16 @@ import {
   reconstructStructuralFromRecords,
 } from '../utils/structuralReload';
 import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
+import {
+  buildCanonicalStructuralReview,
+  rebaseStructuralRecordsToCanonicalSource,
+} from '../utils/structuralCanonical';
+import type { MarkdownSerialize } from '../utils/structuralFingerprint';
+import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateCommentForRepair } from '../utils/commentAnchors';
-import {
-  captureCanonicalReviewState,
-  type CanonicalCaptureResult,
-} from '../utils/canonicalCapture';
+import { captureCanonicalReviewState, type UnmappableAnchor } from '../utils/canonicalCapture';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
@@ -224,6 +227,23 @@ export function reviewBlockedNotice(
       `risking a mismatched anchor. ${pointer} — adjust or remove it, then save again.`,
   };
 }
+
+/**
+ * The result of the combined pre-write capture: the exact source Markdown to write, the inline
+ * records captured against the reconstructed canonical review union, and the re-anchored
+ * structural records — or a fail-closed reason (an unanchorable inline annotation, or a
+ * structural payload/rebase/reconstruction failure), which aborts the whole save.
+ */
+type CanonicalSaveState =
+  | {
+      ok: true;
+      markdown: string;
+      comments: Comment[];
+      suggestions: Suggestion[];
+      structural: StructuralSuggestionRecord[];
+    }
+  | { ok: false; reason: 'review-blocked'; unmappable: UnmappableAnchor[] }
+  | { ok: false; reason: 'structural'; error: string };
 
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
@@ -563,44 +583,75 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [comments, suggestions]);
 
-  // The FILE save paths (save, Save As, overwrite) canonicalize review coordinates to the
-  // document a reopen produces, so a source-hashed sidecar's positions are honest. (The
-  // workspace snapshot does NOT yet canonicalize — it stays unbound until that lands.)
-  // Fails closed (ok:false) when an annotation covers text that changes shape on write;
-  // the caller then aborts the ENTIRE save. The editor is always present during a save —
-  // if somehow absent, fail closed rather than persist non-canonical positions.
-  const getCanonicalReviewState = useCallback((): {
-    capture: CanonicalCaptureResult;
-    markdown: string;
-  } => {
+  // One combined pre-write primitive every FILE save route funnels through. It composes the
+  // structural (source) and inline (review) axes so a reopen rebuilds EXACTLY what was captured:
+  //  1. validated structural SOURCE payload — fail-closed on a quarantined/orphan/incomplete
+  //     union; its `content` is the source-only Markdown (never the live union);
+  //  2. normalize that SOURCE (write the canonical Markdown when it is a round-trip fixed point,
+  //     else the raw source), so the bytes match what a reopen rebuilds — never the union;
+  //  3. rebase the structural records' anchors/fingerprints onto that canonical source;
+  //  4. reconstruct the canonical review UNION (detached) from the canonical source + records;
+  //  5. capture the inline comments/suggestions from the LIVE union INTO that reconstructed
+  //     canonical review union, so a proposed-branch anchor maps instead of blocking.
+  // Any step failing closed aborts the ENTIRE save before a byte is written.
+  const captureCanonicalSaveState = useCallback((): CanonicalSaveState => {
     const ed = editorRef.current?.getEditor();
+    if (!ed) return { ok: false, reason: 'structural', error: 'editor not ready' };
+    const serialize: MarkdownSerialize = (content) =>
+      (
+        ed.storage as unknown as {
+          markdown: { serializer: { serialize: (c: PMNode | Fragment) => string } };
+        }
+      ).markdown.serializer.serialize(content);
+    // 1. Structural source payload; fail closed while unreconciled quarantined records exist.
     const liveMarkdown = getDocMarkdown();
-    const canonDoc = editorRef.current?.parseMarkdown(liveMarkdown);
+    if (quarantinedStructuralRef.current.length > 0) {
+      return {
+        ok: false,
+        reason: 'structural',
+        error: 'unreconciled structural suggestions on disk',
+      };
+    }
+    const payload = buildStructuralSavePayload(ed, liveMarkdown);
+    if (!payload.ok) return { ok: false, reason: 'structural', error: payload.error };
+    // 2. Parse the SOURCE, then normalize it (fixed-point-guarded) — never the live union.
+    const canonicalSourceDoc = editorRef.current?.parseMarkdown(payload.content);
+    if (!canonicalSourceDoc)
+      return { ok: false, reason: 'structural', error: 'source parse failed' };
+    const canonicalSourceMd = editorRef.current?.serializeDoc(canonicalSourceDoc);
+    const reparsed =
+      canonicalSourceMd != null ? editorRef.current?.parseMarkdown(canonicalSourceMd) : null;
+    const markdown =
+      canonicalSourceMd != null && reparsed != null && reparsed.eq(canonicalSourceDoc)
+        ? canonicalSourceMd
+        : payload.content;
+    // 3. Re-anchor + re-fingerprint the structural records onto the canonical source.
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      ed.state.doc,
+      canonicalSourceDoc,
+      payload.structural,
+      serialize,
+    );
+    if (!rebased.ok) return { ok: false, reason: 'structural', error: rebased.error };
+    // 4. Reconstruct the canonical review union (detached) from the canonical source.
+    const union = buildCanonicalStructuralReview(canonicalSourceDoc, rebased.records, serialize);
+    if (!union.ok) return { ok: false, reason: 'structural', error: union.error };
+    // 5. Capture inline comments/suggestions from the live union INTO the canonical review union.
     const live = getLiveReviewState();
-    if (!ed || !canonDoc) return { capture: { ok: false, unmappable: [] }, markdown: liveMarkdown };
     const capture = captureCanonicalReviewState(
       ed.state.doc,
-      canonDoc,
+      union.doc,
       live.comments,
       live.suggestions,
     );
-    // Normalize on write: persist the CANONICAL Markdown — the exact document a reopen
-    // rebuilds — so a typed double space is stored as the single space it always collapses
-    // to and the on-disk bytes match what the editor shows. Coordinates were captured against
-    // THIS canonDoc; the write is only correct if a reopen rebuilds canonDoc EXACTLY, i.e.
-    // the canonical Markdown is a true round-trip fixed point (`parse(serialize(canonDoc))
-    // === canonDoc`). Verify that before trusting it — if some construct is not idempotent
-    // under a second round-trip, fall back to the live serialization, whose reopen is canonDoc
-    // by definition, so a bound reopen never drifts either way. This keeps normalization
-    // provably safe by construction rather than by enumerating every Markdown construct.
-    const canonicalMarkdown = editorRef.current?.serializeDoc(canonDoc);
-    const reparsed =
-      canonicalMarkdown != null ? editorRef.current?.parseMarkdown(canonicalMarkdown) : null;
-    const markdown =
-      canonicalMarkdown != null && reparsed != null && reparsed.eq(canonDoc)
-        ? canonicalMarkdown
-        : liveMarkdown;
-    return { capture, markdown };
+    if (!capture.ok) return { ok: false, reason: 'review-blocked', unmappable: capture.unmappable };
+    return {
+      ok: true,
+      markdown,
+      comments: capture.comments,
+      suggestions: capture.suggestions,
+      structural: rebased.records,
+    };
   }, [getDocMarkdown, getLiveReviewState]);
 
   // The shell owns persistence and asks each mounted tab for a live snapshot.
@@ -1135,27 +1186,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       .catch((error) => console.warn('Could not record Claude session document:', error));
   }, [aiSession, filePath]);
 
-  // The single synchronous pre-write payload builder every save route funnels
-  // through: the source-projected `.md` plus the structural records for the
-  // envelope. For a document with no structural union it returns getMarkdown()
-  // verbatim (byte-identical to the pre-structural save); a malformed union
-  // returns `{ ok: false }` so the caller aborts BEFORE any byte is written.
-  const captureDiskPayload = useCallback((): StructuralSavePayload => {
-    const ed = editorRef.current?.getEditor();
-    const fallback = editorRef.current?.getMarkdown() ?? '';
-    if (!ed) return { ok: true, content: fallback, structural: [] };
-    // Fail closed if the last load left unreconciled (quarantined) structural
-    // records: rebuilding the envelope from live state would DROP them, while the
-    // on-disk sidecar still holds the only copy. Refuse every write route until the
-    // document is reconciled — the sidecar is never overwritten, so nothing is lost
-    // (and nothing rejected is resurrected). Proper mixed active+quarantined
-    // preservation needs a multi-batch envelope and lands with the mint slice.
-    if (quarantinedStructuralRef.current.length > 0) {
-      return { ok: false, error: 'unreconciled structural suggestions on disk' };
-    }
-    return buildStructuralSavePayload(ed, fallback);
-  }, []);
-
   // A failed structural payload build aborts the save before any byte is written
   // (fail closed). Presented like any other save failure: loud for a manual save,
   // quiet (footer + backoff) for autosave.
@@ -1234,31 +1264,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // notices live here so they run exactly once per write, even when several
   // coalesced requests share it.
   const performSave = useCallback(async (): Promise<SaveOutcome> => {
-    // Structural fail-closed FIRST: refuse the whole save if there are unreconciled
-    // (quarantined) structural records on disk (the sidecar holds the only copy).
-    const payload = captureDiskPayload();
-    if (!payload.ok) return structuralSaveFailure(payload.error);
-    // Then canonicalize the inline anchors + normalize BEFORE any write. On failure nothing
-    // is written and the doc stays dirty — a review annotation covers text that changes shape
-    // when saved. (Composition follow-up: for a doc with a structural union, the inline anchors
-    // should be captured against the reconstructed canonical review union, not the bare source
-    // parse — see reviewAnchorMap's "composes with the structural reconstruction step"; the
-    // structural mint slice wires that.)
-    const { capture, markdown } = getCanonicalReviewState();
-    if (!capture.ok) {
-      const outcome: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+    // Capture BOTH axes in one composed, fail-closed primitive before any byte is written:
+    // the structural source payload (fail-closed on a quarantined/incomplete union) and the
+    // inline anchors normalized + captured against the reconstructed canonical review union.
+    const state = captureCanonicalSaveState();
+    if (!state.ok) {
+      if (state.reason === 'structural') return structuralSaveFailure(state.error);
+      const outcome: SaveOutcome = { status: 'review-blocked', unmappable: state.unmappable };
       notifySaveOutcome(outcome);
       return outcome;
     }
     const outcome = await saveFile(
-      markdown,
-      capture.comments,
-      capture.suggestions,
+      state.markdown,
+      state.comments,
+      state.suggestions,
       aiSession,
       contextFolder,
       undefined,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-      payload.structural,
+      state.structural,
     );
     if (outcome.status === 'saved') {
       rememberSessionPermission(window.localStorage, outcome.path, aiSession);
@@ -1269,9 +1293,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return outcome;
   }, [
     saveFile,
-    captureDiskPayload,
+    captureCanonicalSaveState,
     structuralSaveFailure,
-    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1391,26 +1414,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // through the coordinator's exclusive lane — waiting for any in-flight save and
   // blocking new saves until it finishes — so writes never overlap the path change.
   const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
-    // Structural fail-closed FIRST (unreconciled quarantined records on disk).
-    const payload = captureDiskPayload();
-    if (!payload.ok) return structuralSaveFailure(payload.error);
-    // Canonicalize before prompting for a path — don't open the dialog for a save that
-    // would fail, and never write non-canonical positions under a source hash.
-    const { capture, markdown } = getCanonicalReviewState();
-    if (!capture.ok) {
-      const blocked: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+    // Capture both axes before prompting for a path — don't open the dialog for a save that
+    // would fail, and never write the live union or non-canonical positions under a source hash.
+    const state = captureCanonicalSaveState();
+    if (!state.ok) {
+      if (state.reason === 'structural') return structuralSaveFailure(state.error);
+      const blocked: SaveOutcome = { status: 'review-blocked', unmappable: state.unmappable };
       notifySaveOutcome(blocked);
       return blocked;
     }
     const outcome = await saveFileAs(
-      markdown,
-      capture.comments,
-      capture.suggestions,
+      state.markdown,
+      state.comments,
+      state.suggestions,
       aiSession,
       contextFolder,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
       (path) => onRequestSavePath(tabId, path),
-      payload.structural,
+      state.structural,
     );
     if (outcome.status === 'saved') {
       // The document gained (or moved) a directory — relative image paths now
@@ -1429,9 +1450,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return outcome;
   }, [
     saveFileAs,
-    captureDiskPayload,
+    captureCanonicalSaveState,
     structuralSaveFailure,
-    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1572,21 +1592,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Overwrite = an explicit same-path Save As: an unconditional write that also
       // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
       const outcome = await runExclusive(async () => {
-        const payload = captureDiskPayload();
-        if (!payload.ok) return structuralSaveFailure(payload.error);
-        const { capture, markdown } = getCanonicalReviewState();
-        if (!capture.ok) {
-          return { status: 'review-blocked', unmappable: capture.unmappable } as SaveOutcome;
+        const state = captureCanonicalSaveState();
+        if (!state.ok) {
+          return state.reason === 'structural'
+            ? structuralSaveFailure(state.error)
+            : ({ status: 'review-blocked', unmappable: state.unmappable } as SaveOutcome);
         }
         return saveFile(
-          markdown,
-          capture.comments,
-          capture.suggestions,
+          state.markdown,
+          state.comments,
+          state.suggestions,
           aiSession,
           contextFolder,
           filePath,
           aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-          payload.structural,
+          state.structural,
         );
       });
       if (outcome.status === 'saved') {
@@ -1606,9 +1626,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     resolvingConflict,
     runExclusive,
     saveFile,
-    captureDiskPayload,
+    captureCanonicalSaveState,
     structuralSaveFailure,
-    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1680,7 +1699,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const state = draft.docJSONState ?? (draft.docJSON ? 'valid' : 'absent');
       const lossless =
         state === 'valid' && draft.docJSON
-          ? editorRef.current?.restoreDocJSON(draft.docJSON, draftComments, draftSuggestions)
+          ? editorRef.current?.restoreDocJSON(
+              draft.docJSON,
+              draftComments,
+              draftSuggestions,
+              draft.structural ?? [],
+            )
           : undefined;
       const ed = editorRef.current?.getEditor();
       let outcome: WorkspaceRecoveryOutcome;
@@ -1691,10 +1715,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Detached/quarantined records are mark-less BY DESIGN, so they cannot be rebuilt
         // from the live marks — seed them back into the quarantine store, or they'd vanish.
         quarantinedSuggestionsRef.current = draftSuggestions.filter((s) => s.detached === true);
-        // The lossless docJSON is self-contained — it restored the document and every mark
-        // byte-exact, so we must NOT re-reconstruct here (that would disturb the restored doc).
-        // Composition follow-up: a structural union embedded in a valid docJSON needs its record
-        // store seeded without a doc mutation; that lands with the structural mint slice.
+        // The lossless docJSON restore is self-contained: it restored the document and every
+        // mark byte-exact AND seeded the structural record store (metadata-only, in the same
+        // transaction, after validating the records against the restored union) — so nothing is
+        // re-reconstructed here, which would disturb the byte-exact restored document.
         setTrackedChanges(getTrackedChanges(ed));
       } else {
         // A lossless doc that was INTENDED but couldn't be used — `invalid` envelope, or a

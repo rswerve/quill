@@ -25,7 +25,7 @@ import {
   TrackChanges,
 } from '../extensions/TrackChanges';
 import type { Editor as TiptapEditor } from '@tiptap/react';
-import type { Comment, JSONContent, Suggestion } from '../types';
+import type { Comment, JSONContent, StructuralSuggestionRecord, Suggestion } from '../types';
 
 export type { DocJSONRestoreResult };
 
@@ -66,6 +66,7 @@ export interface EditorRef {
     json: JSONContent,
     comments: Comment[],
     suggestions: Suggestion[],
+    structural?: readonly StructuralSuggestionRecord[],
   ) => DocJSONRestoreResult;
 }
 
@@ -312,9 +313,9 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
             >
           ).markdown.serializer.serialize(doc);
         },
-        restoreDocJSON(json, comments, suggestions): DocJSONRestoreResult {
+        restoreDocJSON(json, comments, suggestions, structural): DocJSONRestoreResult {
           if (!editor) return { ok: false, reason: 'editor not ready' };
-          const result = restoreDocJSONInto(editor, json, comments, suggestions);
+          const result = restoreDocJSONInto(editor, json, comments, suggestions, structural);
           if (result.ok) setIsEmpty(editor.isEmpty);
           return result;
         },
