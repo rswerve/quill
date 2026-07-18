@@ -539,7 +539,9 @@ export function restoreReviewMarks(
   editor: TiptapEditor,
   comments: Comment[],
   suggestions: PersistedSuggestion[],
-  mode: ReviewRestoreMode = 'bound',
+  // REQUIRED, no default: 'bound' grants trust, so a caller must state it explicitly —
+  // a forgotten mode must never silently trust stale coordinates.
+  mode: ReviewRestoreMode,
 ): ReviewRestoreResult {
   const { state } = editor;
   const { tr, doc, schema } = state;

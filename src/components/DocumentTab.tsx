@@ -41,6 +41,7 @@ import {
   normalizePersistedSuggestions,
   restoreReviewMarks,
   suggestionsFromTrackedChanges,
+  type ReviewRestoreMode,
 } from '../utils/reviewPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
@@ -468,11 +469,12 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [comments, suggestions]);
 
-  // Every WRITE path (save, Save As, overwrite, workspace snapshot) canonicalizes review
-  // coordinates to the document a reopen produces, so a source-hashed sidecar's positions
-  // are honest. Fails closed (ok:false) when an annotation covers text that changes shape
-  // on write; the caller then aborts the ENTIRE save. The editor is always present during
-  // a save — if somehow absent, fail closed rather than persist non-canonical positions.
+  // The FILE save paths (save, Save As, overwrite) canonicalize review coordinates to the
+  // document a reopen produces, so a source-hashed sidecar's positions are honest. (The
+  // workspace snapshot does NOT yet canonicalize — it stays unbound until that lands.)
+  // Fails closed (ok:false) when an annotation covers text that changes shape on write;
+  // the caller then aborts the ENTIRE save. The editor is always present during a save —
+  // if somehow absent, fail closed rather than persist non-canonical positions.
   const getCanonicalReviewState = useCallback((): CanonicalCaptureResult => {
     const ed = editorRef.current?.getEditor();
     const canonDoc = editorRef.current?.parseMarkdown(getDocMarkdown());
@@ -716,8 +718,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [zoom]);
 
   const restorePersistedReviewMarks = useCallback(
-    (ed: TiptapEditor, persistedComments: Comment[], persistedSuggestions: Suggestion[]) => {
-      const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions);
+    (
+      ed: TiptapEditor,
+      persistedComments: Comment[],
+      persistedSuggestions: Suggestion[],
+      mode: ReviewRestoreMode,
+    ) => {
+      const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions, mode);
       // Adopt the AUTHORITATIVE comment set restore produced. This is essential, not
       // cosmetic: a comment that failed validation is returned `detached` with no live
       // mark, and only the detached flag stops the reconciler from dropping it on the next
@@ -762,6 +769,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         filePath: string;
         autoBound?: boolean;
         sidecarError?: string | null;
+        /** Anchor authority for this load (see OpenResult.reviewMode). Absent → bound. */
+        reviewMode?: ReviewRestoreMode;
       },
       promptForSession = true,
     ) => {
@@ -788,7 +797,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // normally follows update events is refreshed by hand.
       const ed = editorRef.current?.getEditor();
       if (ed) {
-        restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions);
+        // Apply the load's detected authority: a legacy/externally-edited file (unbound)
+        // relocates its anchors instead of trusting stale coordinates.
+        restorePersistedReviewMarks(
+          ed,
+          loadedComments,
+          loadedSuggestions,
+          result.reviewMode ?? 'bound',
+        );
       }
       const access = authorizeSidecarAccess(
         window.localStorage,
@@ -1388,7 +1404,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // suppresses the update event).
       const ed = editorRef.current?.getEditor();
       if (ed) {
-        restorePersistedReviewMarks(ed, draftComments, draftSuggestions);
+        // A recovered draft carries no anchor provenance (its coordinates were captured
+        // against its own embedded content but are not source-hash bound), so it restores
+        // UNBOUND — relocate conservatively rather than trust the snapshot's positions.
+        restorePersistedReviewMarks(ed, draftComments, draftSuggestions, 'unbound');
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);

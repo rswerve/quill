@@ -99,7 +99,7 @@ describe('suggestionsFromTrackedChanges', () => {
     expect(record.originChatMessageId).toBe('chat-message-7');
 
     const editor = makeEditor();
-    restoreReviewMarks(editor, [], [record]);
+    restoreReviewMarks(editor, [], [record], 'bound');
     expect(getTrackedChanges(editor)[0].originChatMessageId).toBe('chat-message-7');
     editor.destroy();
   });
@@ -192,7 +192,7 @@ describe('restoreReviewMarks', () => {
 
   it('stamps originCommentId back into the restored dataTracked', () => {
     editor = makeEditor('<p>Hello world</p>');
-    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42' })]);
+    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42' })], 'bound');
 
     const [change] = getTrackedChanges(editor);
     expect(change).toMatchObject({
@@ -204,7 +204,7 @@ describe('restoreReviewMarks', () => {
 
   it('restores without originCommentId when the record has none', () => {
     editor = makeEditor('<p>Hello world</p>');
-    restoreReviewMarks(editor, [], [suggestion()]);
+    restoreReviewMarks(editor, [], [suggestion()], 'bound');
 
     const [change] = getTrackedChanges(editor);
     expect(change.id).toBe('s1');
@@ -225,7 +225,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p>Hello beautiful world</p>');
-    restoreReviewMarks(editor, [], records);
+    restoreReviewMarks(editor, [], records, 'bound');
     const [restored] = getTrackedChanges(editor);
     expect(restored.originCommentId).toBe('c42');
     expect(restored.status).toBe('pending');
@@ -256,7 +256,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p>one<br>two</p>');
-    const restored = restoreReviewMarks(editor, [], records);
+    const restored = restoreReviewMarks(editor, [], records, 'bound');
 
     expect(restored).toMatchObject({ quarantinedSuggestions: [], mismatches: [] });
     let restoredBreakMarks: string[] | null = null;
@@ -296,7 +296,7 @@ describe('restoreReviewMarks', () => {
     expect(sanitized[0]).toMatchObject({
       segments: [expect.objectContaining({ text: '\n', nodeType: 'hardBreak' })],
     });
-    expect(restoreReviewMarks(editor, [], sanitized)).toMatchObject({
+    expect(restoreReviewMarks(editor, [], sanitized, 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -322,7 +322,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 4, to: 5, text: ' ' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toMatchObject({
+    expect(restoreReviewMarks(editor, [], [legacy], 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -342,7 +342,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 1, to: 8, text: 'one two' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toMatchObject({
+    expect(restoreReviewMarks(editor, [], [legacy], 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -374,7 +374,7 @@ describe('restoreReviewMarks', () => {
       ],
     };
 
-    const restored = restoreReviewMarks(editor, [], [record]);
+    const restored = restoreReviewMarks(editor, [], [record], 'bound');
     // A quarantined suggestion is now marked detached (non-authoritative for future loads).
     expect(restored.quarantinedSuggestions).toEqual([{ ...record, detached: true }]);
     expect(restored.mismatches).toEqual([
@@ -399,7 +399,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p><em>one<br>two</em></p>');
-    expect(restoreReviewMarks(editor, [], records)).toMatchObject({
+    expect(restoreReviewMarks(editor, [], records, 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -411,7 +411,7 @@ describe('restoreReviewMarks', () => {
 
   it('restores disjoint format spans under one logical id with exact deltas', () => {
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
-    restoreReviewMarks(editor, [], [formatSuggestion({ originCommentId: 'c42' })]);
+    restoreReviewMarks(editor, [], [formatSuggestion({ originCommentId: 'c42' })], 'bound');
 
     expect(getTrackedChanges(editor)).toEqual([
       expect.objectContaining({
@@ -440,7 +440,7 @@ describe('restoreReviewMarks', () => {
     expect(recordSegment.adds).not.toBe(liveSegment.adds);
 
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
-    restoreReviewMarks(editor, [], [record]);
+    restoreReviewMarks(editor, [], [record], 'bound');
     expect(getTrackedChanges(editor)[0]).toMatchObject({
       originCommentId: 'c42',
       segments: live.segments,
@@ -451,7 +451,7 @@ describe('restoreReviewMarks', () => {
     editor = makeEditor('<p>Other world</p>');
     const before = editor.getJSON();
 
-    const result = restoreReviewMarks(editor, [], [suggestion()]);
+    const result = restoreReviewMarks(editor, [], [suggestion()], 'bound');
 
     expect(result.quarantinedSuggestions).toEqual([
       expect.objectContaining({
@@ -490,7 +490,7 @@ describe('restoreReviewMarks', () => {
       }),
     ];
 
-    const result = restoreReviewMarks(editor, [], records);
+    const result = restoreReviewMarks(editor, [], records, 'bound');
 
     expect(result.quarantinedSuggestions.map((record) => record.id)).toEqual(['pair-1']);
     expect(getTrackedChanges(editor)).toEqual([]);
@@ -518,7 +518,7 @@ describe('restoreReviewMarks', () => {
       }),
     ];
 
-    expect(restoreReviewMarks(editor, [], records).mismatches).toEqual([]);
+    expect(restoreReviewMarks(editor, [], records, 'bound').mismatches).toEqual([]);
     const [change] = getTrackedChanges(editor);
     expect(change).toMatchObject({
       id: 'pair-1',
@@ -534,7 +534,7 @@ describe('restoreReviewMarks', () => {
   it('quarantines every segment of a format suggestion when one segment mismatches', () => {
     editor = makeEditor('<p><strong>Hello</strong> <em>other</em></p>');
 
-    const result = restoreReviewMarks(editor, [], [formatSuggestion()]);
+    const result = restoreReviewMarks(editor, [], [formatSuggestion()], 'bound');
 
     expect(result.quarantinedSuggestions).toEqual([
       expect.objectContaining({ id: 'fmt1', type: 'change' }),
@@ -582,7 +582,7 @@ describe('restoreReviewMarks', () => {
       // Markdown persists the now-applied bold but not review marks. This is
       // the equivalent clean document shape presented to restoreReviewMarks.
       editor = makeEditor('<p><strong>HeXllo</strong> world</p>');
-      restoreReviewMarks(editor, [], records);
+      restoreReviewMarks(editor, [], records, 'bound');
 
       let insertedMarks: string[] | null = null;
       editor.state.doc.descendants((node) => {
