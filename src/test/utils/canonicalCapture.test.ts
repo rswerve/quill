@@ -204,3 +204,49 @@ describe('captureCanonicalReviewState: fail-closed (normalization INSIDE the ann
     expect(result.ok).toBe(false); // the whole capture fails, not a partial write
   });
 });
+
+describe('captureCanonicalReviewState: a RESOLVED comment never blocks (Maz decision — detach)', () => {
+  it('detaches a resolved comment whose highlight covers a collapse, instead of blocking', () => {
+    const live = liveDoc(para('a  b')); // highlight includes the collapsing double space
+    const canon = canonicalOf(live); // "a b"
+    const result = ok(
+      captureCanonicalReviewState(
+        live,
+        canon,
+        [comment(1, 5, { anchorText: 'a  b', resolved: true })],
+        [],
+      ),
+    );
+    // The save proceeds; the dismissed comment is preserved detached (reopen relocates it).
+    expect(result.comments[0].detached).toBe(true);
+    expect(result.comments[0].resolved).toBe(true);
+  });
+
+  it('still BLOCKS an active comment over the same collapse — only a resolved one detaches', () => {
+    const live = liveDoc(para('a  b'));
+    const canon = canonicalOf(live);
+    const result = captureCanonicalReviewState(
+      live,
+      canon,
+      [comment(1, 5, { anchorText: 'a  b', resolved: false })],
+      [],
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('a resolved comment that DOES map keeps its corrected coords and stays non-detached', () => {
+    const live = liveDoc(para('foo  bar baz')); // collapse is upstream of the highlight
+    const canon = canonicalOf(live);
+    const from = posOf(live, 'bar');
+    const result = ok(
+      captureCanonicalReviewState(
+        live,
+        canon,
+        [comment(from, from + 3, { anchorText: 'bar', resolved: true })],
+        [],
+      ),
+    );
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(canon.textBetween(result.comments[0].from, result.comments[0].to)).toBe('bar');
+  });
+});

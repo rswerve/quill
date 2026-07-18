@@ -20,13 +20,18 @@ export type CanonicalCaptureResult =
  *
  * ATOMIC + FAIL-CLOSED. A sidecar stamped with a source hash promises every stored position
  * corresponds to those exact bytes, so capture must NEVER silently store a position it knows is
- * wrong. If ANY non-detached annotation's range does not map — its content sits INSIDE a
+ * wrong. If a non-detached annotation's range does not map — its content sits INSIDE a
  * normalization-changing zone, e.g. a highlight or tracked edit over a collapsing double space —
  * capture fails and returns the offending records; the caller aborts the ENTIRE save before either
  * file is written, rather than delaying a preventable failure until reopen. A suggestion maps
  * all-or-nothing (its segment text is never altered). A `detached` comment OR suggestion already
  * carries a known-bad range and self-declares non-authoritative, so it passes through untouched
  * and never blocks the save.
+ *
+ * ONE exception blocks nothing: a RESOLVED comment that fails to map is DETACHED rather than
+ * blocking (Maz's call). A resolved comment is dismissed — mark-less, no live highlight — so
+ * stopping a save over its stale anchor would only frustrate; detaching preserves the record and
+ * lets a reopen relocate it by unique text. An ACTIVE (unresolved) comment still blocks.
  */
 export function captureCanonicalReviewState(
   liveDoc: ProseMirrorNode,
@@ -41,6 +46,11 @@ export function captureCanonicalReviewState(
     if (comment.detached) return comment;
     const mapped = mapper.map(comment.from, comment.to);
     if (!mapped) {
+      // A RESOLVED comment is dismissed — it has no live highlight and must never block a
+      // save (Maz's call). Detach it (its stored range is preserved best-effort) so capture
+      // proceeds; a reopen relocates it by unique text or keeps it detached. An ACTIVE
+      // comment still blocks: its live highlight is text the user is working with.
+      if (comment.resolved) return { ...comment, detached: true as const };
       unmappable.push({ kind: 'comment', id: comment.id });
       return comment;
     }
