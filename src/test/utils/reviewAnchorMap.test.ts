@@ -472,3 +472,59 @@ describe('reviewAnchorMap: boundary-identity attacks (independent verification)'
     expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('abc');
   });
 });
+
+describe('reviewAnchorMap: removed-edge-block cursor rebind (Codex round 4)', () => {
+  it('a cursor in a REMOVED leading empty paragraph does not rebind into the survivor', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph' },
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+      ],
+    });
+    const canon = canonicalOf(live); // leading empty paragraph removed
+    // Position 1 is inside the deleted empty paragraph — it must NOT bind to before "a".
+    expect(buildAnchorMapper(live, canon).map(1, 1)).toBeNull();
+  });
+
+  it('a cursor in a REMOVED trailing empty paragraph does not rebind into the survivor', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph' },
+      ],
+    });
+    const canon = canonicalOf(live); // trailing empty paragraph removed
+    const inside = live.content.size - 1; // interior cursor of the deleted trailing paragraph
+    expect(buildAnchorMapper(live, canon).map(inside, inside)).toBeNull();
+  });
+
+  it('an empty paragraph that GAINS text on the canon side does not map its cursor', () => {
+    const live = liveDoc({ type: 'doc', content: [{ type: 'paragraph' }] });
+    const canon = liveDoc(para('new')); // canon side abuts surviving content the live side lacks
+    expect(buildAnchorMapper(live, canon).map(1, 1)).toBeNull();
+  });
+
+  it('a cursor in a removed leading empty paragraph INSIDE a blockquote does not rebind', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'blockquote',
+          content: [
+            { type: 'paragraph' },
+            { type: 'paragraph', content: [{ type: 'text', text: 'q' }] },
+          ],
+        },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const q = nthPos(live, 'q');
+    const mapper = buildAnchorMapper(live, canon);
+    // The surviving quoted content still maps...
+    expect(mapper.map(q, q + 1)).not.toBeNull();
+    // ...but the deleted leading empty quote paragraph's cursor (just before it) does not.
+    expect(mapper.map(q - 2, q - 2)).toBeNull();
+  });
+});

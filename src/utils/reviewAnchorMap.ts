@@ -311,6 +311,23 @@ export interface MappedRange {
  * unchanged: a boundary whose left/right character changed block type, base marks,
  * or leaf identity (H1→H2, plain→bold) sits in altered context and must not map.
  */
+/**
+ * One side of a zero-width boundary is safe only when its content neighbours agree
+ * SYMMETRICALLY: if EITHER the live or the canonical neighbour on that side is a
+ * content cell, both must exist and be fully equal. This rejects a rebind after an
+ * empty/removed block collapses — a cursor inside a deleted leading/trailing empty
+ * paragraph whose live neighbour is a vanishing boundary/whitespace, but whose
+ * canonical neighbour is the surviving next paragraph's content. When neither side is
+ * content (both are whitespace/boundary/edge) the position is legitimately inside an
+ * emptied-but-kept block and still maps.
+ */
+function neighbourOk(liveN: Cell | null, canonN: Cell | null): boolean {
+  const liveContent = liveN !== null && !isNormalizable(liveN);
+  const canonContent = canonN !== null && !isNormalizable(canonN);
+  if (!liveContent && !canonContent) return true;
+  return liveN !== null && canonN !== null && cellsMatch(liveN, canonN);
+}
+
 function boundaryContextOk(
   live: AnchorProjection,
   canon: AnchorProjection,
@@ -324,17 +341,7 @@ function boundaryContextOk(
   const rightLive = b < live.cells.length ? live.cells[b] : null;
   const leftCanon = cb > 0 ? canon.cells[cb - 1] : null;
   const rightCanon = cb < canon.cells.length ? canon.cells[cb] : null;
-  if (leftLive && !isNormalizable(leftLive) && (!leftCanon || !cellsMatch(leftLive, leftCanon))) {
-    return false;
-  }
-  if (
-    rightLive &&
-    !isNormalizable(rightLive) &&
-    (!rightCanon || !cellsMatch(rightLive, rightCanon))
-  ) {
-    return false;
-  }
-  return true;
+  return neighbourOk(leftLive, leftCanon) && neighbourOk(rightLive, rightCanon);
 }
 
 function mapRange(
