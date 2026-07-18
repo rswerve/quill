@@ -1,24 +1,31 @@
 import type { Node as ProseMirrorNode, Schema } from '@tiptap/pm/model';
 import { getTrackedChanges } from '../extensions/TrackChanges';
-import type { Comment, JSONContent, Suggestion } from '../types';
+import { reconcileCommentsWithDocument } from './commentReconciler';
+import { normalizePersistedSuggestions, suggestionsFromTrackedChanges } from './reviewPersistence';
+import { sanitizeSuggestions } from './annotationValidation';
+import type { Comment, JSONContent, LogicalSuggestion, Suggestion } from '../types';
 
 /**
  * Validation for the lossless (PM-JSON) crash-recovery path. `workspace.json` is untrusted
- * input — it may have been truncated by the very crash it exists to recover, or written by
- * a different Quill version — so before a recovery restores a document byte-for-byte we
- * prove two things, FAIL-CLOSED, against the LIVE schema:
+ * input — truncated by the crash it recovers, or written by a different Quill version — so
+ * before recovery restores a document byte-for-byte we prove, FAIL-CLOSED, against the LIVE
+ * schema:
  *
- *  1. the JSON is a real document this schema round-trips without silently dropping data, and
- *  2. the document's marks form a BIJECTION with the review records — so we never install a
- *     document and a metadata set that disagree about which annotations exist and where.
+ *  1. the JSON is a real document this schema round-trips + `check()`s without dropping data,
+ *  2. every raw tracked mark carries a well-formed `dataTracked` (so the change collector can
+ *     never throw or silently coalesce a malformed one), and
+ *  3. the document's marks form an EXACT correspondence with the review records — not merely
+ *     matching id sets, but matching geometry, text, kind, author, and format deltas — so we
+ *     never install a document and a metadata set that disagree.
  *
  * A lossless restore is only safe when the two were captured as one coherent state; these
- * checks are what let recovery trust the stored positions instead of relocating.
+ * checks are what let recovery trust the stored positions instead of relocating. The whole
+ * consistency phase is wrapped so ANY unexpected collector error fails closed, never throws.
  */
 
 export type SnapshotValidation = { ok: true; doc: ProseMirrorNode } | { ok: false; reason: string };
 
-/** Structural: a parseable `doc` node this schema reproduces with no dropped attributes. */
+/** Structural: a parseable, schema-valid `doc` this schema reproduces with no dropped data. */
 function parseSnapshotDoc(schema: Schema, json: JSONContent): SnapshotValidation {
   if (!json || typeof json !== 'object' || json.type !== 'doc') {
     return { ok: false, reason: 'docJSON is not a doc node' };
@@ -38,6 +45,18 @@ function parseSnapshotDoc(schema: Schema, json: JSONContent): SnapshotValidation
       reason: `docJSON top node is ${doc.type.name}, not ${schema.topNodeType.name}`,
     };
   }
+  // `nodeFromJSON` only checks that node/mark TYPES exist — it accepts schema-INVALID content
+  // arrangements (e.g. a paragraph nested in a paragraph) that ALSO round-trip through toJSON
+  // unchanged. `check()` validates the content expressions and marks and throws on violation;
+  // without it a corrupt-but-well-typed doc would pass and then corrupt the editor on dispatch.
+  try {
+    doc.check();
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `docJSON violates the schema: ${e instanceof Error ? e.message : e}`,
+    };
+  }
   // A silently-dropped unknown attribute (e.g. a newer Quill's mark attr this schema can't
   // read) would make the reparse lossy — catch it by re-serializing and deep-comparing.
   if (!deepEqual(doc.toJSON(), json)) {
@@ -46,74 +65,214 @@ function parseSnapshotDoc(schema: Schema, json: JSONContent): SnapshotValidation
   return { ok: true, doc };
 }
 
-/** The set of comment ids that appear as live marks in the document. */
-function markedCommentIds(doc: ProseMirrorNode): Set<string> {
-  const ids = new Set<string>();
-  doc.descendants((node) => {
-    for (const mark of node.marks) {
-      if (mark.type.name === 'comment') {
-        const id = mark.attrs.commentId as string | undefined;
-        if (id) ids.add(id);
-      }
-    }
-  });
-  return ids;
+type TrackedOp = 'insert' | 'delete' | 'format';
+type MarkMeta = { authorID: unknown; status: unknown; createdAt: unknown };
+
+function trackedOp(mark: { type: unknown }, schema: Schema): TrackedOp | null {
+  if (mark.type === schema.marks['tracked_insert']) return 'insert';
+  if (mark.type === schema.marks['tracked_delete']) return 'delete';
+  if (mark.type === schema.marks['tracked_format']) return 'format';
+  return null;
 }
 
-/** Suggestion side of the bijection: attached records ↔ live tracked marks, detached ↔ none. */
+/** A format delta must be `{ adds?: string[]; removes?: string[] }` — nothing else. */
+function formatDeltaError(id: string, delta: unknown): string | null {
+  if (typeof delta !== 'object' || delta === null)
+    return `tracked mark ${id} has a malformed delta`;
+  const d = delta as Record<string, unknown>;
+  for (const key of ['adds', 'removes'] as const) {
+    const v = d[key];
+    if (v !== undefined && (!Array.isArray(v) || !v.every((x) => typeof x === 'string')))
+      return `tracked mark ${id} delta.${key} is not a string array`;
+  }
+  return null;
+}
+
+/** Shape-check one tracked mark's `dataTracked` (its operation must match the mark type). */
+function trackedMarkDataError(
+  op: TrackedOp,
+  data: Record<string, unknown> | undefined,
+): string | null {
+  if (!data || typeof data !== 'object') return 'tracked mark has no dataTracked';
+  const id = data.id;
+  if (typeof id !== 'string' || !id) return 'tracked mark is missing its id';
+  if (data.operation !== op)
+    return `tracked mark ${id} operation "${String(data.operation)}" != ${op}`;
+  if (typeof data.authorID !== 'string') return `tracked mark ${id} has a non-string authorID`;
+  if (data.status !== 'pending' && data.status !== 'accepted' && data.status !== 'rejected')
+    return `tracked mark ${id} has an invalid status`;
+  if (typeof data.createdAt !== 'number') return `tracked mark ${id} has a non-numeric createdAt`;
+  if (op === 'format' && data.delta !== undefined) return formatDeltaError(id, data.delta);
+  return null;
+}
+
+/**
+ * Validate the raw `dataTracked` on every tracked mark BEFORE the change collector reads them.
+ * getTrackedChanges deliberately skips malformed marks and coalesces fragments by id, so a
+ * corrupt mark could otherwise vanish (becoming an invisible orphan) or throw mid-collection
+ * (e.g. a `delta.adds` that isn't an array). Fragments sharing an id must agree on identity
+ * (operation may differ — a replacement carries both an insert and a delete under one id).
+ */
+function validateRawTrackedMarks(doc: ProseMirrorNode, schema: Schema): string | null {
+  const meta = new Map<string, MarkMeta>();
+  let error: string | null = null;
+  doc.descendants((node) => {
+    if (error) return false;
+    if (!node.isInline) return;
+    for (const mark of node.marks) {
+      const op = trackedOp(mark, schema);
+      if (!op) continue;
+      const data = mark.attrs.dataTracked as Record<string, unknown> | undefined;
+      error = trackedMarkDataError(op, data);
+      if (error) return false;
+      const id = data!.id as string;
+      const prior = meta.get(id);
+      if (
+        prior &&
+        (prior.authorID !== data!.authorID ||
+          prior.status !== data!.status ||
+          prior.createdAt !== data!.createdAt)
+      ) {
+        error = `tracked mark ${id} has inconsistent metadata across fragments`;
+        return false;
+      }
+      if (!prior)
+        meta.set(id, {
+          authorID: data!.authorID,
+          status: data!.status,
+          createdAt: data!.createdAt,
+        });
+    }
+  });
+  return error;
+}
+
+/** Canonical form both sides run through, so legitimate serialization can't false-positive. */
+function canonicalize(suggestions: Suggestion[]): LogicalSuggestion[] {
+  return normalizePersistedSuggestions(sanitizeSuggestions(suggestions));
+}
+
+/**
+ * Suggestion side — an EXACT correspondence: every attached record deep-equals its live
+ * canonical form (author/timestamp/origins/segment geometry+text+kind/format deltas all
+ * covered), detached records are mark-less, no orphan marks, no duplicate ids, and no
+ * accepted/rejected records (new snapshots emit only pending).
+ */
 function validateSuggestions(
   doc: ProseMirrorNode,
   schema: Schema,
   suggestions: Suggestion[],
 ): string | null {
-  const liveIds = new Set<string>();
-  for (const change of getTrackedChanges({ state: { doc, schema } })) {
-    if (liveIds.has(change.id)) return `duplicate live tracked-change id ${change.id}`;
-    liveIds.add(change.id);
+  const ids = new Set<string>();
+  for (const s of suggestions) {
+    if (s.status !== 'pending') return `suggestion record ${s.id} is ${s.status}, not pending`;
+    if (ids.has(s.id)) return `duplicate suggestion record id ${s.id}`;
+    ids.add(s.id);
   }
+  const live = new Map<string, LogicalSuggestion>();
+  for (const s of canonicalize(
+    suggestionsFromTrackedChanges(getTrackedChanges({ state: { doc, schema } })),
+  ))
+    live.set(s.id, s);
 
-  const pending = suggestions.filter((s) => s.status === 'pending');
-  const recordIds = new Set<string>();
-  const attached = new Set<string>();
-  const detached = new Set<string>();
-  for (const s of pending) {
-    if (recordIds.has(s.id)) return `duplicate suggestion record id ${s.id}`;
-    recordIds.add(s.id);
-    (s.detached ? detached : attached).add(s.id);
+  const attached = new Map<string, LogicalSuggestion>();
+  for (const s of canonicalize(suggestions.filter((s) => !s.detached))) attached.set(s.id, s);
+  for (const s of suggestions)
+    if (s.detached && live.has(s.id))
+      return `detached suggestion ${s.id} unexpectedly has a live mark`;
+
+  for (const [id, record] of attached) {
+    const canon = live.get(id);
+    if (!canon) return `attached suggestion ${id} has no live mark`;
+    if (!deepEqual(record, canon)) return `attached suggestion ${id} does not match its live mark`;
   }
-
-  for (const id of attached)
-    if (!liveIds.has(id)) return `attached suggestion ${id} has no live mark`;
-  for (const id of detached)
-    if (liveIds.has(id)) return `detached suggestion ${id} unexpectedly has a live mark`;
-  for (const id of liveIds)
+  for (const id of live.keys())
     if (!attached.has(id)) return `orphan tracked mark ${id} has no attached record`;
   return null;
 }
 
-/** Comment side of the bijection: active records ↔ marks, resolved/detached ↔ mark-less. */
+/** The {kind, resolved} of every comment mark carrying `id`. */
+function commentMarkAttrs(
+  doc: ProseMirrorNode,
+  id: string,
+): Array<{ kind: unknown; resolved: unknown }> {
+  const attrs: Array<{ kind: unknown; resolved: unknown }> = [];
+  doc.descendants((node) => {
+    for (const mark of node.marks) {
+      if (mark.type.name === 'comment' && mark.attrs.commentId === id)
+        attrs.push({ kind: mark.attrs.kind, resolved: mark.attrs.resolved });
+    }
+  });
+  return attrs;
+}
+
+/** The set of comment ids that appear as live marks in the document. */
+function markedCommentIds(doc: ProseMirrorNode): Set<string> {
+  const ids = new Set<string>();
+  doc.descendants((node) => {
+    for (const mark of node.marks)
+      if (mark.type.name === 'comment') {
+        const id = mark.attrs.commentId as string | undefined;
+        if (id) ids.add(id);
+      }
+  });
+  return ids;
+}
+
+/**
+ * Comment side — an EXACT correspondence: reconciling the records against the document is a
+ * NO-OP (any drift in range/anchorText, or a missing mark, changes the output), every active
+ * record's mark carries its `kind` and is unresolved, resolved/detached records are mark-less,
+ * and no mark lacks a record.
+ */
+/** Mark attributes must agree with the record: active ↔ its kind + unresolved, else mark-less. */
+function commentMarkError(doc: ProseMirrorNode, c: Comment): string | null {
+  const attrs = commentMarkAttrs(doc, c.id);
+  if (c.resolved || c.detached) {
+    return attrs.length > 0 ? `resolved/detached comment ${c.id} unexpectedly has a mark` : null;
+  }
+  if (attrs.length === 0) return `active comment ${c.id} has no mark`;
+  if (attrs.some((a) => a.kind !== c.kind))
+    return `comment ${c.id} mark kind does not match record`;
+  if (attrs.some((a) => a.resolved === true)) return `active comment ${c.id} has a resolved mark`;
+  return null;
+}
+
 function validateComments(doc: ProseMirrorNode, comments: Comment[]): string | null {
-  const recordIds = new Set<string>();
+  const ids = new Set<string>();
   for (const c of comments) {
-    if (recordIds.has(c.id)) return `duplicate comment record id ${c.id}`;
-    recordIds.add(c.id);
+    if (ids.has(c.id)) return `duplicate comment record id ${c.id}`;
+    ids.add(c.id);
   }
-  const marked = markedCommentIds(doc);
+  if (!deepEqual(reconcileCommentsWithDocument(comments, doc), comments))
+    return 'comment records are not coherent with the document (range / anchor / presence)';
   for (const c of comments) {
-    const hasMark = marked.has(c.id);
-    const shouldHaveMark = !c.resolved && !c.detached;
-    if (shouldHaveMark && !hasMark) return `active comment ${c.id} has no mark`;
-    if (!shouldHaveMark && hasMark)
-      return `resolved/detached comment ${c.id} unexpectedly has a mark`;
+    const error = commentMarkError(doc, c);
+    if (error) return error;
   }
-  for (const id of marked) if (!recordIds.has(id)) return `comment mark ${id} has no record`;
+  for (const id of markedCommentIds(doc))
+    if (!ids.has(id)) return `comment mark ${id} has no record`;
   return null;
 }
 
 /**
  * Parse and consistency-check a lossless snapshot. Returns the parsed doc on success so the
  * caller can dispatch the SAME validated node it checked (never a re-parse). Never mutates.
+ * The consistency phase is wrapped so any unexpected collector error fails closed.
  */
+function consistencyError(
+  doc: ProseMirrorNode,
+  schema: Schema,
+  comments: Comment[],
+  suggestions: Suggestion[],
+): string | null {
+  return (
+    validateRawTrackedMarks(doc, schema) ||
+    validateSuggestions(doc, schema, suggestions) ||
+    validateComments(doc, comments)
+  );
+}
+
 export function validateSnapshot(
   schema: Schema,
   json: JSONContent,
@@ -122,10 +281,15 @@ export function validateSnapshot(
 ): SnapshotValidation {
   const parsed = parseSnapshotDoc(schema, json);
   if (!parsed.ok) return parsed;
-  const suggestionError = validateSuggestions(parsed.doc, schema, suggestions);
-  if (suggestionError) return { ok: false, reason: suggestionError };
-  const commentError = validateComments(parsed.doc, comments);
-  if (commentError) return { ok: false, reason: commentError };
+  try {
+    const error = consistencyError(parsed.doc, schema, comments, suggestions);
+    if (error) return { ok: false, reason: error };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `snapshot consistency check threw: ${e instanceof Error ? e.message : e}`,
+    };
+  }
   return parsed;
 }
 

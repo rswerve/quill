@@ -119,6 +119,19 @@ describe('validateSnapshot: structural checks', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain('round-trip');
   });
+
+  it('rejects schema-INVALID content that nodeFromJSON accepts and toJSON round-trips', () => {
+    // A paragraph nested in a paragraph: well-typed (all node types exist) and byte-identical
+    // through toJSON, so only a real schema check() catches it. Dispatching it would corrupt.
+    const editor = makeEditor();
+    const invalid = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'paragraph' }] }],
+    };
+    const result = validateSnapshot(editor.schema, invalid, [], []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('violates the schema');
+  });
 });
 
 describe('validateSnapshot: suggestion bijection', () => {
@@ -162,6 +175,72 @@ describe('validateSnapshot: suggestion bijection', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain('duplicate suggestion record id');
   });
+
+  it('fails when a same-id record has the WRONG segment geometry', () => {
+    const { editor, comment, suggestions } = coherent();
+    const seg0 = suggestions[0].segments[0];
+    const drifted: Suggestion = {
+      ...suggestions[0],
+      segments: [
+        { ...seg0, from: seg0.from + 1, to: seg0.to + 1 },
+        ...suggestions[0].segments.slice(1),
+      ],
+    };
+    const result = validateSnapshot(editor.schema, jsonOf(editor), [comment], [drifted]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('does not match its live mark');
+  });
+
+  it('rejects a non-pending suggestion record outright', () => {
+    const { editor, comment, suggestions } = coherent();
+    const accepted: Suggestion = { ...suggestions[0], status: 'accepted' };
+    const result = validateSnapshot(editor.schema, jsonOf(editor), [comment], [accepted]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('not pending');
+  });
+});
+
+describe('validateSnapshot: malformed tracked-mark attributes fail closed (no throw)', () => {
+  function tamperFormatDelta(json: Record<string, unknown>): boolean {
+    for (const block of (json.content as Array<Record<string, unknown>>) ?? []) {
+      for (const inline of (block.content as Array<Record<string, unknown>>) ?? []) {
+        for (const mark of (inline.marks as Array<Record<string, unknown>>) ?? []) {
+          const attrs = mark.attrs as Record<string, unknown> | undefined;
+          const data = attrs?.dataTracked as Record<string, unknown> | undefined;
+          if (mark.type === 'tracked_format' && data) {
+            data.delta = { adds: 7, removes: [] }; // adds is a number, not a string[]
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  it('returns {ok:false} for a malformed format delta instead of throwing', () => {
+    // Codex's repro: `[...(delta.adds ?? [])]` throws "7 is not iterable" inside the collector.
+    const editor = makeEditor();
+    editor.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'bold me' }] }],
+      },
+      { emitUpdate: false },
+    );
+    editor.commands.setTrackChangesEnabled(true);
+    editor.commands.setTrackChangesAuthor('claude');
+    editor.chain().setTextSelection({ from: 1, to: 5 }).toggleBold().run();
+    const json = jsonOf(editor);
+    expect(tamperFormatDelta(json)).toBe(true);
+
+    // Must NOT throw — the raw-mark scan (and the try/catch wrapper) turn it into a clean failure.
+    let result: ReturnType<typeof validateSnapshot>;
+    expect(() => {
+      result = validateSnapshot(editor.schema, json, [], []);
+    }).not.toThrow();
+    expect(result!.ok).toBe(false);
+    if (!result!.ok) expect(result!.reason).toMatch(/delta\.adds|threw/);
+  });
 });
 
 describe('validateSnapshot: comment bijection', () => {
@@ -169,8 +248,25 @@ describe('validateSnapshot: comment bijection', () => {
     const { editor, comment, suggestions } = coherent();
     const phantom: Comment = { ...comment, id: 'c-phantom' };
     const result = validateSnapshot(editor.schema, jsonOf(editor), [comment, phantom], suggestions);
+    // A mark-less active record is dropped by reconciliation → not coherent with the document.
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain('has no mark');
+    if (!result.ok) expect(result.reason).toMatch(/coherent|has no mark/);
+  });
+
+  it('fails when an active comment record has the WRONG range (geometry drift)', () => {
+    const { editor, comment, suggestions } = coherent();
+    const drifted: Comment = { ...comment, from: comment.from + 1, to: comment.to + 1 };
+    const result = validateSnapshot(editor.schema, jsonOf(editor), [drifted], suggestions);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('coherent');
+  });
+
+  it('fails when a same-id comment record carries the WRONG kind', () => {
+    const { editor, comment, suggestions } = coherent();
+    const wrongKind: Comment = { ...comment, kind: 'claude' }; // the mark is kind 'note'
+    const result = validateSnapshot(editor.schema, jsonOf(editor), [wrongKind], suggestions);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('kind');
   });
 
   it('fails when a resolved comment still has a mark', () => {
