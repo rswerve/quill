@@ -145,6 +145,7 @@ function throughDisk(draft: DraftFile): DraftFile {
 interface Mounted {
   handle: DocumentTabHandle;
   notices: Array<{ title: string; message: string }>;
+  onInitialWorkspaceLoaded: ReturnType<typeof vi.fn>;
 }
 
 async function mountRecovery(snapshot: DraftFile): Promise<Mounted> {
@@ -173,8 +174,10 @@ async function mountRecovery(snapshot: DraftFile): Promise<Mounted> {
       onReleaseSession={() => {}}
     />,
   );
-  await waitFor(() => expect(onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1'));
-  return { handle: ref.current!, notices };
+  await waitFor(() =>
+    expect(onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1', expect.any(String)),
+  );
+  return { handle: ref.current!, notices, onInitialWorkspaceLoaded };
 }
 
 class ResizeObserverStub {
@@ -229,6 +232,8 @@ describe('DocumentTab lossless recovery', () => {
     const snap = m.handle.getWorkspaceSnapshot();
     expect(snap.docJSON).toEqual(docJSON);
     expect(snap.docJSONVersion).toBe(1);
+    // And it reports a lossless outcome so the shell resumes persistence normally.
+    expect(m.onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1', 'lossless');
   });
 
   it('preserves a detached suggestion through recovery (not dropped)', async () => {
@@ -257,6 +262,7 @@ describe('DocumentTab recovery fallbacks', () => {
     // The text is present (via Markdown), and no corruption notice fires.
     expect(ed.state.doc.textContent).toContain('alpha');
     expect(m.notices.some((n) => n.title === 'Recovered in text-only mode')).toBe(false);
+    expect(m.onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1', 'legacy');
   });
 
   it('degrades to text-only with an explicit notice when docJSON is present but corrupt', async () => {
@@ -272,5 +278,19 @@ describe('DocumentTab recovery fallbacks', () => {
     const ed = m.handle.getEditor()!;
     expect(ed.state.doc.textContent).toContain('alpha'); // text salvaged via Markdown
     expect(m.notices.some((n) => n.title === 'Recovered in text-only mode')).toBe(true);
+    expect(m.onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1', 'degraded');
+  });
+
+  it('degrades on an INVALID envelope (unsupported version) — sanitizer drops the blob', async () => {
+    const { draft } = coherentDraft();
+    // An unsupported docJSONVersion: the sanitizer drops the blob but records docJSONState
+    // 'invalid', so recovery degrades explicitly instead of masquerading as a legacy snapshot.
+    const unsupported = throughDisk({ ...draft, docJSONVersion: 2 as unknown as 1 });
+    expect(unsupported.docJSONState).toBe('invalid');
+    expect(unsupported.docJSON).toBeUndefined();
+    const m = await mountRecovery(unsupported);
+    expect(m.handle.getEditor()!.state.doc.textContent).toContain('alpha');
+    expect(m.notices.some((n) => n.title === 'Recovered in text-only mode')).toBe(true);
+    expect(m.onInitialWorkspaceLoaded).toHaveBeenCalledWith('tab-1', 'degraded');
   });
 });

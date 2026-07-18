@@ -31,19 +31,34 @@ function sanitizeFingerprint(raw: unknown): Fingerprint | undefined {
 }
 
 /**
- * Preserve only a PLAUSIBLE lossless-document envelope (versioned, a `doc`-typed object).
- * Authoritative schema + bijection validation belongs where the live editor schema is
- * (the restore primitive); this boundary just keeps a well-shaped blob and drops garbage
- * so a malformed one falls back to the Markdown path instead of reaching the editor.
+ * Classify the lossless-document envelope from RAW property presence, into an explicit
+ * tri-state that recovery acts on:
+ *  - `absent`  — no docJSON fields at all → a genuine legacy Markdown snapshot.
+ *  - `valid`   — versioned + a plausible `doc`-typed object → the blob is kept.
+ *  - `invalid` — the fields are PRESENT but malformed / an unsupported version → the blob is
+ *                dropped, but the state is remembered so recovery degrades EXPLICITLY (text-only
+ *                + preserve the original) instead of masquerading as legacy.
+ * The distinction between absent and present-invalid must survive even when the invalid blob
+ * itself is discarded — that is why the state is carried, not just the blob. Authoritative
+ * schema + bijection validation runs later, where the live editor schema is (the restore primitive).
  */
-function sanitizeDocJSON(
-  raw: unknown,
-  version: unknown,
-): { docJSON: DraftFile['docJSON']; docJSONVersion: 1 } | null {
-  if (version !== 1) return null;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  if ((raw as Record<string, unknown>).type !== 'doc') return null;
-  return { docJSON: raw as DraftFile['docJSON'], docJSONVersion: 1 };
+function classifyDocJSON(d: Record<string, unknown>): {
+  docJSONState: DraftFile['docJSONState'];
+  docJSON?: DraftFile['docJSON'];
+  docJSONVersion?: 1;
+} {
+  const present = 'docJSON' in d || 'docJSONVersion' in d;
+  if (!present) return { docJSONState: 'absent' };
+  const raw = d.docJSON;
+  const plausible =
+    d.docJSONVersion === 1 &&
+    typeof raw === 'object' &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    (raw as Record<string, unknown>).type === 'doc';
+  if (plausible)
+    return { docJSONState: 'valid', docJSON: raw as DraftFile['docJSON'], docJSONVersion: 1 };
+  return { docJSONState: 'invalid' };
 }
 
 export type DraftSnapshot = Omit<DraftFile, 'version' | 'savedAt'>;
@@ -86,13 +101,15 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   const chat = sanitizeDocumentChat(d.chat);
   const expectedDoc = sanitizeFingerprint(d.expectedDoc);
   const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
-  const docJSON = sanitizeDocJSON(d.docJSON, d.docJSONVersion);
+  const docJSON = classifyDocJSON(d);
   return {
     version: 1,
     savedAt: typeof d.savedAt === 'string' ? d.savedAt : new Date().toISOString(),
     filePath: d.filePath,
     content: d.content,
-    ...(docJSON ?? {}),
+    docJSONState: docJSON.docJSONState,
+    ...(docJSON.docJSON ? { docJSON: docJSON.docJSON } : {}),
+    ...(docJSON.docJSONVersion ? { docJSONVersion: docJSON.docJSONVersion } : {}),
     comments: sanitizeComments(d.comments),
     suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
     aiSession: sanitizeAISession(d.aiSession) ?? null,

@@ -36,6 +36,8 @@ const VALID_DRAFT: DraftFile = {
   version: 1,
   savedAt: '2026-06-11T00:00:00.000Z',
   ...SNAPSHOT,
+  // No docJSON fields → the sanitizer classifies this legacy snapshot as 'absent'.
+  docJSONState: 'absent',
 };
 
 const WORKSPACE: WorkspaceFile = {

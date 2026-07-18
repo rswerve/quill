@@ -303,6 +303,13 @@ export interface DraftFile {
   docJSON?: JSONContent;
   /** Envelope version for `docJSON`, so a future shape change fails closed rather than mis-parsing. */
   docJSONVersion?: 1;
+  /**
+   * Read-time classification of the lossless envelope (populated by the sanitizer, never
+   * persisted): `absent` (legacy Markdown snapshot) | `valid` (usable docJSON) | `invalid`
+   * (present but malformed / unsupported version). `invalid` must stay distinct from `absent`
+   * so recovery degrades EXPLICITLY and preserves the original, never masquerading as legacy.
+   */
+  docJSONState?: 'absent' | 'valid' | 'invalid';
   comments: Comment[];
   suggestions: Suggestion[];
   aiSession: AISessionBinding | null;

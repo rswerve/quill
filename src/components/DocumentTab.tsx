@@ -259,6 +259,15 @@ export interface DocumentTabMetaSnapshot {
   autosaveAttention: 'failed' | 'blocked' | 'review-blocked' | null;
 }
 
+/**
+ * How a workspace snapshot recovered, reported so the shell can hold persistence suspended
+ * and preserve a corrupt original before any degraded write overwrites it:
+ *  - `lossless` — byte-exact restore from a valid docJSON;
+ *  - `legacy`   — a genuine pre-docJSON snapshot restored from Markdown;
+ *  - `degraded` — an intended-but-corrupt docJSON; text salvaged, the ORIGINAL must be preserved.
+ */
+export type WorkspaceRecoveryOutcome = 'lossless' | 'legacy' | 'degraded';
+
 interface DocumentTabProps {
   tabId: string;
   isActive: boolean;
@@ -271,7 +280,7 @@ interface DocumentTabProps {
   onChromeChange: (tabId: string, snapshot: DocumentTabChromeSnapshot) => void;
   onMetaChange: (tabId: string, snapshot: DocumentTabMetaSnapshot) => void;
   onInitialFileLoaded: (tabId: string, loaded: boolean) => void;
-  onInitialWorkspaceLoaded: (tabId: string) => void;
+  onInitialWorkspaceLoaded: (tabId: string, outcome: WorkspaceRecoveryOutcome) => void;
   onOpenSessionPicker: (tabId: string) => void;
   onNotice: (notice: {
     title: string;
@@ -1431,7 +1440,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
   // restored as clean browser-session state.
   const restoreWorkspaceSnapshot = useCallback(
-    (draft: DraftFile, dirty: boolean) => {
+    (draft: DraftFile, dirty: boolean): WorkspaceRecoveryOutcome => {
       restoreDraft(draft.filePath, dirty, {
         expectedDoc: draft.expectedDoc ?? null,
         expectedSidecar: draft.expectedSidecar ?? null,
@@ -1447,17 +1456,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setLastKnownModel(newestObservedModel(draftComments, draft.chat));
       setLastKnownEffort(newestObservedEffort(draftComments, draft.chat));
 
-      // Prefer the LOSSLESS path: a valid docJSON restores the document + every mark at
+      // Prefer the LOSSLESS path: a `valid` docJSON restores the document + every mark at
       // byte-exact positions (nothing relocates, no whitespace drift). restoreDocJSON
       // validates structure + doc↔records bijection and fails closed, so we only install
-      // the matching records when it actually restored.
+      // the matching records when it actually restored. `docJSONState` (from the sanitizer)
+      // distinguishes a genuine legacy snapshot (`absent`) from a corrupt one (`invalid`).
+      const state = draft.docJSONState ?? (draft.docJSON ? 'valid' : 'absent');
       const lossless =
-        draft.docJSON && draft.docJSONVersion === 1
+        state === 'valid' && draft.docJSON
           ? editorRef.current?.restoreDocJSON(draft.docJSON, draftComments, draftSuggestions)
           : undefined;
       const ed = editorRef.current?.getEditor();
 
+      let outcome: WorkspaceRecoveryOutcome;
       if (lossless?.ok && ed) {
+        outcome = 'lossless';
         setComments(draftComments);
         setSuggestions(draftSuggestions);
         // Detached/quarantined records are mark-less BY DESIGN, so they cannot be rebuilt
@@ -1465,9 +1478,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         quarantinedSuggestionsRef.current = draftSuggestions.filter((s) => s.detached === true);
         setTrackedChanges(getTrackedChanges(ed));
       } else {
-        // Legacy snapshot (no docJSON) OR a docJSON that failed validation → degraded
-        // text-only recovery through Markdown + unbound relocation. Markdown is stored
-        // independently, so the user's text survives even a corrupt lossless blob.
+        // A lossless doc that was INTENDED but couldn't be used — `invalid` envelope, or a
+        // `valid` one that failed deep validation — is corruption: degrade EXPLICITLY. Genuine
+        // `absent` legacy snapshots take the normal Markdown + unbound relocation path.
+        const degraded = state === 'invalid' || (state === 'valid' && !!lossless && !lossless.ok);
+        outcome = degraded ? 'degraded' : 'legacy';
         editorRef.current?.setContent(draft.content);
         setComments(draftComments);
         setSuggestions(draftSuggestions);
@@ -1479,8 +1494,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             draftSuggestions,
             'unbound',
           );
-          // A PRESENT-but-invalid docJSON is corruption (not a legacy snapshot): say so.
-          if (lossless && !lossless.ok) onNotice(degradedRecoveryNotice());
+          if (degraded) onNotice(degradedRecoveryNotice());
           else announceUnboundLoad('recovery', restored);
         }
       }
@@ -1494,6 +1508,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         rememberSessionPermission(window.localStorage, draft.filePath, session);
         rememberContextFolderPermission(window.localStorage, draft.filePath, restoredContextFolder);
       }
+      return outcome;
     },
     [
       adoptLoadedSession,
@@ -1512,8 +1527,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       return;
     }
     initialWorkspaceRestoreStartedRef.current = true;
-    restoreWorkspaceSnapshot(initialWorkspaceSnapshot, initialWorkspaceDirty);
-    onInitialWorkspaceLoaded(tabId);
+    const outcome = restoreWorkspaceSnapshot(initialWorkspaceSnapshot, initialWorkspaceDirty);
+    onInitialWorkspaceLoaded(tabId, outcome);
   }, [
     editor,
     initialWorkspaceDirty,

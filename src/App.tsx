@@ -5,6 +5,7 @@ import type {
   DocumentTabChromeSnapshot,
   DocumentTabHandle,
   DocumentTabMetaSnapshot,
+  WorkspaceRecoveryOutcome,
 } from './components/DocumentTab';
 import Footer from './components/Footer';
 import Rail from './components/Rail';
@@ -172,6 +173,15 @@ export default function App() {
     { status: 'invalid' }
   > | null>(null);
   const [persistenceSuspended, setPersistenceSuspended] = useState(false);
+  // A degraded workspace recovery is holding persistence suspended until the user preserves
+  // the corrupt original (mirrors `invalidWorkspace`, but discovered AFTER hydration).
+  const [degradedRecovery, setDegradedRecovery] = useState(false);
+  // Recovery hydration accumulator: which snapshot-bearing tabs we're still waiting on, and
+  // the outcome each reported. A ref (not state) so a tab reporting can't race a re-render.
+  const recoveryRef = useRef<{
+    expected: Set<string>;
+    outcomes: Map<string, WorkspaceRecoveryOutcome>;
+  } | null>(null);
   const [tabHandleRevision, setTabHandleRevision] = useState(0);
   // Cross-tab "one Claude session per document" registry. Its callbacks are
   // referentially stable; destructuring them keeps App's dependency arrays
@@ -314,6 +324,7 @@ export default function App() {
           defaultZoomRef.current,
         ),
       );
+      return restored;
     },
     [commitTabs, clearSessionClaims],
   );
@@ -491,11 +502,33 @@ export default function App() {
     [closeTabImmediately, commitTabs],
   );
 
+  // Called after all snapshot-bearing tabs of a suspended recovery have reported: resume
+  // persistence when everything restored cleanly, or hold it suspended and raise the
+  // Preserve gate when any tab degraded (a corrupt lossless doc) so the original recovery
+  // file is quarantined BEFORE a fresh write can overwrite it.
+  const finalizeRecovery = useCallback(() => {
+    const recovery = recoveryRef.current;
+    if (!recovery) return;
+    recoveryRef.current = null;
+    const anyDegraded = [...recovery.outcomes.values()].includes('degraded');
+    if (anyDegraded) {
+      setDegradedRecovery(true); // stays suspended until Preserve & Continue
+    } else {
+      persistenceSuspendedRef.current = false;
+      setPersistenceSuspended(false);
+    }
+  }, []);
+
   const handleInitialWorkspaceLoaded = useCallback(
-    (tabId: string) => {
+    (tabId: string, outcome: WorkspaceRecoveryOutcome) => {
       commitTabs({ type: 'clearInitialWorkspaceSnapshot', tabId });
+      const recovery = recoveryRef.current;
+      if (recovery?.expected.has(tabId)) {
+        recovery.outcomes.set(tabId, outcome);
+        if (recovery.outcomes.size === recovery.expected.size) finalizeRecovery();
+      }
     },
-    [commitTabs],
+    [commitTabs, finalizeRecovery],
   );
 
   const handleTabMetaChange = useCallback(
@@ -939,8 +972,24 @@ export default function App() {
               label: 'Recover',
               kind: 'primary',
               onClick: () => {
-                applyWorkspaceState(pendingRecovery, true);
+                // Hold persistence suspended THROUGH hydration so no tab's post-restore write
+                // can overwrite the original before we know whether any tab degraded. Every
+                // snapshot-bearing tab reports its outcome; finalizeRecovery then resumes or
+                // raises the Preserve gate. Suspension via the ref is synchronous, so the
+                // immediate write effect can't slip through.
+                persistenceSuspendedRef.current = true;
+                setPersistenceSuspended(true);
+                const restored = applyWorkspaceState(pendingRecovery, true);
+                recoveryRef.current = {
+                  expected: new Set(
+                    restored.tabs
+                      .filter((tab) => tab.initialWorkspaceSnapshot)
+                      .map((tab) => tab.id),
+                  ),
+                  outcomes: new Map(),
+                };
                 setPendingRecovery(null);
+                if (recoveryRef.current.expected.size === 0) finalizeRecovery();
               },
             },
             {
@@ -975,6 +1024,33 @@ export default function App() {
                   return;
                 }
                 setInvalidWorkspace(null);
+                persistenceSuspendedRef.current = false;
+                setPersistenceSuspended(false);
+              },
+            },
+          ]}
+        />
+      )}
+
+      {degradedRecovery && (
+        <AppModal
+          title="Recovered work needs preserving"
+          message="Some recovered documents had damaged saved review state. Quill recovered your text, but exact comment and suggestion positions could not be restored. It will preserve the original recovery file for manual repair before saving again."
+          buttons={[
+            {
+              label: 'Preserve & Continue',
+              kind: 'primary',
+              onClick: async () => {
+                const preservedPath = await quarantineWorkspace();
+                if (!preservedPath) {
+                  showNotice({
+                    title: 'Could not preserve recovery',
+                    message:
+                      'Quill has not overwritten the recovery file. Check app-data permissions and try again.',
+                  });
+                  return;
+                }
+                setDegradedRecovery(false);
                 persistenceSuspendedRef.current = false;
                 setPersistenceSuspended(false);
               },
