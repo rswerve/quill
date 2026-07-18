@@ -1,5 +1,7 @@
+import type { JSONContent } from '@tiptap/core';
 import type { Fingerprint } from '../utils/atomicFile';
 export type { Fingerprint };
+export type { JSONContent };
 
 export interface Reply {
   id: string;
@@ -290,6 +292,17 @@ export interface DraftFile {
   /** The file the draft belongs to, or null for an untitled document. */
   filePath: string | null;
   content: string;
+  /**
+   * The LOSSLESS ProseMirror document JSON (all review marks embedded), for byte-exact
+   * crash recovery. When present and valid, recovery restores this directly so positions
+   * never drift and nothing relocates — unlike `content` (Markdown), which normalizes
+   * whitespace on reparse. Absent for legacy snapshots → recovery falls back to `content`
+   * through the unbound relocation path. `content` is retained alongside for back-compat,
+   * preview, and a degraded text-only salvage when `docJSON` is corrupt.
+   */
+  docJSON?: JSONContent;
+  /** Envelope version for `docJSON`, so a future shape change fails closed rather than mis-parsing. */
+  docJSONVersion?: 1;
   comments: Comment[];
   suggestions: Suggestion[];
   aiSession: AISessionBinding | null;
