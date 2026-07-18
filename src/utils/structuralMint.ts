@@ -213,25 +213,22 @@ function classifyFootprintAnnotations(
         }
         continue;
       }
-      // The origin comment: tolerated only as a strict active inline mark.
+      // The origin comment: every fragment must be a strict active inline mark…
       if (!node.isInline || mark.attrs.resolved !== false || !isCommentKind(mark.attrs.kind)) {
         refusal = 'annotated-footprint';
         return false;
       }
-      if (inFootprint) {
-        // Every tolerated origin fragment must be the SAME mark — identical id,
-        // resolved, kind, and any future attribute. Adjacent same-id fragments
-        // with a divergent (but individually valid) kind are an inconsistent
-        // anchor, not one carveout comment, and must refuse.
-        if (firstOrigin === null) firstOrigin = mark;
-        else if (!firstOrigin.eq(mark)) {
-          refusal = 'annotated-footprint';
-          return false;
-        }
-        originSpans.push({ from: pos, to });
-      } else {
-        originOutside = true;
+      // …and ALL fragments (in-footprint or disjoint) must be one consistent mark —
+      // identical id, resolved, kind, and any future attribute. The record adopts
+      // this comment via originCommentId and Accept resolves it globally
+      // (unsetComment by id), so a divergent fragment anywhere is a malformed anchor.
+      if (firstOrigin === null) firstOrigin = mark;
+      else if (!firstOrigin.eq(mark)) {
+        refusal = 'annotated-footprint';
+        return false;
       }
+      if (inFootprint) originSpans.push({ from: pos, to });
+      else originOutside = true;
     }
     return true;
   });

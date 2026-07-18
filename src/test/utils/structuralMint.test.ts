@@ -658,4 +658,23 @@ describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () =
     );
     expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
   });
+
+  it('refuses a wholly-disjoint origin whose fragments diverge in kind (malformed adopted anchor)', () => {
+    editor = makeEditor('<h1>Head</h1><p>Body text here</p>');
+    // The origin comment lives entirely on the paragraph (disjoint from the minted
+    // heading) but as two adjacent fragments of divergent kind. Because the record
+    // adopts it via originCommentId and Accept resolves it globally, a divergent
+    // disjoint fragment is still a malformed anchor and must refuse.
+    editor.chain().setTextSelection({ from: 7, to: 11 }).setComment('cm1', 'note').run(); // "Body"
+    editor.chain().setTextSelection({ from: 11, to: 21 }).setComment('cm1', 'claude').run(); // " text here"
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: headingToParagraph,
+        targetPos: posInBlock(0),
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
 });
