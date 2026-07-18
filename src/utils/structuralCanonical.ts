@@ -1,6 +1,7 @@
 import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralSuggestionRecord } from '../types';
 import { structuralSkeletonEq } from './canonicalDocument';
+import { partitionStructuralRecords } from './structuralRecordValidation';
 import { toCanonicalRecord, type CanonicalRecord } from '../extensions/StructuralRecordStore';
 import { projectBlockUnions } from './blockUnionProjection';
 import { buildAnchorMapper } from './reviewAnchorMap';
@@ -220,16 +221,24 @@ export function buildCanonicalStructuralReview(
  */
 export function prepareStructuralRecordSeed(
   restoredReviewDoc: PMNode,
-  persisted: readonly StructuralSuggestionRecord[],
+  persisted: readonly unknown[],
   serialize: MarkdownSerialize,
 ): StructuralRecordSeed {
-  const persistedIds = persisted.map((record) => record.changeId);
+  // Persisted workspace JSON is untrusted. Partition BEFORE any metadata access; a malformed
+  // entry makes the entire lossless seed unusable because docJSON + metadata are one atomic
+  // snapshot and silently dropping one record could orphan or misidentify a live union.
+  const partitioned = partitionStructuralRecords(persisted);
+  if (partitioned.quarantined.length > 0) {
+    return { ok: false, error: 'lossless structural records are malformed' };
+  }
+  const records = partitioned.valid;
+  const persistedIds = records.map((record) => record.changeId);
   const persistedSet = new Set(persistedIds);
-  const metadata = new Map(persisted.map((record) => [record.changeId, record]));
+  const metadata = new Map(records.map((record) => [record.changeId, record]));
   const index = analyzeStructuralUnions(restoredReviewDoc, metadata);
   const activeIds = new Set(index.persistable.keys());
   const exactIds =
-    index.hasStructuralMarkup === persisted.length > 0 &&
+    index.hasStructuralMarkup === records.length > 0 &&
     index.issues.length === 0 &&
     index.missingMetadataIds.size === 0 &&
     index.allIdentityIds.size === index.topologyValid.size &&
@@ -240,13 +249,13 @@ export function prepareStructuralRecordSeed(
   if (!exactIds) {
     return { ok: false, error: 'lossless structural records do not match the live unions' };
   }
-  if (persisted.length === 0) return { ok: true, records: [] };
+  if (records.length === 0) return { ok: true, records: [] };
 
   const sourceDoc = projectBlockUnions(restoredReviewDoc, 'source').doc;
-  const rebuilt = buildCanonicalStructuralReview(sourceDoc, persisted, serialize);
+  const rebuilt = buildCanonicalStructuralReview(sourceDoc, records, serialize);
   if (!rebuilt.ok) return rebuilt;
   if (!structuralSkeletonEq(rebuilt.doc, restoredReviewDoc)) {
     return { ok: false, error: 'lossless structural records do not reproduce the review union' };
   }
-  return { ok: true, records: persisted.map(toCanonicalRecord) };
+  return { ok: true, records: records.map(toCanonicalRecord) };
 }

@@ -308,8 +308,28 @@ describe('prepareStructuralRecordSeed', () => {
     const live = makeEditor('# Title\n\nBody');
     mintHeadingToParagraph(live, 0);
     const raw = payload(live);
-    const result = prepareStructuralRecordSeed(live.state.doc, raw.structural, serialize);
+    const persisted: readonly unknown[] = raw.structural;
+    const result = prepareStructuralRecordSeed(live.state.doc, persisted, serialize);
     expect(result).toEqual({ ok: true, records: [canonicalRecord('c1')] });
+  });
+
+  it('fails the entire lossless seed on malformed-only or valid+malformed persisted input', () => {
+    const live = makeEditor('# Title\n\nBody');
+    mintHeadingToParagraph(live, 0);
+    const valid = payload(live).structural[0];
+    const malformed = {
+      ...valid,
+      anchor: { parentPath: [], childIndex: 'zero', childCount: 1 },
+    };
+
+    expect(prepareStructuralRecordSeed(live.state.doc, [valid, malformed], serialize)).toEqual({
+      ok: false,
+      error: 'lossless structural records are malformed',
+    });
+    expect(prepareStructuralRecordSeed(live.state.doc, [malformed], serialize)).toEqual({
+      ok: false,
+      error: 'lossless structural records are malformed',
+    });
   });
 
   it('ignores inline review marks only for structural skeleton parity', () => {
