@@ -26,6 +26,7 @@ import {
 } from '../utils/atomicFile';
 import { stripTransientChatState } from '../utils/chatThread';
 import { REVIEW_ANCHOR_VERSION } from '../utils/reviewAnchorMap';
+import type { ReviewRestoreMode } from '../utils/reviewPersistence';
 import type { UnmappableAnchor } from '../utils/canonicalCapture';
 
 function emptySidecar(): SidecarFile {
@@ -112,6 +113,23 @@ export type SaveOutcome =
   | { status: 'failed'; message: string; path?: string }
   | { status: 'review-blocked'; unmappable: UnmappableAnchor[] };
 
+/** A successfully opened document: its content, review sidecar, and anchor authority. */
+export interface OpenResult {
+  content: string;
+  sidecar: SidecarFile;
+  filePath: string;
+  autoBound?: boolean;
+  sidecarError?: string | null;
+  /**
+   * Whether the sidecar's stored coordinates are authoritative for the `.md` on disk.
+   * `bound` — the sidecar's `reviewSourceHash` matches the document's actual hash AND its
+   * `reviewAnchorVersion` matches, so positions are trusted. `unbound` — legacy/missing
+   * provenance, or an externally-edited `.md` (a hash mismatch), so the restore relocates
+   * conservatively rather than trusting stale positions.
+   */
+  reviewMode: ReviewRestoreMode;
+}
+
 /**
  * Result of persisting the sidecar: its new on-disk fingerprint on success, or the
  * conflicting on-disk fingerprint when a fingerprint-gated write/delete found the
@@ -127,20 +145,8 @@ interface UseFileManagerReturn {
   /** Synchronous read of the current dirty state (authoritative right after a save). */
   getIsDirty: () => boolean;
   markDirty: () => void;
-  openFile: () => Promise<{
-    content: string;
-    sidecar: SidecarFile;
-    filePath: string;
-    autoBound?: boolean;
-    sidecarError?: string | null;
-  } | null>;
-  openFilePath: (path: string) => Promise<{
-    content: string;
-    sidecar: SidecarFile;
-    filePath: string;
-    autoBound?: boolean;
-    sidecarError?: string | null;
-  } | null>;
+  openFile: () => Promise<OpenResult | null>;
+  openFilePath: (path: string) => Promise<OpenResult | null>;
   saveFile: (
     content: string,
     comments: Comment[],
@@ -334,7 +340,15 @@ export function useFileManager(
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
         setIsDirty(false);
-        return { content, sidecar, filePath: path, autoBound, sidecarError };
+        // Bound iff the sidecar's provenance proves it corresponds to THESE `.md` bytes:
+        // both the source hash and the anchor version must match. A legacy sidecar (no
+        // hash) or an externally-edited `.md` (hash mismatch) is unbound → relocate.
+        const reviewMode: ReviewRestoreMode =
+          sidecar.reviewSourceHash === docRead.hash &&
+          sidecar.reviewAnchorVersion === REVIEW_ANCHOR_VERSION
+            ? 'bound'
+            : 'unbound';
+        return { content, sidecar, filePath: path, autoBound, sidecarError, reviewMode };
       } catch (e) {
         console.error('Failed to open file:', e);
         onError?.('Could not open file', `${path}\n\n${String(e)}`);

@@ -109,6 +109,49 @@ describe('useFileManager', () => {
       expect(result.current.isDirty).toBe(false);
     });
 
+    const sidecarWith = (provenance: object) =>
+      JSON.stringify({ version: 2, comments: [SAMPLE_COMMENT], suggestions: [], ...provenance });
+
+    const openWithSidecar = async (md: string, sidecarJson: string) => {
+      installSaveRouter({ '/docs/test.md': md, '/docs/test.comments.json': sidecarJson });
+      const { result } = renderHook(() => useFileManager());
+      let res: Awaited<ReturnType<typeof result.current.openFilePath>>;
+      await act(async () => {
+        res = await result.current.openFilePath('/docs/test.md');
+      });
+      return res!;
+    };
+
+    it('reviewMode is bound when the sidecar source hash + version match the .md', async () => {
+      // readHash('# Hello') is the .md's hash; a matching sidecar is authoritative.
+      const res = await openWithSidecar(
+        '# Hello',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }),
+      );
+      expect(res.reviewMode).toBe('bound');
+    });
+
+    it('reviewMode is unbound for a legacy sidecar with no provenance', async () => {
+      const res = await openWithSidecar('# Hello', sidecarWith({}));
+      expect(res.reviewMode).toBe('unbound');
+    });
+
+    it('reviewMode is unbound when the .md was edited externally (hash mismatch)', async () => {
+      const res = await openWithSidecar(
+        '# Hello edited',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }), // stale hash
+      );
+      expect(res.reviewMode).toBe('unbound');
+    });
+
+    it('reviewMode is unbound when the anchor version does not match', async () => {
+      const res = await openWithSidecar(
+        '# Hello',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 999 }),
+      );
+      expect(res.reviewMode).toBe('unbound');
+    });
+
     it('calls sidecarPath correctly — sidecar read uses .comments.json path', async () => {
       mockInvoke.mockResolvedValueOnce(fpPresent('content')).mockResolvedValueOnce(fpPresent('{}'));
 
