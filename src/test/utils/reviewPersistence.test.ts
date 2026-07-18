@@ -816,4 +816,41 @@ describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
     expect(result.quarantinedSuggestions[0]).toMatchObject({ id: 'sg1', detached: true });
     expect(getTrackedChanges(editor)).toEqual([]);
   });
+
+  it('bound: duplicate-id disjoint records are all quarantined/detached, zero marks', () => {
+    editor = makeEditor('<p>alpha beta</p>'); // both words unique, disjoint ranges
+    const a = logical([{ kind: 'delete', from: 1, to: 6, text: 'alpha' }], { id: 'dup' });
+    const b = logical([{ kind: 'delete', from: 7, to: 11, text: 'beta' }], { id: 'dup' });
+    const result = restoreReviewMarks(editor, [], [a, b], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.detached)).toEqual([true, true]);
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toEqual([]); // never stamped
+  });
+
+  it('unbound: duplicate-id disjoint records are all quarantined/detached, zero marks', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    const a = logical([{ kind: 'delete', from: 100, to: 105, text: 'alpha' }], { id: 'dup' });
+    const b = logical([{ kind: 'delete', from: 200, to: 204, text: 'beta' }], { id: 'dup' });
+    const result = restoreReviewMarks(editor, [], [a, b], 'unbound');
+    expect(result.quarantinedSuggestions.map((s) => s.detached)).toEqual([true, true]);
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('a detached record that re-anchors then loses a conflict is re-detached, not relocated', () => {
+    editor = makeEditor(); // one unique "world" at 7..12
+    // Both relocate onto the same span; their excluding marks conflict on stamping.
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], {
+      id: 'ins',
+      detached: true,
+    });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], {
+      id: 'del',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]); // re-anchored but then conflicted
+    expect(result.quarantinedSuggestions.map((s) => s.detached).sort()).toEqual([true, true]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
 });

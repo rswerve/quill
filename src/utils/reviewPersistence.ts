@@ -478,8 +478,19 @@ function restoreSuggestions(
   const quarantined: Suggestion[] = [];
   const mismatches: ReviewRestoreMismatch[] = [];
 
+  // A malformed sidecar can repeat an id. Since `relocatedIds` and the live marks both key
+  // by id, two records sharing one (even with disjoint, non-conflicting segments) would
+  // collapse into a single mixed live suggestion. Quarantine every member of a
+  // duplicate-id group up front so none is ever stamped.
+  const pendingIds = suggestions.filter((s) => s.status === 'pending').map((s) => s.id);
+  const duplicateIds = new Set(pendingIds.filter((id, index) => pendingIds.indexOf(id) !== index));
+
   for (const suggestion of suggestions) {
     if (suggestion.status !== 'pending') continue;
+    if (duplicateIds.has(suggestion.id)) {
+      quarantined.push(markSuggestionDetached(suggestion));
+      continue;
+    }
     const requiresUnique = mode === 'unbound' || suggestion.detached === true;
     if (requiresUnique) {
       const outcome = relocateSuggestion(doc, suggestion);
