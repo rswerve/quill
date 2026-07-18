@@ -11,6 +11,8 @@ import type {
   TrackedChangeInfo,
   TrackedChangeSegment,
 } from '../types';
+import { relocateComment, relocateSuggestion } from './reviewRelocation';
+import { rangeText } from './trackedEdits';
 
 export interface ReviewRestoreMismatch {
   suggestionId: string;
@@ -20,8 +22,29 @@ export interface ReviewRestoreMismatch {
   actual: string | null;
 }
 
+/**
+ * Whether the persisted review coordinates are authoritative. `bound` — the sidecar's
+ * source hash matched the document bytes, so positions are trusted (validated as a
+ * corruption defense). `unbound` — legacy/missing hash, or an externally-edited `.md`,
+ * so positions are only hints and every anchor is conservatively relocated by unique
+ * text. See `src/utils/reviewRelocation.ts`.
+ */
+export type ReviewRestoreMode = 'bound' | 'unbound';
+
 export interface ReviewRestoreResult {
+  /**
+   * The complete authoritative comment set after restore — validated/relocated comments
+   * with corrected coordinates, plus any newly `detached` ones. Callers REPLACE their
+   * comment state with this so the detached flags reach the reconciler.
+   */
+  comments: Comment[];
+  /** Comments re-anchored by unbound relocation (for the "re-attached" notice count). */
+  relocatedComments: Comment[];
+  /** Comments that could not be re-anchored this load and are now `detached`. */
+  detachedComments: Comment[];
   quarantinedSuggestions: Suggestion[];
+  /** Suggestions re-anchored by unbound relocation, with corrected segment positions. */
+  relocatedSuggestions: Suggestion[];
   mismatches: ReviewRestoreMismatch[];
 }
 
@@ -141,23 +164,71 @@ function clampRange(from: number, to: number, size: number): { from: number; to:
   return clampedTo > clampedFrom ? { from: clampedFrom, to: clampedTo } : null;
 }
 
-function restoreCommentMarks(
+interface CommentRestoreOutcome {
+  comments: Comment[];
+  relocated: Comment[];
+  detached: Comment[];
+}
+
+/**
+ * A comment's live range in `bound` mode: its stored range, but ONLY while the anchor
+ * text still sits there. The hash said the bytes match, so a mismatch is corruption —
+ * we do NOT fuzzy-fallback; the caller detaches it.
+ */
+function locateBoundComment(
+  doc: TiptapEditor['state']['doc'],
+  comment: Comment,
+): { from: number; to: number } | null {
+  const range = clampRange(comment.from, comment.to, doc.content.size);
+  if (!range) return null;
+  return rangeText(doc, range.from, range.to) === comment.anchorText ? range : null;
+}
+
+/**
+ * Restore comment marks and classify each comment. Resolved comments pass through
+ * (mark-less by design). Otherwise the mode's locator finds the live range — bound:
+ * validate at the stored range; unbound: relocate to a globally-unique occurrence. A
+ * located comment is stamped and adopts the range (clearing any `detached`); an
+ * unlocatable one is preserved `detached` with no mark.
+ */
+function restoreComments(
   tr: Transaction,
   commentType: MarkType | undefined,
+  doc: TiptapEditor['state']['doc'],
   comments: Comment[],
-  size: number,
-): void {
-  if (!commentType) return;
+  mode: ReviewRestoreMode,
+): CommentRestoreOutcome {
+  const result: Comment[] = [];
+  const relocated: Comment[] = [];
+  const detached: Comment[] = [];
   for (const comment of comments) {
-    if (comment.resolved) continue;
-    const range = clampRange(comment.from, comment.to, size);
-    if (!range) continue;
-    tr.addMark(
-      range.from,
-      range.to,
-      commentType.create({ commentId: comment.id, kind: comment.kind, resolved: false }),
-    );
+    if (comment.resolved) {
+      result.push(comment);
+      continue;
+    }
+    const located =
+      mode === 'bound' ? locateBoundComment(doc, comment) : relocateComment(doc, comment);
+    if (!located) {
+      const record = comment.detached ? comment : { ...comment, detached: true as const };
+      result.push(record);
+      if (!comment.detached) detached.push(record);
+      continue;
+    }
+    if (commentType) {
+      tr.addMark(
+        located.from,
+        located.to,
+        commentType.create({ commentId: comment.id, kind: comment.kind, resolved: false }),
+      );
+    }
+    const record: Comment = { ...comment, from: located.from, to: located.to };
+    delete record.detached; // adopting a live range clears any detached state
+    result.push(record);
+    const moved =
+      located.from !== comment.from || located.to !== comment.to || comment.detached === true;
+    if (mode === 'unbound' && moved) relocated.push(record);
   }
+  return { comments: result, relocated, detached };
 }
 
 function restoreLogicalSuggestion(
@@ -286,21 +357,58 @@ function suggestionMismatches(
   });
 }
 
-function quarantineMismatchedSuggestions(
+interface SuggestionRestoreOutcome {
+  quarantined: Suggestion[];
+  relocated: Suggestion[];
+  mismatches: ReviewRestoreMismatch[];
+}
+
+/**
+ * Bound mode: stored positions are authoritative, validated against the segment text
+ * as a corruption defense. Any segment whose text no longer sits at its saved position
+ * quarantines its whole suggestion (nothing is relocated).
+ */
+function restoreBoundSuggestions(
+  tr: Transaction,
+  schema: TiptapEditor['schema'],
   doc: TiptapEditor['state']['doc'],
   suggestions: LogicalSuggestion[],
-): ReviewRestoreResult & { restorableSuggestions: LogicalSuggestion[] } {
+  size: number,
+): SuggestionRestoreOutcome {
   const mismatches = suggestions
     .filter((suggestion) => suggestion.status === 'pending')
     .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
   const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
   const isQuarantined = (suggestion: Suggestion) =>
     suggestion.status === 'pending' && mismatchedIds.has(suggestion.id);
-  return {
-    quarantinedSuggestions: suggestions.filter(isQuarantined),
-    restorableSuggestions: suggestions.filter((suggestion) => !isQuarantined(suggestion)),
-    mismatches,
-  };
+  const restorable = suggestions.filter((suggestion) => !isQuarantined(suggestion));
+  restoreSuggestionMarks(tr, schema, restorable, size);
+  return { quarantined: suggestions.filter(isQuarantined), relocated: [], mismatches };
+}
+
+/**
+ * Unbound mode: stored positions are only hints. Each PENDING suggestion is relocated
+ * by the conservative matcher; a relocated one is stamped at its corrected positions,
+ * and anything ambiguous/absent/ineligible quarantines. Non-pending records get no live
+ * mark either way, so they pass through untouched.
+ */
+function restoreUnboundSuggestions(
+  tr: Transaction,
+  schema: TiptapEditor['schema'],
+  doc: TiptapEditor['state']['doc'],
+  suggestions: LogicalSuggestion[],
+  size: number,
+): SuggestionRestoreOutcome {
+  const quarantined: Suggestion[] = [];
+  const relocated: LogicalSuggestion[] = [];
+  for (const suggestion of suggestions) {
+    if (suggestion.status !== 'pending') continue;
+    const outcome = relocateSuggestion(doc, suggestion);
+    if (outcome.status === 'relocated') relocated.push(outcome.suggestion);
+    else quarantined.push(suggestion);
+  }
+  restoreSuggestionMarks(tr, schema, relocated, size);
+  return { quarantined, relocated, mismatches: [] };
 }
 
 /**
@@ -317,17 +425,19 @@ export function restoreReviewMarks(
   editor: TiptapEditor,
   comments: Comment[],
   suggestions: PersistedSuggestion[],
+  mode: ReviewRestoreMode = 'bound',
 ): ReviewRestoreResult {
   const { state } = editor;
   const { tr, doc, schema } = state;
   const commentType = schema.marks['comment'];
   const size = doc.content.size;
   const logicalSuggestions = normalizePersistedSuggestions(suggestions);
-  const { quarantinedSuggestions, restorableSuggestions, mismatches } =
-    quarantineMismatchedSuggestions(doc, logicalSuggestions);
 
-  restoreCommentMarks(tr, commentType, comments, size);
-  restoreSuggestionMarks(tr, schema, restorableSuggestions, size);
+  const suggestionOutcome =
+    mode === 'bound'
+      ? restoreBoundSuggestions(tr, schema, doc, logicalSuggestions, size)
+      : restoreUnboundSuggestions(tr, schema, doc, logicalSuggestions, size);
+  const commentOutcome = restoreComments(tr, commentType, doc, comments, mode);
 
   if (tr.steps.length) {
     tr.setMeta('preventUpdate', true);
@@ -335,5 +445,12 @@ export function restoreReviewMarks(
     tr.setMeta('addToHistory', false);
     editor.view.dispatch(tr);
   }
-  return { quarantinedSuggestions, mismatches };
+  return {
+    comments: commentOutcome.comments,
+    relocatedComments: commentOutcome.relocated,
+    detachedComments: commentOutcome.detached,
+    quarantinedSuggestions: suggestionOutcome.quarantined,
+    relocatedSuggestions: suggestionOutcome.relocated,
+    mismatches: suggestionOutcome.mismatches,
+  };
 }

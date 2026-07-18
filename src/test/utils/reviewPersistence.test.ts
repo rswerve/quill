@@ -9,13 +9,23 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
+import { CommentMark } from '../../extensions/Comment';
 import { sanitizeSuggestions } from '../../utils/annotationValidation';
 import {
   mergeQuarantinedSuggestions,
   suggestionsFromTrackedChanges,
   restoreReviewMarks,
 } from '../../utils/reviewPersistence';
-import type { LegacyFormatSuggestion, LegacyTextSuggestion, TrackedChangeInfo } from '../../types';
+import { reconcileCommentsWithDocument } from '../../utils/commentReconciler';
+import { findAnnotationRange } from '../../extensions/AnnotationFocus';
+import type {
+  Comment,
+  LegacyFormatSuggestion,
+  LegacyTextSuggestion,
+  LogicalSuggestion,
+  TrackedChangeInfo,
+  TrackedChangeSegment,
+} from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -29,10 +39,27 @@ function makeEditor(content = '<p>Hello world</p>') {
       TrackedDelete,
       TrackedFormat,
       TrackChanges,
+      CommentMark,
     ],
     content,
   });
 }
+
+const comment = (overrides: Partial<Comment> = {}): Comment => ({
+  id: 'cm1',
+  anchorText: 'world',
+  from: 7,
+  to: 12,
+  author: 'Reviewer',
+  createdAt: '2026-07-11T18:00:00Z',
+  resolved: false,
+  kind: 'note',
+  replies: [],
+  ...overrides,
+});
+
+const hasCommentMark = (editor: Editor, id: string) =>
+  findAnnotationRange(editor.state.doc, 'comment', id) !== null;
 
 function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
   return {
@@ -231,7 +258,7 @@ describe('restoreReviewMarks', () => {
     editor = makeEditor('<p>one<br>two</p>');
     const restored = restoreReviewMarks(editor, [], records);
 
-    expect(restored).toEqual({ quarantinedSuggestions: [], mismatches: [] });
+    expect(restored).toMatchObject({ quarantinedSuggestions: [], mismatches: [] });
     let restoredBreakMarks: string[] | null = null;
     editor.state.doc.descendants((node) => {
       if (node.type.name === 'hardBreak') {
@@ -269,7 +296,7 @@ describe('restoreReviewMarks', () => {
     expect(sanitized[0]).toMatchObject({
       segments: [expect.objectContaining({ text: '\n', nodeType: 'hardBreak' })],
     });
-    expect(restoreReviewMarks(editor, [], sanitized)).toEqual({
+    expect(restoreReviewMarks(editor, [], sanitized)).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -295,7 +322,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 4, to: 5, text: ' ' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+    expect(restoreReviewMarks(editor, [], [legacy])).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -315,7 +342,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 1, to: 8, text: 'one two' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+    expect(restoreReviewMarks(editor, [], [legacy])).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -371,7 +398,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p><em>one<br>two</em></p>');
-    expect(restoreReviewMarks(editor, [], records)).toEqual({
+    expect(restoreReviewMarks(editor, [], records)).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -565,4 +592,101 @@ describe('restoreReviewMarks', () => {
       expect(insertedMarks).not.toContain('tracked_format');
     },
   );
+});
+
+describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
+  let editor: Editor | null = null;
+  afterEach(() => {
+    editor?.destroy();
+    editor = null;
+  });
+
+  const logical = (
+    segments: TrackedChangeSegment[],
+    overrides: object = {},
+  ): LogicalSuggestion => ({
+    id: 'sg1',
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    status: 'pending',
+    type: 'change',
+    segments,
+    ...overrides,
+  });
+
+  it('bound: validates a comment at its stored range and stamps it', () => {
+    editor = makeEditor(); // "Hello world"; "world" at 7..12
+    const result = restoreReviewMarks(editor, [comment()], [], 'bound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(true);
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(result.detachedComments).toEqual([]);
+  });
+
+  it('bound: a comment whose anchor text no longer matches is detached, not stamped', () => {
+    editor = makeEditor();
+    const stale = comment({ anchorText: 'zzz' }); // text at [7,12] is "world"
+    const result = restoreReviewMarks(editor, [stale], [], 'bound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+    expect(result.comments[0].detached).toBe(true);
+    expect(result.detachedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: relocates a comment to a unique occurrence and clears detached', () => {
+    editor = makeEditor();
+    const drifted = comment({ from: 100, to: 105, detached: true }); // stale coords, still "world"
+    const result = restoreReviewMarks(editor, [drifted], [], 'unbound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(true);
+    expect(result.comments[0]).toMatchObject({ from: 7, to: 12 });
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(result.relocatedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: an ambiguous comment is detached, never guessed', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const result = restoreReviewMarks(
+      editor,
+      [comment({ anchorText: 'ab', from: 1, to: 3 })],
+      [],
+      'unbound',
+    );
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+    expect(result.comments[0].detached).toBe(true);
+    expect(result.detachedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: relocates a drifted suggestion and stamps it at the corrected position', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const drifted = logical([{ kind: 'delete', from: 100, to: 105, text: 'world' }]);
+    const result = restoreReviewMarks(editor, [], [drifted], 'unbound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(result.quarantinedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toHaveLength(1);
+    expect(getTrackedChanges(editor)[0].segments[0]).toMatchObject({ from: 7, to: 12 });
+  });
+
+  it('unbound: an ambiguous suggestion is quarantined, not relocated', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const ambiguous = logical([{ kind: 'delete', from: 1, to: 3, text: 'ab' }]);
+    const result = restoreReviewMarks(editor, [], [ambiguous], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('regression: a detached comment survives the next editor update without a mark or reattachment', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const result = restoreReviewMarks(
+      editor,
+      [comment({ anchorText: 'ab', from: 1, to: 3 })],
+      [],
+      'unbound',
+    );
+    expect(result.comments[0].detached).toBe(true);
+
+    // Simulate a subsequent editor update reconciling comments from live marks.
+    const afterUpdate = reconcileCommentsWithDocument(result.comments, editor.state.doc);
+    expect(afterUpdate).toHaveLength(1);
+    expect(afterUpdate[0]).toMatchObject({ id: 'cm1', detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false); // still no mark, not reattached
+  });
 });

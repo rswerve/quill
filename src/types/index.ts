@@ -91,9 +91,10 @@ export interface Comment {
    * thread is deliberately kept (its content isn't lost) but has no live mark and does
    * not highlight anything until the user repairs it. The reconciler preserves a
    * detached comment instead of dropping it; navigation/unresolve for it must relocate
-   * by unique text only, never by its stale stored range.
+   * by unique text only, never by its stale stored range. Only ever literal `true` (never
+   * `false`) — an un-detached comment simply omits the key.
    */
-  detached?: boolean;
+  detached?: true;
   /**
    * Single-player margin model: a private local `note` (never sent to Claude)
    * or a `claude` thread (the user's request plus Claude's replies).
