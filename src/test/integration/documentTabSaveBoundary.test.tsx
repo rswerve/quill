@@ -39,9 +39,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { invoke } from '@tauri-apps/api/core';
 import DocumentTab, { type DocumentTabHandle } from '../../components/DocumentTab';
 import { findAnnotationRange } from '../../extensions/AnnotationFocus';
+import { getTrackedChanges } from '../../extensions/TrackChanges';
 import { REVIEW_ANCHOR_VERSION } from '../../utils/reviewAnchorMap';
 import type { Editor } from '@tiptap/core';
-import type { Comment, SidecarFile } from '../../types';
+import type { Comment, SidecarFile, Suggestion } from '../../types';
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -49,11 +50,16 @@ const DOC_PATH = '/docs/test.md';
 const SIDECAR_PATH = '/docs/test.comments.json';
 const DOC_HASH = 'd'.repeat(64);
 
-/** One recorded write_file_atomic call. */
-interface WriteRecord {
+/**
+ * One recorded disk MUTATION — a write OR a delete. "Zero writes" is too narrow: a save
+ * that empty-collapses the sidecar DELETES it, and a broken gate could leak through that
+ * path too. The gate's real invariant is zero disk mutations of any kind.
+ */
+interface MutationRecord {
+  kind: 'write' | 'delete';
   path: string;
-  content: string;
-  expected: unknown;
+  content?: string;
+  expected?: unknown;
 }
 
 interface RouterConfig {
@@ -66,11 +72,11 @@ interface RouterConfig {
 }
 
 /**
- * Route invoke() to the atomic-persistence + dialog contract, recording every write so a
- * test can prove ZERO writes happened during a blocked action.
+ * Route invoke() to the atomic-persistence + dialog contract, recording every disk
+ * mutation (write AND delete) so a test can prove ZERO happened during a blocked action.
  */
 function installRouter(config: RouterConfig) {
-  const writes: WriteRecord[] = [];
+  const mutations: MutationRecord[] = [];
   mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
     const a = (args ?? {}) as Record<string, unknown>;
     const path = a.path as string | undefined;
@@ -82,9 +88,15 @@ function installRouter(config: RouterConfig) {
           : { state: 'absent' };
       }
       case 'write_file_atomic':
-        writes.push({ path: path!, content: a.content as string, expected: a.expected });
+        mutations.push({
+          kind: 'write',
+          path: path!,
+          content: a.content as string,
+          expected: a.expected,
+        });
         return config.writeResult ? config.writeResult() : { status: 'written', hash: DOC_HASH };
       case 'delete_file_if_match':
+        mutations.push({ kind: 'delete', path: path!, expected: a.expected });
         return { status: 'deleted' };
       case 'find_session_for_markdown':
         return null;
@@ -94,7 +106,7 @@ function installRouter(config: RouterConfig) {
         return undefined;
     }
   });
-  return writes;
+  return mutations;
 }
 
 /** A bound sidecar (source hash matches the doc) with one comment over `anchorText`. */
@@ -134,16 +146,28 @@ function makeComment(fields: Partial<Comment>): Comment {
   } as Comment;
 }
 
+/** A pending tracked-deletion suggestion of `text`, stored at [from,to] (may be stale). */
+function deletionSuggestion(id: string, text: string, from: number, to: number): Suggestion {
+  return {
+    id,
+    type: 'change',
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    status: 'pending',
+    segments: [{ kind: 'delete', from, to, text }],
+  } as Suggestion;
+}
+
 interface Mounted {
   handle: DocumentTabHandle;
-  writes: WriteRecord[];
+  mutations: MutationRecord[];
   notices: Array<{ title: string; message: string }>;
   container: HTMLElement;
 }
 
 /** Mount a DocumentTab bound to DOC_PATH and wait for its initial load to settle. */
 async function mountTab(config: RouterConfig): Promise<Mounted> {
-  const writes = installRouter(config);
+  const mutations = installRouter(config);
   const notices: Array<{ title: string; message: string }> = [];
   const ref = createRef<DocumentTabHandle>();
   const onInitialFileLoaded = vi.fn();
@@ -171,7 +195,7 @@ async function mountTab(config: RouterConfig): Promise<Mounted> {
 
   await waitFor(() => expect(onInitialFileLoaded).toHaveBeenCalledWith('tab-1', true));
   // The editor is created and the sidecar restored by now.
-  return { handle: ref.current!, writes, notices, container: result.container };
+  return { handle: ref.current!, mutations, notices, container: result.container };
 }
 
 const editorOf = (handle: DocumentTabHandle): Editor => handle.getEditor()!;
@@ -255,7 +279,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
 
     expect(saved).toBeNull(); // review-blocked ⇒ no path
-    expect(m.writes).toHaveLength(0); // ZERO writes — neither .md nor sidecar
+    expect(m.mutations).toHaveLength(0); // ZERO writes — neither .md nor sidecar
     expect(m.handle.getPersistenceSnapshot().dirty).toBe(true); // stays dirty, synchronously
     // The user is told why, and the offending annotation is named.
     expect(m.notices.some((n) => n.title.startsWith('Save blocked'))).toBe(true);
@@ -274,9 +298,9 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
 
     expect(saved).toBeNull();
-    expect(m.writes).toHaveLength(0);
+    expect(m.mutations).toHaveLength(0);
     // The capture gate runs BEFORE the path prompt: no dialog for a save that would fail.
-    expect(mockInvoke).not.toHaveBeenCalledWith('show_save_dialog', expect.anything());
+    expect(mockInvoke.mock.calls.some(([command]) => command === 'show_save_dialog')).toBe(false);
     expect(m.handle.getPersistenceSnapshot().dirty).toBe(true);
   });
 
@@ -290,7 +314,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
 
     expect(stillDirty).toBe(true); // the shell will still guard this tab on quit
-    expect(m.writes).toHaveLength(0);
+    expect(m.mutations).toHaveLength(0);
   });
 
   it('overwrite (conflict banner): capture failure writes nothing and keeps the banner up', async () => {
@@ -324,13 +348,13 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     // Now break the comment and overwrite: capture must fail before any write.
     breakCommentWithDoubleSpace(ed);
     conflictArmed = false; // if a write DID happen it would succeed — makes a leak visible
-    m.writes.length = 0;
+    m.mutations.length = 0;
 
     await act(async () => {
       fireEvent.click(overwriteBtn);
     });
 
-    expect(m.writes).toHaveLength(0);
+    expect(m.mutations).toHaveLength(0);
     // The banner is sticky: a blocked overwrite must not clear the conflict.
     expect(
       [...m.container.querySelectorAll('button')].some((b) => b.textContent === 'Overwrite'),
@@ -346,7 +370,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     await act(async () => {
       await m.handle.save();
     });
-    expect(m.writes).toHaveLength(0);
+    expect(m.mutations).toHaveLength(0);
 
     // Normalize: delete the extra space so the highlight no longer straddles a collapse.
     const range = findAnnotationRange(ed.state.doc, 'comment', 'c1')!;
@@ -362,7 +386,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     });
 
     expect(saved).toBe(DOC_PATH); // now it lands
-    expect(m.writes.some((w) => w.path === DOC_PATH)).toBe(true);
+    expect(m.mutations.some((x) => x.kind === 'write' && x.path === DOC_PATH)).toBe(true);
     expect(m.handle.getPersistenceSnapshot().dirty).toBe(false);
   });
 
@@ -373,7 +397,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
     await act(async () => {
       await m.handle.save();
     });
-    expect(m.writes).toHaveLength(0);
+    expect(m.mutations).toHaveLength(0);
 
     // Strip the comment mark entirely (the reconciler then drops the record). Remove it
     // with a raw transaction rather than a focused command so no selection scroll fires
@@ -388,7 +412,7 @@ describe('DocumentTab save boundary — capture failure blocks every write route
       saved = await m.handle.save();
     });
     expect(saved).toBe(DOC_PATH);
-    expect(m.writes.some((w) => w.path === DOC_PATH)).toBe(true);
+    expect(m.mutations.some((x) => x.kind === 'write' && x.path === DOC_PATH)).toBe(true);
   });
 });
 
@@ -453,5 +477,52 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     const snap = m.handle.getWorkspaceSnapshot();
     const restored = snap.comments.find((c) => c.id === 'c1')!;
     expect(restored.detached).toBe(true);
+  });
+
+  it('source-hash mismatch: suggestions relocate (live mark) or quarantine (detached) in one sidecar', async () => {
+    // Suggestions travel a different restore path than comments — live tracked marks for
+    // the relocated ones, the quarantine ref for the rest — and the two are re-merged by
+    // getLiveReviewState. Prove BOTH halves at the component boundary with two disjoint
+    // suggestions in one unbound sidecar: a unique deletion relocates and becomes a live
+    // mark at corrected coordinates; an ambiguous one is preserved detached with no mark.
+    const content = 'alpha beta gamma delta same one same two';
+    const sidecar: SidecarFile = {
+      version: 2,
+      comments: [],
+      suggestions: [
+        // Stored over "alpha" (from 1) — deliberately WRONG. Its text is the unique "gamma",
+        // so unbound relocation must re-find and re-base it, not trust the stale range.
+        deletionSuggestion('s-unique', 'gamma', 1, 6),
+        // "same" occurs twice → ambiguous → quarantined detached, never bound to a guess.
+        deletionSuggestion('s-ambig', 'same', 24, 28),
+      ],
+      reviewSourceHash: 'stale'.padEnd(64, '0'), // ≠ DOC_HASH ⇒ unbound
+      reviewAnchorVersion: REVIEW_ANCHOR_VERSION,
+    } as SidecarFile;
+
+    const m = await mountTab({
+      reads: {
+        [DOC_PATH]: { content, hash: DOC_HASH },
+        [SIDECAR_PATH]: { content: JSON.stringify(sidecar), hash: 's'.repeat(64) },
+      },
+    });
+    const ed = editorOf(m.handle);
+
+    // Only the unique suggestion becomes a live tracked mark, at the corrected span.
+    const changes = getTrackedChanges(ed);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].id).toBe('s-unique');
+    const seg = changes[0].segments[0];
+    expect(seg.from).not.toBe(1); // re-based off the stale coordinate
+    expect(ed.state.doc.textBetween(seg.from, seg.to)).toBe('gamma');
+
+    // The workspace snapshot merges both: the live relocated one and the detached one.
+    const snap = m.handle.getWorkspaceSnapshot();
+    const unique = snap.suggestions.find((s) => s.id === 's-unique')!;
+    expect(unique.detached).toBeUndefined();
+    const ambig = snap.suggestions.find((s) => s.id === 's-ambig')!;
+    expect(ambig.detached).toBe(true);
+    // The quarantine surfaced its "needs review" notice.
+    expect(m.notices.some((n) => n.title === 'Saved suggestions need review')).toBe(true);
   });
 });
