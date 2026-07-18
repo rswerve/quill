@@ -666,13 +666,15 @@ describe('DocumentTab conflict gate — a conflict blocks autosave I/O (E4b-1 co
     expect(m.container.textContent).toContain('changed on disk'); // conflict kept
   });
 
-  it('New drains an in-flight save before changing identity (removing await flushSaves would fail this)', async () => {
+  it('New drains an in-flight save before changing identity (a change-identity-then-flush reorder fails this)', async () => {
     let releaseWrite!: () => void;
     const writeGate = new Promise<void>((r) => (releaseWrite = r));
     const m = await mountTab({ reads: boundReads(), writeGate });
-    const ed = editorOf(m.handle);
     act(() => {
-      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' x');
+      editorOf(m.handle).commands.insertContentAt(
+        editorOf(m.handle).state.doc.content.size - 1,
+        ' x',
+      );
     });
     // A manual save whose write hangs on the gate — now in-flight in the coordinator.
     let savePromise!: Promise<string | null>;
@@ -691,12 +693,59 @@ describe('DocumentTab conflict gate — a conflict blocks autosave I/O (E4b-1 co
       await new Promise((r) => setTimeout(r, 5)); // flush micro/macrotasks; the gate stays closed
     });
     expect(newDone).toBe(false); // blocked draining the in-flight save
+    // IDENTITY must not change while it waits: the OLD document is still loaded.
+    expect(editorOf(m.handle).state.doc.textContent).toContain('target here');
 
     await act(async () => {
       releaseWrite(); // save resolves → drain completes → New proceeds
       await Promise.all([savePromise, newPromise]);
     });
     expect(newDone).toBe(true);
+    expect(editorOf(m.handle).state.doc.textContent).not.toContain('target here'); // now the empty Untitled
+  });
+
+  it('Open drains an in-flight save before loading the other document', async () => {
+    const OTHER = '/docs/other.md';
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((r) => (releaseWrite = r));
+    const m = await mountTab({
+      reads: {
+        ...boundReads(),
+        [OTHER]: { content: 'entirely other content', hash: 'o'.repeat(64) },
+      },
+      writeGate,
+    });
+    act(() => {
+      editorOf(m.handle).commands.insertContentAt(
+        editorOf(m.handle).state.doc.content.size - 1,
+        ' x',
+      );
+    });
+    let savePromise!: Promise<string | null>;
+    act(() => {
+      savePromise = m.handle.save();
+    });
+    let openDone = false;
+    let openPromise!: Promise<void>;
+    act(() => {
+      openPromise = m.handle.openPath(OTHER).then(() => {
+        openDone = true;
+      });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    expect(openDone).toBe(false);
+    // The OLD document is still loaded while the in-flight save drains — the other file has NOT loaded.
+    expect(editorOf(m.handle).state.doc.textContent).toContain('target here');
+    expect(editorOf(m.handle).state.doc.textContent).not.toContain('entirely other content');
+
+    await act(async () => {
+      releaseWrite();
+      await Promise.all([savePromise, openPromise]);
+    });
+    expect(openDone).toBe(true);
+    expect(editorOf(m.handle).state.doc.textContent).toContain('entirely other content'); // identity changed after the drain
   });
 
   it('after a conflict outcome, an edit + autosave flush performs zero further writes', async () => {
