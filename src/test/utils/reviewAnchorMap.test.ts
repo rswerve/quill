@@ -425,3 +425,50 @@ describe('reviewAnchorMap: empty and whitespace-only blocks (Codex round 3)', ()
     expect(buildAnchorMapper(live, canon).map(1, 1)).toBeNull();
   });
 });
+
+describe('reviewAnchorMap: boundary-identity attacks (independent verification)', () => {
+  it('a cursor INSIDE a vanishing whitespace-only block does not map (no valid target)', () => {
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: ' ' }] }, // disappears
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const canon = canonicalOf(live);
+    const inside = nthPos(live, ' '); // the interior cursor of the block that vanishes
+    const mapper = buildAnchorMapper(live, canon);
+    expect(mapper.map(inside, inside)).toBeNull(); // before the space
+    expect(mapper.map(inside + 1, inside + 1)).toBeNull(); // after the space
+  });
+
+  it('an NBSP-only block that the round-trip empties fails forward (safe, not mismapped)', () => {
+    // A lone NBSP is a paragraph-level blank to the Markdown serializer: the block
+    // reopens EMPTY, dropping the NBSP. Live content [a, NBSP, b] vs canonical [a, b]
+    // is a genuine content-count divergence, so the deterministic mapper refuses to
+    // map anything after it rather than guessing — the load-side relocation net
+    // recovers `b` by unique text. Broad failure beats a plausible wrong anchor.
+    const live = liveDoc({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: ' ' }] }, // NBSP, not collapsible
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const canon = canonicalOf(live);
+    expect(canon.child(1).content.size).toBe(0); // the middle block reopened empty
+    const b = nthPos(live, 'b');
+    expect(buildAnchorMapper(live, canon).map(b, b + 1)).toBeNull(); // fails forward
+  });
+
+  it('leading whitespace trim adjacent to surviving content maps the content', () => {
+    const live = liveDoc(para('  abc')); // two leading spaces trimmed on reopen
+    const canon = canonicalOf(live);
+    const a = nthPos(live, 'abc');
+    const mapped = buildAnchorMapper(live, canon).map(a, a + 3);
+    expect(mapped).not.toBeNull();
+    expect(canon.textBetween(mapped!.from, mapped!.to)).toBe('abc');
+  });
+});
