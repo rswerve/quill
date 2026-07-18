@@ -577,3 +577,40 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     expect(notice!.message).toContain('open the review panel');
   });
 });
+
+describe('DocumentTab conflict gate — a conflict blocks autosave I/O (E4b-1 composition)', () => {
+  it('after a conflict outcome, an edit + autosave flush performs zero further writes', async () => {
+    // Every write returns an external conflict, so the first save latches the ConflictBanner.
+    const m = await mountTab({
+      reads: boundReads(),
+      writeResult: () => ({
+        status: 'conflict',
+        actual: { state: 'present', hash: 'x'.repeat(64) },
+      }),
+    });
+    const ed = editorOf(m.handle);
+
+    // Dirty the doc (edit at the end keeps the bound comment mappable), then a manual save
+    // hits the on-disk conflict and raises the banner.
+    act(() => {
+      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' one');
+    });
+    await act(async () => {
+      await m.handle.save();
+    });
+    expect(m.mutations.filter((x) => x.kind === 'write').length).toBeGreaterThanOrEqual(1);
+    expect(m.container.textContent).toContain('changed on disk'); // banner is up
+
+    // The extraction moved saveConflict into useDocumentSaveOrchestration, but useAutosave still
+    // reads it through isEligible. A fresh edit + autosave flush must therefore perform ZERO
+    // further disk I/O of any kind — the saveConflict → useAutosave composition still holds.
+    const before = m.mutations.length;
+    act(() => {
+      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' two');
+    });
+    await act(async () => {
+      await m.handle.flushPendingSave();
+    });
+    expect(m.mutations).toHaveLength(before);
+  });
+});

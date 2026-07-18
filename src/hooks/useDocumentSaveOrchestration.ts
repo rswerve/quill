@@ -1,4 +1,4 @@
-import { useCallback, useState, type MutableRefObject, type RefObject } from 'react';
+import { useCallback, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { useSaveCoordinator } from './useSaveCoordinator';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { dirname } from '../utils/path';
@@ -92,7 +92,7 @@ export interface DocumentSaveOrchestrationDeps {
  * save routes (Save / Save As / Overwrite-conflict), the save coordinator, the manual-outcome
  * handling, and the external-conflict STATE. It deliberately does NOT own: markDirty, autosave,
  * snapshot capture/restore, or load/open/new — those stay in the component (autosave consumes
- * the returned `saveAndDrain`; open/new consume `runExclusive`/`flushSaves`; reload-conflict
+ * the returned `saveAndDrain`; open/new drain via the returned `flushSaves`; reload-conflict
  * lives in the component and drives the returned `runConflictResolution`).
  *
  * The correctness-critical counters (change-revision, covered-revision, save-epoch, baselines)
@@ -133,6 +133,25 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
 
   /** Named clear action for the component's external clear sites (successful Open, New). */
   const clearSaveConflict = useCallback(() => setSaveConflict(null), []);
+
+  // Synchronous single-flight guard for conflict resolution. A REF, not the `resolvingConflict`
+  // state: two same-tick calls (a double-click, or a stale stored callback) would both observe
+  // stale `false` and run concurrently, because state updates a render later. The ref flips
+  // synchronously, so the second call returns immediately; the state only mirrors it for the
+  // banner's busy affordance. This single wrapper is the ONE lifecycle owner shared by Overwrite,
+  // Save-a-Copy, and the component-driven Reload — no path guards on the state independently.
+  const resolvingConflictRef = useRef(false);
+  const runConflictResolution = useCallback(async (job: () => Promise<unknown>): Promise<void> => {
+    if (resolvingConflictRef.current) return;
+    resolvingConflictRef.current = true;
+    setResolvingConflict(true);
+    try {
+      await job();
+    } finally {
+      resolvingConflictRef.current = false;
+      setResolvingConflict(false);
+    }
+  }, []);
 
   const structuralSaveFailure = useCallback(
     (error: string): SaveOutcome => ({
@@ -342,9 +361,8 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
   // a raw save) and clears the conflict only on success; a failed/cancelled action
   // keeps it. Actions are disabled by the banner while `resolvingConflict` is true.
   const handleOverwriteConflict = useCallback(async () => {
-    if (!filePath || resolvingConflict) return;
-    setResolvingConflict(true);
-    try {
+    if (!filePath) return;
+    await runConflictResolution(async () => {
       // Overwrite = an explicit same-path Save As: an unconditional write that also
       // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
       const outcome = await runExclusive(async () => {
@@ -374,12 +392,10 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
       } else {
         presentManualSaveFailure(outcome); // e.g. a protected sidecar or unanchored annotation
       }
-    } finally {
-      setResolvingConflict(false);
-    }
+    });
   }, [
     filePath,
-    resolvingConflict,
+    runConflictResolution,
     runExclusive,
     saveFile,
     captureCanonicalSaveState,
@@ -393,31 +409,11 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
   ]);
 
   const handleSaveCopyConflict = useCallback(async () => {
-    if (resolvingConflict) return;
-    setResolvingConflict(true);
-    try {
+    await runConflictResolution(async () => {
       const path = await handleSaveAs(); // exclusive Save As to a NEW file
       if (path) setSaveConflict(null); // now editing the copy — nothing to conflict with
-    } finally {
-      setResolvingConflict(false);
-    }
-  }, [resolvingConflict, handleSaveAs]);
-
-  // Owns the resolvingConflict lifecycle for a conflict-resolution job the COMPONENT drives
-  // (reload lives there because it depends on performOpenPath, which is declared after the
-  // save coordinator — passing it in would be a dependency cycle).
-  const runConflictResolution = useCallback(
-    async (job: () => Promise<unknown>): Promise<void> => {
-      if (resolvingConflict) return;
-      setResolvingConflict(true);
-      try {
-        await job();
-      } finally {
-        setResolvingConflict(false);
-      }
-    },
-    [resolvingConflict],
-  );
+    });
+  }, [runConflictResolution, handleSaveAs]);
 
   return {
     handleSave,
