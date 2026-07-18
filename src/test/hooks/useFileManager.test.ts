@@ -1526,6 +1526,97 @@ describe('structural envelope persistence', () => {
     const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
     expect(writes).toHaveLength(0);
   });
+
+  it('E1: PROTECTS a sidecar whose two source hashes DISAGREE (impossible app state)', async () => {
+    // reviewSourceHash (inline) and structural.sourceDocumentHash (unions) always bind the SAME
+    // .md hash when the app writes them, so a disagreement is a hand-edited/corrupt sidecar — a
+    // split-brain if half-trusted. Protect BOTH files and drop the structural envelope so nothing
+    // reconstructs against a source that disagrees with the inline axis.
+    const mismatched = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'a'.repeat(64),
+      structural: { version: 1, sourceDocumentHash: 'b'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(mismatched));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/m.md');
+    });
+    expect(opened!.sidecar.structural).toBeUndefined(); // dropped: never reconstructed
+    expect(opened!.sidecarError).toBeTruthy();
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# Title changed', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    const noWrites = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(noWrites).toHaveLength(0);
+  });
+
+  it('E1: LOADS a sidecar whose two source hashes AGREE (no false protection)', async () => {
+    // Equal hashes are internally consistent — at worst a plain external edit, which the
+    // per-axis gates already handle. The cross-check must NOT protect this.
+    const consistent = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'c'.repeat(64),
+      structural: { version: 1, sourceDocumentHash: 'c'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(consistent));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/c.md');
+    });
+    expect(opened!.sidecar.structural?.records).toHaveLength(1);
+    expect(opened!.sidecarError).toBeNull();
+  });
+
+  it('E1: one hash absent is legacy/partial, not a conflict — reviewSourceHash absent', async () => {
+    const legacyInline = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 1, sourceDocumentHash: 'd'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(legacyInline));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/l.md');
+    });
+    expect(opened!.sidecar.structural?.records).toHaveLength(1);
+    expect(opened!.sidecarError).toBeNull();
+  });
+
+  it('E1: one hash absent is legacy/partial, not a conflict — structural absent', async () => {
+    const noStructural = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'e'.repeat(64),
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(noStructural));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/e.md');
+    });
+    expect(opened!.sidecar.structural).toBeUndefined();
+    expect(opened!.sidecarError).toBeNull();
+  });
 });
 
 describe('stripTransientReplyState', () => {

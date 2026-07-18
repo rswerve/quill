@@ -194,6 +194,22 @@ function hasMalformedStructuralBlock(raw: unknown): boolean {
   );
 }
 
+/**
+ * True when a sidecar carries BOTH source hashes but they disagree. `reviewSourceHash` (inline
+ * anchors) and `structural.sourceDocumentHash` (block unions) are ALWAYS stamped with the same
+ * `.md` hash by the app, so a disagreement is an impossible app-produced state — a hand-edited
+ * or corrupt sidecar. Left unchecked it is a split-brain: the two subsystems could reach
+ * different bound/unbound verdicts (e.g. inline trusts its positions while structural quarantines,
+ * or vice-versa). Treated like a malformed structural block: protect BOTH files and skip
+ * reconstruction, rather than half-trusting one axis. One hash absent is a legacy/partial sidecar,
+ * not a conflict — that stays the normal compatibility path.
+ */
+function hasStructuralHashMismatch(sidecar: SidecarFile): boolean {
+  const review = sidecar.reviewSourceHash;
+  const structural = sidecar.structural?.sourceDocumentHash;
+  return review !== undefined && structural !== undefined && review !== structural;
+}
+
 /** A successfully opened document: its content, review sidecar, and anchor authority. */
 export interface OpenResult {
   content: string;
@@ -402,6 +418,15 @@ export function useFileManager(
                 sidecarError = `structural suggestions block is malformed`;
                 structuralMalformed = true;
                 console.error(`Sidecar at ${sidecarPath(path)} has a malformed structural block`);
+              } else if (hasStructuralHashMismatch(sidecar)) {
+                // Both source hashes present but disagreeing: an impossible app-produced state.
+                // Protect BOTH files (like a malformed block) and DROP the structural envelope in
+                // memory so reconstruction never runs against it — the on-disk sidecar (the only
+                // copy of the proposal) is preserved by the protection for the user to reconcile.
+                sidecarError = `structural source hash disagrees with the review source hash`;
+                structuralMalformed = true;
+                sidecar = { ...sidecar, structural: undefined };
+                console.error(`Sidecar at ${sidecarPath(path)} has mismatched source hashes`);
               }
             } catch (e) {
               // Present but corrupt JSON: keep an empty in-memory model, flag the
