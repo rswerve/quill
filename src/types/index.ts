@@ -86,6 +86,15 @@ export interface Comment {
   createdAt: string;
   resolved: boolean;
   /**
+   * Set when a load could not re-anchor this comment — an externally-edited or legacy
+   * document where its text is now ambiguous or gone. DISTINCT from `resolved`: the
+   * thread is deliberately kept (its content isn't lost) but has no live mark and does
+   * not highlight anything until the user repairs it. The reconciler preserves a
+   * detached comment instead of dropping it; navigation/unresolve for it must relocate
+   * by unique text only, never by its stale stored range.
+   */
+  detached?: boolean;
+  /**
    * Single-player margin model: a private local `note` (never sent to Claude)
    * or a `claude` thread (the user's request plus Claude's replies).
    */
