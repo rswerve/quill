@@ -4,6 +4,7 @@ import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { describe, it, expect, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { CommentMark } from '../../extensions/Comment';
+import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/TrackChanges';
 import {
   StructuralRecordStore,
   activeRecords,
@@ -41,6 +42,11 @@ function makeEditor(content: string): Editor {
       BlockTrack,
       StructuralRecordStore,
       CommentMark,
+      // The tracked review marks (inert without the TrackChanges plugin) so the
+      // annotation-scan tests can seed each review-mark family into the schema.
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
     ],
     content,
   });
@@ -366,5 +372,90 @@ describe('compileStructuralMint — determinism and disjoint unions', () => {
     editor.view.dispatch(r.tr);
     expect(editor.state.selection.from).toBe(3); // still inside the delete (source) branch
     expect(editor.state.doc.child(0).type.name).toBe('heading');
+  });
+
+  it('a successful compile leaves the live doc and store untouched until the tr is dispatched', () => {
+    editor = makeEditor('<h1>T</h1>');
+    const docBefore = editor.state.doc.toJSON();
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+      ),
+    );
+    expect(editor.state.doc.toJSON()).toEqual(docBefore); // not applied yet
+    expect(retainedRecords(editor.state).size).toBe(0);
+    editor.view.dispatch(r.tr);
+    expect(editor.state.doc.childCount).toBe(2); // union appears only on dispatch
+    expect(retainedRecords(editor.state).has('c1')).toBe(true);
+  });
+});
+
+describe('compileStructuralMint — review-mark families and the runtime boundary', () => {
+  it.each(['comment', 'tracked_insert', 'tracked_delete', 'tracked_format'])(
+    'refuses when a %s mark sits anywhere in the captured subtree',
+    (markName) => {
+      editor = makeEditor('<h1>Title</h1>');
+      const tr = editor.state.tr.addMark(1, 6, editor.state.schema.marks[markName].create());
+      tr.setMeta(SKIP_TRACKING_META, true);
+      editor.view.dispatch(tr);
+      const r = compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+      );
+      expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+    },
+  );
+
+  it('refuses a review mark carried only on a hard-break leaf (full-subtree scan)', () => {
+    editor = makeEditor('<h1>A<br>B</h1>');
+    // <h1>A<br>B</h1>: heading@0, "A"@1, hardBreak@2, "B"@3. Mark ONLY the leaf.
+    const tr = editor.state.tr.addMark(2, 3, editor.state.schema.marks.comment.create());
+    tr.setMeta(SKIP_TRACKING_META, true);
+    editor.view.dispatch(tr);
+    // Sanity: the mark is on the hard_break leaf, not on any text node.
+    expect(editor.state.doc.child(0).child(1).type.name).toBe('hardBreak');
+    expect(
+      editor.state.doc
+        .child(0)
+        .child(1)
+        .marks.map((m) => m.type.name),
+    ).toContain('comment');
+    const r = compileStructuralMint(
+      editor.state,
+      req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  // Each case escapes TypeScript via `as unknown` — the exact way a future
+  // model-facing caller could reach the compiler with malformed input. The
+  // contract is a typed refusal, never a thrown exception or silent metadata loss.
+  const boundaryCases: Array<[string, Record<string, unknown>, string]> = [
+    ['NaN position', { targetPos: NaN }, 'target-not-found'],
+    ['fractional position', { targetPos: 1.5 }, 'target-not-found'],
+    [
+      'out-of-range heading level',
+      { op: { kind: 'paragraphToHeading', level: 99 } },
+      'unsupported-shape',
+    ],
+    ['malformed op kind', { op: { kind: 'frobnicate' } }, 'unsupported-shape'],
+    ['non-string changeId', { changeId: 42 }, 'invalid-metadata'],
+    ['null author', { author: null }, 'invalid-metadata'],
+    ['unparseable createdAt', { createdAt: 12345 }, 'invalid-metadata'],
+    ['bogus origin kind', { origin: { kind: 'bogus', id: 'x' } }, 'invalid-metadata'],
+    ['non-string origin id', { origin: { kind: 'comment', id: 7 } }, 'invalid-metadata'],
+  ];
+  it.each(boundaryCases)('never throws — %s yields a typed refusal', (_label, override, reason) => {
+    editor = makeEditor('<p>x</p>');
+    const request = {
+      op: { kind: 'paragraphToHeading', level: 2 },
+      targetPos: posInBlock(0),
+      changeId: 'c1',
+      author: 'claude',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      ...override,
+    } as unknown as StructuralMintRequest;
+    expect(compileStructuralMint(editor.state, request)).toEqual({ ok: false, reason });
   });
 });

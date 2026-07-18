@@ -16,6 +16,7 @@ import {
 import { projectBlockUnions } from './blockUnionProjection';
 import { lockedChangeIds } from './structuralFootprints';
 import { isReviewMarkName } from './canonicalDocument';
+import { isStructuralOp } from './structuralRecordValidation';
 import {
   SKIP_TRACKING_META,
   STRUCTURAL_BYPASS_META,
@@ -90,7 +91,9 @@ interface TargetBlock {
 
 /** Resolve a position to the direct top-level textblock strictly containing it. */
 function resolveTopLevelTextblock(doc: PMNode, pos: number): TargetBlock | null {
-  if (pos <= 0 || pos >= doc.content.size) return null;
+  // Guard the resolve boundary: a non-integer (NaN, fractional) `pos` slips past a
+  // bare range check but throws in `doc.resolve`, so reject it as target-not-found.
+  if (!Number.isInteger(pos) || pos <= 0 || pos >= doc.content.size) return null;
   const $pos = doc.resolve(pos);
   // depth 1 = directly inside a top-level block; a boundary position is depth 0
   // and a nested textblock (list item, blockquote) is depth > 1.
@@ -100,13 +103,17 @@ function resolveTopLevelTextblock(doc: PMNode, pos: number): TargetBlock | null 
   return { node, from: $pos.before(1), to: $pos.after(1), index: $pos.index(0) };
 }
 
-/** The native ProseMirror command for a V1a op; null for ops outside V1a. */
+/**
+ * The native ProseMirror command for a V1a op; null for ops outside V1a or when
+ * the schema lacks the node type the conversion needs (so a schema without
+ * paragraph/heading refuses cleanly rather than passing `undefined` to a command).
+ */
 function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
   switch (op.kind) {
     case 'headingToParagraph':
-      return setBlockType(schema.nodes.paragraph);
+      return schema.nodes.paragraph ? setBlockType(schema.nodes.paragraph) : null;
     case 'paragraphToHeading':
-      return setBlockType(schema.nodes.heading, { level: op.level });
+      return schema.nodes.heading ? setBlockType(schema.nodes.heading, { level: op.level }) : null;
     default:
       return null; // list operations are product V1b, a later compiler extension
   }
@@ -124,12 +131,32 @@ function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
   }
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/** A runtime-strict origin: exactly `{kind:'comment'|'chat', id: nonempty string}`. */
+function isValidOrigin(value: unknown): value is StructuralMintOrigin {
+  if (typeof value !== 'object' || value === null) return false;
+  const origin = value as Record<string, unknown>;
+  return (origin.kind === 'comment' || origin.kind === 'chat') && isNonEmptyString(origin.id);
+}
+
+/**
+ * Validate the request's provenance metadata at the runtime boundary — a caller
+ * that escapes TypeScript (e.g. a future model-facing path) must get a typed
+ * refusal, never a thrown `.trim()`/`Date.parse` or a silently dropped origin.
+ * The `op` is validated separately (`isStructuralOp`, reported as unsupported-shape).
+ */
 function metadataValid(req: StructuralMintRequest): boolean {
-  if (req.changeId.trim().length === 0) return false;
-  if (req.author.trim().length === 0) return false;
-  if (typeof req.createdAt !== 'string' || Number.isNaN(Date.parse(req.createdAt))) return false;
-  if (req.origin && req.origin.id.trim().length === 0) return false;
-  return true;
+  const createdAt: unknown = req.createdAt;
+  return (
+    isNonEmptyString(req.changeId) &&
+    isNonEmptyString(req.author) &&
+    typeof createdAt === 'string' &&
+    !Number.isNaN(Date.parse(createdAt)) &&
+    (req.origin === undefined || isValidOrigin(req.origin))
+  );
 }
 
 /** True when the subtree (or the root itself) carries any review mark. */
@@ -219,7 +246,11 @@ export function compileStructuralMint(
   const target = resolveTopLevelTextblock(state.doc, targetPos);
   if (!target) return refuse('target-not-found');
 
-  // 5. The op is expressible in V1a on this block type.
+  // 5. The op is a well-formed structural operation expressible in V1a on this
+  //    block type. isStructuralOp runs first so a runtime-invalid op (e.g. a
+  //    HeadingLevel of 99, which opSourceMatches/structuralOpShapeValid would
+  //    otherwise mint into an unsaveable record) is refused before any capture.
+  if (!isStructuralOp(op)) return refuse('unsupported-shape');
   const command = nativeCommandFor(state.schema, op);
   if (!command || !opSourceMatches(op, target.node)) return refuse('unsupported-shape');
 
