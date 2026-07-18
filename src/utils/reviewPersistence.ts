@@ -376,38 +376,51 @@ interface SuggestionRestoreOutcome {
   mismatches: ReviewRestoreMismatch[];
 }
 
-/** Two segments cover an overlapping document range. */
-function segmentsOverlap(a: TrackedChangeSegment, b: TrackedChangeSegment): boolean {
-  return a.from < b.to && b.from < a.to;
+/**
+ * Two segments cover an overlapping range AND carry mutually-excluding mark types
+ * (`tracked_insert` excludes `tracked_delete`). Marks stamp sequentially, so the second
+ * such mark EVICTS the first — leaving a span silently unmarked yet reported restored.
+ */
+function segmentsConflict(
+  schema: TiptapEditor['schema'],
+  a: TrackedChangeSegment,
+  b: TrackedChangeSegment,
+): boolean {
+  if (a.from >= b.to || b.from >= a.to) return false; // disjoint
+  const ma = schema.marks[SEGMENT_MARK[a.kind]];
+  const mb = schema.marks[SEGMENT_MARK[b.kind]];
+  return Boolean(ma && mb && (ma.excludes(mb) || mb.excludes(ma)));
 }
 
-/**
- * Two suggestions conflict when segments of each overlap a shared range AND their mark
- * types mutually exclude one another (`tracked_insert` excludes `tracked_delete`). Marks
- * are stamped sequentially, so the second such mark would EVICT the first — leaving one
- * suggestion silently unmarked yet reported restored.
- */
-function suggestionsConflict(
+/** A single suggestion whose OWN segments collide (a malformed record). */
+function hasInternalConflict(
   schema: TiptapEditor['schema'],
-  a: LogicalSuggestion,
-  b: LogicalSuggestion,
+  suggestion: LogicalSuggestion,
 ): boolean {
-  for (const sa of a.segments) {
-    for (const sb of b.segments) {
-      if (!segmentsOverlap(sa, sb)) continue;
-      const ma = schema.marks[SEGMENT_MARK[sa.kind]];
-      const mb = schema.marks[SEGMENT_MARK[sb.kind]];
-      if (ma && mb && (ma.excludes(mb) || mb.excludes(ma))) return true;
+  const { segments } = suggestion;
+  for (let i = 0; i < segments.length; i += 1) {
+    for (let j = i + 1; j < segments.length; j += 1) {
+      if (segmentsConflict(schema, segments[i], segments[j])) return true;
     }
   }
   return false;
 }
 
+/** Any segment of `a` collides with any segment of `b`. */
+function suggestionsConflict(
+  schema: TiptapEditor['schema'],
+  a: LogicalSuggestion,
+  b: LogicalSuggestion,
+): boolean {
+  return a.segments.some((sa) => b.segments.some((sb) => segmentsConflict(schema, sa, sb)));
+}
+
 /**
- * Independently-valid relocations can still collide once stamped: two suggestions may
- * land on the same span with excluding mark types. Split the batch so any suggestion in
- * a conflicting pair is quarantined together (never stamped), while disjoint ones
- * survive. Applies in BOTH modes, over the candidates' FINAL positions.
+ * Independently-valid candidates can still collide once stamped — two suggestions on the
+ * same span with excluding mark types, OR one malformed suggestion whose own segments
+ * exclude each other. Split the batch so any conflicting record (internally, or paired)
+ * is quarantined and never stamped, while disjoint ones survive. Applies in BOTH modes,
+ * over the candidates' FINAL positions.
  */
 function partitionByMarkConflict(
   schema: TiptapEditor['schema'],
@@ -415,6 +428,7 @@ function partitionByMarkConflict(
 ): { survivors: LogicalSuggestion[]; conflicted: LogicalSuggestion[] } {
   const conflicted = new Set<string>();
   for (let i = 0; i < candidates.length; i += 1) {
+    if (hasInternalConflict(schema, candidates[i])) conflicted.add(candidates[i].id);
     for (let j = i + 1; j < candidates.length; j += 1) {
       if (suggestionsConflict(schema, candidates[i], candidates[j])) {
         conflicted.add(candidates[i].id);

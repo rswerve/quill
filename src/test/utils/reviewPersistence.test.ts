@@ -770,4 +770,18 @@ describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
     expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
     expect(getTrackedChanges(editor)).toEqual([]);
   });
+
+  it('bound: one suggestion with INTERNALLY conflicting segments is quarantined', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const malformed = logical(
+      [
+        { kind: 'insert', from: 7, to: 12, text: 'world' },
+        { kind: 'delete', from: 7, to: 12, text: 'world' },
+      ],
+      { id: 'malf' },
+    );
+    const result = restoreReviewMarks(editor, [], [malformed], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['malf']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
 });
