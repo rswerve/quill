@@ -81,7 +81,7 @@ export function useComments(): UseCommentsReturn {
         prev.map((c) => {
           if (c.id !== commentId) return c;
           const next = { ...c, ...anchor, resolved: false };
-          delete next.detached; // repaired: it now has a live anchor again
+          if (anchor) delete next.detached; // repaired: it now has a live anchor again
           return next;
         }),
       );

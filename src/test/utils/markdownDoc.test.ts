@@ -94,7 +94,7 @@ describe('parseMarkdownToDoc: byte-for-byte fidelity to setContent reopen', () =
     ['link', '[label](https://example.com)'],
     ['list then trailing paragraph', '- item\n\ntrailing text'],
     ['unicode + emoji', '# 日本語\n\nHello 🌍 world with  spaces'],
-    ['nbsp preserved', 'foo  bar'],
+    ['nbsp preserved', 'foo  bar'],
   ];
 
   // Exact equality via toJSON (Node.eq would fail only because the two docs come from
