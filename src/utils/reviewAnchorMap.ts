@@ -37,6 +37,16 @@ import type { Mark, Node as ProseMirrorNode } from '@tiptap/pm/model';
  *    of the document is left unmapped rather than resynced onto a guessed anchor.
  */
 
+/**
+ * Version of the canonical anchoring scheme. Stamped into a sidecar/draft alongside
+ * the source hash when review coordinates are canonically captured. A load trusts
+ * stored coordinates as authoritative ("bound" mode) only when BOTH the source hash
+ * matches the actual document bytes AND this version matches; otherwise it falls back
+ * to conservative relocation. Bump this whenever a change to the capture/mapping
+ * alters the coordinates a given document would produce.
+ */
+export const REVIEW_ANCHOR_VERSION = 1;
+
 type AnchorSource = 'text' | 'hardBreak' | 'blockBoundary' | 'otherLeaf';
 
 interface Cell {

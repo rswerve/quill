@@ -147,6 +147,17 @@ export interface SidecarFile {
   contextFolder?: string;
   /** Rendered document-chat thread, isolated to this document and session. */
   chat?: DocumentChatThread;
+  /**
+   * Provenance proving these review coordinates were canonically captured against
+   * the exact `.md` bytes this sidecar accompanies: the lowercase SHA-256 hex of
+   * that `.md` content and the anchor scheme version (`REVIEW_ANCHOR_VERSION`). On
+   * load, matching BOTH against the actual document is "bound" mode — stored
+   * positions are authoritative. Absent (legacy) or mismatched (an external
+   * `.md`-only edit) is "unbound" — positions are only hints, so review marks are
+   * conservatively relocated by unique text instead of trusted.
+   */
+  reviewSourceHash?: string;
+  reviewAnchorVersion?: number;
 }
 
 export interface FileState {
@@ -277,6 +288,14 @@ export interface DraftFile {
   expectedSidecar?: Fingerprint | null;
   /** Whether the sidecar was protected (unreadable) when the draft was snapshotted. */
   sidecarProtected?: boolean;
+  /**
+   * Anchor provenance for the embedded `content` (see `SidecarFile.reviewSourceHash`).
+   * `reviewSourceHash` is the SHA-256 of THIS draft's `content`, so a recovered draft
+   * whose review coordinates were canonically captured restores in bound mode; a
+   * legacy or hand-edited draft falls back to conservative relocation.
+   */
+  reviewSourceHash?: string;
+  reviewAnchorVersion?: number;
 }
 
 /**
