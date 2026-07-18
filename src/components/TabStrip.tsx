@@ -8,7 +8,14 @@ export interface TabStripItem {
   conflict?: boolean;
   /** Latched autosave attention (this tab's background flush failed or is blocked) —
    *  shown as a warning marker so a background save failure is never silent. */
-  autosaveAttention?: 'failed' | 'blocked' | null;
+  autosaveAttention?: 'failed' | 'blocked' | 'review-blocked' | null;
+}
+
+/** Tooltip/label for a tab's latched autosave attention. */
+export function autosaveAttentionLabel(attention: 'failed' | 'blocked' | 'review-blocked'): string {
+  if (attention === 'review-blocked') return 'Save blocked — fix annotation';
+  if (attention === 'blocked') return 'Autosave paused — needs attention';
+  return 'Autosave failed — retrying';
 }
 
 interface TabStripProps {
@@ -114,14 +121,8 @@ export default function TabStrip({ tabs, activeTabId, onActivate, onClose, onNew
             {!tab.conflict && tab.autosaveAttention && (
               <span
                 className="document-tab-conflict"
-                title={
-                  tab.autosaveAttention === 'blocked'
-                    ? 'Autosave paused — needs attention'
-                    : 'Autosave failed — retrying'
-                }
-                aria-label={
-                  tab.autosaveAttention === 'blocked' ? 'Autosave paused' : 'Autosave failed'
-                }
+                title={autosaveAttentionLabel(tab.autosaveAttention)}
+                aria-label={autosaveAttentionLabel(tab.autosaveAttention)}
               >
                 ⚠
               </span>

@@ -209,8 +209,9 @@ export interface DocumentTabMetaSnapshot {
    *  background tab's conflict is visible even while its in-document banner is hidden. */
   conflict: boolean;
   /** Latched autosave attention (a background tab's flush failed or is blocked), surfaced
-   *  on the tab strip so a background save failure is never silent. Null when healthy. */
-  autosaveAttention: 'failed' | 'blocked' | null;
+   *  on the tab strip so a background save failure is never silent. `review-blocked` is kept
+   *  distinct from `blocked` so its tooltip names the actual cause. Null when healthy. */
+  autosaveAttention: 'failed' | 'blocked' | 'review-blocked' | null;
 }
 
 interface DocumentTabProps {
@@ -1086,13 +1087,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // must stay visibly flagged even though only the ACTIVE tab's footer shows live status.
   // Latch failed/blocked (a retry's failed→saving must NOT clear it early); clear only on
   // a successful save or a reconciliation (schedulerGen). Conflict has its own marker.
-  const [autosaveAttention, setAutosaveAttention] = useState<'failed' | 'blocked' | null>(null);
+  const [autosaveAttention, setAutosaveAttention] = useState<
+    'failed' | 'blocked' | 'review-blocked' | null
+  >(null);
   useEffect(() => {
     if (autosaveStatus.state === 'failed') setAutosaveAttention('failed');
     else if (autosaveStatus.state === 'stopped' && autosaveStatus.reason === 'blocked') {
       setAutosaveAttention('blocked');
     } else if (autosaveStatus.state === 'review-blocked') {
-      setAutosaveAttention('blocked'); // a stuck save the user must resolve (like a block)
+      setAutosaveAttention('review-blocked'); // distinct: an annotation must be fixed
     } else if (autosaveStatus.state === 'saved') setAutosaveAttention(null);
   }, [autosaveStatus]);
   useEffect(() => {
