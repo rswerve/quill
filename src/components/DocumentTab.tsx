@@ -718,6 +718,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const restorePersistedReviewMarks = useCallback(
     (ed: TiptapEditor, persistedComments: Comment[], persistedSuggestions: Suggestion[]) => {
       const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions);
+      // Adopt the AUTHORITATIVE comment set restore produced. This is essential, not
+      // cosmetic: a comment that failed validation is returned `detached` with no live
+      // mark, and only the detached flag stops the reconciler from dropping it on the next
+      // editor update. Keeping the stale non-detached record would lose the comment.
+      setComments(result.comments);
       quarantinedSuggestionsRef.current = result.quarantinedSuggestions;
       setTrackedChanges(getTrackedChanges(ed));
       if (result.quarantinedSuggestions.length > 0) {
@@ -730,7 +735,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         });
       }
     },
-    [onNotice],
+    [onNotice, setComments],
   );
 
   // A mounted background tab keeps its editor state, but layout APIs return
