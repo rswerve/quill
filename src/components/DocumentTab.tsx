@@ -12,6 +12,7 @@ import {
   useFileManager,
   stripTransientReplyState,
   type SaveOutcome,
+  type OpenResult,
 } from '../hooks/useFileManager';
 import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
 import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
@@ -73,7 +74,6 @@ import type {
   DraftFile,
   EditScope,
   QuillEdit,
-  SidecarFile,
   Suggestion,
   TrackedChangeInfo,
   TrackedEditOrigin,
@@ -762,18 +762,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [editor, isActive]);
 
   const loadFileResult = useCallback(
-    (
-      result: {
-        content: string;
-        sidecar: SidecarFile;
-        filePath: string;
-        autoBound?: boolean;
-        sidecarError?: string | null;
-        /** Anchor authority for this load (see OpenResult.reviewMode). Absent → bound. */
-        reviewMode?: ReviewRestoreMode;
-      },
-      promptForSession = true,
-    ) => {
+    (result: OpenResult, promptForSession = true) => {
       // A successful (re)load reconciles the document with disk, resolving any
       // pending conflict for this tab. Bump the scheduler generation so a same-path
       // Reload/Reopen also resets autosave (clears a latch, drops a stale completion).
@@ -798,13 +787,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const ed = editorRef.current?.getEditor();
       if (ed) {
         // Apply the load's detected authority: a legacy/externally-edited file (unbound)
-        // relocates its anchors instead of trusting stale coordinates.
-        restorePersistedReviewMarks(
-          ed,
-          loadedComments,
-          loadedSuggestions,
-          result.reviewMode ?? 'bound',
-        );
+        // relocates its anchors instead of trusting stale coordinates. No fallback — a
+        // missing mode is a compile error, never a silent trust-granting default.
+        restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions, result.reviewMode);
       }
       const access = authorizeSidecarAccess(
         window.localStorage,
