@@ -28,6 +28,9 @@ import {
   type Expected,
 } from '../utils/atomicFile';
 import { stripTransientChatState } from '../utils/chatThread';
+import { REVIEW_ANCHOR_VERSION } from '../utils/reviewAnchorMap';
+import type { ReviewRestoreMode } from '../utils/reviewPersistence';
+import type { UnmappableAnchor } from '../utils/canonicalCapture';
 
 function emptySidecar(): SidecarFile {
   return { version: 2, comments: [], suggestions: [] };
@@ -83,6 +86,14 @@ function normalizeSidecar(raw: unknown): SidecarFile {
     aiSession: sanitizeAISession(parsed.aiSession),
     contextFolder: sanitizeContextFolder(parsed.contextFolder),
     chat: sanitizeDocumentChat(parsed.chat),
+    // Anchor provenance is preserved so the load can decide bound vs unbound. Absent or
+    // malformed values simply read as "no provenance" (→ unbound / conservative).
+    ...(typeof parsed.reviewSourceHash === 'string'
+      ? { reviewSourceHash: parsed.reviewSourceHash }
+      : {}),
+    ...(typeof parsed.reviewAnchorVersion === 'number'
+      ? { reviewAnchorVersion: parsed.reviewAnchorVersion }
+      : {}),
   };
 }
 
@@ -112,13 +123,98 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 `path` (when known) is the destination that failed, so a manual save's
  *                 notice can name the file. The caller presents it — useFileManager does
  *                 not, so an autosave failure stays quiet.
+ * - `review-blocked` — canonical capture refused: a review annotation covers text that
+ *                 changes shape when written (e.g. a collapsing double space), so NOTHING
+ *                 was written (distinct from `blocked`, where the `.md` was written). The
+ *                 document stays dirty; `unmappable` names the offending records so a
+ *                 manual notice can point the user at them. Synthesized by the caller
+ *                 BEFORE `saveFile` — `saveFile` itself never returns it.
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
   | { status: 'blocked'; reason: 'sidecar-protected' | 'structural-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
-  | { status: 'failed'; message: string; path?: string };
+  | { status: 'failed'; message: string; path?: string }
+  | { status: 'review-blocked'; unmappable: UnmappableAnchor[] };
+
+/**
+ * Why a sidecar's coordinates are only hints. `legacy` — no provenance (a pre-anchor-
+ * versioning sidecar); `source-mismatch` — the `.md` changed since Quill wrote it (an
+ * external / partial `.md`-only edit); `version-mismatch` — a newer anchor scheme wrote it.
+ * Used to tailor the recovery notice.
+ */
+export type ReviewUnboundReason = 'legacy' | 'source-mismatch' | 'version-mismatch';
+
+/**
+ * Why a sidecar's coordinates are only hints for the `.md` on disk, or undefined when they
+ * are authoritative (bound). Checked most-specific first: no provenance is legacy; a hash
+ * that no longer matches is an external/partial `.md` edit; a matching hash under a
+ * different anchor version is a newer scheme.
+ */
+function reviewProvenanceReason(
+  sidecar: SidecarFile,
+  docHash: string,
+): ReviewUnboundReason | undefined {
+  if (sidecar.reviewSourceHash === undefined) return 'legacy';
+  if (sidecar.reviewSourceHash !== docHash) return 'source-mismatch';
+  if (sidecar.reviewAnchorVersion !== REVIEW_ANCHOR_VERSION) return 'version-mismatch';
+  return undefined;
+}
+
+/**
+ * Scan for a Claude session whose cwd matches this markdown, validated across the IPC
+ * boundary (a binding that fails the sidecar's own validator would be persisted only to be
+ * silently dropped on the next open). Returns the binding to adopt, or null (no match, or the
+ * scan itself failed).
+ */
+async function scanAutoBoundSession(content: string): Promise<AISessionBinding | null> {
+  try {
+    const match = sanitizeAISession(
+      await invoke<unknown>('find_session_for_markdown', { content }),
+    );
+    return match ?? null;
+  } catch (e) {
+    console.warn('Auto-bind scan failed:', e);
+    return null;
+  }
+}
+
+/**
+ * True when a parsed sidecar carries a `structural` block that fails shape validation. Its
+ * records may hold the only copy of the proposed content, so a malformed one must protect the
+ * file (block BOTH .md and sidecar) rather than being silently dropped.
+ */
+function hasMalformedStructuralBlock(raw: unknown): boolean {
+  return (
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as Record<string, unknown>).structural !== undefined &&
+    parseStructuralEnvelope((raw as Record<string, unknown>).structural) === null
+  );
+}
+
+/** A successfully opened document: its content, review sidecar, and anchor authority. */
+export interface OpenResult {
+  content: string;
+  /** SHA-256 of the `.md` bytes on disk. Both the inline review anchors (`reviewSourceHash`)
+   *  and the structural envelope (`sourceDocumentHash`) bind to these exact bytes. */
+  docHash: string;
+  sidecar: SidecarFile;
+  filePath: string;
+  autoBound?: boolean;
+  sidecarError?: string | null;
+  /**
+   * Whether the sidecar's stored coordinates are authoritative for the `.md` on disk.
+   * `bound` — the sidecar's `reviewSourceHash` matches the document's actual hash AND its
+   * `reviewAnchorVersion` matches, so positions are trusted. `unbound` — legacy/missing
+   * provenance, or an externally-edited `.md` (a hash mismatch), so the restore relocates
+   * conservatively rather than trusting stale positions.
+   */
+  reviewMode: ReviewRestoreMode;
+  /** Present only when `reviewMode === 'unbound'` — why, for the recovery notice. */
+  reviewUnboundReason?: ReviewUnboundReason;
+}
 
 /**
  * Result of persisting the sidecar: its new on-disk fingerprint on success, or the
@@ -135,22 +231,8 @@ interface UseFileManagerReturn {
   /** Synchronous read of the current dirty state (authoritative right after a save). */
   getIsDirty: () => boolean;
   markDirty: () => void;
-  openFile: () => Promise<{
-    content: string;
-    docHash: string;
-    sidecar: SidecarFile;
-    filePath: string;
-    autoBound?: boolean;
-    sidecarError?: string | null;
-  } | null>;
-  openFilePath: (path: string) => Promise<{
-    content: string;
-    docHash: string;
-    sidecar: SidecarFile;
-    filePath: string;
-    autoBound?: boolean;
-    sidecarError?: string | null;
-  } | null>;
+  openFile: () => Promise<OpenResult | null>;
+  openFilePath: (path: string) => Promise<OpenResult | null>;
   saveFile: (
     content: string,
     comments: Comment[],
@@ -316,12 +398,7 @@ export function useFileManager(
               // protect the file (STRUCTURALLY — block BOTH files, since the source
               // the proposal is anchored to must stay intact) rather than silently
               // discarding those proposals.
-              if (
-                typeof raw === 'object' &&
-                raw !== null &&
-                (raw as Record<string, unknown>).structural !== undefined &&
-                parseStructuralEnvelope((raw as Record<string, unknown>).structural) === null
-              ) {
+              if (hasMalformedStructuralBlock(raw)) {
                 sidecarError = `structural suggestions block is malformed`;
                 structuralMalformed = true;
                 console.error(`Sidecar at ${sidecarPath(path)} has a malformed structural block`);
@@ -348,20 +425,10 @@ export function useFileManager(
 
         let autoBound = false;
         if (!sidecar.aiSession) {
-          try {
-            // Validate instead of casting: the backend's result crosses a
-            // serialization boundary, and a binding that doesn't satisfy the
-            // sidecar's own validator would be persisted only to be silently
-            // dropped on the next open.
-            const match = sanitizeAISession(
-              await invoke<unknown>('find_session_for_markdown', { content }),
-            );
-            if (match) {
-              sidecar = { ...sidecar, aiSession: match };
-              autoBound = true;
-            }
-          } catch (e) {
-            console.warn('Auto-bind scan failed:', e);
+          const match = await scanAutoBoundSession(content);
+          if (match) {
+            sidecar = { ...sidecar, aiSession: match };
+            autoBound = true;
           }
         }
 
@@ -377,7 +444,18 @@ export function useFileManager(
         // shell's one-session-per-document claim succeeds. A rejected
         // collision must leave the just-opened file clean.
         setIsDirty(false);
-        return { content, docHash: docRead.hash, sidecar, filePath: path, autoBound, sidecarError };
+        const reviewUnboundReason = reviewProvenanceReason(sidecar, docRead.hash);
+        const reviewMode: ReviewRestoreMode = reviewUnboundReason ? 'unbound' : 'bound';
+        return {
+          content,
+          docHash: docRead.hash,
+          sidecar,
+          filePath: path,
+          autoBound,
+          sidecarError,
+          reviewMode,
+          ...(reviewUnboundReason ? { reviewUnboundReason } : {}),
+        };
       } catch (e) {
         console.error('Failed to open file:', e);
         onError?.('Could not open file', `${path}\n\n${String(e)}`);
@@ -410,6 +488,10 @@ export function useFileManager(
       structural: StructuralSuggestionRecord[],
       docHash: string,
       expectedSidecar: Fingerprint | null,
+      // The `.md`'s content hash. The caller passes canonicalized positions, so stamping
+      // this proves the sidecar corresponds to those exact bytes — the load reads it back
+      // as "bound" and trusts the positions. See utils/canonicalCapture + reviewAnchorMap.
+      reviewSourceHash: string,
     ): Promise<SidecarSaveResult> => {
       const scPath = sidecarPath(path);
       // Gate the write/delete on the sidecar's last-known on-disk state: an external
@@ -444,6 +526,9 @@ export function useFileManager(
         if (result.status === 'conflict') return { ok: false, conflict: result.actual };
         return { ok: true, fingerprint: { state: 'absent' } };
       }
+      // Anchor provenance is meaningful only for REVIEW records. A chat/session-only
+      // sidecar needs no source hash and stays byte-compatible with older Quill.
+      const hasReviewRecords = cleanComments.length > 0 || suggestions.length > 0;
       const sidecar: SidecarFile = {
         version: 2,
         comments: cleanComments,
@@ -452,6 +537,9 @@ export function useFileManager(
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
         ...(cleanChat ? { chat: cleanChat } : {}),
+        ...(hasReviewRecords
+          ? { reviewSourceHash, reviewAnchorVersion: REVIEW_ANCHOR_VERSION }
+          : {}),
       };
       const result = await writeFileAtomic(scPath, JSON.stringify(sidecar, null, 2), expected);
       if (result.status === 'conflict') return { ok: false, conflict: result.actual };
@@ -560,6 +648,7 @@ export function useFileManager(
           structural ?? [],
           docResult.hash,
           usingExpected ? expectedSidecarRef.current : null,
+          docResult.hash,
         );
         if (!sidecarResult.ok) {
           // The sidecar changed underneath us. For a current-path save the .md is

@@ -115,6 +115,9 @@ function sanitizeComment(raw: unknown): Comment | null {
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     resolved: raw.resolved === true,
+    // Only literal `true` sets the flag; false/invalid values are omitted entirely,
+    // and `detached` stays independent of `resolved`.
+    ...(raw.detached === true ? { detached: true } : {}),
     kind,
     replies,
   };
@@ -190,6 +193,8 @@ function suggestionBase(raw: Record<string, unknown>) {
     author: typeof raw.author === 'string' ? raw.author : '',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     status,
+    // Only literal true survives, kept independent of status (see Comment.detached).
+    ...(raw.detached === true ? { detached: true as const } : {}),
     ...(isNonEmptyString(raw.originCommentId) ? { originCommentId: raw.originCommentId } : {}),
     ...(isNonEmptyString(raw.originChatMessageId)
       ? { originChatMessageId: raw.originChatMessageId }

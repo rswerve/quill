@@ -12,6 +12,8 @@ import {
   useFileManager,
   stripTransientReplyState,
   type SaveOutcome,
+  type OpenResult,
+  type ReviewUnboundReason,
 } from '../hooks/useFileManager';
 import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
 import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
@@ -41,6 +43,8 @@ import {
   normalizePersistedSuggestions,
   restoreReviewMarks,
   suggestionsFromTrackedChanges,
+  type ReviewRestoreMode,
+  type ReviewRestoreResult,
 } from '../utils/reviewPersistence';
 import {
   buildStructuralSavePayload,
@@ -53,7 +57,11 @@ import {
 import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
-import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
+import { locateCommentForRepair } from '../utils/commentAnchors';
+import {
+  captureCanonicalReviewState,
+  type CanonicalCaptureResult,
+} from '../utils/canonicalCapture';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
@@ -77,7 +85,6 @@ import type {
   DraftFile,
   EditScope,
   QuillEdit,
-  SidecarFile,
   Suggestion,
   StructuralReviewEnvelope,
   StructuralSuggestionRecord,
@@ -156,6 +163,68 @@ export const newestObservedEffort = (comments: Comment[], thread: DocumentChatTh
     (record) => record.effortObservedAt ?? record.createdAt,
   );
 
+/** The lead sentence, tailored to WHY the load was unbound (Maz's wording). */
+function unboundLead(context: ReviewUnboundReason | 'recovery'): string {
+  if (context === 'source-mismatch') return 'This file was changed outside Quill.';
+  if (context === 'recovery') return 'Quill recovered unsaved work from a previous session.';
+  return 'This file was saved in an older version of Quill.'; // legacy / version-mismatch
+}
+
+/**
+ * The notice for a load that had to relocate anchors by text (an unbound file or crash
+ * recovery). Silent when nothing was set aside — don't nag when there's nothing to act on.
+ * The lead sentence is tailored to the reason; the body and its "open the review panel"
+ * call-to-action are shared across reasons.
+ */
+export function unboundRecoveryNotice(
+  context: ReviewUnboundReason | 'recovery',
+  setAsideCount: number,
+): { title: string; message: string } | null {
+  if (setAsideCount <= 0) return null;
+  const n = setAsideCount;
+  return {
+    title: 'Some annotations need review',
+    message:
+      `${unboundLead(context)} We re-anchored your comments and suggestions to the new text; ${n} ` +
+      `couldn’t be placed and ${n === 1 ? 'is' : 'are'} set aside — open the review panel to see them.`,
+  };
+}
+
+/**
+ * Shown when a crash snapshot's lossless document was PRESENT but corrupt — distinct from a
+ * clean recovery. The Markdown text is salvaged (it's stored independently), but exact
+ * review anchoring is lost, so it degrades to text-only + best-effort relocation.
+ */
+export function degradedRecoveryNotice(): { title: string; message: string } {
+  return {
+    title: 'Recovered in text-only mode',
+    message:
+      'This file’s saved review state was damaged and could not be restored exactly. Your text ' +
+      'was recovered; some comments and suggestions may be detached or set aside. Save the file ' +
+      'to store a fresh copy of your work.',
+  };
+}
+
+/** The manual-save "Save blocked" notice, pluralized for the offending records. */
+export function reviewBlockedNotice(
+  unmappable: ReadonlyArray<{ kind: 'comment' | 'suggestion'; id: string }>,
+): { title: string; message: string } {
+  const comments = unmappable.filter((u) => u.kind === 'comment').length;
+  const suggestions = unmappable.length - comments;
+  const parts: string[] = [];
+  if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
+  if (suggestions) parts.push(`${suggestions} suggestion${suggestions === 1 ? '' : 's'}`);
+  const verb = unmappable.length === 1 ? 'covers' : 'cover';
+  const pointer = unmappable.length === 1 ? "It's highlighted" : 'The first is highlighted';
+  return {
+    title: "Save blocked — an annotation can't be anchored",
+    message:
+      `${parts.join(' and ')} ${verb} text that changes shape when the file is written ` +
+      '(for example, extra spaces that collapse on save), so Quill can’t save without ' +
+      `risking a mismatched anchor. ${pointer} — adjust or remove it, then save again.`,
+  };
+}
+
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
   filePath: string | null;
@@ -216,9 +285,19 @@ export interface DocumentTabMetaSnapshot {
    *  background tab's conflict is visible even while its in-document banner is hidden. */
   conflict: boolean;
   /** Latched autosave attention (a background tab's flush failed or is blocked), surfaced
-   *  on the tab strip so a background save failure is never silent. Null when healthy. */
-  autosaveAttention: 'failed' | 'blocked' | null;
+   *  on the tab strip so a background save failure is never silent. `review-blocked` is kept
+   *  distinct from `blocked` so its tooltip names the actual cause. Null when healthy. */
+  autosaveAttention: 'failed' | 'blocked' | 'review-blocked' | null;
 }
+
+/**
+ * How a workspace snapshot recovered, reported so the shell can hold persistence suspended
+ * and preserve a corrupt original before any degraded write overwrites it:
+ *  - `lossless` — byte-exact restore from a valid docJSON;
+ *  - `legacy`   — a genuine pre-docJSON snapshot restored from Markdown;
+ *  - `degraded` — an intended-but-corrupt docJSON; text salvaged, the ORIGINAL must be preserved.
+ */
+export type WorkspaceRecoveryOutcome = 'lossless' | 'legacy' | 'degraded';
 
 interface DocumentTabProps {
   tabId: string;
@@ -232,7 +311,7 @@ interface DocumentTabProps {
   onChromeChange: (tabId: string, snapshot: DocumentTabChromeSnapshot) => void;
   onMetaChange: (tabId: string, snapshot: DocumentTabMetaSnapshot) => void;
   onInitialFileLoaded: (tabId: string, loaded: boolean) => void;
-  onInitialWorkspaceLoaded: (tabId: string) => void;
+  onInitialWorkspaceLoaded: (tabId: string, outcome: WorkspaceRecoveryOutcome) => void;
   onOpenSessionPicker: (tabId: string) => void;
   onNotice: (notice: {
     title: string;
@@ -484,6 +563,46 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [comments, suggestions]);
 
+  // The FILE save paths (save, Save As, overwrite) canonicalize review coordinates to the
+  // document a reopen produces, so a source-hashed sidecar's positions are honest. (The
+  // workspace snapshot does NOT yet canonicalize — it stays unbound until that lands.)
+  // Fails closed (ok:false) when an annotation covers text that changes shape on write;
+  // the caller then aborts the ENTIRE save. The editor is always present during a save —
+  // if somehow absent, fail closed rather than persist non-canonical positions.
+  const getCanonicalReviewState = useCallback((): {
+    capture: CanonicalCaptureResult;
+    markdown: string;
+  } => {
+    const ed = editorRef.current?.getEditor();
+    const liveMarkdown = getDocMarkdown();
+    const canonDoc = editorRef.current?.parseMarkdown(liveMarkdown);
+    const live = getLiveReviewState();
+    if (!ed || !canonDoc) return { capture: { ok: false, unmappable: [] }, markdown: liveMarkdown };
+    const capture = captureCanonicalReviewState(
+      ed.state.doc,
+      canonDoc,
+      live.comments,
+      live.suggestions,
+    );
+    // Normalize on write: persist the CANONICAL Markdown — the exact document a reopen
+    // rebuilds — so a typed double space is stored as the single space it always collapses
+    // to and the on-disk bytes match what the editor shows. Coordinates were captured against
+    // THIS canonDoc; the write is only correct if a reopen rebuilds canonDoc EXACTLY, i.e.
+    // the canonical Markdown is a true round-trip fixed point (`parse(serialize(canonDoc))
+    // === canonDoc`). Verify that before trusting it — if some construct is not idempotent
+    // under a second round-trip, fall back to the live serialization, whose reopen is canonDoc
+    // by definition, so a bound reopen never drifts either way. This keeps normalization
+    // provably safe by construction rather than by enumerating every Markdown construct.
+    const canonicalMarkdown = editorRef.current?.serializeDoc(canonDoc);
+    const reparsed =
+      canonicalMarkdown != null ? editorRef.current?.parseMarkdown(canonicalMarkdown) : null;
+    const markdown =
+      canonicalMarkdown != null && reparsed != null && reparsed.eq(canonDoc)
+        ? canonicalMarkdown
+        : liveMarkdown;
+    return { capture, markdown };
+  }, [getDocMarkdown, getLiveReviewState]);
+
   // The shell owns persistence and asks each mounted tab for a live snapshot.
   // Keep transient AI reply state out of this second on-disk write path just as
   // the regular sidecar serializer does.
@@ -510,11 +629,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       ? buildStructuralSavePayload(ed, reviewMd)
       : ({ ok: true, content: reviewMd, structural: [] } satisfies StructuralSavePayload);
     if (!payload.ok) return lastGoodWorkspaceSnapshotRef.current;
+    // One stable document node for BOTH the lossless docJSON and the records derived from
+    // its marks, so the snapshot is internally coherent (the bijection recovery relies on).
+    const doc = ed?.state.doc;
     const live = getLiveReviewState();
     const baselines = getBaselines();
     const snapshot: DraftSnapshot = {
       filePath,
       content: payload.content,
+      // The lossless representation: byte-exact recovery when it survives; Markdown remains
+      // the back-compat + degraded-salvage fallback.
+      ...(doc ? { docJSON: doc.toJSON(), docJSONVersion: 1 as const } : {}),
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
       ...(payload.structural.length > 0 ? { structural: payload.structural } : {}),
@@ -745,19 +870,35 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [zoom]);
 
   const restorePersistedReviewMarks = useCallback(
-    (ed: TiptapEditor, persistedComments: Comment[], persistedSuggestions: Suggestion[]) => {
-      const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions);
+    (
+      ed: TiptapEditor,
+      persistedComments: Comment[],
+      persistedSuggestions: Suggestion[],
+      mode: ReviewRestoreMode,
+    ) => {
+      const result = restoreReviewMarks(ed, persistedComments, persistedSuggestions, mode);
+      // Adopt the AUTHORITATIVE comment set restore produced. This is essential, not
+      // cosmetic: a comment that failed validation is returned `detached` with no live
+      // mark, and only the detached flag stops the reconciler from dropping it on the next
+      // editor update. Keeping the stale non-detached record would lose the comment.
+      setComments(result.comments);
       quarantinedSuggestionsRef.current = result.quarantinedSuggestions;
       setTrackedChanges(getTrackedChanges(ed));
-      if (result.quarantinedSuggestions.length > 0) {
-        const count = result.quarantinedSuggestions.length;
-        onNotice({
-          title: 'Saved suggestions need review',
-          message:
-            `${count} saved suggestion${count === 1 ? '' : 's'} no longer matched the document text and ` +
-            `was not restored. The saved record remains preserved, but it cannot affect the document until its anchor is repaired.`,
-        });
-      }
+      // The caller decides the notice: the wording depends on WHY the load was unbound
+      // (a file's provenance vs. crash recovery), which only the caller knows.
+      return result;
+    },
+    [setComments],
+  );
+
+  // Announce a text-relocated (unbound) load, once, tailored to the reason — but only when
+  // something couldn't be placed. `null` context = a bound load, nothing to say.
+  const announceUnboundLoad = useCallback(
+    (context: ReviewUnboundReason | 'recovery' | null, restored: ReviewRestoreResult) => {
+      if (!context) return;
+      const setAside = restored.detachedComments.length + restored.quarantinedSuggestions.length;
+      const notice = unboundRecoveryNotice(context, setAside);
+      if (notice) onNotice(notice);
     },
     [onNotice],
   );
@@ -828,17 +969,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, [editor, isActive]);
 
   const loadFileResult = useCallback(
-    (
-      result: {
-        content: string;
-        docHash: string;
-        sidecar: SidecarFile;
-        filePath: string;
-        autoBound?: boolean;
-        sidecarError?: string | null;
-      },
-      promptForSession = true,
-    ) => {
+    (result: OpenResult, promptForSession = true) => {
       // A successful (re)load reconciles the document with disk, resolving any
       // pending conflict for this tab. Bump the scheduler generation so a same-path
       // Reload/Reopen also resets autosave (clears a latch, drops a stale completion).
@@ -864,8 +995,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // dirty), so the tracked-changes state is refreshed by hand.
       const ed = editorRef.current?.getEditor();
       if (ed) {
+        // Two-axis reload (Codex's composition invariant): reconstruct the structural
+        // unions FIRST — that rebuilds the review document whose positions the inline/comment
+        // marks were captured against — THEN restore those marks under the load's bound/unbound
+        // authority. A legacy/externally-edited file (unbound) relocates its anchors instead of
+        // trusting stale coordinates; a missing mode is a compile error, never a silent default.
         restoreStructuralUnions(ed, result.sidecar.structural ?? null, result.docHash);
-        restorePersistedReviewMarks(ed, loadedComments, loadedSuggestions);
+        const restored = restorePersistedReviewMarks(
+          ed,
+          loadedComments,
+          loadedSuggestions,
+          result.reviewMode,
+        );
+        // An unbound load relocates by text; tell the user, tailored to WHY it was unbound,
+        // and only when something couldn't be placed. `reviewUnboundReason` is present iff
+        // the load was unbound, so it doubles as the bound/unbound gate (null ⇒ silent).
+        announceUnboundLoad(result.reviewUnboundReason ?? null, restored);
       }
       const access = authorizeSidecarAccess(
         window.localStorage,
@@ -961,6 +1106,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       onOpenSessionPicker,
       restorePersistedReviewMarks,
       restoreStructuralUnions,
+      announceUnboundLoad,
       tabId,
       bumpSchedulerGen,
     ],
@@ -1072,9 +1218,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Name the destination that failed when we know it (actionable), else just why.
         const detail = outcome.path ? `${outcome.path}\n\n${outcome.message}` : outcome.message;
         showError('Could not save file', detail);
+      } else if (outcome.status === 'review-blocked') {
+        // Focus the first offending annotation so the user can find and fix it.
+        const [first] = outcome.unmappable;
+        if (first) setActiveAnnotation({ kind: first.kind, id: first.id });
+        const notice = reviewBlockedNotice(outcome.unmappable);
+        showError(notice.title, notice.message);
       }
     },
-    [showError],
+    [showError, setActiveAnnotation],
   );
 
   // The coordinator's default-save job: capture the live payload NOW (at
@@ -1082,13 +1234,26 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // notices live here so they run exactly once per write, even when several
   // coalesced requests share it.
   const performSave = useCallback(async (): Promise<SaveOutcome> => {
+    // Structural fail-closed FIRST: refuse the whole save if there are unreconciled
+    // (quarantined) structural records on disk (the sidecar holds the only copy).
     const payload = captureDiskPayload();
     if (!payload.ok) return structuralSaveFailure(payload.error);
-    const live = getLiveReviewState();
+    // Then canonicalize the inline anchors + normalize BEFORE any write. On failure nothing
+    // is written and the doc stays dirty — a review annotation covers text that changes shape
+    // when saved. (Composition follow-up: for a doc with a structural union, the inline anchors
+    // should be captured against the reconstructed canonical review union, not the bare source
+    // parse — see reviewAnchorMap's "composes with the structural reconstruction step"; the
+    // structural mint slice wires that.)
+    const { capture, markdown } = getCanonicalReviewState();
+    if (!capture.ok) {
+      const outcome: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+      notifySaveOutcome(outcome);
+      return outcome;
+    }
     const outcome = await saveFile(
-      payload.content,
-      live.comments,
-      live.suggestions,
+      markdown,
+      capture.comments,
+      capture.suggestions,
       aiSession,
       contextFolder,
       undefined,
@@ -1106,7 +1271,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     saveFile,
     captureDiskPayload,
     structuralSaveFailure,
-    getLiveReviewState,
+    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1192,11 +1357,15 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // must stay visibly flagged even though only the ACTIVE tab's footer shows live status.
   // Latch failed/blocked (a retry's failed→saving must NOT clear it early); clear only on
   // a successful save or a reconciliation (schedulerGen). Conflict has its own marker.
-  const [autosaveAttention, setAutosaveAttention] = useState<'failed' | 'blocked' | null>(null);
+  const [autosaveAttention, setAutosaveAttention] = useState<
+    'failed' | 'blocked' | 'review-blocked' | null
+  >(null);
   useEffect(() => {
     if (autosaveStatus.state === 'failed') setAutosaveAttention('failed');
     else if (autosaveStatus.state === 'stopped' && autosaveStatus.reason === 'blocked') {
       setAutosaveAttention('blocked');
+    } else if (autosaveStatus.state === 'review-blocked') {
+      setAutosaveAttention('review-blocked'); // distinct: an annotation must be fixed
     } else if (autosaveStatus.state === 'saved') setAutosaveAttention(null);
   }, [autosaveStatus]);
   useEffect(() => {
@@ -1222,13 +1391,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // through the coordinator's exclusive lane — waiting for any in-flight save and
   // blocking new saves until it finishes — so writes never overlap the path change.
   const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
+    // Structural fail-closed FIRST (unreconciled quarantined records on disk).
     const payload = captureDiskPayload();
     if (!payload.ok) return structuralSaveFailure(payload.error);
-    const live = getLiveReviewState();
+    // Canonicalize before prompting for a path — don't open the dialog for a save that
+    // would fail, and never write non-canonical positions under a source hash.
+    const { capture, markdown } = getCanonicalReviewState();
+    if (!capture.ok) {
+      const blocked: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
+      notifySaveOutcome(blocked);
+      return blocked;
+    }
     const outcome = await saveFileAs(
-      payload.content,
-      live.comments,
-      live.suggestions,
+      markdown,
+      capture.comments,
+      capture.suggestions,
       aiSession,
       contextFolder,
       aiSession ? documentChat.getThread(aiSession.sessionId) : null,
@@ -1254,7 +1431,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     saveFileAs,
     captureDiskPayload,
     structuralSaveFailure,
-    getLiveReviewState,
+    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1397,11 +1574,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const outcome = await runExclusive(async () => {
         const payload = captureDiskPayload();
         if (!payload.ok) return structuralSaveFailure(payload.error);
-        const live = getLiveReviewState();
+        const { capture, markdown } = getCanonicalReviewState();
+        if (!capture.ok) {
+          return { status: 'review-blocked', unmappable: capture.unmappable } as SaveOutcome;
+        }
         return saveFile(
-          payload.content,
-          live.comments,
-          live.suggestions,
+          markdown,
+          capture.comments,
+          capture.suggestions,
           aiSession,
           contextFolder,
           filePath,
@@ -1416,7 +1596,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
         setLastSavedAt(Date.now());
       } else {
-        presentManualSaveFailure(outcome); // e.g. a protected sidecar still blocks
+        presentManualSaveFailure(outcome); // e.g. a protected sidecar or unanchored annotation
       }
     } finally {
       setResolvingConflict(false);
@@ -1428,7 +1608,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     saveFile,
     captureDiskPayload,
     structuralSaveFailure,
-    getLiveReviewState,
+    getCanonicalReviewState,
     aiSession,
     contextFolder,
     documentChat,
@@ -1475,7 +1655,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
   // restored as clean browser-session state.
   const restoreWorkspaceSnapshot = useCallback(
-    (draft: DraftFile, dirty: boolean) => {
+    (draft: DraftFile, dirty: boolean): WorkspaceRecoveryOutcome => {
       restoreDraft(draft.filePath, dirty, {
         expectedDoc: draft.expectedDoc ?? null,
         expectedSidecar: draft.expectedSidecar ?? null,
@@ -1487,21 +1667,57 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       if (liveEditor) {
         setImageBaseDir(liveEditor, draft.filePath ? dirname(draft.filePath) : null);
       }
-      editorRef.current?.setContent(draft.content);
       const draftComments = draft.comments ?? [];
       const draftSuggestions = draft.suggestions ?? [];
-      setComments(draftComments);
       setLastKnownModel(newestObservedModel(draftComments, draft.chat));
       setLastKnownEffort(newestObservedEffort(draftComments, draft.chat));
-      setSuggestions(draftSuggestions);
-      // The draft's annotations need their marks stamped back just like a file
-      // load — the snapshot's content is serialized Markdown, which drops them
-      // (and the same manual tracked-changes refresh, since the restore
-      // suppresses the update event).
+
+      // Prefer the LOSSLESS path: a `valid` docJSON restores the document + every mark at
+      // byte-exact positions (nothing relocates, no whitespace drift). restoreDocJSON
+      // validates structure + doc↔records bijection and fails closed, so we only install
+      // the matching records when it actually restored. `docJSONState` (from the sanitizer)
+      // distinguishes a genuine legacy snapshot (`absent`) from a corrupt one (`invalid`).
+      const state = draft.docJSONState ?? (draft.docJSON ? 'valid' : 'absent');
+      const lossless =
+        state === 'valid' && draft.docJSON
+          ? editorRef.current?.restoreDocJSON(draft.docJSON, draftComments, draftSuggestions)
+          : undefined;
       const ed = editorRef.current?.getEditor();
-      if (ed) {
-        restoreStructuralFromDraft(ed, draft.structural ?? []);
-        restorePersistedReviewMarks(ed, draftComments, draftSuggestions);
+      let outcome: WorkspaceRecoveryOutcome;
+      if (lossless?.ok && ed) {
+        outcome = 'lossless';
+        setComments(draftComments);
+        setSuggestions(draftSuggestions);
+        // Detached/quarantined records are mark-less BY DESIGN, so they cannot be rebuilt
+        // from the live marks — seed them back into the quarantine store, or they'd vanish.
+        quarantinedSuggestionsRef.current = draftSuggestions.filter((s) => s.detached === true);
+        // The lossless docJSON is self-contained — it restored the document and every mark
+        // byte-exact, so we must NOT re-reconstruct here (that would disturb the restored doc).
+        // Composition follow-up: a structural union embedded in a valid docJSON needs its record
+        // store seeded without a doc mutation; that lands with the structural mint slice.
+        setTrackedChanges(getTrackedChanges(ed));
+      } else {
+        // A lossless doc that was INTENDED but couldn't be used — `invalid` envelope, or a
+        // `valid` one that failed deep validation — is corruption: degrade EXPLICITLY. Genuine
+        // `absent` legacy snapshots take the normal Markdown + unbound relocation path.
+        const degraded = state === 'invalid' || (state === 'valid' && !!lossless && !lossless.ok);
+        outcome = degraded ? 'degraded' : 'legacy';
+        editorRef.current?.setContent(draft.content);
+        setComments(draftComments);
+        setSuggestions(draftSuggestions);
+        const ed2 = editorRef.current?.getEditor();
+        if (ed2) {
+          // Reconstruct the structural unions FIRST (source → union), then restore inline marks.
+          restoreStructuralFromDraft(ed2, draft.structural ?? []);
+          const restored = restorePersistedReviewMarks(
+            ed2,
+            draftComments,
+            draftSuggestions,
+            'unbound',
+          );
+          if (degraded) onNotice(degradedRecoveryNotice());
+          else announceUnboundLoad('recovery', restored);
+        }
       }
       const session = adoptLoadedSession(draft.aiSession ?? null, draft.filePath);
       documentChat.restore(draft.chat, session);
@@ -1513,6 +1729,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         rememberSessionPermission(window.localStorage, draft.filePath, session);
         rememberContextFolderPermission(window.localStorage, draft.filePath, restoredContextFolder);
       }
+      return outcome;
     },
     [
       adoptLoadedSession,
@@ -1520,6 +1737,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       restoreDraft,
       restorePersistedReviewMarks,
       restoreStructuralFromDraft,
+      announceUnboundLoad,
+      onNotice,
       setComments,
       setSuggestions,
     ],
@@ -1530,8 +1749,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       return;
     }
     initialWorkspaceRestoreStartedRef.current = true;
-    restoreWorkspaceSnapshot(initialWorkspaceSnapshot, initialWorkspaceDirty);
-    onInitialWorkspaceLoaded(tabId);
+    const outcome = restoreWorkspaceSnapshot(initialWorkspaceSnapshot, initialWorkspaceDirty);
+    onInitialWorkspaceLoaded(tabId, outcome);
   }, [
     editor,
     initialWorkspaceDirty,
@@ -1866,7 +2085,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     (commentId: string) => {
       const comment = comments.find((c) => c.id === commentId);
       if (!comment || !editor) return false;
-      const anchor = locateDetachedCommentAnchor(editor.state.doc, comment);
+      // A detached record's stored range is known-bad, so repair relocates by unique
+      // text only; a resolved-but-attached record keeps the trust-range rule.
+      const anchor = locateCommentForRepair(editor.state.doc, comment);
       if (!anchor) return false;
       // Queue the validated range and unresolved state before restoring the
       // mark, so the mark transaction reconciles against the updated record.

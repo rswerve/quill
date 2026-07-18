@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { expect, type Page } from '@playwright/test';
 import { canonicalDocumentPath, dirname } from '../../src/utils/path';
 import { sidecarPath } from '../../src/utils/sidecarPath';
+import { REVIEW_ANCHOR_VERSION } from '../../src/utils/reviewAnchorMap';
 
 interface MemoryTauriOptions {
   files?: Record<string, string>;
@@ -73,6 +75,50 @@ function seededSidecarPermissions(options: MemoryTauriOptions) {
     }
   }
   return permissions;
+}
+
+/**
+ * A real Quill save stamps every review-bearing sidecar with `reviewSourceHash`
+ * (the SHA-256 of the `.md` its coordinates were captured against) and
+ * `reviewAnchorVersion`, so the next open reads it as BOUND and trusts the stored
+ * positions — the steady state these tests mean to exercise. Hand-authored
+ * fixtures omit that stamp, which would make every seeded document look like a
+ * legacy file and send it through unbound relocation (conservative set-aside +
+ * an "older version of Quill" migration notice whose modal overlay then blocks
+ * the very interactions under test). So stamp any sidecar that carries review
+ * records and no explicit provenance, mirroring `saveSidecar`. The hash matches
+ * the shim's own read-side SHA-256 (UTF-8, lowercase hex). A fixture that WANTS
+ * the legacy/unbound path expresses it by setting its own `reviewSourceHash`
+ * (an intentional mismatch), which is left untouched.
+ */
+function stampBoundReviewAnchors(files: Record<string, string>): Record<string, string> {
+  const stamped: Record<string, string> = { ...files };
+  for (const [path, content] of Object.entries(files)) {
+    if (path.endsWith('.comments.json')) continue; // a document, not a sidecar
+    const scPath = sidecarPath(path);
+    const raw = files[scPath];
+    if (raw === undefined) continue;
+    let parsed: {
+      comments?: unknown[];
+      suggestions?: unknown[];
+      reviewSourceHash?: unknown;
+    };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue; // an intentionally-malformed sidecar stays exactly as seeded
+    }
+    const hasReviewRecords =
+      (Array.isArray(parsed.comments) && parsed.comments.length > 0) ||
+      (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0);
+    if (!hasReviewRecords || parsed.reviewSourceHash !== undefined) continue;
+    stamped[scPath] = JSON.stringify({
+      ...parsed,
+      reviewSourceHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+      reviewAnchorVersion: REVIEW_ANCHOR_VERSION,
+    });
+  }
+  return stamped;
 }
 
 /**
@@ -319,7 +365,7 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       };
     },
     {
-      files: options.files ?? {},
+      files: stampBoundReviewAnchors(options.files ?? {}),
       openPath: options.openPath ?? null,
       savePath: options.savePath ?? null,
       folderPath: options.folderPath ?? null,

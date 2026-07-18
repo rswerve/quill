@@ -78,7 +78,12 @@ export function useComments(): UseCommentsReturn {
   const unresolveComment = useCallback(
     (commentId: string, anchor?: { from: number; to: number }) => {
       setComments((prev) =>
-        prev.map((c) => (c.id === commentId ? { ...c, ...anchor, resolved: false } : c)),
+        prev.map((c) => {
+          if (c.id !== commentId) return c;
+          const next = { ...c, ...anchor, resolved: false };
+          if (anchor) delete next.detached; // repaired: it now has a live anchor again
+          return next;
+        }),
       );
     },
     [],

@@ -3,7 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
-import { locateDetachedCommentAnchor } from '../utils/commentAnchors';
+import { locateCommentForRepair } from '../utils/commentAnchors';
 import type { Comment, TrackedChangeInfo } from '../types';
 
 type ActiveAnnotation = { kind: AnnotationKind; id: string } | null;
@@ -103,9 +103,12 @@ export function useAnnotationNavigation({
       );
       const comment = comments.find((candidate) => candidate.id === commentId);
       if (!editor || !comment) return;
-      const range = comment.resolved
-        ? locateDetachedCommentAnchor(editor.state.doc, comment)
-        : findAnnotationRange(editor.state.doc, 'comment', commentId);
+      // A mark-less record (resolved or detached) is located by text — detached ones by
+      // unique text only; a live comment navigates to its actual mark.
+      const range =
+        comment.resolved || comment.detached
+          ? locateCommentForRepair(editor.state.doc, comment)
+          : findAnnotationRange(editor.state.doc, 'comment', commentId);
       if (!range) return;
       const { node } = editor.view.domAtPos(range.from);
       const element = node instanceof HTMLElement ? node : node.parentElement;

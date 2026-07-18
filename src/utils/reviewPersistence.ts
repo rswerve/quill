@@ -11,6 +11,14 @@ import type {
   TrackedChangeInfo,
   TrackedChangeSegment,
 } from '../types';
+import {
+  relocateComment,
+  relocateSuggestion,
+  spanAdmitsMark,
+  suggestionMarksAdmissible,
+  SEGMENT_MARK,
+} from './reviewRelocation';
+import { rangeText } from './trackedEdits';
 
 export interface ReviewRestoreMismatch {
   suggestionId: string;
@@ -20,8 +28,29 @@ export interface ReviewRestoreMismatch {
   actual: string | null;
 }
 
+/**
+ * Whether the persisted review coordinates are authoritative. `bound` — the sidecar's
+ * source hash matched the document bytes, so positions are trusted (validated as a
+ * corruption defense). `unbound` — legacy/missing hash, or an externally-edited `.md`,
+ * so positions are only hints and every anchor is conservatively relocated by unique
+ * text. See `src/utils/reviewRelocation.ts`.
+ */
+export type ReviewRestoreMode = 'bound' | 'unbound';
+
 export interface ReviewRestoreResult {
+  /**
+   * The complete authoritative comment set after restore — validated/relocated comments
+   * with corrected coordinates, plus any newly `detached` ones. Callers REPLACE their
+   * comment state with this so the detached flags reach the reconciler.
+   */
+  comments: Comment[];
+  /** Comments re-anchored by unbound relocation (for the "re-attached" notice count). */
+  relocatedComments: Comment[];
+  /** Comments that could not be re-anchored this load and are now `detached`. */
+  detachedComments: Comment[];
   quarantinedSuggestions: Suggestion[];
+  /** Suggestions re-anchored by unbound relocation, with corrected segment positions. */
+  relocatedSuggestions: Suggestion[];
   mismatches: ReviewRestoreMismatch[];
 }
 
@@ -141,23 +170,78 @@ function clampRange(from: number, to: number, size: number): { from: number; to:
   return clampedTo > clampedFrom ? { from: clampedFrom, to: clampedTo } : null;
 }
 
-function restoreCommentMarks(
+interface CommentRestoreOutcome {
+  comments: Comment[];
+  relocated: Comment[];
+  detached: Comment[];
+}
+
+/**
+ * A comment's live range in `bound` mode: its stored range, but ONLY while the anchor
+ * text still sits there. The hash said the bytes match, so a mismatch is corruption —
+ * we do NOT fuzzy-fallback; the caller detaches it.
+ */
+function locateBoundComment(
+  doc: TiptapEditor['state']['doc'],
+  comment: Comment,
+): { from: number; to: number } | null {
+  const range = clampRange(comment.from, comment.to, doc.content.size);
+  if (!range) return null;
+  return rangeText(doc, range.from, range.to) === comment.anchorText ? range : null;
+}
+
+/**
+ * Restore comment marks and classify each comment. Resolution controls only whether a
+ * MARK is stamped — never whether the anchor is validated, so a resolved comment's
+ * coordinates are still checked/corrected (a later unresolve must not trust a stale
+ * range). The locator is unique-only whenever the record is already `detached` OR the
+ * document is unbound: a persisted detached comment must never re-bind through its stale
+ * range on a bound reload. Otherwise a bound comment validates at its stored range. A
+ * located range that will be stamped must also ADMIT the comment mark; an unlocatable or
+ * ineligible one is preserved `detached` (keeping any `resolved`), with no mark.
+ */
+function restoreComments(
   tr: Transaction,
   commentType: MarkType | undefined,
+  doc: TiptapEditor['state']['doc'],
   comments: Comment[],
-  size: number,
-): void {
-  if (!commentType) return;
+  mode: ReviewRestoreMode,
+): CommentRestoreOutcome {
+  const result: Comment[] = [];
+  const relocated: Comment[] = [];
+  const detached: Comment[] = [];
   for (const comment of comments) {
-    if (comment.resolved) continue;
-    const range = clampRange(comment.from, comment.to, size);
-    if (!range) continue;
-    tr.addMark(
-      range.from,
-      range.to,
-      commentType.create({ commentId: comment.id, kind: comment.kind, resolved: false }),
-    );
+    const requiresUnique = mode === 'unbound' || comment.detached === true;
+    const willStamp = !comment.resolved;
+    let located = requiresUnique ? relocateComment(doc, comment) : locateBoundComment(doc, comment);
+    // Mark admissibility defines whether an anchor is USABLE at all — independent of
+    // resolution. A resolved comment validated inside a code block would clear detached
+    // and later fail silently when unresolved, so gate it here, not only when stamping.
+    // (The unbound `relocateComment` already enforces this; the bound path does not.)
+    if (located && !spanAdmitsMark(doc, located.from, located.to, 'comment')) {
+      located = null;
+    }
+    if (!located) {
+      const record = comment.detached ? comment : { ...comment, detached: true as const };
+      result.push(record);
+      if (!comment.detached) detached.push(record);
+      continue;
+    }
+    if (willStamp && commentType) {
+      tr.addMark(
+        located.from,
+        located.to,
+        commentType.create({ commentId: comment.id, kind: comment.kind, resolved: false }),
+      );
+    }
+    const record: Comment = { ...comment, from: located.from, to: located.to };
+    delete record.detached; // adopting a live range clears any detached state
+    result.push(record);
+    const moved =
+      located.from !== comment.from || located.to !== comment.to || comment.detached === true;
+    if (requiresUnique && moved) relocated.push(record);
   }
+  return { comments: result, relocated, detached };
 }
 
 function restoreLogicalSuggestion(
@@ -286,19 +370,157 @@ function suggestionMismatches(
   });
 }
 
-function quarantineMismatchedSuggestions(
+interface SuggestionRestoreOutcome {
+  quarantined: Suggestion[];
+  relocated: Suggestion[];
+  mismatches: ReviewRestoreMismatch[];
+}
+
+/**
+ * Two segments cover an overlapping range AND carry mutually-excluding mark types
+ * (`tracked_insert` excludes `tracked_delete`). Marks stamp sequentially, so the second
+ * such mark EVICTS the first — leaving a span silently unmarked yet reported restored.
+ */
+function segmentsConflict(
+  schema: TiptapEditor['schema'],
+  a: TrackedChangeSegment,
+  b: TrackedChangeSegment,
+): boolean {
+  if (a.from >= b.to || b.from >= a.to) return false; // disjoint
+  const ma = schema.marks[SEGMENT_MARK[a.kind]];
+  const mb = schema.marks[SEGMENT_MARK[b.kind]];
+  return Boolean(ma && mb && (ma.excludes(mb) || mb.excludes(ma)));
+}
+
+/** A single suggestion whose OWN segments collide (a malformed record). */
+function hasInternalConflict(
+  schema: TiptapEditor['schema'],
+  suggestion: LogicalSuggestion,
+): boolean {
+  const { segments } = suggestion;
+  for (let i = 0; i < segments.length; i += 1) {
+    for (let j = i + 1; j < segments.length; j += 1) {
+      if (segmentsConflict(schema, segments[i], segments[j])) return true;
+    }
+  }
+  return false;
+}
+
+/** Any segment of `a` collides with any segment of `b`. */
+function suggestionsConflict(
+  schema: TiptapEditor['schema'],
+  a: LogicalSuggestion,
+  b: LogicalSuggestion,
+): boolean {
+  return a.segments.some((sa) => b.segments.some((sb) => segmentsConflict(schema, sa, sb)));
+}
+
+/**
+ * Independently-valid candidates can still collide once stamped — two suggestions on the
+ * same span with excluding mark types, OR one malformed suggestion whose own segments
+ * exclude each other. Split the batch so any conflicting record (internally, or paired)
+ * is quarantined and never stamped, while disjoint ones survive. Applies in BOTH modes,
+ * over the candidates' FINAL positions.
+ */
+function partitionByMarkConflict(
+  schema: TiptapEditor['schema'],
+  candidates: LogicalSuggestion[],
+): { survivors: LogicalSuggestion[]; conflicted: LogicalSuggestion[] } {
+  const conflicted = new Set<string>();
+  for (let i = 0; i < candidates.length; i += 1) {
+    if (hasInternalConflict(schema, candidates[i])) conflicted.add(candidates[i].id);
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      if (suggestionsConflict(schema, candidates[i], candidates[j])) {
+        conflicted.add(candidates[i].id);
+        conflicted.add(candidates[j].id);
+      }
+    }
+  }
+  return {
+    survivors: candidates.filter((suggestion) => !conflicted.has(suggestion.id)),
+    conflicted: candidates.filter((suggestion) => conflicted.has(suggestion.id)),
+  };
+}
+
+/** Mark a record non-authoritative (unless it already is). */
+function markSuggestionDetached(suggestion: Suggestion): Suggestion {
+  return suggestion.detached ? suggestion : { ...suggestion, detached: true };
+}
+
+/** Drop the detached flag on a record that just re-anchored. */
+function clearSuggestionDetached(suggestion: LogicalSuggestion): LogicalSuggestion {
+  if (!suggestion.detached) return suggestion;
+  const next = { ...suggestion };
+  delete next.detached;
+  return next;
+}
+
+/**
+ * Restore tracked-change marks. A pending suggestion is UNIQUE-relocated whenever the
+ * document is unbound OR the record is already `detached` — its stored range is known-bad,
+ * so it must never re-bind to a coincidental repeat, even in a bound sidecar. Otherwise a
+ * bound record validates at its stored range (segment text + mark eligibility). A record
+ * that re-anchors clears `detached` and adopts its corrected positions and is stamped; one
+ * that cannot re-anchor — or loses a mark-exclusion conflict during stamping — is
+ * quarantined AND marked `detached`, so a source-hashed sidecar can honestly cover it and
+ * later loads treat its coordinates as non-authoritative.
+ */
+function restoreSuggestions(
+  tr: Transaction,
+  schema: TiptapEditor['schema'],
   doc: TiptapEditor['state']['doc'],
   suggestions: LogicalSuggestion[],
-): ReviewRestoreResult & { restorableSuggestions: LogicalSuggestion[] } {
-  const mismatches = suggestions
-    .filter((suggestion) => suggestion.status === 'pending')
-    .flatMap((suggestion) => suggestionMismatches(doc, suggestion));
-  const mismatchedIds = new Set(mismatches.map((mismatch) => mismatch.suggestionId));
-  const isQuarantined = (suggestion: Suggestion) =>
-    suggestion.status === 'pending' && mismatchedIds.has(suggestion.id);
+  mode: ReviewRestoreMode,
+  size: number,
+): SuggestionRestoreOutcome {
+  const toStamp: LogicalSuggestion[] = [];
+  const relocatedIds = new Set<string>();
+  const quarantined: Suggestion[] = [];
+  const mismatches: ReviewRestoreMismatch[] = [];
+
+  // A malformed sidecar can repeat an id. Since `relocatedIds` and the live marks both key
+  // by id, two records sharing one (even with disjoint, non-conflicting segments) would
+  // collapse into a single mixed live suggestion. Quarantine every member of a
+  // duplicate-id group up front so none is ever stamped.
+  const pendingIds = suggestions.filter((s) => s.status === 'pending').map((s) => s.id);
+  const duplicateIds = new Set(pendingIds.filter((id, index) => pendingIds.indexOf(id) !== index));
+
+  for (const suggestion of suggestions) {
+    if (suggestion.status !== 'pending') continue;
+    if (duplicateIds.has(suggestion.id)) {
+      quarantined.push(markSuggestionDetached(suggestion));
+      continue;
+    }
+    const requiresUnique = mode === 'unbound' || suggestion.detached === true;
+    if (requiresUnique) {
+      const outcome = relocateSuggestion(doc, suggestion);
+      if (outcome.status === 'relocated') {
+        toStamp.push(clearSuggestionDetached(outcome.suggestion));
+        relocatedIds.add(suggestion.id);
+      } else {
+        quarantined.push(markSuggestionDetached(suggestion));
+      }
+      continue;
+    }
+    // Bound + not detached: trust the stored range, validated as a corruption defense.
+    const segMismatches = suggestionMismatches(doc, suggestion);
+    if (segMismatches.length > 0) {
+      mismatches.push(...segMismatches);
+      quarantined.push(markSuggestionDetached(suggestion));
+    } else if (!suggestionMarksAdmissible(doc, suggestion)) {
+      quarantined.push(markSuggestionDetached(suggestion));
+    } else {
+      toStamp.push(suggestion);
+    }
+  }
+
+  // Independently-valid candidates can still collide once stamped (excluding mark types
+  // over an overlapping span, or a malformed internally-conflicting record).
+  const { survivors, conflicted } = partitionByMarkConflict(schema, toStamp);
+  restoreSuggestionMarks(tr, schema, survivors, size);
   return {
-    quarantinedSuggestions: suggestions.filter(isQuarantined),
-    restorableSuggestions: suggestions.filter((suggestion) => !isQuarantined(suggestion)),
+    quarantined: [...quarantined, ...conflicted.map(markSuggestionDetached)],
+    relocated: survivors.filter((suggestion) => relocatedIds.has(suggestion.id)),
     mismatches,
   };
 }
@@ -317,17 +539,18 @@ export function restoreReviewMarks(
   editor: TiptapEditor,
   comments: Comment[],
   suggestions: PersistedSuggestion[],
+  // REQUIRED, no default: 'bound' grants trust, so a caller must state it explicitly —
+  // a forgotten mode must never silently trust stale coordinates.
+  mode: ReviewRestoreMode,
 ): ReviewRestoreResult {
   const { state } = editor;
   const { tr, doc, schema } = state;
   const commentType = schema.marks['comment'];
   const size = doc.content.size;
   const logicalSuggestions = normalizePersistedSuggestions(suggestions);
-  const { quarantinedSuggestions, restorableSuggestions, mismatches } =
-    quarantineMismatchedSuggestions(doc, logicalSuggestions);
 
-  restoreCommentMarks(tr, commentType, comments, size);
-  restoreSuggestionMarks(tr, schema, restorableSuggestions, size);
+  const suggestionOutcome = restoreSuggestions(tr, schema, doc, logicalSuggestions, mode, size);
+  const commentOutcome = restoreComments(tr, commentType, doc, comments, mode);
 
   if (tr.steps.length) {
     tr.setMeta('preventUpdate', true);
@@ -335,5 +558,12 @@ export function restoreReviewMarks(
     tr.setMeta('addToHistory', false);
     editor.view.dispatch(tr);
   }
-  return { quarantinedSuggestions, mismatches };
+  return {
+    comments: commentOutcome.comments,
+    relocatedComments: commentOutcome.relocated,
+    detachedComments: commentOutcome.detached,
+    quarantinedSuggestions: suggestionOutcome.quarantined,
+    relocatedSuggestions: suggestionOutcome.relocated,
+    mismatches: suggestionOutcome.mismatches,
+  };
 }

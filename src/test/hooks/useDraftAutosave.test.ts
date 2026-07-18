@@ -36,6 +36,8 @@ const VALID_DRAFT: DraftFile = {
   version: 1,
   savedAt: '2026-06-11T00:00:00.000Z',
   ...SNAPSHOT,
+  // No docJSON fields → the sanitizer classifies this legacy snapshot as 'absent'.
+  docJSONState: 'absent',
 };
 
 const WORKSPACE: WorkspaceFile = {
@@ -150,6 +152,28 @@ describe('useWorkspaceAutosave', () => {
       await vi.advanceTimersByTimeAsync(20000);
     });
     expect(deleteCalls()).toHaveLength(0);
+    expect(writeCalls()).toHaveLength(0);
+  });
+
+  it('isProtected refuses EVERY write, including an explicit override (quit/discard bypass)', async () => {
+    const { result } = renderHook(() =>
+      useWorkspaceAutosave({
+        enabled: true,
+        hasDirtyTabs: true,
+        revision: 'r',
+        getWorkspace: () => WORKSPACE,
+        isProtected: () => true, // a degraded recovery is holding evidence
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The auto-write is gated, AND an explicit override write (as quit/discard uses) is refused.
+    let wrote = true;
+    await act(async () => {
+      wrote = await result.current.writeWorkspace(WORKSPACE);
+    });
+    expect(wrote).toBe(false);
     expect(writeCalls()).toHaveLength(0);
   });
 

@@ -475,6 +475,16 @@ fn delete_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Hash arbitrary UTF-8 content with the SAME SHA-256 the atomic file trio uses, so the
+/// frontend can bind a workspace draft's embedded content to its review coordinates
+/// (its `reviewSourceHash`) without a second, parity-risky hash implementation. Unlike
+/// the `.md`, a draft's content is never written as its own file, so its hash cannot come
+/// from a `write_file_atomic` result — this exposes the same hasher directly.
+#[tauri::command]
+fn hash_content(content: String) -> String {
+    sha256_hex(content.as_bytes())
+}
+
 #[tauri::command]
 async fn show_open_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = app
@@ -1190,6 +1200,18 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn hash_content_matches_the_file_hash_for_the_same_bytes() {
+        // The draft-binding hash MUST equal the atomic file hash of the same content,
+        // so a saved `.md` and an embedded draft of identical bytes bind identically.
+        let content = "# 日本語\nHello 🌍".to_string();
+        assert_eq!(
+            hash_content(content.clone()),
+            sha256_hex(content.as_bytes())
+        );
+        assert_eq!(hash_content(String::new()), sha256_hex(b""));
     }
 
     #[test]
@@ -3883,6 +3905,7 @@ pub fn run() {
             write_file_atomic,
             delete_file,
             delete_file_if_match,
+            hash_content,
             show_open_dialog,
             show_save_dialog,
             show_folder_dialog,

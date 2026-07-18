@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { newestObservedEffort, newestObservedModel } from '../../components/DocumentTab';
+import {
+  newestObservedEffort,
+  newestObservedModel,
+  unboundRecoveryNotice,
+} from '../../components/DocumentTab';
 import { sanitizeComments, sanitizeDocumentChat } from '../../utils/annotationValidation';
 import type { ChatMessage, Comment, DocumentChatThread, Reply } from '../../types';
 
@@ -146,5 +150,44 @@ describe('newestObserved model/effort restore', () => {
     // proving the persisted observedAt survived the boundary AND drove ordering.
     expect(newestObservedModel(comments, chat)).toBe('claude-opus-4-8');
     expect(newestObservedEffort(comments, chat)).toBe('high');
+  });
+});
+
+describe('unboundRecoveryNotice (Maz decision #3: per-reason, silent-when-clean)', () => {
+  it('is silent when nothing was set aside', () => {
+    expect(unboundRecoveryNotice('source-mismatch', 0)).toBeNull();
+    expect(unboundRecoveryNotice('legacy', 0)).toBeNull();
+  });
+
+  it('leads with "changed outside Quill" for an external edit', () => {
+    const notice = unboundRecoveryNotice('source-mismatch', 2)!;
+    expect(notice.title).toBe('Some annotations need review');
+    expect(notice.message).toContain('This file was changed outside Quill.');
+    expect(notice.message).toContain('2 couldn’t be placed and are set aside');
+    expect(notice.message).toContain('open the review panel');
+  });
+
+  it('leads with "older version of Quill" for legacy and version-mismatch', () => {
+    expect(unboundRecoveryNotice('legacy', 1)!.message).toContain(
+      'This file was saved in an older version of Quill.',
+    );
+    expect(unboundRecoveryNotice('version-mismatch', 1)!.message).toContain(
+      'This file was saved in an older version of Quill.',
+    );
+  });
+
+  it('leads with a recovery sentence for crash recovery', () => {
+    expect(unboundRecoveryNotice('recovery', 3)!.message).toContain(
+      'Quill recovered unsaved work from a previous session.',
+    );
+  });
+
+  it('agrees in number: one is set aside, many are set aside', () => {
+    expect(unboundRecoveryNotice('legacy', 1)!.message).toContain(
+      '1 couldn’t be placed and is set aside',
+    );
+    expect(unboundRecoveryNotice('legacy', 4)!.message).toContain(
+      '4 couldn’t be placed and are set aside',
+    );
   });
 });

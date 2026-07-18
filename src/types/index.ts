@@ -1,6 +1,7 @@
 import type { JSONContent } from '@tiptap/core';
 import type { Fingerprint } from '../utils/atomicFile';
 export type { Fingerprint };
+export type { JSONContent };
 
 export interface Reply {
   id: string;
@@ -87,6 +88,16 @@ export interface Comment {
   createdAt: string;
   resolved: boolean;
   /**
+   * Set when a load could not re-anchor this comment — an externally-edited or legacy
+   * document where its text is now ambiguous or gone. DISTINCT from `resolved`: the
+   * thread is deliberately kept (its content isn't lost) but has no live mark and does
+   * not highlight anything until the user repairs it. The reconciler preserves a
+   * detached comment instead of dropping it; navigation/unresolve for it must relocate
+   * by unique text only, never by its stale stored range. Only ever literal `true` (never
+   * `false`) — an un-detached comment simply omits the key.
+   */
+  detached?: true;
+  /**
    * Single-player margin model: a private local `note` (never sent to Claude)
    * or a `claude` thread (the user's request plus Claude's replies).
    */
@@ -102,6 +113,14 @@ interface SuggestionBase {
   author: string;
   createdAt: string;
   status: SuggestionStatus;
+  /**
+   * The suggestion analog of `Comment.detached`: set when restore could not re-anchor
+   * this record (its stored coordinates are stale/non-authoritative). A source-hashed
+   * ("bound") sidecar can then honestly cover it, because a detached suggestion always
+   * relocates by UNIQUE text — never its stored range — even in bound mode. Only ever
+   * literal `true`; a re-anchored record omits the key. See utils/reviewPersistence.
+   */
+  detached?: true;
   /** The comment whose Claude request produced this suggestion, if any. */
   originCommentId?: string;
   /** The document-chat assistant turn that produced this suggestion, if any. */
@@ -203,6 +222,17 @@ export interface SidecarFile {
   contextFolder?: string;
   /** Rendered document-chat thread, isolated to this document and session. */
   chat?: DocumentChatThread;
+  /**
+   * Provenance proving these review coordinates were canonically captured against
+   * the exact `.md` bytes this sidecar accompanies: the lowercase SHA-256 hex of
+   * that `.md` content and the anchor scheme version (`REVIEW_ANCHOR_VERSION`). On
+   * load, matching BOTH against the actual document is "bound" mode — stored
+   * positions are authoritative. Absent (legacy) or mismatched (an external
+   * `.md`-only edit) is "unbound" — positions are only hints, so review marks are
+   * conservatively relocated by unique text instead of trusted.
+   */
+  reviewSourceHash?: string;
+  reviewAnchorVersion?: number;
 }
 
 export interface FileState {
@@ -317,6 +347,24 @@ export interface DraftFile {
   /** The file the draft belongs to, or null for an untitled document. */
   filePath: string | null;
   content: string;
+  /**
+   * The LOSSLESS ProseMirror document JSON (all review marks embedded), for byte-exact
+   * crash recovery. When present and valid, recovery restores this directly so positions
+   * never drift and nothing relocates — unlike `content` (Markdown), which normalizes
+   * whitespace on reparse. Absent for legacy snapshots → recovery falls back to `content`
+   * through the unbound relocation path. `content` is retained alongside for back-compat,
+   * preview, and a degraded text-only salvage when `docJSON` is corrupt.
+   */
+  docJSON?: JSONContent;
+  /** Envelope version for `docJSON`, so a future shape change fails closed rather than mis-parsing. */
+  docJSONVersion?: 1;
+  /**
+   * Read-time classification of the lossless envelope (populated by the sanitizer, never
+   * persisted): `absent` (legacy Markdown snapshot) | `valid` (usable docJSON) | `invalid`
+   * (present but malformed / unsupported version). `invalid` must stay distinct from `absent`
+   * so recovery degrades EXPLICITLY and preserves the original, never masquerading as legacy.
+   */
+  docJSONState?: 'absent' | 'valid' | 'invalid';
   comments: Comment[];
   suggestions: Suggestion[];
   /**
@@ -348,6 +396,14 @@ export interface DraftFile {
    * protection, which would overwrite the `.md` the proposal is anchored to.
    */
   structuralProtected?: boolean;
+  /**
+   * Anchor provenance for the embedded `content` (see `SidecarFile.reviewSourceHash`).
+   * `reviewSourceHash` is the SHA-256 of THIS draft's `content`, so a recovered draft
+   * whose review coordinates were canonically captured restores in bound mode; a
+   * legacy or hand-edited draft falls back to conservative relocation.
+   */
+  reviewSourceHash?: string;
+  reviewAnchorVersion?: number;
 }
 
 /**

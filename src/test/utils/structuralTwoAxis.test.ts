@@ -129,7 +129,7 @@ function buildFixture() {
     resolved: false,
     replies: [],
   };
-  restoreReviewMarks(live, [comment], [inlineRecord]);
+  restoreReviewMarks(live, [comment], [inlineRecord], 'bound');
 
   const payload = buildStructuralSavePayload(live, getMarkdown(live));
   if (!payload.ok) throw new Error(`fixture build failed: ${payload.error}`);
@@ -153,7 +153,7 @@ describe('two-axis reload ordering (P1/P2)', () => {
     const reopened = makeEditor('');
     reopened.commands.setContent(sourceMd, { emitUpdate: false });
     reconstructStructuralIntoEditor(reopened, envelope, 'fixture-hash');
-    restoreReviewMarks(reopened, comments, inlineSuggestions);
+    restoreReviewMarks(reopened, comments, inlineSuggestions, 'bound');
 
     expect(reopened.state.doc.toJSON()).toEqual(reviewJSON);
   });
@@ -165,7 +165,7 @@ describe('two-axis reload ordering (P1/P2)', () => {
     reopened.commands.setContent(sourceMd, { emitUpdate: false });
     // Wrong order: marks restored against the SOURCE doc (positions are review
     // coordinates, so they land wrong / quarantine), then reconstruct.
-    restoreReviewMarks(reopened, comments, inlineSuggestions);
+    restoreReviewMarks(reopened, comments, inlineSuggestions, 'bound');
     reconstructStructuralIntoEditor(reopened, envelope, 'fixture-hash');
 
     expect(reopened.state.doc.toJSON()).not.toEqual(reviewJSON);

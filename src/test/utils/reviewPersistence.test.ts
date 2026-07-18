@@ -9,13 +9,23 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
+import { CommentMark } from '../../extensions/Comment';
 import { sanitizeSuggestions } from '../../utils/annotationValidation';
 import {
   mergeQuarantinedSuggestions,
   suggestionsFromTrackedChanges,
   restoreReviewMarks,
 } from '../../utils/reviewPersistence';
-import type { LegacyFormatSuggestion, LegacyTextSuggestion, TrackedChangeInfo } from '../../types';
+import { reconcileCommentsWithDocument } from '../../utils/commentReconciler';
+import { findAnnotationRange } from '../../extensions/AnnotationFocus';
+import type {
+  Comment,
+  LegacyFormatSuggestion,
+  LegacyTextSuggestion,
+  LogicalSuggestion,
+  TrackedChangeInfo,
+  TrackedChangeSegment,
+} from '../../types';
 
 function makeEditor(content = '<p>Hello world</p>') {
   const el = document.createElement('div');
@@ -29,10 +39,27 @@ function makeEditor(content = '<p>Hello world</p>') {
       TrackedDelete,
       TrackedFormat,
       TrackChanges,
+      CommentMark,
     ],
     content,
   });
 }
+
+const comment = (overrides: Partial<Comment> = {}): Comment => ({
+  id: 'cm1',
+  anchorText: 'world',
+  from: 7,
+  to: 12,
+  author: 'Reviewer',
+  createdAt: '2026-07-11T18:00:00Z',
+  resolved: false,
+  kind: 'note',
+  replies: [],
+  ...overrides,
+});
+
+const hasCommentMark = (editor: Editor, id: string) =>
+  findAnnotationRange(editor.state.doc, 'comment', id) !== null;
 
 function makeChange(overrides: Partial<TrackedChangeInfo> = {}): TrackedChangeInfo {
   return {
@@ -72,7 +99,7 @@ describe('suggestionsFromTrackedChanges', () => {
     expect(record.originChatMessageId).toBe('chat-message-7');
 
     const editor = makeEditor();
-    restoreReviewMarks(editor, [], [record]);
+    restoreReviewMarks(editor, [], [record], 'bound');
     expect(getTrackedChanges(editor)[0].originChatMessageId).toBe('chat-message-7');
     editor.destroy();
   });
@@ -165,7 +192,7 @@ describe('restoreReviewMarks', () => {
 
   it('stamps originCommentId back into the restored dataTracked', () => {
     editor = makeEditor('<p>Hello world</p>');
-    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42' })]);
+    restoreReviewMarks(editor, [], [suggestion({ originCommentId: 'c42' })], 'bound');
 
     const [change] = getTrackedChanges(editor);
     expect(change).toMatchObject({
@@ -177,7 +204,7 @@ describe('restoreReviewMarks', () => {
 
   it('restores without originCommentId when the record has none', () => {
     editor = makeEditor('<p>Hello world</p>');
-    restoreReviewMarks(editor, [], [suggestion()]);
+    restoreReviewMarks(editor, [], [suggestion()], 'bound');
 
     const [change] = getTrackedChanges(editor);
     expect(change.id).toBe('s1');
@@ -198,7 +225,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p>Hello beautiful world</p>');
-    restoreReviewMarks(editor, [], records);
+    restoreReviewMarks(editor, [], records, 'bound');
     const [restored] = getTrackedChanges(editor);
     expect(restored.originCommentId).toBe('c42');
     expect(restored.status).toBe('pending');
@@ -229,9 +256,9 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p>one<br>two</p>');
-    const restored = restoreReviewMarks(editor, [], records);
+    const restored = restoreReviewMarks(editor, [], records, 'bound');
 
-    expect(restored).toEqual({ quarantinedSuggestions: [], mismatches: [] });
+    expect(restored).toMatchObject({ quarantinedSuggestions: [], mismatches: [] });
     let restoredBreakMarks: string[] | null = null;
     editor.state.doc.descendants((node) => {
       if (node.type.name === 'hardBreak') {
@@ -269,7 +296,7 @@ describe('restoreReviewMarks', () => {
     expect(sanitized[0]).toMatchObject({
       segments: [expect.objectContaining({ text: '\n', nodeType: 'hardBreak' })],
     });
-    expect(restoreReviewMarks(editor, [], sanitized)).toEqual({
+    expect(restoreReviewMarks(editor, [], sanitized, 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -295,7 +322,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 4, to: 5, text: ' ' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+    expect(restoreReviewMarks(editor, [], [legacy], 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -315,7 +342,7 @@ describe('restoreReviewMarks', () => {
       segments: [{ kind: 'delete' as const, from: 1, to: 8, text: 'one two' }],
     };
 
-    expect(restoreReviewMarks(editor, [], [legacy])).toEqual({
+    expect(restoreReviewMarks(editor, [], [legacy], 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -347,8 +374,9 @@ describe('restoreReviewMarks', () => {
       ],
     };
 
-    const restored = restoreReviewMarks(editor, [], [record]);
-    expect(restored.quarantinedSuggestions).toEqual([record]);
+    const restored = restoreReviewMarks(editor, [], [record], 'bound');
+    // A quarantined suggestion is now marked detached (non-authoritative for future loads).
+    expect(restored.quarantinedSuggestions).toEqual([{ ...record, detached: true }]);
     expect(restored.mismatches).toEqual([
       expect.objectContaining({ suggestionId: 'mismatched-break', expected: '\n', actual: null }),
     ]);
@@ -371,7 +399,7 @@ describe('restoreReviewMarks', () => {
     editor.destroy();
 
     editor = makeEditor('<p><em>one<br>two</em></p>');
-    expect(restoreReviewMarks(editor, [], records)).toEqual({
+    expect(restoreReviewMarks(editor, [], records, 'bound')).toMatchObject({
       quarantinedSuggestions: [],
       mismatches: [],
     });
@@ -383,7 +411,7 @@ describe('restoreReviewMarks', () => {
 
   it('restores disjoint format spans under one logical id with exact deltas', () => {
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
-    restoreReviewMarks(editor, [], [formatSuggestion({ originCommentId: 'c42' })]);
+    restoreReviewMarks(editor, [], [formatSuggestion({ originCommentId: 'c42' })], 'bound');
 
     expect(getTrackedChanges(editor)).toEqual([
       expect.objectContaining({
@@ -412,7 +440,7 @@ describe('restoreReviewMarks', () => {
     expect(recordSegment.adds).not.toBe(liveSegment.adds);
 
     editor = makeEditor('<p><strong>Hello</strong> <em>world</em></p>');
-    restoreReviewMarks(editor, [], [record]);
+    restoreReviewMarks(editor, [], [record], 'bound');
     expect(getTrackedChanges(editor)[0]).toMatchObject({
       originCommentId: 'c42',
       segments: live.segments,
@@ -423,7 +451,7 @@ describe('restoreReviewMarks', () => {
     editor = makeEditor('<p>Other world</p>');
     const before = editor.getJSON();
 
-    const result = restoreReviewMarks(editor, [], [suggestion()]);
+    const result = restoreReviewMarks(editor, [], [suggestion()], 'bound');
 
     expect(result.quarantinedSuggestions).toEqual([
       expect.objectContaining({
@@ -462,7 +490,7 @@ describe('restoreReviewMarks', () => {
       }),
     ];
 
-    const result = restoreReviewMarks(editor, [], records);
+    const result = restoreReviewMarks(editor, [], records, 'bound');
 
     expect(result.quarantinedSuggestions.map((record) => record.id)).toEqual(['pair-1']);
     expect(getTrackedChanges(editor)).toEqual([]);
@@ -490,7 +518,7 @@ describe('restoreReviewMarks', () => {
       }),
     ];
 
-    expect(restoreReviewMarks(editor, [], records).mismatches).toEqual([]);
+    expect(restoreReviewMarks(editor, [], records, 'bound').mismatches).toEqual([]);
     const [change] = getTrackedChanges(editor);
     expect(change).toMatchObject({
       id: 'pair-1',
@@ -506,7 +534,7 @@ describe('restoreReviewMarks', () => {
   it('quarantines every segment of a format suggestion when one segment mismatches', () => {
     editor = makeEditor('<p><strong>Hello</strong> <em>other</em></p>');
 
-    const result = restoreReviewMarks(editor, [], [formatSuggestion()]);
+    const result = restoreReviewMarks(editor, [], [formatSuggestion()], 'bound');
 
     expect(result.quarantinedSuggestions).toEqual([
       expect.objectContaining({ id: 'fmt1', type: 'change' }),
@@ -554,7 +582,7 @@ describe('restoreReviewMarks', () => {
       // Markdown persists the now-applied bold but not review marks. This is
       // the equivalent clean document shape presented to restoreReviewMarks.
       editor = makeEditor('<p><strong>HeXllo</strong> world</p>');
-      restoreReviewMarks(editor, [], records);
+      restoreReviewMarks(editor, [], records, 'bound');
 
       let insertedMarks: string[] | null = null;
       editor.state.doc.descendants((node) => {
@@ -565,4 +593,264 @@ describe('restoreReviewMarks', () => {
       expect(insertedMarks).not.toContain('tracked_format');
     },
   );
+});
+
+describe('restoreReviewMarks: bound/unbound modes (slice 3b)', () => {
+  let editor: Editor | null = null;
+  afterEach(() => {
+    editor?.destroy();
+    editor = null;
+  });
+
+  const logical = (
+    segments: TrackedChangeSegment[],
+    overrides: object = {},
+  ): LogicalSuggestion => ({
+    id: 'sg1',
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    status: 'pending',
+    type: 'change',
+    segments,
+    ...overrides,
+  });
+
+  it('bound: validates a comment at its stored range and stamps it', () => {
+    editor = makeEditor(); // "Hello world"; "world" at 7..12
+    const result = restoreReviewMarks(editor, [comment()], [], 'bound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(true);
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(result.detachedComments).toEqual([]);
+  });
+
+  it('bound: a comment whose anchor text no longer matches is detached, not stamped', () => {
+    editor = makeEditor();
+    const stale = comment({ anchorText: 'zzz' }); // text at [7,12] is "world"
+    const result = restoreReviewMarks(editor, [stale], [], 'bound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+    expect(result.comments[0].detached).toBe(true);
+    expect(result.detachedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: relocates a comment to a unique occurrence and clears detached', () => {
+    editor = makeEditor();
+    const drifted = comment({ from: 100, to: 105, detached: true }); // stale coords, still "world"
+    const result = restoreReviewMarks(editor, [drifted], [], 'unbound');
+    expect(hasCommentMark(editor, 'cm1')).toBe(true);
+    expect(result.comments[0]).toMatchObject({ from: 7, to: 12 });
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(result.relocatedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: an ambiguous comment is detached, never guessed', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const result = restoreReviewMarks(
+      editor,
+      [comment({ anchorText: 'ab', from: 1, to: 3 })],
+      [],
+      'unbound',
+    );
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+    expect(result.comments[0].detached).toBe(true);
+    expect(result.detachedComments.map((c) => c.id)).toEqual(['cm1']);
+  });
+
+  it('unbound: relocates a drifted suggestion and stamps it at the corrected position', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const drifted = logical([{ kind: 'delete', from: 100, to: 105, text: 'world' }]);
+    const result = restoreReviewMarks(editor, [], [drifted], 'unbound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(result.quarantinedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toHaveLength(1);
+    expect(getTrackedChanges(editor)[0].segments[0]).toMatchObject({ from: 7, to: 12 });
+  });
+
+  it('unbound: an ambiguous suggestion is quarantined, not relocated', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const ambiguous = logical([{ kind: 'delete', from: 1, to: 3, text: 'ab' }]);
+    const result = restoreReviewMarks(editor, [], [ambiguous], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('regression: a detached comment survives the next editor update without a mark or reattachment', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const result = restoreReviewMarks(
+      editor,
+      [comment({ anchorText: 'ab', from: 1, to: 3 })],
+      [],
+      'unbound',
+    );
+    expect(result.comments[0].detached).toBe(true);
+
+    // Simulate a subsequent editor update reconciling comments from live marks.
+    const afterUpdate = reconcileCommentsWithDocument(result.comments, editor.state.doc);
+    expect(afterUpdate).toHaveLength(1);
+    expect(afterUpdate[0]).toMatchObject({ id: 'cm1', detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false); // still no mark, not reattached
+  });
+
+  it('unbound: a RESOLVED comment on repeated text is detached but stays resolved (no mark)', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const resolved = comment({ resolved: true, anchorText: 'ab', from: 1, to: 3 });
+    const result = restoreReviewMarks(editor, [resolved], [], 'unbound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('unbound: a RESOLVED comment with drifted coords is corrected but not stamped', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const resolved = comment({ resolved: true, from: 100, to: 105 }); // stale coords, unique "world"
+    const result = restoreReviewMarks(editor, [resolved], [], 'unbound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, from: 7, to: 12 });
+    expect(result.comments[0].detached).toBeUndefined();
+    expect(hasCommentMark(editor, 'cm1')).toBe(false); // resolved => no live mark
+  });
+
+  it('bound: a persisted detached comment never re-binds via its stale range (stays detached)', () => {
+    // "ab" repeats; the stale range [1,3] contains "ab", but a detached record must go
+    // through unique-only relocation even in bound mode — so it stays detached.
+    editor = makeEditor('<p>ab ab</p>');
+    const persistedDetached = comment({ anchorText: 'ab', from: 1, to: 3, detached: true });
+    const result = restoreReviewMarks(editor, [persistedDetached], [], 'bound');
+    expect(result.comments[0].detached).toBe(true);
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('bound: an in-range code-block comment is detached, never silently no-op "restored"', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>'); // "codeword" at 1..9
+    const inCode = comment({ anchorText: 'codeword', from: 1, to: 9 });
+    const result = restoreReviewMarks(editor, [inCode], [], 'bound');
+    expect(result.comments[0].detached).toBe(true);
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('bound: an in-range code-block suggestion is quarantined, never "restored"', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>');
+    const inCode = logical([{ kind: 'delete', from: 1, to: 9, text: 'codeword' }]);
+    const result = restoreReviewMarks(editor, [], [inCode], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('bound: a resolved comment inside a code block is detached (eligibility ignores resolution)', () => {
+    editor = makeEditor('<pre><code>codeword</code></pre>');
+    const resolvedInCode = comment({ resolved: true, anchorText: 'codeword', from: 1, to: 9 });
+    const result = restoreReviewMarks(editor, [resolvedInCode], [], 'bound');
+    expect(result.comments[0]).toMatchObject({ resolved: true, detached: true });
+    expect(hasCommentMark(editor, 'cm1')).toBe(false);
+  });
+
+  it('unbound: two suggestions relocating onto one span with excluding marks are both quarantined', () => {
+    editor = makeEditor(); // one unique "world" at 7..12
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], { id: 'del' });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor)).toEqual([]); // zero marks stamped
+  });
+
+  it('unbound: a disjoint third suggestion survives while the conflicting pair is quarantined', () => {
+    editor = makeEditor(); // "Hello" at 1..6, "world" at 7..12 (both unique)
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], { id: 'del' });
+    const third = logical([{ kind: 'delete', from: 300, to: 305, text: 'Hello' }], { id: 'third' });
+    const result = restoreReviewMarks(editor, [], [ins, del, third], 'unbound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['third']);
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor).map((c) => c.id)).toEqual(['third']);
+  });
+
+  it('bound: a malformed sidecar with two conflicting suggestions on one span quarantines both', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const ins = logical([{ kind: 'insert', from: 7, to: 12, text: 'world' }], { id: 'ins' });
+    const del = logical([{ kind: 'delete', from: 7, to: 12, text: 'world' }], { id: 'del' });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id).sort()).toEqual(['del', 'ins']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('bound: one suggestion with INTERNALLY conflicting segments is quarantined', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const malformed = logical(
+      [
+        { kind: 'insert', from: 7, to: 12, text: 'world' },
+        { kind: 'delete', from: 7, to: 12, text: 'world' },
+      ],
+      { id: 'malf' },
+    );
+    const result = restoreReviewMarks(editor, [], [malformed], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.id)).toEqual(['malf']);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('a quarantined suggestion is marked detached (non-authoritative for future loads)', () => {
+    editor = makeEditor(); // "world" at 7..12
+    const stale = logical([{ kind: 'delete', from: 7, to: 12, text: 'zzz' }], { id: 'sg1' }); // text mismatch
+    const result = restoreReviewMarks(editor, [], [stale], 'bound');
+    expect(result.quarantinedSuggestions[0]).toMatchObject({ id: 'sg1', detached: true });
+  });
+
+  it('bound: a DETACHED suggestion relocates by unique text, never its stale stored range', () => {
+    editor = makeEditor(); // "world" at 7..12
+    // Detached record with a stale range: even in bound mode it must relocate by unique text.
+    const detached = logical([{ kind: 'delete', from: 100, to: 105, text: 'world' }], {
+      id: 'sg1',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [detached], 'bound');
+    expect(result.relocatedSuggestions.map((s) => s.id)).toEqual(['sg1']);
+    expect(result.relocatedSuggestions[0].detached).toBeUndefined(); // cleared on re-anchor
+    expect(getTrackedChanges(editor)[0].segments[0]).toMatchObject({ from: 7, to: 12 });
+  });
+
+  it('bound: a DETACHED suggestion on ambiguous text stays detached (quarantined)', () => {
+    editor = makeEditor('<p>ab ab</p>');
+    const detached = logical([{ kind: 'delete', from: 1, to: 3, text: 'ab' }], {
+      id: 'sg1',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [detached], 'bound');
+    expect(result.quarantinedSuggestions[0]).toMatchObject({ id: 'sg1', detached: true });
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('bound: duplicate-id disjoint records are all quarantined/detached, zero marks', () => {
+    editor = makeEditor('<p>alpha beta</p>'); // both words unique, disjoint ranges
+    const a = logical([{ kind: 'delete', from: 1, to: 6, text: 'alpha' }], { id: 'dup' });
+    const b = logical([{ kind: 'delete', from: 7, to: 11, text: 'beta' }], { id: 'dup' });
+    const result = restoreReviewMarks(editor, [], [a, b], 'bound');
+    expect(result.quarantinedSuggestions.map((s) => s.detached)).toEqual([true, true]);
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toEqual([]); // never stamped
+  });
+
+  it('unbound: duplicate-id disjoint records are all quarantined/detached, zero marks', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    const a = logical([{ kind: 'delete', from: 100, to: 105, text: 'alpha' }], { id: 'dup' });
+    const b = logical([{ kind: 'delete', from: 200, to: 204, text: 'beta' }], { id: 'dup' });
+    const result = restoreReviewMarks(editor, [], [a, b], 'unbound');
+    expect(result.quarantinedSuggestions.map((s) => s.detached)).toEqual([true, true]);
+    expect(result.relocatedSuggestions).toEqual([]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
+
+  it('a detached record that re-anchors then loses a conflict is re-detached, not relocated', () => {
+    editor = makeEditor(); // one unique "world" at 7..12
+    // Both relocate onto the same span; their excluding marks conflict on stamping.
+    const ins = logical([{ kind: 'insert', from: 100, to: 105, text: 'world' }], {
+      id: 'ins',
+      detached: true,
+    });
+    const del = logical([{ kind: 'delete', from: 200, to: 205, text: 'world' }], {
+      id: 'del',
+      detached: true,
+    });
+    const result = restoreReviewMarks(editor, [], [ins, del], 'unbound');
+    expect(result.relocatedSuggestions).toEqual([]); // re-anchored but then conflicted
+    expect(result.quarantinedSuggestions.map((s) => s.detached).sort()).toEqual([true, true]);
+    expect(getTrackedChanges(editor)).toEqual([]);
+  });
 });

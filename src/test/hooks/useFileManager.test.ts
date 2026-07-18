@@ -125,6 +125,53 @@ describe('useFileManager', () => {
       expect(result.current.isDirty).toBe(false);
     });
 
+    const sidecarWith = (provenance: object) =>
+      JSON.stringify({ version: 2, comments: [SAMPLE_COMMENT], suggestions: [], ...provenance });
+
+    const openWithSidecar = async (md: string, sidecarJson: string) => {
+      installSaveRouter({ '/docs/test.md': md, '/docs/test.comments.json': sidecarJson });
+      const { result } = renderHook(() => useFileManager());
+      let res: Awaited<ReturnType<typeof result.current.openFilePath>>;
+      await act(async () => {
+        res = await result.current.openFilePath('/docs/test.md');
+      });
+      return res!;
+    };
+
+    it('reviewMode is bound (no reason) when the sidecar source hash + version match the .md', async () => {
+      // readHash('# Hello') is the .md's hash; a matching sidecar is authoritative.
+      const res = await openWithSidecar(
+        '# Hello',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }),
+      );
+      expect(res.reviewMode).toBe('bound');
+      expect(res.reviewUnboundReason).toBeUndefined();
+    });
+
+    it('unbound + legacy for a sidecar with no provenance', async () => {
+      const res = await openWithSidecar('# Hello', sidecarWith({}));
+      expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('legacy');
+    });
+
+    it('unbound + source-mismatch when the .md was edited externally (hash mismatch)', async () => {
+      const res = await openWithSidecar(
+        '# Hello edited',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }), // stale hash
+      );
+      expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('source-mismatch');
+    });
+
+    it('unbound + version-mismatch when the anchor version does not match', async () => {
+      const res = await openWithSidecar(
+        '# Hello',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 999 }),
+      );
+      expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('version-mismatch');
+    });
+
     it('calls sidecarPath correctly — sidecar read uses .comments.json path', async () => {
       mockInvoke.mockResolvedValueOnce(fpPresent('content')).mockResolvedValueOnce(fpPresent('{}'));
 
@@ -329,6 +376,40 @@ describe('useFileManager', () => {
       const written = JSON.parse((sidecarCall![1] as { content: string }).content);
       expect(written.version).toBe(2);
       expect(written.comments).toHaveLength(1);
+    });
+
+    const writtenSidecar = () => {
+      const call = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === 'write_file_atomic' &&
+          typeof c[1] === 'object' &&
+          (c[1] as { path: string }).path.endsWith('.comments.json'),
+      );
+      return JSON.parse((call![1] as { content: string }).content);
+    };
+
+    it('stamps reviewSourceHash (the .md hash) + version when the sidecar holds review records', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        await result.current.saveFile('content', [SAMPLE_COMMENT], [], null, null, '/docs/test.md');
+      });
+      const written = writtenSidecar();
+      expect(written.reviewSourceHash).toBe(HASH_DOC);
+      expect(written.reviewAnchorVersion).toBe(1);
+    });
+
+    it('does NOT stamp anchor provenance for a review-free sidecar (byte-compatible)', async () => {
+      installSaveRouter();
+      const { result } = renderHook(() => useFileManager());
+      await act(async () => {
+        // Only a context folder — no comments/suggestions, so no anchor provenance.
+        await result.current.saveFile('content', [], [], null, '/ref/folder', '/docs/test.md');
+      });
+      const written = writtenSidecar();
+      expect(written.contextFolder).toBe('/ref/folder');
+      expect('reviewSourceHash' in written).toBe(false);
+      expect('reviewAnchorVersion' in written).toBe(false);
     });
 
     it('strips transient AI replies from the written sidecar', async () => {
