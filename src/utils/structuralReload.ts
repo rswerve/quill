@@ -3,6 +3,7 @@ import type { StructuralReviewEnvelope, StructuralSuggestionRecord } from '../ty
 import { reconstructFromEnvelope } from './structuralEnvelope';
 import { reconstructBlockUnions, type ReconstructionResult } from './structuralReconstruction';
 import { resetStructuralRecords, toCanonicalRecord } from '../extensions/StructuralRecordStore';
+import { STRUCTURAL_BYPASS_META, type StructuralBypass } from '../extensions/trackChangesMeta';
 import { markdownSerializer } from './structuralFingerprint';
 
 export interface StructuralReloadResult {
@@ -34,6 +35,9 @@ function applyReconstruction(
   tr.setMeta('preventUpdate', true);
   tr.setMeta('skipTracking', true);
   tr.setMeta('addToHistory', false);
+  // Reconstruction rebuilds union nodes, which would trip the structural freeze
+  // guard if a prior document's unions are being replaced; authorize it explicitly.
+  tr.setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' } satisfies StructuralBypass);
   editor.view.dispatch(tr);
   return { restored: result.restored, quarantined: result.quarantined };
 }

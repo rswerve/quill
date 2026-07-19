@@ -16,11 +16,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Editor } from '@tiptap/core';
 import DocumentTab, { type DocumentTabHandle } from '../../components/DocumentTab';
 import { findAnnotationRange } from '../../extensions/AnnotationFocus';
-import {
-  addStructuralRecord,
-  retainedRecords,
-  type CanonicalRecord,
-} from '../../extensions/StructuralRecordStore';
+import { retainedRecords, type CanonicalRecord } from '../../extensions/StructuralRecordStore';
+import { compileStructuralMint } from '../../utils/structuralMint';
 import { buildCanonicalStructuralReview } from '../../utils/structuralCanonical';
 import type { MarkdownSerialize } from '../../utils/structuralFingerprint';
 import { parseMarkdownToDoc } from '../../utils/markdownDoc';
@@ -125,8 +122,10 @@ const record: CanonicalRecord = {
   createdAt: '2026-07-18T00:00:00.000Z',
 };
 
-/** Mint the V1 heading→paragraph union directly in the real DocumentTab editor. */
-function mintUnion(editor: Editor): void {
+/** Establish the working document: a double-spaced heading (which exercises
+ *  whitespace normalization on save) and a Body paragraph that carries a comment
+ *  disjoint from the union the heading is about to become. */
+function setWorkingDoc(editor: Editor): void {
   editor.commands.setContent(
     {
       type: 'doc',
@@ -141,28 +140,33 @@ function mintUnion(editor: Editor): void {
     },
     { emitUpdate: true },
   );
-  const source = editor.state.doc.child(0);
-  const tr = editor.state.tr;
-  tr.setNodeMarkup(0, undefined, {
-    ...source.attrs,
-    blockTrack: { changeId: record.changeId, op: 'delete' },
-  });
-  tr.insert(
-    source.nodeSize,
-    editor.schema.nodes.paragraph.create(
-      { blockTrack: { changeId: record.changeId, op: 'insert' } },
-      source.content,
-    ),
-  );
-  addStructuralRecord(tr, record);
-  editor.view.dispatch(tr);
 }
 
-async function addNoteOnProposedBranch(mounted: MountedTab): Promise<void> {
+/** Mint the V1 heading→paragraph union through the REAL compiler, with the
+ *  disjoint Body comment as its origin (Option-B). The compiler stamps the mint
+ *  bypass, so it passes the freeze guard the union it creates. */
+function mintHeadingUnion(editor: Editor, originCommentId: string): void {
+  const result = compileStructuralMint(editor.state, {
+    op: record.op,
+    targetPos: 1,
+    changeId: record.changeId,
+    author: record.author,
+    createdAt: record.createdAt,
+    origin: { kind: 'comment', id: originCommentId },
+  });
+  if (!result.ok) throw new Error(`mint refused: ${result.reason}`);
+  editor.view.dispatch(result.tr);
+}
+
+/** Add a comment over [from,to) through the real DocumentTab note flow; returns
+ *  its generated id so the caller can pass it as the mint's origin. */
+async function addCommentOn(
+  mounted: MountedTab,
+  from: number,
+  to: number,
+  text: string,
+): Promise<string> {
   const editor = mounted.getHandle().getEditor()!;
-  const proposed = editor.state.doc.child(1);
-  const from = editor.state.doc.child(0).nodeSize + 1;
-  const to = from + proposed.textContent.length;
   act(() => {
     editor.commands.setTextSelection({ from, to });
   });
@@ -181,17 +185,19 @@ async function addNoteOnProposedBranch(mounted: MountedTab): Promise<void> {
     expect(input).toBeTruthy();
     return input!;
   });
-  fireEvent.change(textarea, { target: { value: 'Review the proposed paragraph.' } });
+  fireEvent.change(textarea, { target: { value: text } });
   const addNote = [...mounted.container.querySelectorAll<HTMLButtonElement>('button')].find(
     (button) => button.textContent === 'Add note',
   );
   expect(addNote).toBeTruthy();
   fireEvent.click(addNote!);
 
-  await waitFor(() => {
-    const snapshot = mounted.getHandle().getWorkspaceSnapshot();
-    expect(snapshot?.comments).toHaveLength(1);
+  const snapshot = await waitFor(() => {
+    const snap = mounted.getHandle().getWorkspaceSnapshot();
+    expect(snap?.comments).toHaveLength(1);
+    return snap!;
   });
+  return snapshot.comments[0].id;
 }
 
 function serializer(editor: Editor): MarkdownSerialize {
@@ -258,17 +264,17 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
       [DOC_PATH]: { content: '# Start\n\nBody', hash: DOC_HASH },
     });
     const live = first.getHandle().getEditor()!;
-    act(() => mintUnion(live));
-    await addNoteOnProposedBranch(first);
+    act(() => setWorkingDoc(live));
+    // "Body" spans [14,18): heading "Title  Here" has nodeSize 13, so the Body
+    // paragraph opens at 13 and its text starts at 14. Comment it BEFORE minting.
+    const commentId = await addCommentOn(first, 14, 18, 'Look at the body.');
+    // Mint the heading→paragraph union with the disjoint Body comment as origin.
+    act(() => mintHeadingUnion(live, commentId));
 
     const liveSnapshot = first.getHandle().getWorkspaceSnapshot();
     if (!liveSnapshot) throw new Error('expected a live workspace snapshot');
-    expect(liveSnapshot.comments[0].anchorText).toBe('Title  Here');
-    const liveCommentRange = findAnnotationRange(
-      live.state.doc,
-      'comment',
-      liveSnapshot.comments[0].id,
-    );
+    expect(liveSnapshot.comments[0].anchorText).toBe('Body');
+    const liveCommentRange = findAnnotationRange(live.state.doc, 'comment', commentId);
     expect(liveCommentRange).not.toBeNull();
 
     first.mutations.length = 0;
@@ -285,8 +291,8 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
       (mutation) => mutation.command === 'write_file_atomic' && mutation.path === SIDECAR_PATH,
     );
     expect(first.mutations).toHaveLength(2);
-    expect(docWrite?.content).toBe('# Title Here\n\nBody');
-    expect(docWrite?.content).not.toContain('# Title Here\n\nTitle');
+    expect(docWrite?.content).toBe('# Title Here\n\nBody'); // source-only + normalized
+    expect(docWrite?.content).not.toContain('Title  Here'); // proposed branch never on disk
     expect(sidecarWrite?.content).toBeTruthy();
 
     const sidecar = JSON.parse(sidecarWrite!.content!) as SidecarFile;
@@ -297,10 +303,11 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
     expect(persistedStructural.quarantined).toEqual([]);
     const structural = persistedStructural.valid[0];
     expect(structural.sourceFingerprint).toBe('# Title Here');
+    expect(structural.originCommentId).toBe(commentId); // the record adopted the origin
     expect(structural.anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
     expect(structural.proposed[0].content?.[0].text).toBe('Title  Here');
     expect(sidecar.comments).toHaveLength(1);
-    expect(sidecar.comments[0].anchorText).toBe('Title  Here');
+    expect(sidecar.comments[0].anchorText).toBe('Body');
 
     // Derive the exact expected review document from the two persisted axes: canonical
     // structural source + sidecar proposal, then the independently persisted comment mark.
@@ -313,10 +320,11 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
     expect(expectedUnion.ok).toBe(true);
     if (!expectedUnion.ok) return;
     const persistedComment = sidecar.comments[0];
-    expect(expectedUnion.doc.textBetween(persistedComment.from, persistedComment.to)).toBe(
-      'Title  Here',
-    );
-    expect(persistedComment.from).toBeGreaterThan(expectedUnion.doc.child(0).nodeSize);
+    expect(expectedUnion.doc.textBetween(persistedComment.from, persistedComment.to)).toBe('Body');
+    // The Body comment anchors AFTER both reconstructed branches — proof the
+    // reconstruct-first ordering shifted its review position past the union.
+    const unionExtent = expectedUnion.doc.child(0).nodeSize + expectedUnion.doc.child(1).nodeSize;
+    expect(persistedComment.from).toBeGreaterThanOrEqual(unionExtent);
     const expectedReviewJSON = withCommentMark(expectedUnion.doc, persistedComment).toJSON();
 
     first.unmount();
@@ -326,11 +334,12 @@ describe('DocumentTab structural + inline canonical save boundary', () => {
     });
     const restored = reopened.getHandle().getEditor()!;
     expect(restored.state.doc.toJSON()).toEqual(expectedReviewJSON);
-    expect(retainedRecords(restored.state).get(record.changeId)).toEqual(record);
+    expect(retainedRecords(restored.state).get(record.changeId)).toEqual({
+      ...record,
+      originCommentId: commentId,
+    });
     const restoredRange = findAnnotationRange(restored.state.doc, 'comment', persistedComment.id);
     expect(restoredRange).toEqual({ from: persistedComment.from, to: persistedComment.to });
-    expect(restored.state.doc.textBetween(restoredRange!.from, restoredRange!.to)).toBe(
-      'Title  Here',
-    );
+    expect(restored.state.doc.textBetween(restoredRange!.from, restoredRange!.to)).toBe('Body');
   });
 });

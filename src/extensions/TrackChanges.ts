@@ -6,7 +6,9 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { TrackedChangeInfo, TrackedChangeSegment, TrackedFormatSegment } from '../types';
 import { ANNOTATION_FOCUS_KEY } from './AnnotationFocus';
 import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
-import { SKIP_TRACKING_META } from './trackChangesMeta';
+import type { TrackingBlockedInfo } from './trackChangesPolicy';
+import { SKIP_TRACKING_META, TRACKING_BLOCKED_META } from './trackChangesMeta';
+import { firstFrozenViolation, STRUCTURAL_FREEZE_NOTICE } from './structuralFreeze';
 import { resolveTrackedChanges } from './trackChangesResolution';
 import type { ChangeResolution } from './trackChangesResolution';
 import { reconcileEditingFormatDeltas, TrackingTransactionAdapter } from './trackChangesTransform';
@@ -294,6 +296,21 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
           const origDispatch = editorView.dispatch.bind(editorView);
 
           editorView.dispatch = function (tr) {
+            // Structural freeze: a pending union's region is read-only until it is
+            // accepted or rejected. Veto atomically in both modes and surface a
+            // notice (an unrelated edit around the union still applies normally).
+            if (firstFrozenViolation(tr) !== null) {
+              origDispatch(
+                editorView.state.tr
+                  .setMeta(TRACKING_BLOCKED_META, {
+                    operation: 'structuralFreeze',
+                    notice: STRUCTURAL_FREEZE_NOTICE,
+                  } satisfies TrackingBlockedInfo)
+                  .setMeta('addToHistory', false),
+              );
+              return;
+            }
+
             const { enabled, authorID, originCommentId, originChatMessageId } = getStorage();
 
             if (

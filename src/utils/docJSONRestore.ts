@@ -7,7 +7,11 @@ import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { FIND_KEY } from '../extensions/Find';
 import { PENDING_COMMENT_KEY } from '../extensions/PendingComment';
 import { ANNOTATION_FOCUS_KEY } from '../extensions/AnnotationFocus';
-import { SKIP_TRACKING_META } from '../extensions/trackChangesMeta';
+import {
+  SKIP_TRACKING_META,
+  STRUCTURAL_BYPASS_META,
+  type StructuralBypass,
+} from '../extensions/trackChangesMeta';
 import type { Comment, JSONContent, Suggestion } from '../types';
 
 /** Outcome of a lossless (PM-JSON) recovery restore. */
@@ -49,6 +53,9 @@ export function restoreDocJSONInto(
   tr.setSelection(TextSelection.atStart(tr.doc));
   tr.setStoredMarks(null);
   tr.setMeta(SKIP_TRACKING_META, true);
+  // Authorize the whole-document restore past the structural freeze guard (it may
+  // replace a prior document's live unions).
+  tr.setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' } satisfies StructuralBypass);
   tr.setMeta('preventUpdate', true);
   tr.setMeta('addToHistory', false);
   tr.setMeta(PENDING_COMMENT_KEY, null);
