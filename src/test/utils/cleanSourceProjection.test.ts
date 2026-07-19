@@ -4,6 +4,7 @@ import { Markdown } from 'tiptap-markdown';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
+import { CommentMark } from '../../extensions/Comment';
 import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/TrackChanges';
 import { projectDocument } from '../../utils/blockUnionProjection';
 import { cleanSourceHTML, cleanSourceMarkdown } from '../../utils/cleanSourceProjection';
@@ -28,6 +29,7 @@ beforeEach(() => {
       StarterKit.configure({ trailingNode: false }),
       Markdown,
       BlockTrack,
+      CommentMark,
       TrackedInsert,
       TrackedDelete,
       TrackedFormat,
@@ -176,6 +178,27 @@ function hardBreakDoc(): PMNode {
   });
 }
 
+/** Text carrying a comment mark — a review annotation, not document content. */
+function commentDoc(): PMNode {
+  return editor.schema.nodeFromJSON({
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'before ' },
+          {
+            type: 'text',
+            text: 'annotated',
+            marks: [{ type: 'comment', attrs: { commentId: 'c1', resolved: false, kind: 'note' } }],
+          },
+          { type: 'text', text: ' after' },
+        ],
+      },
+    ],
+  });
+}
+
 describe('cleanSourceHTML — the pending-ignored original for print', () => {
   it('serializes the source view to HTML with NO redline markup', () => {
     const html = cleanSourceHTML(mixedDoc());
@@ -204,5 +227,13 @@ describe('cleanSourceHTML — the pending-ignored original for print', () => {
     expect(html).toContain('line one');
     expect(html).toContain('line two');
     expect(html).toMatch(/<br\b/i);
+  });
+
+  it('strips comment marks — no highlight, id, or class reaches the HTML', () => {
+    const html = cleanSourceHTML(commentDoc());
+    expect(html).toContain('annotated'); // the annotated text stays as content
+    // ...but the comment annotation itself leaves no trace in the printed doc.
+    expect(html).not.toMatch(/<mark\b/i);
+    expect(html).not.toMatch(/data-comment|comment-mark|comment-active|comment-resolved/);
   });
 });

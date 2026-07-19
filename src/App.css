@@ -1095,10 +1095,10 @@ del.track-delete {
   }
 
   /* Hide the live redline editor and show the detached clean-source render in
-     its place. The render carries no tracking markup at all — it's already the
-     pending-ignored document, so there is nothing to mask. Only comment-mark
-     highlights survive the projection (comments are annotations, not content),
-     so drop their highlight while keeping the underlying text. */
+     its place. The render is projectCleanSourceDocument HTML — pending changes
+     rejected AND the whole review-mark axis stripped (tracked marks + comment
+     anchors) — so there is no redline and no comment highlight to mask; it's
+     already the clean document. */
   .editor-page-zoom-wrapper {
     display: none !important;
   }
@@ -1108,9 +1108,6 @@ del.track-delete {
     max-width: none !important;
     padding: 0 !important;
     background: #fff !important;
-  }
-  .print-doc mark.comment-mark {
-    background: none !important;
   }
 
   /* Avoid orphaned headings and split code/quote blocks where possible. */

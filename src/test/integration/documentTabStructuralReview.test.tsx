@@ -798,4 +798,33 @@ describe('DocumentTab structural review wiring', () => {
     });
     expect(printDoc.innerHTML).toBe('');
   });
+
+  it('populates the print container via the toolbar exportPdf() path before window.print', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    const printDoc = mounted.container.querySelector('.print-doc') as HTMLElement;
+    // Capture the container's contents at the instant window.print() is invoked:
+    // handleExportPdf must refresh the clean-source render BEFORE printing.
+    let htmlAtPrint = '';
+    const originalPrint = window.print;
+    window.print = () => {
+      htmlAtPrint = printDoc.innerHTML;
+    };
+    try {
+      act(() => {
+        mounted.getHandle().exportPdf();
+      });
+    } finally {
+      window.print = originalPrint;
+    }
+
+    expect(htmlAtPrint).toContain('Title Here'); // populated before printing
+    expect(htmlAtPrint).not.toMatch(
+      /track-insert|track-delete|track-format|data-tracked|data-block-track/,
+    );
+  });
 });
