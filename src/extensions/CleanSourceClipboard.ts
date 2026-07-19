@@ -1,27 +1,29 @@
 import { Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
-import { cleanSourceSlice } from '../utils/cleanSourceProjection';
+import { cleanSourceClipboard } from '../utils/cleanSourceProjection';
 
 /**
  * Copy → clean source. Intercepts the editor's `copy` DOM event and places the
  * CLEAN-SOURCE projection of the selection on the clipboard (pending suggestions
- * ignored), never the live redline: cleanSourceSlice projects the whole doc, maps
- * the live selection into source, and returns that slice — so a selection over a
+ * ignored), never the live redline: cleanSourceClipboard projects the whole doc,
+ * maps the live selection into source, and returns that slice — so a selection over a
  * hidden insertion copies only source-visible text, a retained deletion copies
  * its original text without tracking, a pending format copies the original
  * formatting, a structural union copies its source branch, and comment / redline
  * markup never reaches the clipboard.
  *
- * SERIALIZATION: we take the HTML from `view.serializeForClipboard` (it renders
- * our clean slice faithfully via DOMSerializer AND stamps ProseMirror's slice
- * metadata / wrappers for paste-back), but derive PLAIN TEXT from the slice
- * directly. serializeForClipboard's text path runs the editor's
- * clipboardTextSerializer (tiptap-markdown's), which ignores the passed slice and
- * re-serializes the LIVE selection — reintroducing exactly the hidden content we
- * projected away. `slice.content.textBetween(…, "\n\n")` is the same block
- * separator serializeForClipboard uses, minus that pollution.
+ * SERIALIZATION: HTML comes from `view.serializeForClipboard` (it renders our
+ * clean slice faithfully via DOMSerializer AND stamps ProseMirror's slice
+ * metadata / wrappers for paste-back). PLAIN TEXT comes from cleanSourceClipboard,
+ * which serializes the CLEAN projected range with Tiptap's text serializers. We do
+ * NOT use serializeForClipboard's text: its text path runs Tiptap core's
+ * ClipboardTextSerializer, which ignores the passed slice and re-serializes the
+ * LIVE selection via getTextBetween — reintroducing exactly the hidden content we
+ * projected away. cleanSourceClipboard takes the same getTextBetween path (so it
+ * keeps HardBreak's renderText newline and every node text serializer), but over
+ * clean coordinates instead of live.
  *
- * FAIL CLOSED: once cleanSourceSlice is non-null we OWN the copy and never return
+ * FAIL CLOSED: once cleanSourceClipboard returns non-null we OWN the copy and never return
  * false, because ProseMirror's native fallback would serialize the LIVE review
  * selection (redline + both union branches). If clipboard access is unavailable
  * we still preventDefault and copy nothing rather than leak. Only a genuinely
@@ -42,9 +44,9 @@ export const CleanSourceClipboard = Extension.create({
           handleDOMEvents: {
             copy: (view, event) => {
               const { from, to } = view.state.selection;
-              const slice = cleanSourceSlice(view.state.doc, from, to);
+              const payload = cleanSourceClipboard(view.state.doc, from, to);
               // Empty selection: nothing to copy — the native default is safe.
-              if (slice === null) return false;
+              if (payload === null) return false;
               // We own the copy from here — suppress the native handler entirely.
               event.preventDefault();
               const data = event.clipboardData;
@@ -53,13 +55,10 @@ export const CleanSourceClipboard = Extension.create({
                 // types. A size-0 slice (selection wholly inside hidden content)
                 // leaves the clipboard cleared — copies nothing.
                 data.clearData();
-                if (slice.size > 0) {
-                  const { dom } = view.serializeForClipboard(slice);
+                if (payload.slice.size > 0) {
+                  const { dom } = view.serializeForClipboard(payload.slice);
                   data.setData('text/html', dom.innerHTML);
-                  data.setData(
-                    'text/plain',
-                    slice.content.textBetween(0, slice.content.size, '\n\n'),
-                  );
+                  data.setData('text/plain', payload.text);
                 }
               }
               return true;

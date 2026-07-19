@@ -168,6 +168,34 @@ describe('CleanSourceClipboard — copy → clean source wiring', () => {
     expect(data.getData('text/html')).not.toMatch(/track-insert|data-tracked|<ins\b/);
   });
 
+  it('renders a hard break as a newline in the copied plain text (a<br>link -> "a\\nlink")', () => {
+    // The bug behind bypassing serializeForClipboard's text: plain textBetween
+    // drops HardBreak's renderText newline. getTextBetween over the clean range
+    // keeps it, so the copied text/plain matches the <br> in text/html.
+    const ed = makeEditor();
+    setDoc(ed, [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'a' },
+          { type: 'hardBreak' },
+          {
+            type: 'text',
+            text: 'link',
+            marks: [{ type: 'link', attrs: { href: 'https://example.com' } }],
+          },
+        ],
+      },
+    ]);
+    ed.commands.setTextSelection({ from: 1, to: ed.state.doc.content.size - 1 });
+
+    const data = new TestDataTransfer();
+    dispatchCopy(ed, data);
+
+    expect(data.getData('text/plain')).toBe('a\nlink');
+    expect(data.getData('text/html')).toMatch(/<br\b/i);
+  });
+
   it('clears stale clipboard MIME data before writing the clean copy', () => {
     const ed = makeEditor();
     setDoc(ed, [{ type: 'paragraph', content: [{ type: 'text', text: 'hello world' }] }]);

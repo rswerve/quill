@@ -1,4 +1,5 @@
 import { DOMSerializer, Slice, type Node as PMNode } from '@tiptap/pm/model';
+import { getTextBetween, getTextSerializersFromSchema } from '@tiptap/core';
 import { projectDocument, type BlockUnionProjection } from './blockUnionProjection';
 import { stripReviewMarks } from './canonicalDocument';
 
@@ -50,24 +51,45 @@ export function cleanSourceHTML(doc: PMNode): string {
 }
 
 /**
- * The clean-source slice for a live selection [from, to), for copy / clipboard.
- * Copy places the pending-ignored version of the selection on the clipboard, not
+ * The clean-source clipboard payload for a live selection [from, to): the HTML
+ * slice AND the plain text, both from the pending-ignored projection rather than
  * the live redline. Returns:
  *   - null when the selection is empty — nothing to copy; let the default run;
- *   - Slice.empty when a NONEMPTY selection is entirely hidden pending content
- *     (it maps to a collapsed source range) — copy nothing;
- *   - otherwise the {@link projectCleanSourceDocument} slice over the mapped
+ *   - `{ slice: Slice.empty, text: '' }` when a NONEMPTY selection is entirely
+ *     hidden pending content (maps to a collapsed source range) — copy nothing;
+ *   - otherwise the {@link projectCleanSourceDocument} slice + text over the mapped
  *     source range, so a selection spanning hidden content yields only its
  *     source-visible part, a retained deletion yields its original text without
  *     tracking, a pending format yields the original formatting, a structural
  *     union yields its source branch, and comment anchors never come along.
  * The from+1 / to-1 associations pin the range to visible content at the edges.
+ *
+ * Plain text uses Tiptap's `getTextBetween` + `getTextSerializersFromSchema` over
+ * the CLEAN projected range — NOT `slice.content.textBetween`, which drops node
+ * `renderText` serializers (HardBreak's newline, future inline atoms). This is
+ * exactly the path Tiptap core's ClipboardTextSerializer takes, except its
+ * coordinate source is the LIVE selection (the leak); ours is the clean
+ * projection, so rendered-text semantics survive without reintroducing hidden
+ * content.
  */
-export function cleanSourceSlice(doc: PMNode, from: number, to: number): Slice | null {
+export function cleanSourceClipboard(
+  doc: PMNode,
+  from: number,
+  to: number,
+): { slice: Slice; text: string } | null {
   if (from >= to) return null;
   const projection = projectCleanSourceDocument(doc);
   const sourceFrom = projection.mapping.map(from, 1);
   const sourceTo = projection.mapping.map(to, -1);
-  if (sourceFrom >= sourceTo) return Slice.empty;
-  return projection.doc.slice(sourceFrom, sourceTo);
+  if (sourceFrom >= sourceTo) return { slice: Slice.empty, text: '' };
+  const slice = projection.doc.slice(sourceFrom, sourceTo);
+  const text = getTextBetween(
+    projection.doc,
+    { from: sourceFrom, to: sourceTo },
+    {
+      blockSeparator: '\n\n',
+      textSerializers: getTextSerializersFromSchema(projection.doc.type.schema),
+    },
+  );
+  return { slice, text };
 }
