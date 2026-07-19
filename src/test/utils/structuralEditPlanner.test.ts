@@ -171,7 +171,7 @@ describe('planStructuralEdits', () => {
     expect(results[0]).toMatchObject({ status: 'ambiguous', reason: 'ambiguous-target' });
   });
 
-  it('plans a find crossing a hard break WITHIN one block (one target)', () => {
+  it('plans a find CROSSING a hard break within one block (one target)', () => {
     const doc = docOf([
       {
         type: 'paragraph',
@@ -182,11 +182,14 @@ describe('planStructuralEdits', () => {
         ],
       },
     ]);
+    // The find spans the hard break but stays inside the one paragraph — the
+    // complete match envelope is contained in that single top-level block.
     const { placed, results } = planStructuralEdits(doc, [
-      edit('line one', { to: 'heading', level: 3 }),
+      edit('line one\nline two', { to: 'heading', level: 3 }),
     ]);
     expect(results[0].status).toBe('planned');
     expect(placed).toHaveLength(1);
+    expect(placed[0].op).toEqual({ kind: 'paragraphToHeading', level: 3 });
   });
 
   it('refuses a find that spans two blocks (cross-block-target)', () => {
