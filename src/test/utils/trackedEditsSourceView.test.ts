@@ -8,11 +8,20 @@ import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/Tr
 import { planEdits } from '../../utils/trackedEdits';
 
 /**
- * planEdits source-view safety gate for STRUCTURAL unions (Codex's oracle cases
- * that the inline reconciliation doesn't cover). Claude sees the clean-source
- * document; an edit whose live envelope intersects a union footprint — including
- * the RETAINED source branch, which is frozen — must refuse `source-view-conflict`
- * rather than land on it, while clean content adjacent to the union applies.
+ * planEdits source-view safety gate — the oracle suite for the clean-source
+ * edit-matching gate (Codex-designed, mutation-verified). Claude sees the
+ * clean-source document; an edit whose live envelope intersects hidden or frozen
+ * content — a union footprint (incl. the RETAINED source branch), a pending
+ * inline mark, or a source point that collapses/inverts across dropped content —
+ * must refuse `source-view-conflict` rather than land on it, while clean content
+ * adjacent to those regions applies at its exact mapped position.
+ *
+ * The pending marks here are canonical hand-built dataTracked JSON (these are
+ * pure planner tests over projectDocument); engine-minted gesture coverage lives
+ * in the adversarial pipeline suite. Load-bearing gates (proven by mutation):
+ * structuralFootprints, the pending-mark scan, and the `liveFrom > liveTo`
+ * inversion guard. removedBranchRanges and the round-trip check are
+ * defense-in-depth — redundant with those under the current projection.
  */
 
 let editor: Editor;
@@ -82,6 +91,8 @@ describe('planEdits source-view gate — structural union cases', () => {
     );
     expect(results[0].status).toBe('applied');
     expect(placed).toHaveLength(1);
+    // The mapped live range is exactly the clean "before" text, not shifted.
+    expect(doc.textBetween(placed[0].from, placed[0].to)).toBe('before');
   });
 
   it('applies an edit on clean content AFTER a union (mixed doc, clean target)', () => {
@@ -95,6 +106,8 @@ describe('planEdits source-view gate — structural union cases', () => {
     );
     expect(results[0].status).toBe('applied');
     expect(placed).toHaveLength(1);
+    // The mapped live range is exactly the clean "after" text, past the union.
+    expect(doc.textBetween(placed[0].from, placed[0].to)).toBe('after');
   });
 });
 
@@ -235,10 +248,14 @@ function combinedDoc(): PMNode {
 }
 
 describe('planEdits source-view gate — inline pending marks', () => {
-  it('refuses a source-visible quote that SPANS a hidden insertion (removed-branch gate)', () => {
+  it('refuses a source-visible quote that SPANS a hidden insertion (hidden-content safety)', () => {
     const doc = insertionDoc();
     // "alphabeta" IS visible in source, but its live envelope crosses the hidden
-    // "MID" insertion — the removed-branch overlap must refuse, not land on it.
+    // "MID" insertion — a hidden-content gate must refuse, not land on it. This
+    // pins SYSTEM behavior: the actual catcher is the pending-mark scan (the
+    // envelope also intersects "MID"'s tracked_insert). removedBranchRanges is
+    // defense-in-depth — redundant with footprints ∪ pending-mark under the
+    // current projection — so removing it alone does NOT make this go red.
     const { placed, results } = planEdits(
       doc,
       0,
@@ -297,6 +314,7 @@ describe('planEdits source-view gate — inline pending marks', () => {
 
   it('applies a clean-target edit amid a union AND an inline insertion (composition maps)', () => {
     const doc = combinedDoc();
+    const clean = liveRangeOf(doc, 'clean');
     const { placed, results } = planEdits(
       doc,
       0,
@@ -306,6 +324,10 @@ describe('planEdits source-view gate — inline pending marks', () => {
     );
     expect(results[0].status).toBe('applied');
     expect(placed).toHaveLength(1);
+    // The composed (union-source ∘ inline-source) mapping lands the edit on the
+    // exact clean "clean" word, not shifted by the hidden union/insertion.
+    expect(placed[0]).toMatchObject({ from: clean.from, to: clean.to });
+    expect(doc.textBetween(placed[0].from, placed[0].to)).toBe('clean');
   });
 });
 
@@ -339,6 +361,8 @@ describe('planEdits source-view gate — zero-width point controls', () => {
     );
     expect(results[0].status).toBe('applied');
     expect(placed).toHaveLength(1);
+    // The zero-width insertion stays put at the exact boundary — no drift.
+    expect(placed[0]).toMatchObject({ from: gone.from, to: gone.from });
   });
 
   it('refuses an empty-find insertion strictly inside the union envelope', () => {
@@ -373,6 +397,8 @@ describe('planEdits source-view gate — zero-width point controls', () => {
     );
     expect(results[0].status).toBe('applied');
     expect(placed).toHaveLength(1);
+    // The insertion lands exactly at the clean leading edge, not pulled inward.
+    expect(placed[0]).toMatchObject({ from: leadingEdge, to: leadingEdge });
   });
 
   it('refuses an empty-find insertion at the collapsed TRAILING seam (inversion, no side guess)', () => {

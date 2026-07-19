@@ -819,6 +819,12 @@ function formatEditCanCarryMarks(doc: ProseMirrorNode, edit: PlannedFormatEdit):
  * collapsed across hidden content), overlaps a removed branch, intersects a
  * structural footprint (the RETAINED source branch is frozen too), overlaps any
  * pending review mark, or fails to round-trip.
+ *
+ * The inversion guard, structural-footprint, and pending-mark checks are each
+ * independently load-bearing (mutation-proven). The removed-branch overlap and
+ * the round-trip check are defense-in-depth: under today's delete-only / mark-
+ * covered projection every removed branch is also footprint- or pending-mark-
+ * covered, so they're redundant — kept as cheap future-proofing, not relied on.
  */
 function translatePlannedRange(
   liveDoc: ProseMirrorNode,
