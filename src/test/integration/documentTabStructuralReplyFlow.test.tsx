@@ -195,6 +195,25 @@ function unionChangeIds(doc: PMNode): Set<string> {
 const aiReplyOf = (comment: Comment): Reply | undefined =>
   comment.replies.find((reply) => reply.authorKind === 'ai');
 
+/** The node carrying blockTrack {changeId, op}, or null (a union's delete/insert branch). */
+function blockTrackNode(doc: PMNode, changeId: string, op: 'delete' | 'insert'): PMNode | null {
+  let found: PMNode | null = null;
+  doc.descendants((node) => {
+    const blockTrack = node.attrs?.blockTrack as { changeId?: string; op?: string } | undefined;
+    if (blockTrack?.changeId === changeId && blockTrack.op === op) found = node;
+  });
+  return found;
+}
+
+/** The first top-level node of the given type, or null. */
+function topLevelOfType(doc: PMNode, typeName: string): PMNode | null {
+  let found: PMNode | null = null;
+  doc.forEach((node) => {
+    if (!found && node.type.name === typeName) found = node;
+  });
+  return found;
+}
+
 class ResizeObserverStub {
   observe() {}
   unobserve() {}
@@ -357,5 +376,42 @@ describe('DocumentTab — Claude proposes a structural change through the real r
         .comments.find((comment) => comment.id !== 'seed-comment')!;
       expect(aiReplyOf(heading)?.suggestionIds).toEqual([FRESH]);
     });
+  });
+
+  it('mints and ACCEPTS a paragraph→taskList conversion end to end (the distinct list path)', async () => {
+    const mounted = await mountReplyTab();
+    const editor = mounted.getHandle().getEditor()!;
+    // "Body text" is a paragraph; comment on it and ask Claude to make it a checklist.
+    await askClaudeOn(mounted, 13, 22, 'make this a checklist');
+    await waitFor(() => expect(mock.dispatchers.size).toBe(1));
+
+    streamEdits(mock.latestToken(), [{ find: 'Body text', structural: { to: 'taskList' } }]);
+
+    await waitFor(() => expect(retainedRecords(editor.state).size).toBe(1));
+    const [changeId, record] = [...retainedRecords(editor.state).entries()][0];
+    expect(record.op).toEqual({ kind: 'paragraphToList', listType: 'taskList' });
+
+    // The proposed (insert) branch is a taskList > taskItem{checked:false}.
+    const proposed = blockTrackNode(editor.state.doc, changeId, 'insert')!;
+    expect(proposed.type.name).toBe('taskList');
+    expect(proposed.child(0).type.name).toBe('taskItem');
+    expect(proposed.child(0).attrs.checked).toBe(false);
+
+    // The reply links ONLY the minted structural id.
+    await waitFor(() => {
+      const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
+      expect(aiReplyOf(comment)?.suggestionIds).toEqual([changeId]);
+    });
+
+    // Accept: the task list stays and the union (both branches + redline/card) is gone.
+    act(() => {
+      editor.commands.acceptStructuralChange(changeId);
+    });
+    const doc = editor.state.doc;
+    expect(unionChangeIds(doc).size).toBe(0); // no blockTrack branches remain
+    const taskList = topLevelOfType(doc, 'taskList')!;
+    expect(taskList.type.name).toBe('taskList');
+    expect(taskList.attrs.blockTrack).toBeNull();
+    expect(taskList.textContent).toBe('Body text');
   });
 });
