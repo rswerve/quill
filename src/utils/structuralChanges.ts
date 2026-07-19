@@ -61,6 +61,21 @@ export interface StructuralReviewIssue {
   readonly code: StructuralReviewIssueCode;
 }
 
+/**
+ * The UI-facing needs-attention code. Widens {@link StructuralReviewIssueCode}
+ * with `union-not-clean` — the RUNTIME-only condition a refused Accept/Reject
+ * raises, which the analyzer cannot see (it is inline-mark contamination on a
+ * still-persistable union). The review panel renders both as one non-actionable
+ * banner.
+ */
+export type StructuralAttentionCode = StructuralReviewIssueCode | 'union-not-clean';
+
+export interface StructuralAttention {
+  /** Null for an anonymous invalid identity (malformed markup with no usable id). */
+  readonly changeId: string | null;
+  readonly code: StructuralAttentionCode;
+}
+
 export interface StructuralReviewState {
   /** Actionable, card-facing changes (persistable unions). */
   changes: StructuralChangeInfo[];

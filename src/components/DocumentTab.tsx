@@ -1,4 +1,12 @@
-import { forwardRef, useState, useCallback, useRef, useEffect, useImperativeHandle } from 'react';
+import {
+  forwardRef,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+  useImperativeHandle,
+} from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './Editor';
 import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
@@ -18,6 +26,7 @@ import { useDocumentSaveOrchestration } from '../hooks/useDocumentSaveOrchestrat
 import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
 import ConflictBanner from './ConflictBanner';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
+import type { ReviewAnnotationKind } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
@@ -53,7 +62,17 @@ import {
   reconstructStructuralIntoEditor,
   reconstructStructuralFromRecords,
 } from '../utils/structuralReload';
-import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
+import {
+  resetStructuralRecords,
+  structuralRecordStoreKey,
+} from '../extensions/StructuralRecordStore';
+import {
+  getStructuralReviewState,
+  type StructuralAttention,
+  type StructuralReviewState,
+} from '../utils/structuralChanges';
+import { resolveStructuralUnion } from '../utils/structuralResolution';
+import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../extensions/trackChangesMeta';
 import {
   prepareCanonicalPersistence,
   rebaseForDegradedRecovery,
@@ -339,12 +358,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // The one annotation (comment or suggestion) currently in focus: its card
   // is outlined and its text highlighted. Set by clicking either side.
   const [activeAnnotation, setActiveAnnotation] = useState<{
-    kind: AnnotationKind;
+    kind: ReviewAnnotationKind;
     id: string;
   } | null>(null);
   const [highlightActivationRevision, setHighlightActivationRevision] = useState(0);
   const activeCommentId = activeAnnotation?.kind === 'comment' ? activeAnnotation.id : null;
   const activeSuggestionId = activeAnnotation?.kind === 'suggestion' ? activeAnnotation.id : null;
+  const activeStructuralId = activeAnnotation?.kind === 'structural' ? activeAnnotation.id : null;
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
     null,
@@ -362,6 +382,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [showResolvedComments, setShowResolvedComments] = useState(false);
   const [chatFocusRevision, setChatFocusRevision] = useState(0);
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
+  // The live structural (block-union) review inventory, refreshed off the editor
+  // transaction seam. `runtimeUncleanIds` are the RUNTIME-only attention flags a
+  // refused Accept/Reject raises (contamination the analyzer can't see); they are
+  // reconciled away once their union disappears and cleared on New/Open.
+  const [structuralReview, setStructuralReview] = useState<StructuralReviewState>({
+    changes: [],
+    issues: [],
+  });
+  const [runtimeUncleanIds, setRuntimeUncleanIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const aiGate = useDocumentAIGate();
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
@@ -880,6 +911,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const resetStructuralIdentity = useCallback(() => {
     quarantinedStructuralRef.current = [];
     lastGoodWorkspaceSnapshotRef.current = null;
+    // A new document identity retires every runtime attention flag; the analyzer
+    // rebuild alone can't (a flag whose union never reappears would linger).
+    setRuntimeUncleanIds((prev) => (prev.size === 0 ? prev : new Set<string>()));
   }, []);
 
   // The structural half of the two-axis FILE reload: rebuild the block unions (and
@@ -1285,6 +1319,22 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
+    // A pending structural union freezes its region, which would VETO the
+    // whole-document replacement below (setContent dispatches over the frozen
+    // range with no bypass). Clear the doc past the freeze with a whole-document
+    // restore bypass first, so New always empties a document that still holds a
+    // block union. Harmless when there is none (no footprint → nothing to veto).
+    if (liveEditor) {
+      const { doc, schema } = liveEditor.state;
+      liveEditor.view.dispatch(
+        liveEditor.state.tr
+          .replaceWith(0, doc.content.size, schema.nodes.paragraph.create())
+          .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+          .setMeta(SKIP_TRACKING_META, true)
+          .setMeta('preventUpdate', true)
+          .setMeta('addToHistory', false),
+      );
+    }
     editorRef.current?.setContent('');
     // Clear a prior document's canonical structural records; setContent alone does
     // not reset the session-retained store.
@@ -1298,6 +1348,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     }
     setComments([]);
     setSuggestions([]);
+    setRuntimeUncleanIds((prev) => (prev.size === 0 ? prev : new Set<string>()));
     quarantinedSuggestionsRef.current = [];
     quarantinedStructuralRef.current = [];
     lastGoodWorkspaceSnapshotRef.current = null; // new identity: forget prior last-good
@@ -1472,6 +1523,45 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [editor, setComments]);
 
+  // Structural review state lives on the TRANSACTION seam, not `update`: a
+  // metadata-only record change (e.g. reconstruction on load) mutates the record
+  // store WITHOUT changing the document, so `update` (docChanged-only) never
+  // fires. Gating on `docChanged || getMeta(structuralRecordStoreKey)` catches
+  // both a mint/resolve (doc change) and a pure record reset, and — being purely
+  // transaction-driven — it stays correct no matter which code path mutated the
+  // doc or the store, so no hand-copied refresh site can drift out of sync.
+  useEffect(() => {
+    if (!editor) return;
+    const refreshStructural = () => setStructuralReview(getStructuralReviewState(editor.state));
+    const onTransaction = ({
+      transaction,
+    }: {
+      transaction: import('@tiptap/pm/state').Transaction;
+    }) => {
+      if (transaction.docChanged || transaction.getMeta(structuralRecordStoreKey)) {
+        refreshStructural();
+      }
+    };
+    editor.on('transaction', onTransaction);
+    refreshStructural();
+    return () => {
+      editor.off('transaction', onTransaction);
+    };
+  }, [editor]);
+
+  // A runtime union-not-clean flag survives only while its union is still a live,
+  // persistable change; once the union collapses or the document is reloaded the
+  // flag is stale and must drop (the analyzer never sees this condition, so it
+  // can't retire the flag for us).
+  useEffect(() => {
+    setRuntimeUncleanIds((prev) => {
+      if (prev.size === 0) return prev;
+      const liveIds = new Set(structuralReview.changes.map((change) => change.changeId));
+      const next = new Set([...prev].filter((id) => liveIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [structuralReview]);
+
   // Chrome reads word/character counts and the current line/column through a
   // value snapshot rather than reaching into this tab. Selection-only
   // transactions matter even when the document did not update — they move the
@@ -1539,7 +1629,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // its text is visibly highlighted alongside the outlined card.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    if (activeAnnotation) {
+    // A structural change anchors to a block-union NODE, not an inline mark, so
+    // the mark-based focus decoration can't (and shouldn't) paint it — the
+    // redline is its in-text emphasis. Clear any prior mark focus instead.
+    if (activeAnnotation && activeAnnotation.kind !== 'structural') {
       editor.commands.setAnnotationFocus(activeAnnotation.kind, activeAnnotation.id);
     } else {
       editor.commands.clearAnnotationFocus();
@@ -1548,7 +1641,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   // Drop the focus when the annotation it points at goes away (resolved,
   // accepted, rejected, deleted) — a stale focus would point at nothing.
-  const clearActiveIf = useCallback((kind: AnnotationKind, id: string) => {
+  const clearActiveIf = useCallback((kind: ReviewAnnotationKind, id: string) => {
     setActiveAnnotation((prev) => (prev?.kind === kind && prev.id === id ? null : prev));
   }, []);
 
@@ -1650,6 +1743,63 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       clearActiveIf('suggestion', id);
     },
     [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
+  );
+
+  // Structural resolution runs through the kernel directly (not the fire-and-
+  // forget command) so we can drive React comment state from its coupled
+  // `resolvedComment`: on Accept, queue the auto-resolution and clear the origin
+  // comment's focus BEFORE the synchronous dispatch — mirroring inline Accept so
+  // the post-dispatch reconciler sees a resolved record — then clear the
+  // structural focus. A refusal never dispatches: an origin lock surfaces a
+  // notice, a contaminated union raises runtime attention, and a vanished union
+  // just refreshes the inventory.
+  const handleAcceptStructuralChange = useCallback(
+    (changeId: string) => {
+      if (!editor) return;
+      const result = resolveStructuralUnion(editor.state, changeId, 'accept');
+      if (!result.ok) {
+        if (result.reason === 'origin-comment-locked') {
+          onNotice({
+            title: 'Resolve the overlapping change first',
+            message:
+              'This structure change shares a comment with another pending change. Resolve that ' +
+              'one first, then accept this.',
+          });
+        } else if (result.reason === 'union-not-clean') {
+          setRuntimeUncleanIds((prev) => (prev.has(changeId) ? prev : new Set(prev).add(changeId)));
+        } else {
+          setStructuralReview(getStructuralReviewState(editor.state));
+        }
+        return;
+      }
+      if (result.resolvedComment) {
+        const resolved = result.resolvedComment;
+        setComments((current) => autoResolveCapturedComments(current, [resolved]));
+        clearActiveIf('comment', resolved.id);
+      }
+      editor.view.dispatch(result.tr);
+      clearActiveIf('structural', changeId);
+    },
+    [editor, onNotice, clearActiveIf, setComments],
+  );
+
+  const handleRejectStructuralChange = useCallback(
+    (changeId: string) => {
+      if (!editor) return;
+      const result = resolveStructuralUnion(editor.state, changeId, 'reject');
+      if (!result.ok) {
+        if (result.reason === 'union-not-clean') {
+          setRuntimeUncleanIds((prev) => (prev.has(changeId) ? prev : new Set(prev).add(changeId)));
+        } else if (result.reason === 'not-resolvable') {
+          setStructuralReview(getStructuralReviewState(editor.state));
+        }
+        // 'origin-comment-locked' cannot occur on Reject — it performs no origin op.
+        return;
+      }
+      editor.view.dispatch(result.tr);
+      clearActiveIf('structural', changeId);
+    },
+    [editor, clearActiveIf],
   );
 
   const handleAddComment = useCallback(
@@ -1802,12 +1952,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     handleActivateComment,
     handleActivateHistoryComment,
     handleActivateSuggestion,
+    handleActivateStructural,
     handleViewReplySuggestion,
     handleSyncActivate,
   } = useAnnotationNavigation({
     editor,
     comments,
     trackedChanges,
+    structuralChanges: structuralReview.changes,
     commentLayerRef,
     setActiveAnnotation,
   });
@@ -1929,6 +2081,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   const pendingSuggestionCount = countLogicalSuggestionCards(
     trackedChanges.filter((change) => change.status === 'pending'),
+  );
+  const structuralChangeCount = structuralReview.changes.length;
+  // The analyzer's structural issues plus the runtime union-not-clean flags,
+  // unified into the panel's non-actionable needs-attention list.
+  const structuralAttention = useMemo<StructuralAttention[]>(
+    () => [
+      ...structuralReview.issues,
+      ...[...runtimeUncleanIds].map(
+        (changeId): StructuralAttention => ({ changeId, code: 'union-not-clean' }),
+      ),
+    ],
+    [structuralReview.issues, runtimeUncleanIds],
   );
   const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
   const resolvedCommentCount = comments.length - unresolvedCommentCount;
@@ -2108,7 +2272,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         <aside className="comment-layer" ref={commentLayerRef} aria-label="Review panel">
           <PanelHeader
             mode={panelMode}
-            commentCount={unresolvedCommentCount + pendingSuggestionCount}
+            commentCount={unresolvedCommentCount + pendingSuggestionCount + structuralChangeCount}
             showResolved={showResolvedComments}
             resolvedCount={resolvedCommentCount}
             aiSession={aiSession}
@@ -2126,8 +2290,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             comments={comments}
             activeCommentId={activeCommentId}
             activeSuggestionId={activeSuggestionId}
+            activeStructuralId={activeStructuralId}
             containerRef={commentLayerRef}
             trackedChanges={trackedChanges}
+            structuralChanges={structuralReview.changes}
+            structuralAttention={structuralAttention}
             commentComposer={commentComposerOpen ? pendingCommentSelection : null}
             scrollTop={scrollTop}
             zoom={zoom}
@@ -2160,6 +2327,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onActivateChatMessage={handleActivateChatMessage}
             onAcceptChange={handleAcceptChange}
             onRejectChange={handleRejectChange}
+            onAcceptStructuralChange={handleAcceptStructuralChange}
+            onRejectStructuralChange={handleRejectStructuralChange}
+            onActivateStructural={handleActivateStructural}
             onSubmitComment={handleAddComment}
             onCancelComment={handleCancelCommentComposer}
             hasSession={aiSession != null}
