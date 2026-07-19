@@ -111,7 +111,6 @@ import type {
   Comment,
   DraftFile,
   EditScope,
-  QuillEdit,
   Suggestion,
   StructuralPromptEntry,
   StructuralReviewEnvelope,
@@ -709,23 +708,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       origin?: TrackedEditOrigin,
     ): StructuralBatchDispatchOutcome => {
       const ed = editor;
-      if (!ed) {
-        return {
-          results: edits.map((edit, batchIndex) => ({
-            batchIndex,
-            outcome: {
-              kind: 'inline' as const,
-              result: {
-                edit: edit as QuillEdit,
-                status: 'not-found' as const,
-                reason: 'document-unavailable' as const,
-              },
-            },
-          })),
-          suggestionIds: [],
-        };
-      }
-
+      // A null editor is handled INSIDE the orchestrator (behind the classifier): a hybrid
+      // stays an xor-violation and every valid-axis entry becomes `unavailable`, so the
+      // result never depends on editor availability or mislabels an entry's axis.
       // applyingClaudeEditsRef suppresses the blocked-gesture modal for the WHOLE batch
       // (inline apply AND structural mints) while the per-op results stay honest.
       try {
@@ -740,15 +725,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
           // Built FRESH at dispatch time (after inline apply) from the live state + the
           // durable side-tables, so a mint never aliases an id already in use anywhere.
           readReservedIds: () =>
-            collectReservedIds(
-              extractReservedIdSources({
-                state: ed.state,
-                quarantinedSuggestions: quarantinedSuggestionsRef.current,
-                quarantinedStructural: quarantinedStructuralRef.current,
-                comments: commentsRef.current,
-                chatMessages: chatThreadRef.current?.messages ?? [],
-              }),
-            ),
+            ed
+              ? collectReservedIds(
+                  extractReservedIdSources({
+                    state: ed.state,
+                    quarantinedSuggestions: quarantinedSuggestionsRef.current,
+                    quarantinedStructural: quarantinedStructuralRef.current,
+                    comments: commentsRef.current,
+                    chatMessages: chatThreadRef.current?.messages ?? [],
+                  }),
+                )
+              : new Set<string>(),
         });
       } finally {
         applyingClaudeEditsRef.current = false;

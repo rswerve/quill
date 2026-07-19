@@ -60,7 +60,8 @@ export interface BatchOrigin {
 }
 
 export interface StructuralBatchDeps {
-  editor: Editor;
+  /** The live editor, or null when no document is mounted (every valid-axis entry → unavailable). */
+  editor: Editor | null;
   /** AI author id for inline suggestions AND structural records. */
   authorID: string;
   /** Inline author restored after apply when the editor carries no track storage. */
@@ -93,10 +94,14 @@ export type StructuralDispatchOutcome =
 /** An entry that declared BOTH axes (structural AND replace/format) — a protocol XOR violation. */
 export type InvalidDispatchOutcome = { kind: 'invalid'; reason: 'xor-violation' };
 
+/** A valid-axis entry that could not run because no document was mounted. */
+export type UnavailableOutcome = { kind: 'unavailable'; reason: 'document-unavailable' };
+
 export type BatchOutcome =
   | InlineDispatchOutcome
   | StructuralDispatchOutcome
-  | InvalidDispatchOutcome;
+  | InvalidDispatchOutcome
+  | UnavailableOutcome;
 
 export interface BatchResultEntry {
   batchIndex: number;
@@ -138,9 +143,12 @@ function classifyEntry(entry: unknown): 'inline' | 'structural' | 'invalid' {
  * malformed origin never stamps the wrong provenance onto minted changes.
  */
 export function batchOriginFrom(origin?: TrackedEditOrigin): BatchOrigin | undefined {
-  const commentId = typeof origin?.commentId === 'string' ? origin.commentId : undefined;
-  const chatMessageId =
-    typeof origin?.chatMessageId === 'string' ? origin.chatMessageId : undefined;
+  // A blank id is no provenance: it would let inline edits mint under an empty origin while
+  // structural minting fails metadata validation. Trim to VALIDATE; keep the exact value.
+  const nonblank = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+  const commentId = nonblank(origin?.commentId);
+  const chatMessageId = nonblank(origin?.chatMessageId);
   if (commentId !== undefined && chatMessageId === undefined)
     return { kind: 'comment', id: commentId };
   if (chatMessageId !== undefined && commentId === undefined)
@@ -338,6 +346,25 @@ export function structuralBatchDispatch(
     }
   });
 
+  // Assemble input-order results from the outcome map (every batch index gets exactly one).
+  const assemble = (suggestionIds: string[]): StructuralBatchDispatchOutcome => {
+    const results: BatchResultEntry[] = [];
+    for (let batchIndex = 0; batchIndex < entries.length; batchIndex += 1) {
+      const outcome = outcomeByIndex.get(batchIndex);
+      if (outcome) results.push({ batchIndex, outcome });
+    }
+    return { results, suggestionIds };
+  };
+
+  // No document mounted: classification already ran (so a hybrid stays xor-violation), so
+  // report every valid-axis entry as `unavailable` — NEVER as a mislabeled inline result.
+  if (!editor) {
+    const unavailable: UnavailableOutcome = { kind: 'unavailable', reason: 'document-unavailable' };
+    for (const { batchIndex } of inlineItems) outcomeByIndex.set(batchIndex, unavailable);
+    for (const { batchIndex } of structuralItems) outcomeByIndex.set(batchIndex, unavailable);
+    return assemble([]);
+  }
+
   // ---- STEP 1: plan both axes on the SAME pre-apply clean-source document. ----
   // The conflict graph lives entirely in clean-source coordinates — the one document
   // both planners operate on, and the one Claude reasoned about.
@@ -481,10 +508,5 @@ export function structuralBatchDispatch(
   );
 
   // ---- STEP 8: assemble input-order results + the minted-id union. ----
-  const results: BatchResultEntry[] = [];
-  for (let batchIndex = 0; batchIndex < entries.length; batchIndex += 1) {
-    const outcome = outcomeByIndex.get(batchIndex);
-    if (outcome) results.push({ batchIndex, outcome });
-  }
-  return { results, suggestionIds: [...inlineSuggestionIds, ...structuralSuggestionIds] };
+  return assemble([...inlineSuggestionIds, ...structuralSuggestionIds]);
 }

@@ -108,6 +108,9 @@ function noticeReason(outcome: BatchOutcome): string | null {
   if (outcome.kind === 'invalid') {
     return 'it asks for both a text/formatting change and a structural change; request just one.';
   }
+  if (outcome.kind === 'unavailable') {
+    return 'the document was not ready.'; // mirrors the inline document-unavailable wording
+  }
   return structuralReasonText(outcome);
 }
 

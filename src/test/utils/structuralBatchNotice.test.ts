@@ -88,6 +88,12 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('both a text/formatting change and a structural change');
   });
 
+  it('reports an unavailable entry with the document-unavailable wording', () => {
+    const results = [entry(0, { kind: 'unavailable', reason: 'document-unavailable' })];
+    const notice = formatBatchResultNotice(results, [{ find: 'X' }]);
+    expect(notice).toContain('the document was not ready.');
+  });
+
   it('uses one shared cross-axis wording for inline and structural cross-axis conflicts', () => {
     const results = [
       entry(0, { kind: 'inline', status: 'cross-axis-conflict' }),

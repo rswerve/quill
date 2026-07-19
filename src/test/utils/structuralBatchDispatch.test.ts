@@ -448,6 +448,41 @@ describe('batchOriginFrom (exactly-one-of provenance)', () => {
     expect(batchOriginFrom({})).toBeUndefined();
     expect(batchOriginFrom(undefined)).toBeUndefined();
   });
+  it('treats a blank id as no provenance (trim to validate, preserve exact value)', () => {
+    expect(batchOriginFrom({ commentId: '' })).toBeUndefined();
+    expect(batchOriginFrom({ commentId: '   ' })).toBeUndefined();
+    expect(batchOriginFrom({ chatMessageId: '\t' })).toBeUndefined();
+    expect(batchOriginFrom({ commentId: ' c-1 ' })).toEqual({ kind: 'comment', id: ' c-1 ' });
+  });
+});
+
+describe('structuralBatchDispatch — null editor (behind the classifier)', () => {
+  it('preserves xor-violation, reports every valid-axis entry unavailable, one outcome each', () => {
+    const deps: StructuralBatchDeps = {
+      editor: null,
+      authorID: 'claude',
+      fallbackAuthor: 'Anonymous',
+      nextId: seqIds('mint'),
+      now: () => '2026-02-02T00:00:00.000Z',
+      readReservedIds: () => new Set<string>(),
+    };
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Heading', 'paragraph'), // structural → unavailable
+        textEdit('body', 'BODY'), // inline → unavailable
+        { find: 'x', replace: 'y', structural: { to: 'paragraph' } }, // hybrid → xor (editor-independent)
+        'not an object', // non-object (classified inline) → unavailable, no crash
+      ],
+      deps,
+    );
+    expect(out.results.map((r) => r.batchIndex)).toEqual([0, 1, 2, 3]);
+    const UNAVAILABLE = { kind: 'unavailable', reason: 'document-unavailable' };
+    expect(out.results[0].outcome).toEqual(UNAVAILABLE);
+    expect(out.results[1].outcome).toEqual(UNAVAILABLE);
+    expect(out.results[2].outcome).toEqual({ kind: 'invalid', reason: 'xor-violation' });
+    expect(out.results[3].outcome).toEqual(UNAVAILABLE);
+    expect(out.suggestionIds).toEqual([]);
+  });
 });
 
 describe('inlineTouchesBlock (cross-axis point semantics)', () => {
