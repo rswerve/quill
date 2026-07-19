@@ -11,9 +11,11 @@ import {
   TrackedFormat,
 } from '../../extensions/TrackChanges';
 import { CommentMark } from '../../extensions/Comment';
+import { EditorState } from '@tiptap/pm/state';
 import { applyTrackedEditsToEditor } from '../../utils/applyTrackedEdits';
 import { planStructuralEdits } from '../../utils/structuralEditPlanner';
 import { compileStructuralMint } from '../../utils/structuralMint';
+import { getStructuralReviewState } from '../../utils/structuralChanges';
 import { collectReservedIds } from '../../utils/structuralReservedIds';
 import {
   extractReservedIdSources,
@@ -167,6 +169,58 @@ describe('extractReservedIdSources', () => {
       expect(reserved.has(id)).toBe(true);
       expect(sources.liveInlineIdentityHints).toContain(id);
     }
+  });
+
+  it('reserves a NON-ACTIONABLE orphan blockTrack identity (raw allIdentityIds, not the actionable subset)', () => {
+    const editor = makeEditor('<p></p>');
+    // An orphan delete branch: a blockTrack changeId with no partner insert branch and no
+    // record — the actionable review state omits it, but a fresh mint must not reuse its id.
+    const orphanDoc = editor.schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { blockTrack: { changeId: 'orphan-x', op: 'delete' } },
+          content: [{ type: 'text', text: 'orphan branch with no partner' }],
+        },
+        { type: 'paragraph', content: [{ type: 'text', text: 'body' }] },
+      ],
+    });
+    const state = EditorState.create({
+      schema: editor.schema,
+      doc: orphanDoc,
+      plugins: editor.state.plugins,
+    });
+    const sources = extractReservedIdSources({
+      state,
+      quarantinedSuggestions: [],
+      quarantinedStructural: [],
+      comments: [],
+      chatMessages: [],
+    });
+    expect(sources.liveStructuralIdentityIds).toContain('orphan-x');
+    // Proof it comes from analyzeStructuralUnions(...).allIdentityIds, not the actionable set.
+    expect(getStructuralReviewState(state).changes.map((change) => change.changeId)).not.toContain(
+      'orphan-x',
+    );
+    expect(collectReservedIds(sources).has('orphan-x')).toBe(true);
+  });
+
+  it('reserves an INACTIVE retained record whose union was undone (raw retainedRecords, not active)', () => {
+    const editor = makeEditor('# Undo me\n\nBody');
+    preMintUnion(editor, 'Undo me', 'inactive-x');
+    editor.commands.undo(); // union leaves the doc; the history-aware record store retains it
+
+    const sources = extractReservedIdSources({
+      state: editor.state,
+      quarantinedSuggestions: [],
+      quarantinedStructural: [],
+      comments: [],
+      chatMessages: [],
+    });
+    expect(sources.retainedStructuralIds).toContain('inactive-x');
+    expect(sources.liveStructuralIdentityIds).not.toContain('inactive-x'); // no longer live
+    expect(collectReservedIds(sources).has('inactive-x')).toBe(true);
   });
 
   it('tolerates empty side-tables and a document with no changes', () => {
