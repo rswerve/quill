@@ -43,7 +43,6 @@ import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { isEffort } from '../utils/claudePreferences';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
-import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { rangeText } from '../utils/trackedEdits';
 import { applyTrackedEditsToEditor } from '../utils/applyTrackedEdits';
 import {
@@ -72,7 +71,6 @@ import {
   type StructuralReviewState,
 } from '../utils/structuralChanges';
 import { resolveStructuralUnion } from '../utils/structuralResolution';
-import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../extensions/trackChangesMeta';
 import {
   prepareCanonicalPersistence,
   rebaseForDegradedRecovery,
@@ -115,27 +113,6 @@ import type {
 const CLAUDE_AUTHOR_ID = 'claude';
 
 const AUTHOR = 'Anonymous';
-
-/**
- * Empty the live document PAST the structural freeze guard, ready for a
- * whole-document `setContent` that follows. A pending block union freezes its
- * region, so an unbypassed replacement over it is VETOED — and every
- * identity-replacement path (New, open, reload, recover) replaces the doc IN
- * PLACE, because `editorKey` is constant and the editor is never remounted. A
- * whole-document `restore` bypass authorizes the clear; it is harmless when there
- * is no union (no footprint → nothing to veto).
- */
-function clearDocumentPastFreeze(editor: TiptapEditor): void {
-  const { doc, schema } = editor.state;
-  editor.view.dispatch(
-    editor.state.tr
-      .replaceWith(0, doc.content.size, schema.nodes.paragraph.create())
-      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
-      .setMeta(SKIP_TRACKING_META, true)
-      .setMeta('preventUpdate', true)
-      .setMeta('addToHistory', false),
-  );
-}
 
 // Breathing room (px) left above/below a card when it's scrolled into view, and
 // the extra scroll range the bottom spacer adds past the lowest card's bottom.
@@ -1028,13 +1005,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) {
-        setImageBaseDir(liveEditor, dirname(result.filePath));
-        // A reload over a document that still holds a pending union must clear it
-        // past the freeze first, or setContent is vetoed and the stale union
-        // survives the reload (reconstruction below rebuilds from the fresh source).
-        clearDocumentPastFreeze(liveEditor);
-      }
+      if (liveEditor) setImageBaseDir(liveEditor, dirname(result.filePath));
       onRecentFile(result.filePath);
       setLastSavedAt(Date.now());
       // setContent parses the structural SOURCE Markdown (original branches only).
@@ -1346,8 +1317,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
-    // Clear a pending union past the freeze first, or the setContent below is vetoed.
-    if (liveEditor) clearDocumentPastFreeze(liveEditor);
+    // setContent is the authoritative load boundary — it clears past the freeze
+    // and skips tracking itself, so no pre-clear is needed here.
     editorRef.current?.setContent('');
     // Clear a prior document's canonical structural records; setContent alone does
     // not reset the session-retained store.
@@ -1523,40 +1494,46 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     tabId,
   ]);
 
+  // Comment RECONCILIATION stays on `update`: it must not run mid-load, before a
+  // reload has restored the persisted comment marks (setContent suppresses
+  // `update`), or it would drop every comment as detached.
   useEffect(() => {
     if (!editor) return;
-    const refresh = () => {
-      setTrackedChanges(getTrackedChanges(editor));
+    const reconcile = () =>
       setComments((current) => reconcileCommentsWithDocument(current, editor.state.doc));
-    };
-    editor.on('update', refresh);
-    refresh();
+    editor.on('update', reconcile);
+    reconcile();
     return () => {
-      editor.off('update', refresh);
+      editor.off('update', reconcile);
     };
   }, [editor, setComments]);
 
-  // Structural review state lives on the TRANSACTION seam, not `update`: a
-  // metadata-only record change (e.g. reconstruction on load) mutates the record
-  // store WITHOUT changing the document, so `update` (docChanged-only) never
-  // fires. Gating on `docChanged || getMeta(structuralRecordStoreKey)` catches
-  // both a mint/resolve (doc change) and a pure record reset, and — being purely
-  // transaction-driven — it stays correct no matter which code path mutated the
-  // doc or the store, so no hand-copied refresh site can drift out of sync.
+  // The review INVENTORY (inline tracked changes + structural review) lives on
+  // the TRANSACTION seam, not `update`. Two load-time mutations fire a
+  // transaction but NO `update`: a metadata-only record change (reconstruction
+  // on load) mutates the store without touching the document, and a programmatic
+  // whole-document replacement (setContent stamps preventUpdate) — so `update`
+  // alone would leave stale inline OR structural cards after New / Open / reload.
+  // Gating on `docChanged || getMeta(structuralRecordStoreKey)` catches a
+  // mint/resolve, a pure record reset, and a document replacement; being purely
+  // transaction-driven, no hand-copied refresh site can drift out of sync.
   useEffect(() => {
     if (!editor) return;
-    const refreshStructural = () => setStructuralReview(getStructuralReviewState(editor.state));
+    const refreshInventories = () => {
+      setTrackedChanges(getTrackedChanges(editor));
+      setStructuralReview(getStructuralReviewState(editor.state));
+    };
     const onTransaction = ({
       transaction,
     }: {
       transaction: import('@tiptap/pm/state').Transaction;
     }) => {
       if (transaction.docChanged || transaction.getMeta(structuralRecordStoreKey)) {
-        refreshStructural();
+        refreshInventories();
       }
     };
     editor.on('transaction', onTransaction);
-    refreshStructural();
+    refreshInventories();
     return () => {
       editor.off('transaction', onTransaction);
     };
@@ -1662,10 +1639,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // clicking plain text dismisses the focus). Focus the innermost one, by
   // smallest live range, like Google Docs.
   const handleAnnotationClick = useCallback(
-    ({ commentIds, suggestionIds }: AnnotationClickInfo) => {
+    ({ commentIds, suggestionIds, structuralIds }: AnnotationClickInfo) => {
       const doc = editor?.state.doc;
       if (!doc) return;
-      const candidates: { kind: AnnotationKind; id: string; size: number }[] = [];
+      const candidates: { kind: ReviewAnnotationKind; id: string; size: number }[] = [];
       for (const id of commentIds) {
         const range = findAnnotationRange(doc, 'comment', id);
         if (range) candidates.push({ kind: 'comment', id, size: range.to - range.from });
@@ -1673,6 +1650,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       for (const id of suggestionIds) {
         const range = findAnnotationRange(doc, 'suggestion', id);
         if (range) candidates.push({ kind: 'suggestion', id, size: range.to - range.from });
+      }
+      // A structural branch is a node, not a mark, so its live extent is the
+      // union envelope from the review inventory (which is what a click on either
+      // branch should activate), ranked by size beside the inline candidates.
+      for (const id of structuralIds) {
+        const change = structuralReview.changes.find((candidate) => candidate.changeId === id);
+        if (change) candidates.push({ kind: 'structural', id, size: change.to - change.from });
       }
       if (candidates.length === 0) {
         setActiveAnnotation(null);
@@ -1683,7 +1667,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setActiveAnnotation({ kind: winner.kind, id: winner.id });
       setHighlightActivationRevision((revision) => revision + 1);
     },
-    [editor],
+    [editor, structuralReview],
   );
 
   const queueAutoResolveForTrackedRemoval = useCallback(

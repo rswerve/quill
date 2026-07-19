@@ -25,6 +25,7 @@ import {
   TrackedFormat,
   TrackChanges,
 } from '../extensions/TrackChanges';
+import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../extensions/trackChangesMeta';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import type { Comment, JSONContent, Suggestion } from '../types';
 
@@ -87,6 +88,43 @@ interface EditorProps {
 export interface AnnotationClickInfo {
   commentIds: string[];
   suggestionIds: string[];
+  /** Block-union redline branches under the click, keyed by change id. Distinct
+   *  from suggestionIds: a structural branch is a node (data-structural-op), not an
+   *  inline mark, so a bare data-change-id must not be mistaken for a suggestion. */
+  structuralIds: string[];
+}
+
+/**
+ * Classify every annotation layered under a click by walking from the click
+ * target up to the editor root. A comment mark contributes `data-comment-id`; a
+ * data-change-id is routed to `structuralIds` when the element also carries
+ * `data-structural-op` (a block-union redline branch is a NODE, not a mark) and to
+ * `suggestionIds` otherwise. The two axes therefore never alias, even when a
+ * structural change and an inline suggestion happen to share an id. Pure DOM
+ * logic (no ProseMirror), so it is unit-testable without a live editor.
+ */
+export function classifyAnnotationClickTarget(
+  target: EventTarget | null,
+  viewDom: HTMLElement,
+): AnnotationClickInfo {
+  const commentIds: string[] = [];
+  const suggestionIds: string[] = [];
+  const structuralIds: string[] = [];
+  let el =
+    target instanceof HTMLElement
+      ? target.closest<HTMLElement>('[data-comment-id], [data-change-id]')
+      : null;
+  while (el && el !== viewDom && viewDom.contains(el)) {
+    const commentId = el.getAttribute('data-comment-id');
+    const changeId = el.getAttribute('data-change-id');
+    if (commentId && !commentIds.includes(commentId)) commentIds.push(commentId);
+    if (changeId) {
+      const bucket = el.hasAttribute('data-structural-op') ? structuralIds : suggestionIds;
+      if (!bucket.includes(changeId)) bucket.push(changeId);
+    }
+    el = el.parentElement;
+  }
+  return { commentIds, suggestionIds, structuralIds };
 }
 
 export interface SelectionInfo {
@@ -197,20 +235,9 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         // click target collects every layer. An empty result is reported
         // too: clicking plain text is how the user dismisses the focus.
         handleClick(view, _pos, event) {
-          const commentIds: string[] = [];
-          const suggestionIds: string[] = [];
-          let el =
-            event.target instanceof HTMLElement
-              ? event.target.closest<HTMLElement>('[data-comment-id], [data-change-id]')
-              : null;
-          while (el && el !== view.dom && view.dom.contains(el)) {
-            const commentId = el.getAttribute('data-comment-id');
-            const changeId = el.getAttribute('data-change-id');
-            if (commentId && !commentIds.includes(commentId)) commentIds.push(commentId);
-            if (changeId && !suggestionIds.includes(changeId)) suggestionIds.push(changeId);
-            el = el.parentElement;
-          }
-          onAnnotationClickRef.current({ commentIds, suggestionIds });
+          onAnnotationClickRef.current(
+            classifyAnnotationClickTarget(event.target, view.dom as HTMLElement),
+          );
           return false;
         },
       },
@@ -294,10 +321,29 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         },
         setContent(md: string) {
           if (!editor) return;
-          // Tiptap v3 flipped setContent's emitUpdate default to true; letting
-          // it emit would fire onUpdate -> markDirty and flag every freshly
-          // opened document as dirty. Programmatic loads are not user edits.
-          editor.commands.setContent(md, { emitUpdate: false });
+          // The authoritative document-load boundary. Every whole-document
+          // replacement (New / Open / reload / recover) flows through here, so
+          // this ONE transaction carries the metadata that makes a load invisible
+          // to the review engines:
+          //  - SKIP_TRACKING_META: a load is content, not a user edit — without
+          //    this, opening a file while Suggesting mode is on re-tracks the
+          //    whole document as one giant insertion.
+          //  - STRUCTURAL_BYPASS_META {restore}: a pending block union freezes its
+          //    region; a whole-document restore bypass is the only thing that
+          //    lets the replacement through the freeze guard unvetoed.
+          //  - addToHistory:false — a load is not an undoable step.
+          //  - preventUpdate — a programmatic load must not fire onUpdate ->
+          //    markDirty (Tiptap v3's setContent defaults emitUpdate to true).
+          // parseMarkdownToDoc is setContent's exact parse pipeline (md -> HTML ->
+          // createDocument), so the installed document equals a reopen exactly.
+          const parsed = parseMarkdownToDoc(editor, md);
+          const tr = editor.state.tr.replaceWith(0, editor.state.doc.content.size, parsed.content);
+          tr.setSelection(TextSelection.atStart(tr.doc))
+            .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+            .setMeta(SKIP_TRACKING_META, true)
+            .setMeta('addToHistory', false)
+            .setMeta('preventUpdate', true);
+          editor.view.dispatch(tr);
           setIsEmpty(editor.isEmpty);
         },
         getEditor() {

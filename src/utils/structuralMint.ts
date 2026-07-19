@@ -14,6 +14,7 @@ import {
   structuralOpShapeValid,
   type StructuralUnionMetadata,
 } from './structuralUnionIndex';
+import { getTrackedChanges } from '../extensions/TrackChanges';
 import { projectBlockUnions } from './blockUnionProjection';
 import { lockedChangeIds } from './structuralFootprints';
 import { isReviewMarkName } from './canonicalDocument';
@@ -331,8 +332,15 @@ export function compileStructuralMint(
   // 1. Metadata is well-formed.
   if (!metadataValid(request)) return refuse('invalid-metadata');
 
-  // 2. The change id is free to mint (not already live or retained).
+  // 2. The change id is free to mint on BOTH axes. canMintChangeId guards the
+  //    structural axis (live unions + retained records); it must also be free of
+  //    any live INLINE tracked change, since structural and inline changes share
+  //    the data-change-id attribute — a collision would alias their cards,
+  //    React keys, and click navigation.
   if (!canMintChangeId(state, changeId)) return refuse('id-unavailable');
+  if (getTrackedChanges({ state }).some((change) => change.id === changeId)) {
+    return refuse('id-unavailable');
+  }
 
   // 3. The document is structurally sound before we add to it. An inactive
   //    retained record (its union removed by Undo) raises no live-topology issue,

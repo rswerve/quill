@@ -5,7 +5,12 @@ import { EditorState } from '@tiptap/pm/state';
 import { describe, it, expect, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { CommentMark } from '../../extensions/Comment';
-import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/TrackChanges';
+import {
+  TrackedInsert,
+  TrackedDelete,
+  TrackedFormat,
+  getTrackedChanges,
+} from '../../extensions/TrackChanges';
 import {
   StructuralRecordStore,
   activeRecords,
@@ -418,6 +423,24 @@ describe('compileStructuralMint — review-mark families and the runtime boundar
       expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
     },
   );
+
+  it('refuses id-unavailable when the id collides with a live INLINE tracked change', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    // Seed a live inline insertion on "Body" (DISJOINT from the heading footprint)
+    // carrying the exact id the mint will request. Structural and inline changes
+    // share data-change-id, so the compiler must refuse the cross-axis collision.
+    const insert = editor.state.schema.marks.tracked_insert.create({
+      dataTracked: { id: 'c1', operation: 'insert', authorID: 'user', status: 'pending' },
+    });
+    editor.view.dispatch(editor.state.tr.addMark(8, 12, insert).setMeta(SKIP_TRACKING_META, true));
+    expect(getTrackedChanges(editor).some((change) => change.id === 'c1')).toBe(true);
+
+    const r = compileStructuralMint(
+      editor.state,
+      req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'id-unavailable' });
+  });
 
   it('refuses a review mark carried only on a hard-break leaf (full-subtree scan)', () => {
     editor = makeEditor('<h1>A<br>B</h1>');
