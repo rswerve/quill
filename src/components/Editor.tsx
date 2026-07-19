@@ -8,7 +8,7 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Markdown } from 'tiptap-markdown';
 import { parseMarkdownToDoc } from '../utils/markdownDoc';
 import { restoreDocJSONInto, type DocJSONRestoreResult } from '../utils/docJSONRestore';
-import { cleanSourceSlice } from '../utils/cleanSourceProjection';
+import { CleanSourceClipboard } from '../extensions/CleanSourceClipboard';
 import { MarkdownImage } from '../extensions/MarkdownImage';
 import { Find } from '../extensions/Find';
 import { CommentMark } from '../extensions/Comment';
@@ -207,6 +207,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         TrackedDelete,
         TrackedFormat,
         TrackChanges,
+        CleanSourceClipboard,
       ],
       content: initialContent,
       editorProps: {
@@ -240,34 +241,6 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
             classifyAnnotationClickTarget(event.target, view.dom as HTMLElement),
           );
           return false;
-        },
-        handleDOMEvents: {
-          // Copy the CLEAN-SOURCE projection of the selection (pending suggestions
-          // ignored), never the live redline. cleanSourceSlice projects the whole
-          // doc, maps the live selection into source, and returns that slice — so a
-          // selection over a hidden insertion copies only source-visible text, a
-          // retained deletion copies its original text without tracking, a pending
-          // format copies the original formatting, a structural union copies its
-          // source branch, and comment/redline markup never reaches the clipboard.
-          // view.serializeForClipboard gives ProseMirror's own HTML + plain-text
-          // serialization (wrappers, hard breaks, links intact). Cut and drag are
-          // deliberately NOT intercepted — taking ownership of deletion there would
-          // cross the tracking / structural-freeze semantics.
-          copy(view, event: ClipboardEvent) {
-            const { from, to } = view.state.selection;
-            const slice = cleanSourceSlice(view.state.doc, from, to);
-            if (slice === null || !event.clipboardData) return false;
-            if (slice.size === 0) {
-              event.clipboardData.setData('text/plain', '');
-              event.clipboardData.setData('text/html', '');
-            } else {
-              const { dom, text } = view.serializeForClipboard(slice);
-              event.clipboardData.setData('text/html', dom.innerHTML);
-              event.clipboardData.setData('text/plain', text);
-            }
-            event.preventDefault();
-            return true;
-          },
         },
       },
       onUpdate({ editor }) {
