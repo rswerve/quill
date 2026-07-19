@@ -1,5 +1,5 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
-import { Transform, type Mapping } from '@tiptap/pm/transform';
+import { Mapping, Transform } from '@tiptap/pm/transform';
 import type { BlockTrackAttr, BlockTrackOp } from '../extensions/BlockTrack';
 import { projectTrackedDocument } from '../extensions/trackChangesProjection';
 
@@ -80,8 +80,13 @@ export function projectBlockUnions(doc: PMNode, mode: StructuralMode): BlockUnio
   return { doc: tr.doc, mapping: tr.mapping, removedBranchRanges };
 }
 
-/** The inline axis: keep the review union, or project inline changes to accepted. */
-export type InlineMode = 'review' | 'accepted';
+/**
+ * The inline axis: keep the review union (`review`), project inline changes to
+ * their accepted form (`accepted`, insertions kept / deletions dropped), or to
+ * their source/original form (`source`, insertions dropped / deletions kept /
+ * formatting inverted — the clean pre-suggestion text).
+ */
+export type InlineMode = 'review' | 'accepted' | 'source';
 
 export interface ProjectionAxes {
   structural: StructuralMode;
@@ -90,24 +95,49 @@ export interface ProjectionAxes {
 
 /**
  * The two-axis projection: structural branch selection composed with the inline
- * accepted-vs-review projection. The disk view is `{structural:'source',
- * inline:'review'}`; the accepted-content view (stats, Claude context, clean
- * print) is `{structural:'accepted', inline:'accepted'}`.
+ * accepted/source/review projection. The disk view is `{structural:'source',
+ * inline:'review'}`; the clean-original view (export, copy, the Claude document —
+ * pending suggestions IGNORED) is `{structural:'source', inline:'source'}`.
  *
- * The returned mapping reflects the structural axis. When `inline` is `accepted`
- * the inline drop is a content rebuild (via the existing, fuzzer-validated
- * `projectTrackedDocument`), which does not preserve a position mapping, so
- * inline-accepted positions are not mapped — callers that need them resolve at
- * their own seam. The disk view needs no inline projection, so it keeps the full
- * structural mapping.
+ * When `inline` is `accepted` the inline drop is a content rebuild (via
+ * `projectTrackedDocument`) that does NOT preserve a mapping, so accepted
+ * positions are unmapped — callers resolve at their own seam. When `inline` is
+ * `source`, the source kernel DOES carry a `review→source` mapping, so this
+ * composes it after the structural mapping into one review→clean-source mapping
+ * (invertible for readers that must translate clean-source positions back to
+ * live review coordinates). ⚠ An inverted position is NOT proof of a contiguous
+ * safe live preimage: a clean-source range can invert to a live envelope that
+ * spans a removed branch or a hidden insertion, so a consumer applying edits
+ * must prove source-contiguity or refuse — see `removedBranchRanges`.
  */
 export function projectDocument(doc: PMNode, axes: ProjectionAxes): BlockUnionProjection {
   const structural = projectBlockUnions(doc, axes.structural);
-  if ((axes.inline ?? 'review') === 'review') return structural;
-  const accepted = projectTrackedDocument(structural.doc).accepted;
+  const inline = axes.inline ?? 'review';
+  if (inline === 'review') return structural;
+  if (inline === 'accepted') {
+    return {
+      doc: projectTrackedDocument(structural.doc).accepted,
+      mapping: structural.mapping,
+      removedBranchRanges: structural.removedBranchRanges,
+    };
+  }
+  // inline === 'source': compose the structural (review→structural-source)
+  // mapping with the inline (structural-source→source) mapping into one
+  // review→clean-source mapping, and gather every removed range in review coords.
+  const projected = projectTrackedDocument(structural.doc);
+  const mapping = new Mapping();
+  mapping.appendMapping(structural.mapping);
+  mapping.appendMapping(projected.sourceMapping);
+  const structuralInverse = structural.mapping.invert();
   return {
-    doc: accepted,
-    mapping: structural.mapping,
-    removedBranchRanges: structural.removedBranchRanges,
+    doc: projected.source,
+    mapping,
+    removedBranchRanges: [
+      ...structural.removedBranchRanges,
+      ...projected.sourceRemovedRanges.map((range) => ({
+        from: structuralInverse.map(range.from),
+        to: structuralInverse.map(range.to),
+      })),
+    ],
   };
 }
