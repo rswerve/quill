@@ -252,6 +252,53 @@ function contaminateUnionWithTrackedMark(editor: Editor, changeId: string): void
   );
 }
 
+/** Seed a live inline tracked mark with a fully-specified dataTracked (id,
+ *  operation, optional originCommentId) — for constructing precise bulk scenarios. */
+function seedTrackedMark(
+  editor: Editor,
+  from: number,
+  to: number,
+  dataTracked: {
+    id: string;
+    operation: 'insert' | 'delete';
+    authorID: string;
+    status: 'pending';
+    originCommentId?: string;
+  },
+): void {
+  const markName = dataTracked.operation === 'delete' ? 'tracked_delete' : 'tracked_insert';
+  const mark = editor.state.schema.marks[markName].create({ dataTracked });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, to, mark)
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Add a foreign comment mark inside a union's delete branch (past the freeze) —
+ *  both contaminates the union (union-not-clean) and serves as a provenance
+ *  comment for an inline change that points at it. */
+function addForeignCommentInUnion(editor: Editor, changeId: string, commentId: string): void {
+  const change = getStructuralReviewState(editor.state).changes.find(
+    (candidate) => candidate.changeId === changeId,
+  );
+  if (!change) throw new Error(`no union ${changeId}`);
+  const from = change.source.from + 1;
+  const mark = editor.state.schema.marks.comment.create({
+    commentId,
+    resolved: false,
+    kind: 'note',
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, from + 1, mark)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
 const clickCardButton = (card: Element, name: 'Accept' | 'Reject'): void => {
   fireEvent.click(within(card as HTMLElement).getByRole('button', { name }));
 };
@@ -635,6 +682,70 @@ describe('DocumentTab structural review wiring', () => {
     expect(
       live.view.dom.querySelector('[data-structural-op="delete"][data-change-id="u-b"]'),
     ).toBeTruthy();
+  });
+
+  it('Accept All recomputes footprints per id — a shift by an earlier inline does not leak a provenance unset', async () => {
+    // Layout: [para "AAAAAAAA", heading "Beta", para "BBBB"]. Accepting the inline
+    // DELETION on "AAAAAAAA" shifts the union left by 8; the later inline INSERT
+    // has a provenance comment INSIDE that (now shifted) union. Only a per-id
+    // FRESH footprint recompute catches that the provenance unset would be vetoed
+    // and skips it — a stale snapshot would let it through and abort mid-flight.
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() =>
+      live.commands.setContent(
+        {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'AAAAAAAA' }] },
+            { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Beta' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'BBBB' }] },
+          ],
+        },
+        { emitUpdate: true },
+      ),
+    );
+    // Union on "Beta" (heading text at [11,15)); contaminate it with prov-C so it
+    // stays AND becomes the inline insert's provenance comment.
+    act(() => mintAt(live, 11, 'u-b'));
+    act(() => addForeignCommentInUnion(live, 'u-b', 'prov-C'));
+    // Inline DELETE on "AAAAAAAA" [1,9) (before the union); inline INSERT on "BBBB"
+    // (after the union) whose origin comment is prov-C, inside the union.
+    act(() =>
+      seedTrackedMark(live, 1, 9, {
+        id: 'inline-A',
+        operation: 'delete',
+        authorID: 'user',
+        status: 'pending',
+      }),
+    );
+    act(() =>
+      seedTrackedMark(live, 23, 27, {
+        id: 'inline-B',
+        operation: 'insert',
+        authorID: 'user',
+        status: 'pending',
+        originCommentId: 'prov-C',
+      }),
+    );
+    await waitFor(() =>
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy(),
+    );
+
+    act(() => mounted.getHandle().acceptAll());
+
+    await waitFor(() => {
+      const pendingIds = getTrackedChanges(live)
+        .filter((c) => c.status === 'pending')
+        .map((c) => c.id);
+      // A resolved (deletion applied, shifting the union); B SKIPPED because its
+      // provenance comment sits inside the shifted union — fresh-footprint caught it.
+      expect(pendingIds).toContain('inline-B');
+      expect(pendingIds).not.toContain('inline-A');
+    });
+    // The provenance comment's mark was never removed.
+    expect(findAnnotationRange(live.state.doc, 'comment', 'prov-C')).not.toBeNull();
+    expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
   });
 
   it('New clears a stale card and its attention state', async () => {

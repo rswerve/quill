@@ -1734,14 +1734,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     (action: 'accept' | 'reject'): string[] => {
       if (!editor) return [];
       const unclean = new Set<string>();
+      // Work an id set to natural termination — NO numeric ceiling. Each pass
+      // resolves every id it can (by id, against fresh state, so intra-pass
+      // position shifts are handled); success / not-resolvable / union-not-clean
+      // drop the id, origin-comment-locked defers it. A pass that resolves nothing
+      // stops the loop, and the id set only ever shrinks, so it always finishes.
+      let pending = getStructuralReviewState(editor.state).changes.map((change) => change.changeId);
       let progress = true;
-      let guard = 0;
-      while (progress && guard < 1000) {
+      while (progress) {
         progress = false;
-        for (const change of getStructuralReviewState(editor.state).changes) {
-          if (unclean.has(change.changeId)) continue;
-          guard += 1;
-          const result = resolveStructuralUnion(editor.state, change.changeId, action);
+        const deferred: string[] = [];
+        for (const changeId of pending) {
+          const result = resolveStructuralUnion(editor.state, changeId, action);
           if (result.ok) {
             if (result.resolvedComment) {
               const resolved = result.resolvedComment;
@@ -1750,11 +1754,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             }
             editor.view.dispatch(result.tr);
             progress = true;
-            break; // positions shifted — re-read the inventory
+          } else if (result.reason === 'union-not-clean') {
+            unclean.add(changeId); // terminal
+          } else if (result.reason !== 'not-resolvable') {
+            deferred.push(changeId); // origin-comment-locked — retry while progress
           }
-          if (result.reason === 'union-not-clean') unclean.add(change.changeId);
-          // not-resolvable → gone (drop); origin-comment-locked → defer & retry
+          // not-resolvable → gone (dropped)
         }
+        pending = deferred;
       }
       return [...unclean];
     },
@@ -1767,10 +1774,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // takes) would touch a remaining frozen union — never queue a comment
   // resolution that the freeze guard then vetoes.
   const acceptInlineIdWithinFootprints = useCallback(
-    (id: string, touchesFootprint: (from: number, to: number) => boolean): void => {
+    (id: string): void => {
       if (!editor) return;
       const state = editor.state;
       if (firstFrozenViolation(resolveTrackedChanges(state, id, 'accept')) !== null) return;
+      // Footprints recomputed FRESH from the current doc: an earlier per-id
+      // resolution in this loop shifted positions, so a snapshot captured before
+      // the loop would compare this id's fresh comment ranges against stale union
+      // coordinates — and a false negative would queue a comment resolved whose
+      // mark removal the freeze then vetoes.
+      const footprints = structuralFootprints(state.doc);
       const { captured, provenanceCommentIds } = captureCommentsResolvedByAccept(
         state.doc,
         getTrackedChanges(editor),
@@ -1778,7 +1791,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       );
       const provenanceBlocked = provenanceCommentIds.some((commentId) => {
         const range = findAnnotationRange(state.doc, 'comment', commentId);
-        return range ? touchesFootprint(range.from, range.to) : false;
+        return range
+          ? footprints.some((footprint) => range.from < footprint.to && footprint.from < range.to)
+          : false;
       });
       if (provenanceBlocked) return;
       if (captured.length > 0) {
@@ -1801,18 +1816,19 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const resolveInlineBulk = useCallback(
     (action: 'accept' | 'reject'): void => {
       if (!editor) return;
-      const footprints = structuralFootprints(editor.state.doc);
-      if (footprints.length === 0) {
+      // Decide bulk-vs-per-id ONCE: a frozen union remains iff there are
+      // footprints now (inline resolution never collapses a union, so this stays
+      // true through the loop). The per-id path recomputes footprint POSITIONS
+      // fresh for each id.
+      if (structuralFootprints(editor.state.doc).length === 0) {
         if (action === 'accept') prepareCommentsForAccept();
         else queueAutoResolveForTrackedRemoval('tracked_insert');
         editor.commands.resolveChange(null, action);
         return;
       }
-      const touchesFootprint = (from: number, to: number) =>
-        footprints.some((footprint) => from < footprint.to && footprint.from < to);
       for (const change of getTrackedChanges(editor).filter((c) => c.status === 'pending')) {
         if (action === 'accept') {
-          acceptInlineIdWithinFootprints(change.id, touchesFootprint);
+          acceptInlineIdWithinFootprints(change.id);
         } else {
           const rejectTr = resolveTrackedChanges(editor.state, change.id, 'reject');
           if (firstFrozenViolation(rejectTr) !== null) continue;
