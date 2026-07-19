@@ -144,12 +144,40 @@ describe('buildPrompt document-scale edit protocol', () => {
     const prompt = buildPrompt(makeComment([]), 'bold this', 'doc body', RANGES, null, null);
     expect(prompt).toContain('use a "format" edit instead of "replace"');
     expect(prompt).toContain('"bold", "italic", "strikethrough"');
-    expect(prompt).toContain('either "replace" or "format", never both');
+    expect(prompt).toContain('exactly ONE of "replace", "format", or "structural"');
     // Inexpressible styles still get an honest prose answer, and the old
     // identical-find/replace trap stays outlawed.
     expect(prompt).toContain('Underline and other styles beyond those three cannot be suggested');
     expect(prompt).toContain('Never emit an edits block with identical "find" and "replace"');
     expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
+  });
+
+  it('documents structural (block-type) edits and their heading↔paragraph-only V1 scope', () => {
+    const prompt = buildPrompt(
+      makeComment([]),
+      'make this a heading',
+      'doc body',
+      RANGES,
+      null,
+      null,
+    );
+    // The structural edit shape + the "uniquely identifies ONE block, not the whole block" precision.
+    expect(prompt).toContain('use a "structural" edit');
+    expect(prompt).toContain('"structural":{"to":"paragraph"}');
+    expect(prompt).toContain('"structural":{"to":"heading","level":2}');
+    expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
+    expect(prompt).toContain('REQUIRED when "to" is "heading"');
+    expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
+    // A block-type change is now possible — the old blanket refusal is carved out.
+    expect(prompt).toContain(
+      "Changing one existing block's TYPE between a heading and a normal paragraph IS possible",
+    );
+    // Honest V1a scope: heading↔paragraph only; lists / level changes / block add-remove unavailable.
+    expect(prompt).toContain(
+      'ONLY converting an existing heading to a paragraph or a paragraph to a heading',
+    );
+    expect(prompt).toContain('converting to or from a list');
+    expect(prompt).toContain('are NOT available yet');
   });
 
   it('states the single-newline line-break convention for multi-line format finds', () => {
@@ -169,9 +197,9 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('a single "\\n" means a hard line break (Shift+Enter)');
     expect(prompt).toContain('{"find":"line one\\nline two","replace":"line one line two"}'); // join
     expect(prompt).toContain('{"find":"one long sentence","replace":"one long\\nsentence"}'); // split
-    // Cross-block structural changes still refused.
+    // Cross-block structural changes still refused for TEXT/FORMAT edits.
     expect(prompt).toContain(
-      'cannot merge, split, or add separate PARAGRAPHS, list items, or headings',
+      'cannot merge, split, add, or remove separate PARAGRAPHS, list items, or headings',
     );
     expect(prompt).toContain('explain in prose that it needs Editing mode');
     // The Slice-1 "no newlines in replace" ban is gone.
