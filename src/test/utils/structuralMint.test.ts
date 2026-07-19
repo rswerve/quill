@@ -812,12 +812,13 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     expect(doc.child(2).textContent).toBe('existing');
   });
 
-  it('carries a contained origin comment on a paragraph→list mint (oracle uses the converted size)', () => {
-    // WITHOUT the buildAcceptedOracle size fix this refuses self-check-failed: the oracle
-    // would strip only a source-paragraph-sized range while the real union strips the whole
-    // (larger) list branch, so accepted != oracle. The fix aligns them → mint succeeds.
+  it('paragraph→list carveout: the oracle uses the LARGER converted size (comment spans the whole paragraph)', () => {
+    // GROWING direction. WITHOUT the size fix the oracle strips only a source-paragraph-sized
+    // range, so a comment spanning the WHOLE paragraph is only partly stripped from the larger
+    // list branch → accepted != oracle → self-check-failed. (A short comment would fit the old
+    // undersized range and hide the bug — hence the full-content span.)
     editor = makeEditor('<p>Item text</p>');
-    editor.chain().setTextSelection({ from: 1, to: 5 }).setComment('cm1').run(); // on "Item"
+    editor.chain().setTextSelection({ from: 1, to: 10 }).setComment('cm1').run(); // full "Item text"
     const r = expectOk(
       compileStructuralMint(
         editor.state,
@@ -835,6 +836,76 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     expect(doc.child(1).type.name).toBe('bulletList');
     expect(blockHasComment(doc.child(1), 'cm1')).toBe(false); // list branch fully stripped
     expect(activeRecords(editor.state)[0].originCommentId).toBe('cm1');
+  });
+
+  it('list→paragraph carveout: the oracle uses the SMALLER converted size (no overrun into the next block)', () => {
+    // SHRINKING direction. WITHOUT the size fix the oracle strips a source-LIST-sized range —
+    // larger than the converted paragraph — overrunning into the following block and removing
+    // its UNRELATED comment → accepted != oracle → self-check-failed. The fix confines it.
+    editor = makeEditor('<ul><li>AAAA</li></ul><p>BBBB</p>');
+    editor.chain().setTextSelection({ from: 3, to: 7 }).setComment('cm2').run(); // full "AAAA" in the list
+    editor.chain().setTextSelection({ from: 11, to: 15 }).setComment('nextcm').run(); // "BBBB" after the list
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'bulletList' },
+          targetPos: posInBlock(0) + 3,
+          origin: { kind: 'comment', id: 'cm2' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(blockHasComment(doc.child(0), 'cm2')).toBe(true); // source list keeps origin
+    expect(blockHasComment(doc.child(1), 'cm2')).toBe(false); // proposed paragraph stripped
+    // The following block's UNRELATED comment survives — the confined range never touches it.
+    expect(blockHasComment(doc.child(doc.childCount - 1), 'nextcm')).toBe(true);
+  });
+
+  it('mints a single-item taskList→paragraph union (exercises the distinct taskItem lift branch)', () => {
+    editor = makeEditor('<ul data-type="taskList"><li data-type="taskItem">Task text</li></ul>');
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'taskList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('taskList');
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    expect(doc.child(1).type.name).toBe('paragraph');
+    expect(doc.child(1).textContent).toBe('Task text');
+  });
+
+  it('mints an orderedList in both directions', () => {
+    editor = makeEditor('<p>Numbered</p>');
+    const wrap = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'paragraphToList', listType: 'orderedList' }, targetPos: posInBlock(0) }),
+      ),
+    );
+    editor.view.dispatch(wrap.tr);
+    expect(editor.state.doc.child(1).type.name).toBe('orderedList');
+
+    editor = makeEditor('<ol><li>Numbered</li></ol>');
+    const lift = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'orderedList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(lift.tr);
+    expect(editor.state.doc.child(1).type.name).toBe('paragraph');
+    expect(editor.state.doc.child(1).textContent).toBe('Numbered');
   });
 
   it('still refuses a non-list, non-textblock container (blockquote) as target-not-found', () => {
