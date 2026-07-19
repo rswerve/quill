@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { TrackedInsert, TrackedDelete, TrackedFormat } from '../../extensions/TrackChanges';
 import { projectDocument } from '../../utils/blockUnionProjection';
-import { cleanSourceMarkdown } from '../../utils/cleanSourceProjection';
+import { cleanSourceHTML, cleanSourceMarkdown } from '../../utils/cleanSourceProjection';
 
 /**
  * Commit 1 of the coordinate slice — the pure foundation. Asserts that the
@@ -122,5 +122,22 @@ describe('projectDocument {structural:source, inline:source} — the composed cl
     expect(md).toContain('abYc'); // insertion dropped, deletion kept
     expect(md).not.toContain('New'); // proposed structural branch gone
     expect(md).not.toMatch(/aXb/); // pending insertion never leaks
+  });
+});
+
+describe('cleanSourceHTML — the pending-ignored original for print', () => {
+  it('serializes the source view to HTML with NO redline markup', () => {
+    const html = cleanSourceHTML(mixedDoc());
+    // Source structure survives: the retained heading and the reject-view text.
+    expect(html).toContain('<h1>Old</h1>');
+    expect(html).toContain('keep');
+    expect(html).toContain('abYc'); // insertion "X" dropped, deletion "Y" kept
+    // The proposed structural branch and the pending insertion never appear.
+    expect(html).not.toContain('New');
+    expect(html).not.toMatch(/aXb/);
+    // Crucially, the projected doc carries no tracking marks, so the printed HTML
+    // has none of the redline elements or classes the live editor renders.
+    expect(html).not.toMatch(/track-insert|track-delete|track-format|data-tracked/);
+    expect(html).not.toMatch(/<ins\b|<del\b/);
   });
 });
