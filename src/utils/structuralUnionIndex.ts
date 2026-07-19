@@ -1,5 +1,5 @@
 import type { Node as PMNode } from '@tiptap/pm/model';
-import { BLOCK_TRACK_TYPES, type BlockTrackAttr } from '../extensions/BlockTrack';
+import { BLOCK_TRACK_TYPES, isBlockTrackAttr, type BlockTrackAttr } from '../extensions/BlockTrack';
 import type { StructuralListType, StructuralOp } from '../types';
 
 const TRACKABLE_ROOTS = new Set<string>(BLOCK_TRACK_TYPES);
@@ -89,17 +89,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function validIdentity(value: unknown): value is BlockTrackAttr {
-  return (
-    isPlainObject(value) &&
-    Object.keys(value).length === 2 &&
-    Object.keys(value).every((key) => key === 'changeId' || key === 'op') &&
-    typeof value.changeId === 'string' &&
-    value.changeId.length > 0 &&
-    (value.op === 'delete' || value.op === 'insert')
-  );
-}
-
 function parentPathAt(doc: PMNode, pos: number): number[] {
   const $pos = doc.resolve(pos);
   const path: number[] = [];
@@ -139,7 +128,7 @@ function collectRoots(doc: PMNode): Collected {
 
     const hintedId = isPlainObject(raw) && typeof raw.changeId === 'string' ? raw.changeId : null;
     if (hintedId && hintedId.length > 0) ids.add(hintedId);
-    if (!validIdentity(raw)) {
+    if (!isBlockTrackAttr(raw)) {
       issues.push({ changeId: hintedId, code: 'invalid-identity', positions: [pos] });
       return true;
     }
@@ -173,7 +162,7 @@ function collectRoots(doc: PMNode): Collected {
         code: 'nested-identity',
         positions: [pos],
       });
-      if (!validIdentity(ancestorRaw)) continue;
+      if (!isBlockTrackAttr(ancestorRaw)) continue;
       issues.push({
         changeId: ancestorRaw.changeId,
         code: 'nested-identity',
@@ -190,7 +179,7 @@ function rootSourceIndex(root: CollectedRoot): number {
   let sourceIndex = 0;
   for (let i = 0; i < root.childIndex; i += 1) {
     const raw = root.parent.child(i).attrs.blockTrack as unknown;
-    if (validIdentity(raw) && raw.op === 'insert') continue;
+    if (isBlockTrackAttr(raw) && raw.op === 'insert') continue;
     sourceIndex += 1;
   }
   return sourceIndex;

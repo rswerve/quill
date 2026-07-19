@@ -16,6 +16,25 @@ export interface BlockTrackAttr {
 }
 
 /**
+ * The ONE exact identity predicate for a live `blockTrack` attribute — a plain
+ * object with EXACTLY `{changeId: nonempty string, op: 'delete'|'insert'}` and no
+ * extra keys. The structural analyzer and the in-canvas redline both consume it so
+ * they can never disagree about which markup is a real identity vs corrupt metadata
+ * (an extra key or a non-`delete`/`insert` op must be treated as malformed by both).
+ */
+export function isBlockTrackAttr(value: unknown): value is BlockTrackAttr {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.every((key) => key === 'changeId' || key === 'op')) return false;
+  const attr = value as Record<string, unknown>;
+  return (
+    typeof attr.changeId === 'string' &&
+    attr.changeId.length > 0 &&
+    (attr.op === 'delete' || attr.op === 'insert')
+  );
+}
+
+/**
  * Block node types that can take part in a structural union. Tables are a later
  * phase (a whole-table union root) and are deliberately excluded here.
  */

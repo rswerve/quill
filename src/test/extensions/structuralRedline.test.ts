@@ -122,4 +122,53 @@ describe('StructuralRedline decoration', () => {
     expect(payload.content).toBe('# Title\n\nBody');
     expect(payload.content).not.toContain('data-change-id');
   });
+
+  it('renders no redline for an identity with an extra key (matches the analyzer)', () => {
+    editor = makeEditor('# Title');
+    const heading = editor.state.doc.child(0);
+    editor.view.dispatch(
+      editor.state.tr.setNodeMarkup(0, undefined, {
+        ...heading.attrs,
+        blockTrack: { changeId: 'c1', op: 'delete', extra: true },
+      }),
+    );
+    expect(editor.view.dom.querySelector('.structural-delete')).toBeNull();
+    expect(editor.view.dom.querySelector('[data-change-id="c1"]')).toBeNull();
+  });
+
+  it('does not descend into a malformed parent, while a clean sibling union still paints', () => {
+    editor = makeEditor('> quoted\n\n# Title');
+    // Mint a clean union on the heading (the sibling that must still paint).
+    const r = compileStructuralMint(editor.state, {
+      op: { kind: 'headingToParagraph', level: 1 },
+      targetPos: 11,
+      changeId: 'c1',
+      author: 'claude',
+      createdAt: '2026-07-18T00:00:00.000Z',
+    });
+    if (!r.ok) throw new Error(r.reason);
+    editor.view.dispatch(r.tr);
+    // Forge a MALFORMED blockquote (bad op) wrapping a valid-looking inner paragraph.
+    const blockquote = editor.state.doc.child(0);
+    const inner = blockquote.child(0);
+    editor.view.dispatch(
+      editor.state.tr
+        .setNodeMarkup(0, undefined, {
+          ...blockquote.attrs,
+          blockTrack: { changeId: 'bad', op: 'bogus' },
+        })
+        .setNodeMarkup(1, undefined, {
+          ...inner.attrs,
+          blockTrack: { changeId: 'nested', op: 'delete' },
+        }),
+    );
+    // The malformed parent and its would-be-valid child get no redline…
+    expect(editor.view.dom.querySelector('[data-change-id="bad"]')).toBeNull();
+    expect(editor.view.dom.querySelector('[data-change-id="nested"]')).toBeNull();
+    // …but the clean heading union still does.
+    expect(editor.view.dom.querySelectorAll('.structural-delete')).toHaveLength(1);
+    expect(
+      editor.view.dom.querySelector('.structural-delete')?.getAttribute('data-change-id'),
+    ).toBe('c1');
+  });
 });

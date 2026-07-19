@@ -2,7 +2,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
-import type { BlockTrackAttr } from './BlockTrack';
+import { isBlockTrackAttr } from './BlockTrack';
 
 /**
  * The in-canvas redline for structural (block-union) suggestions. `blockTrack` is
@@ -24,24 +24,16 @@ import type { BlockTrackAttr } from './BlockTrack';
 
 const STRUCTURAL_REDLINE_KEY = new PluginKey<DecorationSet>('structuralRedline');
 
-function validBlockTrack(raw: unknown): raw is BlockTrackAttr {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const value = raw as Record<string, unknown>;
-  return (
-    typeof value.changeId === 'string' &&
-    value.changeId.trim().length > 0 &&
-    (value.op === 'delete' || value.op === 'insert')
-  );
-}
-
 function buildRedline(doc: PMNode): DecorationSet {
   const decorations: Decoration[] = [];
   doc.descendants((node, pos) => {
     const raw = node.attrs.blockTrack as unknown;
-    if (raw === null || raw === undefined) return true;
-    // A malformed identity gets no redline — an unknown op is never treated as an
-    // insertion; the needs-attention state covers the corrupt union instead.
-    if (!validBlockTrack(raw)) return true;
+    if (raw === null || raw === undefined) return true; // no identity → look inside for nested unions
+    // A malformed identity gets no redline AND we do NOT descend into it (fail
+    // closed — a valid-looking nested identity under a corrupt parent must not be
+    // painted); the needs-attention state covers the corrupt union instead. The
+    // predicate is the SAME one the analyzer uses, so they cannot disagree.
+    if (!isBlockTrackAttr(raw)) return false;
     decorations.push(
       Decoration.node(pos, pos + node.nodeSize, {
         class: raw.op === 'delete' ? 'structural-delete' : 'structural-insert',
