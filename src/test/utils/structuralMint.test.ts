@@ -701,3 +701,34 @@ describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () =
     expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
   });
 });
+
+describe('compileStructuralMint — V1b-1 top-level block resolution', () => {
+  it('resolves a top-level LIST target (reaches the command → unsupported-shape, not target-not-found)', () => {
+    editor = makeEditor('<ul><li>item text</li></ul><p>Body</p>');
+    // Before V1b-1 a list target did not resolve (target-not-found). Now it resolves and
+    // reaches the command lookup, which still refuses list ops until V1b-2 → unsupported-shape.
+    const r = compileStructuralMint(
+      editor.state,
+      req({ op: { kind: 'listToParagraph', listType: 'bulletList' }, targetPos: posInBlock(0) }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'unsupported-shape' });
+  });
+
+  it('resolves a single-item TASK list target too', () => {
+    editor = makeEditor('<ul data-type="taskList"><li data-type="taskItem">task text</li></ul>');
+    const r = compileStructuralMint(
+      editor.state,
+      req({ op: { kind: 'listToParagraph', listType: 'taskList' }, targetPos: posInBlock(0) }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'unsupported-shape' });
+  });
+
+  it('still refuses a non-list, non-textblock container (blockquote) as target-not-found', () => {
+    editor = makeEditor('<blockquote><p>quote</p></blockquote>');
+    const r = compileStructuralMint(
+      editor.state,
+      req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'target-not-found' });
+  });
+});

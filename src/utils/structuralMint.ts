@@ -90,20 +90,60 @@ interface TargetBlock {
   from: number;
   to: number;
   index: number;
+  /**
+   * The INLINE range a native conversion command selects. For a textblock it is the
+   * block's own content; for a list it is the FIRST nested textblock's content — an
+   * explicit inline range, because ProseMirror warns when a TextSelection endpoint is
+   * not an inline position (a list's own boundaries are not).
+   */
+  contentSelection: { from: number; to: number };
 }
 
-/** Resolve a position to the direct top-level textblock strictly containing it. */
-function resolveTopLevelTextblock(doc: PMNode, pos: number): TargetBlock | null {
+const LIST_TYPES = new Set(['bulletList', 'orderedList', 'taskList']);
+
+/** The content range of the first textblock descendant of a list node (absolute positions). */
+function firstTextblockContentRange(
+  listFrom: number,
+  listNode: PMNode,
+): { from: number; to: number } | null {
+  let range: { from: number; to: number } | null = null;
+  listNode.descendants((node, offset) => {
+    if (range) return false;
+    if (node.isTextblock) {
+      const start = listFrom + 1 + offset; // list content begins at listFrom + 1
+      range = { from: start + 1, to: start + node.nodeSize - 1 };
+      return false;
+    }
+    return true;
+  });
+  return range;
+}
+
+/**
+ * Resolve a position to the top-level block (depth 1) strictly containing it — generalized
+ * from V1a's textblock-only resolution to also accept a list container, so list↔paragraph
+ * conversions can target a top-level list. A boundary position (depth 0) or a block type
+ * outside V1's scope (e.g. a blockquote) resolves to null.
+ */
+function resolveTopLevelBlock(doc: PMNode, pos: number): TargetBlock | null {
   // Guard the resolve boundary: a non-integer (NaN, fractional) `pos` slips past a
   // bare range check but throws in `doc.resolve`, so reject it as target-not-found.
   if (!Number.isInteger(pos) || pos <= 0 || pos >= doc.content.size) return null;
   const $pos = doc.resolve(pos);
-  // depth 1 = directly inside a top-level block; a boundary position is depth 0
-  // and a nested textblock (list item, blockquote) is depth > 1.
+  // depth 1 = directly inside a top-level block; a boundary position is depth 0.
   if ($pos.depth !== 1) return null;
   const node = $pos.parent;
-  if (!node.isTextblock) return null;
-  return { node, from: $pos.before(1), to: $pos.after(1), index: $pos.index(0) };
+  const from = $pos.before(1);
+  const to = $pos.after(1);
+  const base = { node, from, to, index: $pos.index(0) };
+  if (node.isTextblock) {
+    return { ...base, contentSelection: { from: from + 1, to: to - 1 } };
+  }
+  if (LIST_TYPES.has(node.type.name)) {
+    const contentSelection = firstTextblockContentRange(from, node);
+    return contentSelection ? { ...base, contentSelection } : null;
+  }
+  return null;
 }
 
 /**
@@ -279,7 +319,11 @@ function captureNativeConversion(
 ): { afterDoc: PMNode; proposed: PMNode } | null {
   const captureState = EditorState.create({
     doc: state.doc,
-    selection: TextSelection.create(state.doc, target.from + 1, target.to - 1),
+    selection: TextSelection.create(
+      state.doc,
+      target.contentSelection.from,
+      target.contentSelection.to,
+    ),
   });
   let captured: Transaction | null = null;
   const applied = command(captureState, (tr) => {
@@ -351,7 +395,7 @@ export function compileStructuralMint(
   }
 
   // 4. The target is strictly inside a single top-level textblock.
-  const target = resolveTopLevelTextblock(state.doc, targetPos);
+  const target = resolveTopLevelBlock(state.doc, targetPos);
   if (!target) return refuse('target-not-found');
 
   // 5. The op is a well-formed structural operation expressible in V1a on this
