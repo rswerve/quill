@@ -2080,6 +2080,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     trackedChanges.filter((change) => change.status === 'pending'),
   );
   const structuralChangeCount = structuralReview.changes.length;
+  // The full pending-review count spans BOTH axes — inline suggestions and
+  // structural changes — so the Topbar total and the panel header agree.
+  const pendingReviewCount = pendingSuggestionCount + structuralChangeCount;
   // The analyzer's structural issues plus the runtime union-not-clean flags,
   // unified into the panel's non-actionable needs-attention list.
   const structuralAttention = useMemo<StructuralAttention[]>(
@@ -2166,7 +2169,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       isDirty,
       lastSavedAt,
       isSuggesting,
-      pendingSuggestionCount,
+      pendingSuggestionCount: pendingReviewCount,
       zoom,
       aiSession,
       contextFolder,
@@ -2189,7 +2192,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     lastKnownEffort,
     lastSavedAt,
     onChromeChange,
-    pendingSuggestionCount,
+    pendingReviewCount,
     tabId,
     zoom,
   ]);
@@ -2269,7 +2272,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         <aside className="comment-layer" ref={commentLayerRef} aria-label="Review panel">
           <PanelHeader
             mode={panelMode}
-            commentCount={unresolvedCommentCount + pendingSuggestionCount + structuralChangeCount}
+            commentCount={unresolvedCommentCount + pendingReviewCount}
             showResolved={showResolvedComments}
             resolvedCount={resolvedCommentCount}
             aiSession={aiSession}
