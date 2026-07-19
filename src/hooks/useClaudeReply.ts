@@ -7,6 +7,8 @@ import type {
   QuillEdit,
   QuillEditsBlock,
   ClaudeRunOptions,
+  StructuralOp,
+  StructuralPromptEntry,
   TrackedChangeInfo,
   TrackedEditOrigin,
 } from '../types';
@@ -55,6 +57,8 @@ interface UseClaudeReplyOptions {
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
    *  what is already proposed and awaiting review. */
   getPendingSuggestions: () => TrackedChangeInfo[];
+  /** Pending structural (block-union) changes, flattened for the manifest. */
+  getStructuralPending: () => StructuralPromptEntry[];
   /** Global model/effort choices, read immediately before each spawn. */
   getRunOptions?: () => ClaudeRunOptions;
   /** Shared with document chat so this document resumes only one request. */
@@ -204,42 +208,63 @@ export function buildEditProtocolLines(): string[] {
   ];
 }
 
-export function buildPendingSuggestionsLines(pendingSuggestions: TrackedChangeInfo[]): string[] {
+/** The target block form a pending structural change would produce. */
+function structuralTargetPhrase(op: StructuralOp): string {
+  switch (op.kind) {
+    case 'headingToParagraph':
+      return 'a paragraph';
+    case 'paragraphToHeading':
+      return `a heading (level ${op.level})`;
+    case 'listToParagraph':
+      return 'a paragraph';
+    case 'paragraphToList':
+      if (op.listType === 'orderedList') return 'a numbered list';
+      if (op.listType === 'taskList') return 'a task list';
+      return 'a bullet list';
+  }
+}
+
+function originSuffix(originCommentId?: string, originChatMessageId?: string): string {
+  if (originCommentId) return ` (from comment ${originCommentId})`;
+  if (originChatMessageId) return ` (from chat ${originChatMessageId})`;
+  return '';
+}
+
+export function buildPendingSuggestionsLines(
+  pendingSuggestions: TrackedChangeInfo[],
+  structuralPending: StructuralPromptEntry[] = [],
+): string[] {
+  const inlineLines = pendingSuggestions.map((suggestion) => {
+    const origin = originSuffix(suggestion.originCommentId, suggestion.originChatMessageId);
+    const formatSegments = suggestion.segments.filter((segment) => segment.kind === 'format');
+    const insertions = suggestion.segments.filter((segment) => segment.kind === 'insert');
+    const deletions = suggestion.segments.filter((segment) => segment.kind === 'delete');
+    if (formatSegments.length > 0 && insertions.length === 0 && deletions.length === 0) {
+      const adds = [...new Set(formatSegments.flatMap((segment) => segment.adds))].sort();
+      const removes = [...new Set(formatSegments.flatMap((segment) => segment.removes))].sort();
+      const delta = [...adds.map((name) => `+${name}`), ...removes.map((name) => `-${name}`)].join(
+        ' ',
+      );
+      const text = formatSegments.map((segment) => segment.text).join(' … ');
+      return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
+    }
+    const inserted = insertions.map((segment) => segment.text).join(' … ');
+    const deleted = deletions.map((segment) => segment.text).join(' … ');
+    if (insertions.length > 0 && deletions.length > 0) {
+      return `- [replacement] "${clip(deleted, 80)}" → "${clip(inserted, 80)}"${origin}`;
+    }
+    const kind = insertions.length > 0 ? 'insertion' : 'deletion';
+    return `- [${kind}] "${clip(inserted || deleted, 80)}"${origin}`;
+  });
+  const structuralLines = structuralPending.map((entry) => {
+    const origin = originSuffix(entry.originCommentId, entry.originChatMessageId);
+    return `- [structure] "${clip(entry.anchorText, 80)}" → ${structuralTargetPhrase(entry.op)}${origin}`;
+  });
+  const lines = [...inlineLines, ...structuralLines];
   return [
     '=== PENDING SUGGESTIONS (already proposed, awaiting review) ===',
     'Do not re-propose or conflict with these pending tracked changes.',
-    ...(pendingSuggestions.length > 0
-      ? pendingSuggestions.map((suggestion) => {
-          let origin = '';
-          if (suggestion.originCommentId) {
-            origin = ` (from comment ${suggestion.originCommentId})`;
-          } else if (suggestion.originChatMessageId) {
-            origin = ` (from chat ${suggestion.originChatMessageId})`;
-          }
-          const formatSegments = suggestion.segments.filter((segment) => segment.kind === 'format');
-          const insertions = suggestion.segments.filter((segment) => segment.kind === 'insert');
-          const deletions = suggestion.segments.filter((segment) => segment.kind === 'delete');
-          if (formatSegments.length > 0 && insertions.length === 0 && deletions.length === 0) {
-            const adds = [...new Set(formatSegments.flatMap((segment) => segment.adds))].sort();
-            const removes = [
-              ...new Set(formatSegments.flatMap((segment) => segment.removes)),
-            ].sort();
-            const delta = [
-              ...adds.map((name) => `+${name}`),
-              ...removes.map((name) => `-${name}`),
-            ].join(' ');
-            const text = formatSegments.map((segment) => segment.text).join(' … ');
-            return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
-          }
-          const inserted = insertions.map((segment) => segment.text).join(' … ');
-          const deleted = deletions.map((segment) => segment.text).join(' … ');
-          if (insertions.length > 0 && deletions.length > 0) {
-            return `- [replacement] "${clip(deleted, 80)}" → "${clip(inserted, 80)}"${origin}`;
-          }
-          const kind = insertions.length > 0 ? 'insertion' : 'deletion';
-          return `- [${kind}] "${clip(inserted || deleted, 80)}"${origin}`;
-        })
-      : ['(none)']),
+    ...(lines.length > 0 ? lines : ['(none)']),
     '',
   ];
 }
@@ -272,6 +297,7 @@ export function buildPrompt(
   context: PromptContext | null,
   pendingSuggestions: TrackedChangeInfo[] = [],
   freshSession = false,
+  structuralPending: StructuralPromptEntry[] = [],
 ): string {
   // `userText` is appended explicitly as the final line below. Depending on
   // when React flushed state, the same message may or may not already be the
@@ -315,7 +341,7 @@ export function buildPrompt(
     ...head,
     ...buildEditProtocolLines(),
     ...editContext,
-    ...buildPendingSuggestionsLines(pendingSuggestions),
+    ...buildPendingSuggestionsLines(pendingSuggestions, structuralPending),
     ...buildReferenceContextLines(context),
     '=== FULL DOCUMENT ===',
     documentIntroduction,
@@ -393,6 +419,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           context,
           opts.getPendingSuggestions(),
           fresh,
+          opts.getStructuralPending(),
         );
 
         const finalize = (rawText: string, visibleText: string) => {

@@ -95,6 +95,7 @@ function makeOpts(mock: MockClaude) {
   }));
   const getContextFolder = vi.fn(() => null);
   const getPendingSuggestions = vi.fn((): TrackedChangeInfo[] => []);
+  const getStructuralPending = vi.fn(() => []);
   return {
     opts: {
       startAIReply,
@@ -110,6 +111,7 @@ function makeOpts(mock: MockClaude) {
       applyTrackedEdits,
       getContextFolder,
       getPendingSuggestions,
+      getStructuralPending,
       aiGate: {
         busy: false,
         acquire: () => true,

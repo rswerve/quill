@@ -106,6 +106,7 @@ import type {
   EditScope,
   QuillEdit,
   Suggestion,
+  StructuralPromptEntry,
   StructuralReviewEnvelope,
   StructuralSuggestionRecord,
   TrackedChangeInfo,
@@ -767,6 +768,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [retryAIReply, markDirty],
   );
 
+  // Pending structural changes flattened for the prompt manifest, read live at
+  // ask time (like getPendingSuggestions) from the authoritative persistable
+  // record/index path — never raw blockTrack — with each block's current
+  // (source-branch) text as the anchor.
+  const getStructuralPending = useCallback((): StructuralPromptEntry[] => {
+    const ed = editorRef.current?.getEditor();
+    if (!ed) return [];
+    return getStructuralReviewState(ed.state).changes.map((change) => ({
+      op: change.op,
+      anchorText: rangeText(ed.state.doc, change.source.from, change.source.to).trim(),
+      ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+      ...(change.originChatMessageId ? { originChatMessageId: change.originChatMessageId } : {}),
+    }));
+  }, []);
+
   const claudeReply = useClaudeReply({
     startAIReply,
     appendAIReplyChunk,
@@ -789,6 +805,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
       [editor],
     ),
+    getStructuralPending,
     getRunOptions: getClaudeRunOptions,
     aiGate,
   });
@@ -820,6 +837,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         editor ? getTrackedChanges(editor).filter((change) => change.status === 'pending') : [],
       [editor],
     ),
+    getStructuralPending,
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
     onEffortObserved: setLastKnownEffort,

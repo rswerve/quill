@@ -7,6 +7,7 @@ import type {
   DocumentChatThread,
   QuillEdit,
   QuillEditsBlock,
+  StructuralPromptEntry,
   TrackedChangeInfo,
 } from '../types';
 import {
@@ -35,6 +36,8 @@ interface UseDocumentChatOptions {
   ) => { results: EditResult[]; suggestionIds?: string[] };
   getContextFolder: () => string | null;
   getPendingSuggestions: () => TrackedChangeInfo[];
+  /** Pending structural (block-union) changes, flattened for the manifest. */
+  getStructuralPending: () => StructuralPromptEntry[];
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
   onEffortObserved?: (effort: string) => void;
@@ -72,6 +75,7 @@ export function buildChatPrompt(
   cursor: ChatCursorContext,
   context: PromptContext | null,
   pendingSuggestions: TrackedChangeInfo[] = [],
+  structuralPending: StructuralPromptEntry[] = [],
 ): string {
   const cursorLines = cursor.selectedText
     ? ['Selected text:', cursor.selectedText, 'Enclosing block:', cursor.blockText]
@@ -83,7 +87,7 @@ export function buildChatPrompt(
     "=== USER'S CURRENT SELECTION / CURSOR ===",
     ...cursorLines,
     '',
-    ...buildPendingSuggestionsLines(pendingSuggestions),
+    ...buildPendingSuggestionsLines(pendingSuggestions, structuralPending),
     ...buildReferenceContextLines(context),
     '=== FULL DOCUMENT ===',
     'Current document:',
@@ -165,6 +169,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           opts.getCursorContext(),
           context,
           opts.getPendingSuggestions(),
+          opts.getStructuralPending(),
         );
         if (!opts.aiGate.owns(requestId)) return;
         const runOptions = opts.getRunOptions();

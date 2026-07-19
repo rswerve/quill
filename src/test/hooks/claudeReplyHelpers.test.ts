@@ -288,6 +288,38 @@ describe('buildPrompt pending suggestions', () => {
     expect(prompt).toContain('- [formatting +bold -italic] "one … two"');
   });
 
+  it('lists pending STRUCTURAL changes with block text and target form', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [], false, [
+      {
+        op: { kind: 'headingToParagraph', level: 1 },
+        anchorText: 'Quarterly Results',
+        originCommentId: 'c7',
+      },
+      { op: { kind: 'paragraphToHeading', level: 2 }, anchorText: 'Overview' },
+      { op: { kind: 'paragraphToList', listType: 'bulletList' }, anchorText: 'first point' },
+    ]);
+    expect(prompt).toContain('- [structure] "Quarterly Results" → a paragraph (from comment c7)');
+    expect(prompt).toContain('- [structure] "Overview" → a heading (level 2)');
+    expect(prompt).toContain('- [structure] "first point" → a bullet list');
+    expect(prompt).not.toContain('(none)');
+  });
+
+  it('combines inline and structural pending changes in one manifest', () => {
+    const prompt = buildPrompt(
+      makeComment([]),
+      'fix this',
+      'doc',
+      RANGES,
+      null,
+      null,
+      [makeChange({ segments: [{ kind: 'insert', from: 1, to: 6, text: 'added text' }] })],
+      false,
+      [{ op: { kind: 'headingToParagraph', level: 1 }, anchorText: 'Title' }],
+    );
+    expect(prompt).toContain('- [insertion] "added text"');
+    expect(prompt).toContain('- [structure] "Title" → a paragraph');
+  });
+
   it('renders (none) when nothing is pending', () => {
     const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, []);
     expect(prompt).toContain('=== PENDING SUGGESTIONS (already proposed, awaiting review) ===');

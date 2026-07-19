@@ -324,6 +324,21 @@ export interface StructuralChangeInfo {
 }
 
 /**
+ * A pending structural change flattened for the Claude prompt's pending-changes
+ * manifest — the block's current (source-branch) text plus the target form — so
+ * Claude is aware of proposed block-shape changes it should not re-propose or
+ * collide with. Derived from the authoritative {@link StructuralChangeInfo}, not
+ * raw markup.
+ */
+export interface StructuralPromptEntry {
+  op: StructuralOp;
+  /** The current (source-branch) text of the block the change targets. */
+  anchorText: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+}
+
+/**
  * One quote-based text edit Claude proposes: replace the first occurrence of
  * the plaintext `find` (within the scoped range) with `replace`. An empty
  * `find` is a pure insertion; an empty `replace` is a pure deletion.

@@ -61,6 +61,7 @@ function makeOptions() {
       applyTrackedEdits,
       getContextFolder: () => '/refs',
       getPendingSuggestions: () => [],
+      getStructuralPending: () => [],
       getRunOptions: () => ({ model: 'sonnet' as const, effort: 'high' as const }),
       onModelObserved: vi.fn(),
       onChanged: vi.fn(),
