@@ -152,31 +152,22 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
   });
 
-  it('documents structural (block-type) edits and their heading↔paragraph-only V1 scope', () => {
-    const prompt = buildPrompt(
-      makeComment([]),
-      'make this a heading',
-      'doc body',
-      RANGES,
-      null,
-      null,
-    );
+  it('documents structural edits incl. single-item list↔paragraph, with the honest V1 scope', () => {
+    const prompt = buildPrompt(makeComment([]), 'make this a list', 'doc body', RANGES, null, null);
     // The structural edit shape + the "uniquely identifies ONE block, not the whole block" precision.
     expect(prompt).toContain('use a "structural" edit');
     expect(prompt).toContain('"structural":{"to":"paragraph"}');
     expect(prompt).toContain('"structural":{"to":"heading","level":2}');
+    expect(prompt).toContain('"structural":{"to":"bulletList"}'); // the list-conversion example
     expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
-    expect(prompt).toContain('REQUIRED when "to" is "heading"');
+    expect(prompt).toContain('REQUIRES a "level"');
     expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
-    // A block-type change is now possible — the old blanket refusal is carved out.
-    expect(prompt).toContain(
-      "Changing one existing block's TYPE between a heading and a normal paragraph IS possible",
-    );
-    // Honest V1a scope: heading↔paragraph only; lists / level changes / block add-remove unavailable.
-    expect(prompt).toContain(
-      'ONLY converting an existing heading to a paragraph or a paragraph to a heading',
-    );
-    expect(prompt).toContain('converting to or from a list');
+    // A block-type change now spans heading↔paragraph AND single-item list↔paragraph.
+    expect(prompt).toContain("Changing one existing block's TYPE");
+    expect(prompt).toContain('SINGLE-item list↔paragraph only');
+    // Honest scope: multi-item lists and list-kind changes remain unavailable.
+    expect(prompt).toContain('Converting a list of MORE THAN ONE item');
+    expect(prompt).toContain("changing a list's kind");
     expect(prompt).toContain('are NOT available yet');
   });
 
