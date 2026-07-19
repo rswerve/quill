@@ -132,7 +132,7 @@ describe('edit pipeline adversarial payloads', () => {
     },
   );
 
-  it('reports a foreign pending-insertion overlap and leaves the review doc unchanged', () => {
+  it('cannot even see a foreign pending insertion in the source view (find not found)', () => {
     const editor = makePipelineEditor('<p>alpha omega</p>');
     editor.commands.setTrackChangesEnabled(true);
     editor.commands.setTrackChangesAuthor('maz');
@@ -142,16 +142,18 @@ describe('edit pipeline adversarial payloads', () => {
 
     const outcome = applyEdits(editor, [{ find: 'pending omega', replace: 'Claude replacement' }]);
 
+    // Source view HIDES the pending insertion, so "pending" is not in the
+    // document Claude was given — its find is honestly not found, doc unchanged.
     expect(outcome.results[0]).toMatchObject({
-      status: 'conflict',
-      reason: 'pending-suggestion',
+      status: 'not-found',
+      reason: 'text-not-found',
     });
     expect(outcome.suggestionIds).toEqual([]);
     expect(editor.state.doc.eq(before)).toBe(true);
     expect(trackedIds(editor)).toEqual(existingIds);
   });
 
-  it('reports a foreign pending-format overlap and leaves the review doc unchanged', () => {
+  it('refuses an edit landing on a foreign pending format, leaving the review doc unchanged', () => {
     const editor = makePipelineEditor('<p>alpha beta omega</p>');
     editor.commands.setTrackChangesEnabled(true);
     editor.commands.setTrackChangesAuthor('maz');
@@ -161,16 +163,18 @@ describe('edit pipeline adversarial payloads', () => {
 
     const outcome = applyEdits(editor, [{ find: 'beta omega', format: { italic: true } }]);
 
+    // The source view keeps that text but its pending format mark is unresolved:
+    // the mapped live range overlaps it → refuse rather than rewrite it.
     expect(outcome.results[0]).toMatchObject({
       status: 'conflict',
-      reason: 'pending-suggestion',
+      reason: 'source-view-conflict',
     });
     expect(outcome.suggestionIds).toEqual([]);
     expect(editor.state.doc.eq(before)).toBe(true);
     expect(trackedIds(editor)).toEqual(existingIds);
   });
 
-  it('reports a foreign pending-deletion overlap and leaves the review doc unchanged', () => {
+  it('refuses an edit landing on a foreign pending deletion, leaving the review doc unchanged', () => {
     const editor = makePipelineEditor('<p>alpha beta omega</p>');
     editor.commands.setTrackChangesEnabled(true);
     editor.commands.setTrackChangesAuthor('maz');
@@ -180,25 +184,35 @@ describe('edit pipeline adversarial payloads', () => {
 
     const outcome = applyEdits(editor, [{ find: 'beta omega', replace: 'Claude replacement' }]);
 
+    // Source view RETAINS the pending deletion text, so the find matches — but the
+    // mapped live range overlaps the pending deletion, so refuse.
     expect(outcome.results[0]).toMatchObject({
       status: 'conflict',
-      reason: 'pending-suggestion',
+      reason: 'source-view-conflict',
     });
     expect(outcome.suggestionIds).toEqual([]);
     expect(editor.state.doc.eq(before)).toBe(true);
     expect(trackedIds(editor)).toEqual(existingIds);
   });
 
-  it('preserves same-author restacking over a pending deletion', () => {
+  it('refuses restacking over ANY pending change, including its own (source-view policy)', () => {
+    // Stricter than the old cross-author policy by design: with the clean-source
+    // document, Claude works from committed text and must never rewrite an
+    // unresolved suggestion — even one it made earlier.
     const editor = makePipelineEditor('<p>alpha beta omega</p>');
     editor.commands.setTrackChangesEnabled(true);
     editor.commands.setTrackChangesAuthor('claude');
     editor.commands.deleteRange({ from: 7, to: 12 });
+    const before = editor.state.doc;
 
     const outcome = applyEdits(editor, [{ find: 'beta omega', replace: 'Claude replacement' }]);
 
-    expect(outcome.results[0]).toMatchObject({ status: 'applied' });
-    expect(outcome.suggestionIds.length).toBeGreaterThan(0);
+    expect(outcome.results[0]).toMatchObject({
+      status: 'conflict',
+      reason: 'source-view-conflict',
+    });
+    expect(outcome.suggestionIds).toEqual([]);
+    expect(editor.state.doc.eq(before)).toBe(true);
   });
 
   it('reports a text edit and an overlapping format edit independently', () => {

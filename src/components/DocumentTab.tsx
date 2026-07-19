@@ -71,6 +71,7 @@ import {
   type StructuralReviewState,
 } from '../utils/structuralChanges';
 import { resolveStructuralUnion } from '../utils/structuralResolution';
+import { cleanSourceMarkdown } from '../utils/cleanSourceProjection';
 import { resolveTrackedChanges } from '../extensions/trackChangesResolution';
 import { firstFrozenViolation } from '../extensions/structuralFreeze';
 import { structuralFootprints } from '../utils/structuralFootprints';
@@ -554,6 +555,18 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
 
+  // The document Claude sees is the CLEAN-SOURCE projection (pending suggestions
+  // ignored) — Maz's Option 1. This MUST stay consistent with planEdits, which
+  // now matches Claude's finds against the same source projection: what Claude
+  // reads and where its edits land are one view. (The save/recovery paths keep
+  // getDocMarkdown = the review doc; only the Claude prompt uses this.)
+  const getClaudeDocMarkdown = useCallback(() => {
+    const ref = editorRef.current;
+    const ed = ref?.getEditor();
+    if (!ref || !ed) return '';
+    return cleanSourceMarkdown(ed.state.doc, (doc) => ref.serializeDoc(doc));
+  }, []);
+
   // Marks are the runtime truth for review data. The update listener below
   // projects comments into React state while editing; write paths reconcile once
   // more defensively, and tracked changes exist only as marks until captured here.
@@ -795,7 +808,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     cancelAIReply: cancelAIReplyAndDirty,
     retryAIReply: retryAIReplyAndDirty,
     linkAIReplySuggestions,
-    getDocMarkdown,
+    getDocMarkdown: getClaudeDocMarkdown,
     getRangeTexts,
     applyTrackedEdits,
     getContextFolder: useCallback(() => contextFolderRef.current, []),
@@ -822,7 +835,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, []);
 
   const documentChat = useDocumentChat({
-    getDocMarkdown,
+    getDocMarkdown: getClaudeDocMarkdown,
     getCursorContext,
     applyTrackedEdits: useCallback(
       (edits: QuillEdit[], originChatMessageId: string) =>

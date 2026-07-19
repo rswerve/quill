@@ -307,8 +307,10 @@ describe('TrackChanges hard-break tracking', () => {
     );
 
     expect(planned.placed).toEqual([]);
+    // Source view retains the pending-deleted hard break, so the find matches and
+    // its live range overlaps that unresolved deletion → refuse.
     expect(planned.results).toEqual([
-      expect.objectContaining({ status: 'conflict', reason: 'pending-suggestion' }),
+      expect.objectContaining({ status: 'conflict', reason: 'source-view-conflict' }),
     ]);
   });
 

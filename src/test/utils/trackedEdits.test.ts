@@ -551,7 +551,8 @@ describe('trackedEdits helpers', () => {
         ],
         'claude',
       );
-      expect(results[0]).toMatchObject({ status: 'conflict', reason: 'pending-suggestion' });
+      // Source-view policy: the italic op lands on an unresolved pending format.
+      expect(results[0]).toMatchObject({ status: 'conflict', reason: 'source-view-conflict' });
       expect(placed).toEqual([
         {
           kind: 'format',

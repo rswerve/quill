@@ -1,6 +1,9 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { EditScope, QuillEdit, QuillFormatEdit, QuillTextEdit } from '../types';
+import type { Mapping } from '@tiptap/pm/transform';
 import { buildEditTextProjection, locateEditTextMatches } from './editTextProjection';
+import { projectDocument, type BlockUnionProjection } from './blockUnionProjection';
+import { structuralFootprints, type StructuralFootprint } from './structuralFootprints';
 import { normalizeHref } from './linkEditing';
 
 /**
@@ -120,6 +123,7 @@ export type EditResultReason =
   | 'already-applied'
   | 'overlapping-edit'
   | 'pending-suggestion'
+  | 'source-view-conflict'
   | 'structural-change'
   | 'engine-blocked'
   | 'invalid-edit'
@@ -807,6 +811,33 @@ function formatEditCanCarryMarks(doc: ProseMirrorNode, edit: PlannedFormatEdit):
  * pending format suggestion (v1 cross-author policy: whole-op block, never
  * partial).
  */
+/**
+ * Translate a planned SOURCE-coordinate range back to live review coordinates and
+ * decide whether the source-view safety gate refuses it. An inverted position is
+ * NOT proof of a contiguous safe live preimage — refuse (never rewrite an
+ * unresolved suggestion) when the live envelope overlaps a removed branch,
+ * intersects a structural footprint (the RETAINED source branch is frozen too),
+ * overlaps any pending review mark, or fails to round-trip.
+ */
+function translatePlannedRange(
+  liveDoc: ProseMirrorNode,
+  projection: BlockUnionProjection,
+  inverse: Mapping,
+  footprints: StructuralFootprint[],
+  sourceFrom: number,
+  sourceTo: number,
+): { liveFrom: number; liveTo: number; conflict: boolean } {
+  const liveFrom = inverse.map(sourceFrom, 1);
+  const liveTo = inverse.map(sourceTo, -1);
+  const conflict =
+    projection.removedBranchRanges.some((range) => range.from < liveTo && liveFrom < range.to) ||
+    footprints.some((footprint) => footprint.from < liveTo && liveFrom < footprint.to) ||
+    rangeHasPendingReviewMark(liveDoc, liveFrom, liveTo) ||
+    projection.mapping.map(liveFrom, 1) !== sourceFrom ||
+    projection.mapping.map(liveTo, -1) !== sourceTo;
+  return { liveFrom, liveTo, conflict };
+}
+
 export function planEdits(
   doc: ProseMirrorNode,
   rangeFrom: number,
@@ -818,23 +849,51 @@ export function planEdits(
   const texts: TextCandidate[] = [];
   const formats: FormatCandidate[] = [];
 
+  // Claude reasons about — and its `find` strings match — the CLEAN-SOURCE
+  // document (pending suggestions ignored). Plan every edit against source, then
+  // translate each planned range back to live coordinates through the safety
+  // gate, so an edit never lands on hidden or frozen content Claude never saw.
+  const projection = projectDocument(doc, { structural: 'source', inline: 'source' });
+  const inverse = projection.mapping.invert();
+  const footprints = structuralFootprints(doc);
+  const sourceFrom = projection.mapping.map(rangeFrom, 1);
+  const sourceTo = projection.mapping.map(rangeTo, -1);
+  // A nonempty live scope that collapses in source is entirely hidden content —
+  // report the honest source-view conflict, not a misleading text-not-found.
+  const scopeCollapsed = rangeFrom < rangeTo && sourceFrom >= sourceTo;
+
   for (const edit of edits) {
-    const decision = planEdit(doc, rangeFrom, rangeTo, edit);
+    if (scopeCollapsed) {
+      results.push(result(edit, 'conflict', 'source-view-conflict'));
+      continue;
+    }
+    const decision = planEdit(projection.doc, sourceFrom, sourceTo, edit);
     const editIndex = results.push(decision.result) - 1;
-    if (decision.placed?.kind === 'text') {
-      const reason = textEditConflictReason(doc, decision.placed, editAuthor);
+    if (!decision.placed) continue;
+    const { liveFrom, liveTo, conflict } = translatePlannedRange(
+      doc,
+      projection,
+      inverse,
+      footprints,
+      decision.placed.from,
+      decision.placed.to,
+    );
+    if (conflict) {
+      results[editIndex] = result(edit, 'conflict', 'source-view-conflict');
+      continue;
+    }
+    const placed: PlannedEdit = { ...decision.placed, from: liveFrom, to: liveTo };
+    if (placed.kind === 'text') {
+      const reason = textEditConflictReason(doc, placed, editAuthor);
       if (reason) {
         results[editIndex] = result(edit, 'conflict', reason);
       } else {
-        texts.push({ editIndex, placed: { ...decision.placed, editIndex } });
+        texts.push({ editIndex, placed: { ...placed, editIndex } });
       }
-    }
-    if (decision.placed?.kind === 'format') {
-      if (formatEditCanCarryMarks(doc, decision.placed)) {
-        formats.push({ editIndex, placed: { ...decision.placed, editIndex } });
-      } else {
-        results[editIndex] = result(edit, 'conflict', 'engine-blocked');
-      }
+    } else if (formatEditCanCarryMarks(doc, placed)) {
+      formats.push({ editIndex, placed: { ...placed, editIndex } });
+    } else {
+      results[editIndex] = result(edit, 'conflict', 'engine-blocked');
     }
   }
 
@@ -894,6 +953,8 @@ function editResultReason(result: EditResult): string {
       return 'it overlaps another proposed text change.';
     case 'pending-suggestion':
       return 'it conflicts with a pending suggestion.';
+    case 'source-view-conflict':
+      return 'it overlaps a pending change; resolve that change first.';
     case 'structural-change':
       return 'it spans or would split multiple paragraphs or list items; structural changes can’t be tracked as suggestions yet. Make this change in Editing mode.';
     case 'engine-blocked':
@@ -957,6 +1018,28 @@ function rangeHasForeignPendingFormat(
         m.type.name === 'tracked_format' &&
         m.attrs.dataTracked?.status === 'pending' &&
         m.attrs.dataTracked?.authorID !== author,
+    );
+  });
+  return found;
+}
+
+/**
+ * Any pending review mark — insert, delete, OR format, from ANY author —
+ * anywhere in the range. The source-view gate is stricter than the cross-author
+ * policy: a clean-source edit must never rewrite an unresolved suggestion, even
+ * Claude's own earlier one, because the source view hides/retains that content in
+ * a way the live application would not.
+ */
+function rangeHasPendingReviewMark(doc: ProseMirrorNode, from: number, to: number): boolean {
+  let found = false;
+  doc.nodesBetween(from, to, (node) => {
+    if (found || (!node.isText && node.type.name !== 'hardBreak')) return;
+    found = node.marks.some(
+      (mark) =>
+        (mark.type.name === 'tracked_insert' ||
+          mark.type.name === 'tracked_delete' ||
+          mark.type.name === 'tracked_format') &&
+        mark.attrs.dataTracked?.status === 'pending',
     );
   });
   return found;
