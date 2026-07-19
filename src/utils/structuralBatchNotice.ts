@@ -19,10 +19,10 @@ import type { StructuralMintRefusal } from './structuralMint';
 const CROSS_AXIS =
   'it changes a block that another edit in this batch is restructuring; ask for them one at a time.';
 
-// V1a executes only heading↔paragraph. The requested target alone can't reveal whether an
-// unsupported op is a list conversion or a heading-level change, so the message names both.
+// V1 executes heading↔paragraph and SINGLE-item list↔paragraph. The requested target alone
+// can't reveal which unsupported case was asked for, so the message names the whole boundary.
 const UNSUPPORTED_STRUCTURAL =
-  'that structural change isn’t available yet — only heading↔paragraph conversions are supported (list conversions and heading-level changes are coming later).';
+  'that structural change isn’t available yet — heading↔paragraph and single-item list↔paragraph are supported, but a multi-item list, a list-kind change (bulleted↔numbered↔checklist), and a heading-level change aren’t.';
 
 // System/provider faults are NOT the model's fault: keep the wording blameless and quiet.
 const SYSTEM_FAULT = 'an internal error stopped it; try asking again.';

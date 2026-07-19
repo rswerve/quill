@@ -43,14 +43,17 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('1 change wasn’t applied:');
   });
 
-  it('names both list conversions AND heading-level changes for an unsupported structural op', () => {
+  it('names the real V1 boundary for an unsupported structural op (single-item lists ARE supported)', () => {
     const results = [
       entry(0, { kind: 'structural', status: 'plan-refused', reason: 'unsupported-op' }),
     ];
-    const notice = formatBatchResultNotice(results, [{ find: 'Make this a list' }]);
-    expect(notice).toContain('list conversions');
-    expect(notice).toContain('heading-level changes');
-    expect(notice).toContain('heading↔paragraph');
+    const notice = formatBatchResultNotice(results, [{ find: 'Make this a multi-item list' }]);
+    expect(notice).toContain('single-item list↔paragraph are supported');
+    expect(notice).toContain('multi-item list');
+    expect(notice).toContain('list-kind change');
+    expect(notice).toContain('heading-level change');
+    // The stale "list conversions are coming later" claim is gone.
+    expect(notice).not.toContain('coming later');
   });
 
   it('gives the same unsupported message when the compiler (not the planner) refuses the shape', () => {
@@ -58,8 +61,8 @@ describe('formatBatchResultNotice', () => {
       entry(0, { kind: 'structural', status: 'mint-refused', reason: 'unsupported-shape' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
-    expect(notice).toContain('list conversions');
-    expect(notice).toContain('heading-level changes');
+    expect(notice).toContain('single-item list↔paragraph are supported');
+    expect(notice).toContain('multi-item list');
   });
 
   it('reports system/provider faults blamelessly, never blaming the instruction', () => {

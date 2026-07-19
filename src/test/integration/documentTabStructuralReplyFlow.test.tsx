@@ -1,5 +1,5 @@
 import { createRef } from 'react';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -403,9 +403,24 @@ describe('DocumentTab — Claude proposes a structural change through the real r
       expect(aiReplyOf(comment)?.suggestionIds).toEqual([changeId]);
     });
 
-    // Accept: the task list stays and the union (both branches + redline/card) is gone.
+    // The structural review card appears — labelled with the correct list KIND (not "List").
+    const card = await waitFor(() => {
+      const el = mounted.container.querySelector(
+        `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(card.textContent).toContain('Checklist');
+
+    // Accept through the PRODUCT handler — the card's real Accept button, not the raw command.
     act(() => {
-      editor.commands.acceptStructuralChange(changeId);
+      fireEvent.click(within(card).getByRole('button', { name: 'Accept' }));
+    });
+
+    // Card disappears, union disappears, the task list survives, the origin comment resolves.
+    await waitFor(() => {
+      expect(mounted.container.querySelector(`[data-card-id="${changeId}"]`)).toBeNull();
     });
     const doc = editor.state.doc;
     expect(unionChangeIds(doc).size).toBe(0); // no blockTrack branches remain
@@ -413,5 +428,6 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     expect(taskList.type.name).toBe('taskList');
     expect(taskList.attrs.blockTrack).toBeNull();
     expect(taskList.textContent).toBe('Body text');
+    expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
   });
 });

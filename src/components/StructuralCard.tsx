@@ -1,18 +1,25 @@
-import type { Comment, StructuralChangeInfo, StructuralOp } from '../types';
+import type { Comment, StructuralChangeInfo, StructuralListType, StructuralOp } from '../types';
 import SuggestionCardShell from './SuggestionCardShell';
 import styles from './SuggestionCard.module.css';
 
-/** A short, human before → after label for the card badge. */
-function structuralOpLabel(op: StructuralOp): string {
+/** The reader-facing name of a list kind — the card must not erase which was proposed. */
+function listKindLabel(listType: StructuralListType): string {
+  if (listType === 'orderedList') return 'Numbered list';
+  if (listType === 'taskList') return 'Checklist';
+  return 'Bulleted list';
+}
+
+/** A short, human before → after label for the card badge (exported for a focused test). */
+export function structuralOpLabel(op: StructuralOp): string {
   switch (op.kind) {
     case 'headingToParagraph':
       return `Heading ${op.level} → Paragraph`;
     case 'paragraphToHeading':
       return `Paragraph → Heading ${op.level}`;
     case 'listToParagraph':
-      return 'List → Paragraph';
+      return `${listKindLabel(op.listType)} → Paragraph`;
     case 'paragraphToList':
-      return 'Paragraph → List';
+      return `Paragraph → ${listKindLabel(op.listType)}`;
   }
 }
 
