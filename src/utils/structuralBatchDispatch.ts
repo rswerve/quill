@@ -90,9 +90,17 @@ export type StructuralDispatchOutcome =
   | { kind: 'structural'; status: 'metadata-provider-failed' }
   | { kind: 'structural'; status: 'mint-refused'; reason: StructuralMintRefusal };
 
+/** An entry that declared BOTH axes (structural AND replace/format) — a protocol XOR violation. */
+export type InvalidDispatchOutcome = { kind: 'invalid'; reason: 'xor-violation' };
+
+export type BatchOutcome =
+  | InlineDispatchOutcome
+  | StructuralDispatchOutcome
+  | InvalidDispatchOutcome;
+
 export interface BatchResultEntry {
   batchIndex: number;
-  outcome: InlineDispatchOutcome | StructuralDispatchOutcome;
+  outcome: BatchOutcome;
 }
 
 export interface StructuralBatchDispatchOutcome {
@@ -102,15 +110,26 @@ export interface StructuralBatchDispatchOutcome {
   suggestionIds: string[];
 }
 
-/** A structural entry declares its axis by carrying a `structural` object. */
-function isStructuralEntry(entry: QuillEdit | QuillStructuralEdit): entry is QuillStructuralEdit {
+/** Own-property presence, tolerant of non-object model JSON. */
+function hasOwn(entry: unknown, key: string): boolean {
   return (
-    typeof entry === 'object' &&
-    entry !== null &&
-    'structural' in entry &&
-    typeof (entry as QuillStructuralEdit).structural === 'object' &&
-    (entry as QuillStructuralEdit).structural !== null
+    typeof entry === 'object' && entry !== null && Object.prototype.hasOwnProperty.call(entry, key)
   );
+}
+
+/**
+ * Classify one untrusted model entry by which axis's fields it declares — by PRESENCE,
+ * not validated value shape, so a null-valued key still counts. An entry carrying BOTH
+ * a `structural` key and a `replace`/`format` key violates the protocol's XOR and is
+ * refused outright rather than silently steered into one axis; a structural-only entry
+ * goes to the structural planner (which validates its shape), and everything else to the
+ * inline planner (which keeps its own validation and Markdown tolerance).
+ */
+function classifyEntry(entry: unknown): 'inline' | 'structural' | 'invalid' {
+  const hasStructural = hasOwn(entry, 'structural');
+  const hasInline = hasOwn(entry, 'replace') || hasOwn(entry, 'format');
+  if (hasStructural && hasInline) return 'invalid';
+  return hasStructural ? 'structural' : 'inline';
 }
 
 function toInlineOrigin(origin: BatchOrigin | undefined): TrackedEditOrigin | undefined {
@@ -143,10 +162,7 @@ function blocksOverlap(a: { from: number; to: number }, b: { from: number; to: n
   return a.from < b.to && b.from < a.to;
 }
 
-type SetOutcome = (
-  batchIndex: number,
-  outcome: InlineDispatchOutcome | StructuralDispatchOutcome,
-) => void;
+type SetOutcome = (batchIndex: number, outcome: BatchOutcome) => void;
 
 interface DispatchCandidate {
   batchIndex: number;
@@ -284,20 +300,27 @@ function dispatchStructuralMints(
 }
 
 export function structuralBatchDispatch(
-  entries: ReadonlyArray<QuillEdit | QuillStructuralEdit>,
+  entries: readonly unknown[],
   deps: StructuralBatchDeps,
 ): StructuralBatchDispatchOutcome {
   const { editor, authorID, fallbackAuthor, origin, nextId, now, readReservedIds } = deps;
 
-  // ---- Partition by axis, preserving the immutable batch index. ----
-  const inlineItems: Array<{ batchIndex: number; edit: QuillEdit }> = [];
-  const structuralItems: Array<{ batchIndex: number; edit: QuillStructuralEdit }> = [];
-  entries.forEach((entry, batchIndex) => {
-    if (isStructuralEntry(entry)) structuralItems.push({ batchIndex, edit: entry });
-    else inlineItems.push({ batchIndex, edit: entry });
-  });
+  const outcomeByIndex = new Map<number, BatchOutcome>();
 
-  const outcomeByIndex = new Map<number, InlineDispatchOutcome | StructuralDispatchOutcome>();
+  // ---- Partition by axis, preserving the immutable batch index. Untrusted model JSON
+  // is classified first (XOR-checked) and only THEN narrowed into each axis's type. ----
+  const inlineItems: Array<{ batchIndex: number; edit: QuillEdit }> = [];
+  const structuralItems: StructuralItem[] = [];
+  entries.forEach((entry, batchIndex) => {
+    const axis = classifyEntry(entry);
+    if (axis === 'invalid') {
+      outcomeByIndex.set(batchIndex, { kind: 'invalid', reason: 'xor-violation' });
+    } else if (axis === 'structural') {
+      structuralItems.push({ batchIndex, edit: entry as QuillStructuralEdit });
+    } else {
+      inlineItems.push({ batchIndex, edit: entry as QuillEdit });
+    }
+  });
 
   // ---- STEP 1: plan both axes on the SAME pre-apply clean-source document. ----
   // The conflict graph lives entirely in clean-source coordinates — the one document

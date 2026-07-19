@@ -387,6 +387,52 @@ describe('structuralBatchDispatch', () => {
   });
 });
 
+describe('structuralBatchDispatch — XOR classification', () => {
+  it('refuses an entry declaring BOTH axes (structural + replace) as xor-violation, applying neither', () => {
+    const editor = makeEditor('# Heading\n\nBody');
+    const out = structuralBatchDispatch(
+      [{ find: 'Heading', replace: 'HEADING', structural: { to: 'paragraph' } }],
+      baseDeps(editor),
+    );
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].outcome).toEqual({ kind: 'invalid', reason: 'xor-violation' });
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(out.suggestionIds).toEqual([]);
+  });
+
+  it('classifies by property PRESENCE, not value — a null-valued key still counts as declared', () => {
+    const editor = makeEditor('# Heading\n\nBody');
+    const out = structuralBatchDispatch(
+      [
+        { find: 'Heading', structural: null, replace: 'x' }, // structural present (null) + replace → invalid
+        { find: 'Body', structural: { to: 'heading', level: 2 }, format: null }, // both present → invalid
+      ],
+      baseDeps(editor),
+    );
+    expect(out.results[0].outcome).toEqual({ kind: 'invalid', reason: 'xor-violation' });
+    expect(out.results[1].outcome).toEqual({ kind: 'invalid', reason: 'xor-violation' });
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+  });
+
+  it('routes a structural-only entry with a malformed structural value to the structural planner', () => {
+    const editor = makeEditor('# Heading\n\nBody');
+    // Only one axis declared → NOT an XOR violation; the structural planner refuses the shape.
+    const out = structuralBatchDispatch([{ find: 'Heading', structural: null }], baseDeps(editor));
+    expect(out.results[0].outcome).toMatchObject({ kind: 'structural', status: 'plan-refused' });
+  });
+
+  it('routes non-object entries to the inline planner as malformed', () => {
+    const editor = makeEditor('# Heading\n\nBody');
+    const out = structuralBatchDispatch(['not an edit', 42, null], baseDeps(editor));
+    expect(out.results).toHaveLength(3);
+    for (const entry of out.results) {
+      expect(entry.outcome).toMatchObject({ kind: 'inline', result: { status: 'malformed' } });
+    }
+  });
+});
+
 describe('inlineTouchesBlock (cross-axis point semantics)', () => {
   // Structural target block envelope [10, 20).
   it('conflicts a nonempty inline range on half-open overlap, allows exact outer edges', () => {
