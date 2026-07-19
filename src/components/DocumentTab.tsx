@@ -71,6 +71,9 @@ import {
   type StructuralReviewState,
 } from '../utils/structuralChanges';
 import { resolveStructuralUnion } from '../utils/structuralResolution';
+import { resolveTrackedChanges } from '../extensions/trackChangesResolution';
+import { firstFrozenViolation } from '../extensions/structuralFreeze';
+import { structuralFootprints } from '../utils/structuralFootprints';
 import {
   prepareCanonicalPersistence,
   rebaseForDegradedRecovery,
@@ -1712,17 +1715,144 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [editor, setComments, clearActiveIf],
   );
 
+  // Bulk resolution resolves STRUCTURAL unions FIRST, then inline suggestions.
+  // Order matters: a union-not-clean union (a tracked mark inside a still-frozen
+  // envelope) left behind would otherwise make the single inline
+  // `resolveChange(null)` transaction touch that frozen region and be VETOED as a
+  // whole — turning best-effort into a global abort of every inline suggestion.
+  // Bulk resolution is intentionally BEST-EFFORT and multi-undo (each structural
+  // kernel closeHistory's its own step): clean changes resolve, contaminated /
+  // locked ones are preserved, and Accept All is NOT atomic.
+
+  // Resolve every persistable structural union for `action`, reading fresh state
+  // each dispatch. Accept queues each coupled resolvedComment BEFORE its dispatch.
+  // union-not-clean is TERMINAL (never retried); origin-comment-locked is DEFERRED
+  // and retried while any OTHER union makes progress (resolving one can unlock
+  // another). Returns the union-not-clean ids to flag as runtime attention; a
+  // locked-cycle union stays an ordinary card (still clean, resolvable later).
+  const resolveAllStructural = useCallback(
+    (action: 'accept' | 'reject'): string[] => {
+      if (!editor) return [];
+      const unclean = new Set<string>();
+      let progress = true;
+      let guard = 0;
+      while (progress && guard < 1000) {
+        progress = false;
+        for (const change of getStructuralReviewState(editor.state).changes) {
+          if (unclean.has(change.changeId)) continue;
+          guard += 1;
+          const result = resolveStructuralUnion(editor.state, change.changeId, action);
+          if (result.ok) {
+            if (result.resolvedComment) {
+              const resolved = result.resolvedComment;
+              setComments((current) => autoResolveCapturedComments(current, [resolved]));
+              clearActiveIf('comment', resolved.id);
+            }
+            editor.view.dispatch(result.tr);
+            progress = true;
+            break; // positions shifted — re-read the inventory
+          }
+          if (result.reason === 'union-not-clean') unclean.add(change.changeId);
+          // not-resolvable → gone (drop); origin-comment-locked → defer & retry
+        }
+      }
+      return [...unclean];
+    },
+    [editor, setComments, clearActiveIf],
+  );
+
+  // Accept ONE inline id in the freeze-constrained fallback: skip it entirely,
+  // BEFORE any React update, if either its resolution transaction OR its
+  // provenance-comment removal (a second mutation path `prepareCommentsForAccept`
+  // takes) would touch a remaining frozen union — never queue a comment
+  // resolution that the freeze guard then vetoes.
+  const acceptInlineIdWithinFootprints = useCallback(
+    (id: string, touchesFootprint: (from: number, to: number) => boolean): void => {
+      if (!editor) return;
+      const state = editor.state;
+      if (firstFrozenViolation(resolveTrackedChanges(state, id, 'accept')) !== null) return;
+      const { captured, provenanceCommentIds } = captureCommentsResolvedByAccept(
+        state.doc,
+        getTrackedChanges(editor),
+        id,
+      );
+      const provenanceBlocked = provenanceCommentIds.some((commentId) => {
+        const range = findAnnotationRange(state.doc, 'comment', commentId);
+        return range ? touchesFootprint(range.from, range.to) : false;
+      });
+      if (provenanceBlocked) return;
+      if (captured.length > 0) {
+        setComments((current) => autoResolveCapturedComments(current, captured));
+      }
+      for (const commentId of provenanceCommentIds) {
+        editor.commands.unsetComment(commentId);
+        clearActiveIf('comment', commentId);
+      }
+      editor.view.dispatch(resolveTrackedChanges(editor.state, id, 'accept'));
+    },
+    [editor, setComments, clearActiveIf],
+  );
+
+  // Resolve inline suggestions AFTER the structural pass. With no frozen union
+  // remaining the single bulk transaction is safe (today's path). Otherwise fall
+  // back to per-id, skipping any id whose resolution — or, for Accept, whose
+  // provenance-comment removal — would touch a remaining footprint. (Reject only
+  // preflights the resolution tx; its comment capture is React-only.)
+  const resolveInlineBulk = useCallback(
+    (action: 'accept' | 'reject'): void => {
+      if (!editor) return;
+      const footprints = structuralFootprints(editor.state.doc);
+      if (footprints.length === 0) {
+        if (action === 'accept') prepareCommentsForAccept();
+        else queueAutoResolveForTrackedRemoval('tracked_insert');
+        editor.commands.resolveChange(null, action);
+        return;
+      }
+      const touchesFootprint = (from: number, to: number) =>
+        footprints.some((footprint) => from < footprint.to && footprint.from < to);
+      for (const change of getTrackedChanges(editor).filter((c) => c.status === 'pending')) {
+        if (action === 'accept') {
+          acceptInlineIdWithinFootprints(change.id, touchesFootprint);
+        } else {
+          const rejectTr = resolveTrackedChanges(editor.state, change.id, 'reject');
+          if (firstFrozenViolation(rejectTr) !== null) continue;
+          queueAutoResolveForTrackedRemoval('tracked_insert', change.id);
+          editor.view.dispatch(rejectTr);
+        }
+      }
+    },
+    [
+      editor,
+      prepareCommentsForAccept,
+      queueAutoResolveForTrackedRemoval,
+      acceptInlineIdWithinFootprints,
+    ],
+  );
+
+  const flagStructuralAttention = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setRuntimeUncleanIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
   const handleAcceptAll = useCallback(() => {
     if (!editor) return;
-    prepareCommentsForAccept();
-    editor.commands.resolveChange(null, 'accept');
-  }, [editor, prepareCommentsForAccept]);
+    const attentionIds = resolveAllStructural('accept');
+    resolveInlineBulk('accept');
+    flagStructuralAttention(attentionIds);
+    setActiveAnnotation(null);
+  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
 
   const handleRejectAll = useCallback(() => {
     if (!editor) return;
-    queueAutoResolveForTrackedRemoval('tracked_insert');
-    editor.commands.resolveChange(null, 'reject');
-  }, [editor, queueAutoResolveForTrackedRemoval]);
+    const attentionIds = resolveAllStructural('reject');
+    resolveInlineBulk('reject');
+    flagStructuralAttention(attentionIds);
+    setActiveAnnotation(null);
+  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
 
   const handleAcceptChange = useCallback(
     (id: string) => {

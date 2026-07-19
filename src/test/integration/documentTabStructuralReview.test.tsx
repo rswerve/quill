@@ -17,6 +17,7 @@ import { findAnnotationRange } from '../../extensions/AnnotationFocus';
 import { retainedRecords, resetStructuralRecords } from '../../extensions/StructuralRecordStore';
 import type { CanonicalRecord } from '../../extensions/StructuralRecordStore';
 import { compileStructuralMint } from '../../utils/structuralMint';
+import { getStructuralReviewState } from '../../utils/structuralChanges';
 import { getTrackedChanges } from '../../extensions/TrackChanges';
 import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../../extensions/trackChangesMeta';
 
@@ -218,6 +219,33 @@ function contaminateUnion(editor: Editor): void {
   editor.view.dispatch(
     editor.state.tr
       .addMark(1, 2, foreign)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Seed a live inline tracked_insert mark INSIDE a union's delete branch (past the
+ *  freeze via a restore bypass) — an unclean union that, under inline-first bulk
+ *  resolution, would make resolveChange(null) touch the frozen envelope and veto
+ *  the ENTIRE inline batch. `contam-<id>` stays pending after Accept All. */
+function contaminateUnionWithTrackedMark(editor: Editor, changeId: string): void {
+  const change = getStructuralReviewState(editor.state).changes.find(
+    (candidate) => candidate.changeId === changeId,
+  );
+  if (!change) throw new Error(`no union ${changeId}`);
+  const from = change.source.from + 1; // first position inside the delete branch content
+  const mark = editor.state.schema.marks.tracked_insert.create({
+    dataTracked: {
+      id: `contam-${changeId}`,
+      operation: 'insert',
+      authorID: 'user',
+      status: 'pending',
+    },
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, from + 1, mark)
       .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
       .setMeta(SKIP_TRACKING_META, true)
       .setMeta('addToHistory', false),
@@ -573,6 +601,40 @@ describe('DocumentTab structural review wiring', () => {
     expect(findAnnotationRange(live.state.doc, 'comment', commentId)).toBeNull();
     expect(live.state.doc.child(0).type.name).toBe('paragraph');
     expect(mounted.container.querySelector(`[data-card-id="${commentId}"]`)).toBeNull();
+  });
+
+  it('Accept All resolves a clean union + inline but preserves a contaminated union (no global abort)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setTwoHeadingDoc(live));
+    // A clean inline suggestion in Body ("Body" content opens at 14), Suggesting on.
+    act(() => mounted.getHandle().setMode(true));
+    act(() => live.commands.insertContentAt(14, 'ZZ'));
+    // Two unions — u-a clean, u-b contaminated by an inline tracked mark inside it.
+    act(() => mintAt(live, 8, 'u-b'));
+    act(() => mintAt(live, 1, 'u-a'));
+    act(() => contaminateUnionWithTrackedMark(live, 'u-b'));
+    await waitFor(() => {
+      expect(mounted.container.querySelector('[data-card-id="u-a"]')).toBeTruthy();
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy();
+    });
+    expect(getTrackedChanges(live).filter((c) => c.status === 'pending')).toHaveLength(2);
+
+    act(() => mounted.getHandle().acceptAll());
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector('[data-card-id="u-a"]')).toBeNull(); // clean union resolved
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy(); // contaminated preserved
+      expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
+    });
+    // The clean Body inline resolved; ONLY the in-union contaminant remains pending
+    // (skipped per-id, NOT globally aborted — the whole point of structural-first).
+    const pending = getTrackedChanges(live).filter((c) => c.status === 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe('contam-u-b');
+    expect(
+      live.view.dom.querySelector('[data-structural-op="delete"][data-change-id="u-b"]'),
+    ).toBeTruthy();
   });
 
   it('New clears a stale card and its attention state', async () => {
