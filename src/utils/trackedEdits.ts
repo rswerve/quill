@@ -815,9 +815,10 @@ function formatEditCanCarryMarks(doc: ProseMirrorNode, edit: PlannedFormatEdit):
  * Translate a planned SOURCE-coordinate range back to live review coordinates and
  * decide whether the source-view safety gate refuses it. An inverted position is
  * NOT proof of a contiguous safe live preimage — refuse (never rewrite an
- * unresolved suggestion) when the live envelope overlaps a removed branch,
- * intersects a structural footprint (the RETAINED source branch is frozen too),
- * overlaps any pending review mark, or fails to round-trip.
+ * unresolved suggestion) when the live range inverts (a zero-width point
+ * collapsed across hidden content), overlaps a removed branch, intersects a
+ * structural footprint (the RETAINED source branch is frozen too), overlaps any
+ * pending review mark, or fails to round-trip.
  */
 function translatePlannedRange(
   liveDoc: ProseMirrorNode,
@@ -829,9 +830,23 @@ function translatePlannedRange(
 ): { liveFrom: number; liveTo: number; conflict: boolean } {
   const liveFrom = inverse.map(sourceFrom, 1);
   const liveTo = inverse.map(sourceTo, -1);
+  // A source point can collapse across hidden content — e.g. a pending insertion
+  // dropped from the source view — so the opposite endpoint biases straddle it,
+  // yielding liveFrom > liveTo. An inverted range is not a placeable preimage; it
+  // must refuse FIRST, before any overlap test could pass on the flipped bounds.
+  // For a zero-width point (liveFrom === liveTo) the frozen-region tests use
+  // STRICT interior containment, so an insertion exactly AT a region's boundary
+  // (a legitimate clean-edge insertion) is allowed while a point strictly inside
+  // refuses. This mirrors rangeHasPendingReviewMark's nodesBetween(p, p), which
+  // likewise catches strict interior and permits the exact start/end boundary.
+  const overlaps = (range: { from: number; to: number }): boolean =>
+    liveFrom === liveTo
+      ? range.from < liveFrom && liveFrom < range.to
+      : range.from < liveTo && liveFrom < range.to;
   const conflict =
-    projection.removedBranchRanges.some((range) => range.from < liveTo && liveFrom < range.to) ||
-    footprints.some((footprint) => footprint.from < liveTo && liveFrom < footprint.to) ||
+    liveFrom > liveTo ||
+    projection.removedBranchRanges.some(overlaps) ||
+    footprints.some(overlaps) ||
     rangeHasPendingReviewMark(liveDoc, liveFrom, liveTo) ||
     projection.mapping.map(liveFrom, 1) !== sourceFrom ||
     projection.mapping.map(liveTo, -1) !== sourceTo;
