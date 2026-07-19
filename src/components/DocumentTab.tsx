@@ -116,6 +116,27 @@ const CLAUDE_AUTHOR_ID = 'claude';
 
 const AUTHOR = 'Anonymous';
 
+/**
+ * Empty the live document PAST the structural freeze guard, ready for a
+ * whole-document `setContent` that follows. A pending block union freezes its
+ * region, so an unbypassed replacement over it is VETOED — and every
+ * identity-replacement path (New, open, reload, recover) replaces the doc IN
+ * PLACE, because `editorKey` is constant and the editor is never remounted. A
+ * whole-document `restore` bypass authorizes the clear; it is harmless when there
+ * is no union (no footprint → nothing to veto).
+ */
+function clearDocumentPastFreeze(editor: TiptapEditor): void {
+  const { doc, schema } = editor.state;
+  editor.view.dispatch(
+    editor.state.tr
+      .replaceWith(0, doc.content.size, schema.nodes.paragraph.create())
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('preventUpdate', true)
+      .setMeta('addToHistory', false),
+  );
+}
+
 // Breathing room (px) left above/below a card when it's scrolled into view, and
 // the extra scroll range the bottom spacer adds past the lowest card's bottom.
 
@@ -1007,7 +1028,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
       const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) setImageBaseDir(liveEditor, dirname(result.filePath));
+      if (liveEditor) {
+        setImageBaseDir(liveEditor, dirname(result.filePath));
+        // A reload over a document that still holds a pending union must clear it
+        // past the freeze first, or setContent is vetoed and the stale union
+        // survives the reload (reconstruction below rebuilds from the fresh source).
+        clearDocumentPastFreeze(liveEditor);
+      }
       onRecentFile(result.filePath);
       setLastSavedAt(Date.now());
       // setContent parses the structural SOURCE Markdown (original branches only).
@@ -1319,22 +1346,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
-    // A pending structural union freezes its region, which would VETO the
-    // whole-document replacement below (setContent dispatches over the frozen
-    // range with no bypass). Clear the doc past the freeze with a whole-document
-    // restore bypass first, so New always empties a document that still holds a
-    // block union. Harmless when there is none (no footprint → nothing to veto).
-    if (liveEditor) {
-      const { doc, schema } = liveEditor.state;
-      liveEditor.view.dispatch(
-        liveEditor.state.tr
-          .replaceWith(0, doc.content.size, schema.nodes.paragraph.create())
-          .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
-          .setMeta(SKIP_TRACKING_META, true)
-          .setMeta('preventUpdate', true)
-          .setMeta('addToHistory', false),
-      );
-    }
+    // Clear a pending union past the freeze first, or the setContent below is vetoed.
+    if (liveEditor) clearDocumentPastFreeze(liveEditor);
     editorRef.current?.setContent('');
     // Clear a prior document's canonical structural records; setContent alone does
     // not reset the session-retained store.

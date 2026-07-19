@@ -427,6 +427,27 @@ describe('DocumentTab structural review wiring', () => {
     }
   });
 
+  it('reload replaces a document that still holds a pending union (not vetoed by the freeze)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    // Reopen the same path: loadFileResult replaces the live doc (union and all)
+    // with the on-disk source. Without the freeze-clear the setContent would be
+    // vetoed and the stale union would survive the reload.
+    await act(async () => {
+      await mounted.getHandle().openPath(DOC_PATH);
+    });
+
+    await waitFor(() => {
+      expect(structuralCard(mounted)).toBeNull();
+      expect(live.state.doc.child(0).type.name).toBe('heading');
+      expect(live.state.doc.child(0).textContent).toBe('Start');
+    });
+  });
+
   it('New clears a stale card and its attention state', async () => {
     const mounted = await mountTab(START);
     const live = mounted.getHandle().getEditor()!;
