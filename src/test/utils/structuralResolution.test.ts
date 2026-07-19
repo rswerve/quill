@@ -2,7 +2,6 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import type { EditorState } from '@tiptap/pm/state';
-import { closeHistory } from '@tiptap/pm/history';
 import { describe, it, expect, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { CommentMark } from '../../extensions/Comment';
@@ -151,12 +150,10 @@ describe('acceptStructuralChange / rejectStructuralChange commands', () => {
   it('accept via the command collapses, and Undo/Redo restore the union together', () => {
     editor = makeEditor('<h1>Title</h1><p>Body</p>');
     editor.view.dispatch(compileMint(editor.state));
-    // Close the history group so Undo of the accept doesn't also revert the mint —
-    // in production the mint (Claude) and accept (a later user click) are already
-    // separate groups; the synchronous test would otherwise coalesce them.
-    editor.view.dispatch(closeHistory(editor.state.tr));
     expect(getStructuralChanges(editor.state).map((c) => c.changeId)).toEqual(['c1']);
 
+    // No external history separator: the kernel stamps closeHistory so Undo of the
+    // accept restores the union even though it immediately follows the mint here.
     expect(editor.commands.acceptStructuralChange('c1')).toBe(true);
     expect(getStructuralChanges(editor.state)).toEqual([]); // collapsed
     expect(editor.state.doc.child(0).type.name).toBe('paragraph');
@@ -170,7 +167,7 @@ describe('acceptStructuralChange / rejectStructuralChange commands', () => {
 });
 
 describe('resolveStructuralUnion — Option-B origin comment', () => {
-  it('accept removes a contained origin comment with the dropped branch', () => {
+  it('accept removes a contained origin comment with the dropped branch and captures its anchor', () => {
     editor = makeEditor('<h1>Title</h1><p>Body</p>');
     // Comment on the heading text (becomes the delete branch); mint with it as origin.
     let state = withComment(editor.state, 1, 6, 'cm');
@@ -178,33 +175,31 @@ describe('resolveStructuralUnion — Option-B origin comment', () => {
     expect(hasComment(state, 'cm')).toBe(true);
     const result = resolveStructuralUnion(state, 'c1', 'accept');
     if (!result.ok) throw new Error(result.reason);
+    expect(result.resolvedComment).toMatchObject({ id: 'cm', anchorText: 'Title' });
     expect(hasComment(state.apply(result.tr), 'cm')).toBe(false); // gone with its branch
   });
 
-  it('accept unsets a DISJOINT origin comment in the same transaction', () => {
+  it('accept unsets a DISJOINT origin comment in the same transaction and captures its anchor', () => {
     editor = makeEditor('<h1>Title</h1><p>Body</p>');
     // Comment on Body (disjoint from the heading union), then mint the heading with it as origin.
     let state = withComment(editor.state, 8, 12, 'cm');
     state = applyMint(state, 1, 'c1', H2P, { kind: 'comment', id: 'cm' });
-    const resolved = state.apply(
-      (() => {
-        const r = resolveStructuralUnion(state, 'c1', 'accept');
-        if (!r.ok) throw new Error(r.reason);
-        return r.tr;
-      })(),
-    );
-    // The disjoint comment must not outlive its resolved record.
-    expect(hasComment(resolved, 'cm')).toBe(false);
+    const result = resolveStructuralUnion(state, 'c1', 'accept');
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.resolvedComment).toMatchObject({ id: 'cm', anchorText: 'Body' });
+    const resolved = state.apply(result.tr);
+    expect(hasComment(resolved, 'cm')).toBe(false); // must not outlive its resolved record
     expect(resolved.doc.child(1).textContent).toBe('Body'); // Body text itself is intact
   });
 
-  it('reject retains the origin comment on the restored original', () => {
+  it('reject retains the origin comment and captures nothing', () => {
     editor = makeEditor('<h1>Title</h1><p>Body</p>');
     let state = withComment(editor.state, 8, 12, 'cm');
     state = applyMint(state, 1, 'c1', H2P, { kind: 'comment', id: 'cm' });
     const result = resolveStructuralUnion(state, 'c1', 'reject');
     if (!result.ok) throw new Error(result.reason);
-    expect(hasComment(state.apply(result.tr), 'cm')).toBe(true); // reject touches no comment
+    expect(result.resolvedComment).toBeNull(); // reject touches no comment
+    expect(hasComment(state.apply(result.tr), 'cm')).toBe(true);
   });
 
   it('refuses accept when the origin comment sits inside another frozen union', () => {
@@ -237,3 +232,45 @@ function compileMint(state: EditorState) {
   if (!r.ok) throw new Error(r.reason);
   return r.tr;
 }
+
+describe('resolveStructuralUnion — fail-closed on an unclean union', () => {
+  // A valid mint guarantees a clean union, but review-mark and structural-skeleton
+  // validation are independent, so a snapshot could carry a corrupt one.
+  it('refuses a union carrying a tracked mark (either action)', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    let state = applyMint(editor.state, 1, 'c1', H2P);
+    // Forge a tracked_insert on the proposed branch ("Title" at [8,13)).
+    const mark = state.schema.marks.tracked_insert.create({
+      changeId: 't',
+      dataTracked: { id: 't', operation: 'insert', authorID: 'x', status: 'pending', createdAt: 0 },
+    });
+    state = state.apply(state.tr.addMark(8, 13, mark));
+    expect(resolveStructuralUnion(state, 'c1', 'accept').ok).toBe(false);
+    expect(resolveStructuralUnion(state, 'c1', 'reject')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
+    });
+  });
+
+  it('refuses a union carrying a foreign comment', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    let state = applyMint(editor.state, 1, 'c1', H2P); // no origin
+    state = withComment(state, 1, 6, 'foreign'); // on the delete branch, but not the origin
+    expect(resolveStructuralUnion(state, 'c1', 'accept')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
+    });
+  });
+
+  it('refuses when the origin comment appears on the proposed branch', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    let state = withComment(editor.state, 1, 6, 'cm');
+    state = applyMint(state, 1, 'c1', H2P, { kind: 'comment', id: 'cm' });
+    // Forge the origin onto the proposed branch ("Title" at [8,13)) — invalid per the carveout.
+    state = withComment(state, 8, 13, 'cm');
+    expect(resolveStructuralUnion(state, 'c1', 'accept')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
+    });
+  });
+});
