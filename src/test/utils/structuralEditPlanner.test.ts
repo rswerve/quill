@@ -108,14 +108,48 @@ describe('planStructuralEdits', () => {
     expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
   });
 
-  it('refuses list targets and list sources as unsupported (V1b)', () => {
-    expect(
-      planStructuralEdits(docOf([para('turn me')]), [edit('turn me', { to: 'bulletList' })])
-        .results[0],
-    ).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
-    expect(
-      planStructuralEdits(docOf([bullet('item')]), [edit('item', { to: 'paragraph' })]).results[0],
-    ).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  it('plans paragraph → list (V1b), deriving the requested list type', () => {
+    const { placed, results } = planStructuralEdits(docOf([para('turn me')]), [
+      edit('turn me', { to: 'bulletList' }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed[0].op).toEqual({ kind: 'paragraphToList', listType: 'bulletList' });
+  });
+
+  it('plans a single-item list → paragraph (V1b), deriving the source list type', () => {
+    const { placed, results } = planStructuralEdits(docOf([bullet('item')]), [
+      edit('item', { to: 'paragraph' }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed[0].op).toEqual({ kind: 'listToParagraph', listType: 'bulletList' });
+  });
+
+  it('refuses a MULTI-item list → paragraph (single-item only in V1b)', () => {
+    const doc = docOf([
+      {
+        type: 'bulletList',
+        content: [
+          { type: 'listItem', content: [para('one')] },
+          { type: 'listItem', content: [para('two')] },
+        ],
+      },
+    ]);
+    const { results } = planStructuralEdits(doc, [edit('one', { to: 'paragraph' })]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  });
+
+  it('refuses a list-type change (bulletList → orderedList) as unsupported', () => {
+    const { results } = planStructuralEdits(docOf([bullet('item')]), [
+      edit('item', { to: 'orderedList' }),
+    ]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  });
+
+  it('refuses a list → heading as unsupported', () => {
+    const { results } = planStructuralEdits(docOf([bullet('item')]), [
+      edit('item', { to: 'heading', level: 2 }),
+    ]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
   });
 
   it('refuses a find that matches no block (text-not-found)', () => {

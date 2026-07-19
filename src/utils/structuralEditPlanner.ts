@@ -1,5 +1,6 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import type { HeadingLevel, QuillStructuralEdit, StructuralOp } from '../types';
+import type { HeadingLevel, QuillStructuralEdit, StructuralListType, StructuralOp } from '../types';
+import { isSingleItemList } from './structuralUnionIndex';
 import { locateEditTextMatches } from './editTextProjection';
 
 /**
@@ -10,9 +11,9 @@ import { locateEditTextMatches } from './editTextProjection';
  * round-trip validation before cross-axis conflict detection and mint dispatch.
  * This module never touches live coordinates and never dispatches.
  *
- * V1 executes only heading↔paragraph (the compiler's V1a scope); every list
- * source or target is planned as a typed `unsupported-op` until the V1b mint
- * extension lands, so Claude's list proposals are refused honestly, not minted.
+ * V1 executes heading↔paragraph and SINGLE-ITEM list↔paragraph (the compiler's
+ * V1a+V1b scope); a multi-item list, a list-type change, or a heading-level change
+ * is planned as a typed `unsupported-op`, so those proposals are refused honestly.
  */
 
 export type StructuralPlanStatus =
@@ -105,12 +106,54 @@ function locateBlock(
 
 type OpDerivation = StructuralOp | 'unsupported-op' | 'already-target';
 
+function isListType(name: string): name is StructuralListType {
+  return name === 'bulletList' || name === 'orderedList' || name === 'taskList';
+}
+
+function deriveHeadingOp(
+  source: ProseMirrorNode,
+  to: string,
+  level: HeadingLevel | undefined,
+): OpDerivation {
+  const currentLevel = source.attrs.level as number;
+  if (to === 'paragraph') {
+    return isHeadingLevel(currentLevel)
+      ? { kind: 'headingToParagraph', level: currentLevel }
+      : 'unsupported-op';
+  }
+  if (to === 'heading') return currentLevel === level ? 'already-target' : 'unsupported-op';
+  return 'unsupported-op'; // heading → list (make it a paragraph first)
+}
+
+function deriveParagraphOp(to: string, level: HeadingLevel | undefined): OpDerivation {
+  if (to === 'paragraph') return 'already-target';
+  if (to === 'heading') return { kind: 'paragraphToHeading', level: level as HeadingLevel };
+  if (isListType(to)) return { kind: 'paragraphToList', listType: to };
+  return 'unsupported-op';
+}
+
+function deriveListOp(
+  source: ProseMirrorNode,
+  listType: StructuralListType,
+  to: string,
+): OpDerivation {
+  if (to === listType) return 'already-target'; // same list type
+  if (to === 'paragraph') {
+    return isSingleItemList(source, listType)
+      ? { kind: 'listToParagraph', listType }
+      : 'unsupported-op'; // a multi-item list is a later phase
+  }
+  return 'unsupported-op'; // list → heading, or list → a different list type
+}
+
 /**
  * Derive the directional {@link StructuralOp} from the source block's current type
- * and the requested target. Level validity is checked by the caller; here `to`
- * === 'heading' always carries a valid level. Only the compiler's V1a pairs
- * (heading↔paragraph) resolve; everything else — list source/target, a heading
- * level change (no such V1 op), any non-heading/paragraph source — is unsupported.
+ * and the requested target (dispatched to a per-source-type helper). Level validity is
+ * checked by the caller; here `to` === 'heading' always carries a valid level. V1
+ * resolves heading↔paragraph and SINGLE-ITEM list↔paragraph; unsupported (typed
+ * `unsupported-op`): a multi-item list source (a later phase), a list-type change
+ * (bullet↔ordered↔task), a heading-level change, a list↔heading, or any other block
+ * type. A conversion to the block's own type is `already-target`.
  */
 function deriveOp(
   source: ProseMirrorNode,
@@ -118,25 +161,10 @@ function deriveOp(
   level: HeadingLevel | undefined,
 ): OpDerivation {
   const type = source.type.name;
-  if (type === 'heading') {
-    const currentLevel = source.attrs.level as number;
-    if (to === 'paragraph') {
-      return isHeadingLevel(currentLevel)
-        ? { kind: 'headingToParagraph', level: currentLevel }
-        : 'unsupported-op';
-    }
-    if (to === 'heading') return currentLevel === level ? 'already-target' : 'unsupported-op';
-    return 'unsupported-op'; // heading → list
-  }
-  if (type === 'paragraph') {
-    if (to === 'paragraph') return 'already-target';
-    if (to === 'heading') return { kind: 'paragraphToHeading', level: level as HeadingLevel };
-    return 'unsupported-op'; // paragraph → list (V1b)
-  }
-  // A list already the requested list type is a real no-op, not unsupported —
-  // even though executing any list conversion is V1b.
-  if (type === to) return 'already-target';
-  return 'unsupported-op'; // list source (different type), blockquote, code, etc.
+  if (type === 'heading') return deriveHeadingOp(source, to, level);
+  if (type === 'paragraph') return deriveParagraphOp(to, level);
+  if (isListType(type)) return deriveListOp(source, type, to);
+  return 'unsupported-op'; // blockquote, code, etc.
 }
 
 /** Validate the edit's shape; returns a refusal reason, or null when well-formed. */
@@ -214,7 +242,7 @@ export function planStructuralEdits(
     const to = located.pos + located.node.nodeSize;
     placed.push({
       op,
-      sourceTargetPos: from + 1, // strictly inside the target textblock
+      sourceTargetPos: from + 1, // strictly inside the target block (resolves via node(1))
       sourceTarget: { from, to },
       editIndex,
     });
