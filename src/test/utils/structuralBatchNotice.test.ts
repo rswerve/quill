@@ -1,0 +1,115 @@
+import { describe, it, expect } from 'vitest';
+import { formatBatchResultNotice } from '../../utils/structuralBatchNotice';
+import type { BatchResultEntry } from '../../utils/structuralBatchDispatch';
+
+/**
+ * 6b-3: the mixed-batch model-facing notice. It must reuse the inline wording table
+ * (not fork a second one), name BOTH unsupported structural ops (list conversions AND
+ * heading-level changes), report system/provider faults blamelessly, and stay silent
+ * on success — all in one input-order block.
+ */
+
+const entry = (batchIndex: number, outcome: BatchResultEntry['outcome']): BatchResultEntry => ({
+  batchIndex,
+  outcome,
+});
+
+describe('formatBatchResultNotice', () => {
+  it('is empty when every entry succeeded (applied / minted are silent)', () => {
+    const results = [
+      entry(0, {
+        kind: 'inline',
+        result: { edit: { find: 'a', replace: 'b' }, status: 'applied' },
+      }),
+      entry(1, { kind: 'structural', status: 'minted', changeId: 'x' }),
+    ];
+    expect(formatBatchResultNotice(results, [{ find: 'a' }, { find: 'b' }])).toBe('');
+  });
+
+  it('reuses the inline wording table for an inline refusal', () => {
+    const results = [
+      entry(0, {
+        kind: 'inline',
+        result: {
+          edit: { find: 'ghost', replace: 'x' },
+          status: 'not-found',
+          reason: 'text-not-found',
+        },
+      }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'ghost' }]);
+    expect(notice).toContain('“ghost”');
+    expect(notice).toContain('this text isn’t in the document.');
+    expect(notice).toContain('1 change wasn’t applied:');
+  });
+
+  it('names both list conversions AND heading-level changes for an unsupported structural op', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'plan-refused', reason: 'unsupported-op' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'Make this a list' }]);
+    expect(notice).toContain('list conversions');
+    expect(notice).toContain('heading-level changes');
+    expect(notice).toContain('heading↔paragraph');
+  });
+
+  it('gives the same unsupported message when the compiler (not the planner) refuses the shape', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'mint-refused', reason: 'unsupported-shape' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
+    expect(notice).toContain('list conversions');
+    expect(notice).toContain('heading-level changes');
+  });
+
+  it('reports system/provider faults blamelessly, never blaming the instruction', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'metadata-provider-failed' }),
+      entry(1, { kind: 'structural', status: 'id-allocation-failed' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'B' }]);
+    expect(notice).toContain('an internal error stopped it; try asking again.');
+    expect(notice).not.toContain('malformed');
+  });
+
+  it('explains an xor-violation as declaring both change kinds', () => {
+    const results = [entry(0, { kind: 'invalid', reason: 'xor-violation' })];
+    const notice = formatBatchResultNotice(results, [{ find: 'X' }]);
+    expect(notice).toContain('both a text/formatting change and a structural change');
+  });
+
+  it('uses one shared cross-axis wording for inline and structural cross-axis conflicts', () => {
+    const results = [
+      entry(0, { kind: 'inline', status: 'cross-axis-conflict' }),
+      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'B' }]);
+    expect(notice.match(/ask for them one at a time/g)).toHaveLength(2);
+  });
+
+  it('emits one input-order block, quoting each find and skipping successes', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'minted', changeId: 'x' }), // silent
+      entry(1, {
+        kind: 'inline',
+        result: {
+          edit: { find: 'foo', replace: 'bar' },
+          status: 'not-found',
+          reason: 'text-not-found',
+        },
+      }),
+      entry(2, { kind: 'structural', status: 'plan-refused', reason: 'missing-level' }),
+    ];
+    const notice = formatBatchResultNotice(results, [
+      { find: 'zero' },
+      { find: 'foo' },
+      { find: 'two' },
+    ]);
+    expect(notice).toContain('2 changes weren’t applied:');
+    const fooIdx = notice.indexOf('“foo”');
+    const twoIdx = notice.indexOf('“two”');
+    expect(fooIdx).toBeGreaterThan(-1);
+    expect(twoIdx).toBeGreaterThan(fooIdx); // input order preserved
+    expect(notice).not.toContain('“zero”'); // the minted (successful) entry is silent
+  });
+});

@@ -945,16 +945,18 @@ export function planEdits(
   return { placed, results };
 }
 
-function editFindLabel(edit: QuillEdit): string {
-  if (typeof edit !== 'object' || edit === null || typeof edit.find !== 'string') {
-    return '(invalid edit)';
-  }
-  const compact = edit.find.replace(/\s+/g, ' ').trim();
+/** A compact, bounded quote label for one model edit (tolerant of non-object JSON). */
+export function editFindLabel(edit: unknown): string {
+  const find =
+    typeof edit === 'object' && edit !== null ? (edit as { find?: unknown }).find : undefined;
+  if (typeof find !== 'string') return '(invalid edit)';
+  const compact = find.replace(/\s+/g, ' ').trim();
   const limit = 58;
   return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 }
 
-function editResultReason(result: EditResult): string {
+/** The human-readable reason one inline edit was not applied. Shared with the batch notice. */
+export function editResultReason(result: EditResult): string {
   switch (result.reason) {
     case 'ambiguous-link':
       return 'more than one link has that label.';

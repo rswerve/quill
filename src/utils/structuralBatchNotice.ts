@@ -1,0 +1,124 @@
+import { editFindLabel, editResultReason } from './trackedEdits';
+import type {
+  BatchOutcome,
+  BatchResultEntry,
+  StructuralDispatchOutcome,
+} from './structuralBatchDispatch';
+import type { StructuralPlanReason } from './structuralEditPlanner';
+import type { StructuralMintRefusal } from './structuralMint';
+
+/**
+ * 6b-3: the honest, model-facing "N changes weren't applied" notice for a mixed
+ * inline+structural batch. It is ONE input-order block that REUSES the inline wording
+ * table (`editResultReason`) for inline outcomes and adds structural / XOR-violation
+ * lines — never a divergent second table. Successful entries (inline `applied`,
+ * structural `minted`) are silent. The original `entries` array is passed so each line
+ * can quote the edit's find text via the same `editFindLabel` the inline notice uses.
+ */
+
+const CROSS_AXIS =
+  'it changes a block that another edit in this batch is restructuring; ask for them one at a time.';
+
+// V1a executes only heading↔paragraph. The requested target alone can't reveal whether an
+// unsupported op is a list conversion or a heading-level change, so the message names both.
+const UNSUPPORTED_STRUCTURAL =
+  'that structural change isn’t available yet — only heading↔paragraph conversions are supported (list conversions and heading-level changes are coming later).';
+
+// System/provider faults are NOT the model's fault: keep the wording blameless and quiet.
+const SYSTEM_FAULT = 'an internal error stopped it; try asking again.';
+
+function structuralPlanReasonText(reason: StructuralPlanReason): string {
+  switch (reason) {
+    case 'text-not-found':
+      return 'this text isn’t in the document.';
+    case 'ambiguous-target':
+      return 'more than one block matches it; make the text identify a single block.';
+    case 'cross-block-target':
+      return 'it spans more than one block; a structural change targets a single block.';
+    case 'unsupported-op':
+      return UNSUPPORTED_STRUCTURAL;
+    case 'already-target':
+      return 'that block is already the requested type.';
+    case 'missing-level':
+      return 'a heading target needs a level (1–6).';
+    case 'invalid-level':
+      return 'that heading level is invalid.';
+    case 'invalid-edit':
+      return 'the edit instruction is malformed.';
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+function structuralMintRefusalText(reason: StructuralMintRefusal): string {
+  switch (reason) {
+    case 'unsupported-shape':
+      return UNSUPPORTED_STRUCTURAL;
+    case 'overlapping-structural':
+      return 'it overlaps an existing structural change; resolve that one first.';
+    case 'annotated-footprint':
+      return 'that block carries a comment or pending change; resolve it first.';
+    case 'origin-comment-partial':
+      return 'the originating comment doesn’t fully cover that block.';
+    case 'invalid-structural-state':
+      return 'the document has an unresolved structural change; resolve it first.';
+    case 'native-no-op':
+      return 'the conversion would make no change.';
+    case 'invalid-metadata':
+      return 'the edit instruction is malformed.';
+    case 'target-not-found':
+      return 'that block couldn’t be located.';
+    case 'id-unavailable':
+    case 'self-check-failed':
+      return SYSTEM_FAULT;
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+function structuralReasonText(outcome: StructuralDispatchOutcome): string | null {
+  switch (outcome.status) {
+    case 'minted':
+      return null; // success is silent
+    case 'cross-axis-conflict':
+      return CROSS_AXIS;
+    case 'id-allocation-failed':
+    case 'metadata-provider-failed':
+      return SYSTEM_FAULT;
+    case 'plan-refused':
+      return structuralPlanReasonText(outcome.reason);
+    case 'mint-refused':
+      return structuralMintRefusalText(outcome.reason);
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+/** The reason line for one outcome, or null when it succeeded (silent). */
+function noticeReason(outcome: BatchOutcome): string | null {
+  if (outcome.kind === 'inline') {
+    if ('result' in outcome) {
+      return outcome.result.status === 'applied' ? null : editResultReason(outcome.result);
+    }
+    return CROSS_AXIS; // inline cross-axis-conflict
+  }
+  if (outcome.kind === 'invalid') {
+    return 'it asks for both a text/formatting change and a structural change; request just one.';
+  }
+  return structuralReasonText(outcome);
+}
+
+export function formatBatchResultNotice(
+  results: BatchResultEntry[],
+  entries: readonly unknown[],
+): string {
+  const lines: string[] = [];
+  for (const { batchIndex, outcome } of results) {
+    const reason = noticeReason(outcome);
+    if (reason) lines.push(`• “${editFindLabel(entries[batchIndex])}” — ${reason}`);
+  }
+  if (lines.length === 0) return '';
+  const heading =
+    lines.length === 1 ? '1 change wasn’t applied:' : `${lines.length} changes weren’t applied:`;
+  return `(${heading}\n${lines.join('\n')})`;
+}
