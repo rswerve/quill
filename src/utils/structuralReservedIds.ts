@@ -76,15 +76,45 @@ export function collectReservedIds(sources: ReservedIdSources): Set<string> {
   return reserved;
 }
 
+/** The outcome of one allocation attempt — a fresh reserved id, or a bounded refusal. */
+export type IdAllocationResult =
+  | { ok: true; id: string }
+  | { ok: false; reason: 'id-allocation-failed' };
+
+/** A finite attempt budget: ample for real UUID sources, a hard stop for a broken one. */
+const MAX_ALLOCATION_ATTEMPTS = 128;
+
 /**
  * Allocate a changeId not already reserved, reserving it IN PLACE so it can't be
  * reused within the batch even if the subsequent compile refuses. `nextId` is
- * injected for deterministic tests (production supplies a UUID / counter source);
- * candidates colliding with an existing or already-allocated id are skipped.
+ * injected for deterministic tests (production supplies a UUID / counter source).
+ *
+ * Fails closed as a security boundary, not a convenience helper: a candidate is
+ * accepted only if it is a runtime string that is nonempty after trimming — trimming
+ * is VALIDATION, not normalization, so an accepted id is reserved EXACTLY as given (a
+ * whitespace-only id is rejected here rather than passed on to fail
+ * compileStructuralMint's metadata check). Colliding or invalid candidates are
+ * skipped up to a finite attempt budget; a throwing `nextId`, or exhausting the
+ * budget on endlessly reserved/invalid candidates, returns a typed
+ * `id-allocation-failed` and adds nothing to the set — so an adversarial or broken
+ * provider can never hang the batch, and the orchestration reports that one edge as
+ * refused with no exception path.
  */
-export function allocateReservedId(reserved: Set<string>, nextId: () => string): string {
-  let id = nextId();
-  while (reserved.has(id)) id = nextId();
-  reserved.add(id);
-  return id;
+export function allocateReservedId(
+  reserved: Set<string>,
+  nextId: () => string,
+): IdAllocationResult {
+  for (let attempt = 0; attempt < MAX_ALLOCATION_ATTEMPTS; attempt++) {
+    let candidate: unknown;
+    try {
+      candidate = nextId();
+    } catch {
+      return { ok: false, reason: 'id-allocation-failed' };
+    }
+    if (typeof candidate !== 'string' || candidate.trim().length === 0) continue;
+    if (reserved.has(candidate)) continue;
+    reserved.add(candidate);
+    return { ok: true, id: candidate };
+  }
+  return { ok: false, reason: 'id-allocation-failed' };
 }

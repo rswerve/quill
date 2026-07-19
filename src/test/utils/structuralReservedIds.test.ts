@@ -103,15 +103,68 @@ describe('collectReservedIds', () => {
 describe('allocateReservedId', () => {
   it('allocates an unreserved id and reserves it in place', () => {
     const reserved = new Set(['a']);
-    expect(allocateReservedId(reserved, seq(['a', 'b']))).toBe('b'); // 'a' collides → skipped
+    expect(allocateReservedId(reserved, seq(['a', 'b']))).toEqual({ ok: true, id: 'b' }); // 'a' collides → skipped
     expect(reserved.has('b')).toBe(true);
   });
 
   it('never reuses an allocated id within the batch, even before the mint runs', () => {
     const reserved = new Set<string>();
     const next = seq(['x', 'x', 'y']);
-    expect(allocateReservedId(reserved, next)).toBe('x');
+    expect(allocateReservedId(reserved, next)).toEqual({ ok: true, id: 'x' });
     // Reserved on ALLOCATION (not on mint success), so the second 'x' is skipped.
-    expect(allocateReservedId(reserved, next)).toBe('y');
+    expect(allocateReservedId(reserved, next)).toEqual({ ok: true, id: 'y' });
+  });
+
+  it('skips invalid and colliding candidates, then reserves the first valid one EXACT', () => {
+    const reserved = new Set(['a']);
+    // '' empty, '  ' whitespace-only, 'a' collides — then a valid id lands.
+    const next = seq(['', '  ', 'a', 'valid']);
+    expect(allocateReservedId(reserved, next)).toEqual({ ok: true, id: 'valid' });
+    expect(reserved.has('valid')).toBe(true);
+  });
+
+  it('preserves a valid-but-padded id verbatim (trimming is validation, not normalization)', () => {
+    const reserved = new Set<string>();
+    // ' x ' has content after trimming → valid → reserved EXACTLY, never trimmed to 'x'.
+    expect(allocateReservedId(reserved, seq([' x ']))).toEqual({ ok: true, id: ' x ' });
+    expect(reserved.has(' x ')).toBe(true);
+    expect(reserved.has('x')).toBe(false);
+  });
+
+  it('fails closed (bounded) when the provider endlessly returns a reserved id', () => {
+    const reserved = new Set(['taken']);
+    expect(allocateReservedId(reserved, () => 'taken')).toEqual({
+      ok: false,
+      reason: 'id-allocation-failed',
+    });
+    expect(reserved.size).toBe(1); // failure adds nothing
+    expect(reserved.has('taken')).toBe(true);
+  });
+
+  it('fails closed when the provider endlessly returns invalid candidates', () => {
+    const reserved = new Set<string>();
+    // Whitespace-only forever.
+    expect(allocateReservedId(reserved, () => '   ')).toEqual({
+      ok: false,
+      reason: 'id-allocation-failed',
+    });
+    // Non-string forever (a broken runtime provider — the type says string, reality lies).
+    expect(allocateReservedId(reserved, (() => 42) as unknown as () => string)).toEqual({
+      ok: false,
+      reason: 'id-allocation-failed',
+    });
+    expect(reserved.size).toBe(0); // nothing invalid was ever reserved
+  });
+
+  it('fails closed when the provider throws', () => {
+    const reserved = new Set<string>();
+    const thrower = (): string => {
+      throw new Error('provider exploded');
+    };
+    expect(allocateReservedId(reserved, thrower)).toEqual({
+      ok: false,
+      reason: 'id-allocation-failed',
+    });
+    expect(reserved.size).toBe(0);
   });
 });
