@@ -125,6 +125,57 @@ describe('projectDocument {structural:source, inline:source} — the composed cl
   });
 });
 
+/** A pending FORMAT suggestion: "word" bolded, not yet accepted. */
+function pendingBoldDoc(): PMNode {
+  return editor.schema.nodeFromJSON({
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'plain ' },
+          {
+            type: 'text',
+            text: 'word',
+            marks: [
+              { type: 'bold' },
+              {
+                type: 'tracked_format',
+                attrs: {
+                  dataTracked: {
+                    id: 'f1',
+                    operation: 'format',
+                    authorID: 'u',
+                    status: 'pending',
+                    delta: { adds: ['bold'], removes: [] },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+/** A hard break inside a paragraph — structure that must survive to HTML. */
+function hardBreakDoc(): PMNode {
+  return editor.schema.nodeFromJSON({
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'line one' },
+          { type: 'hardBreak' },
+          { type: 'text', text: 'line two' },
+        ],
+      },
+    ],
+  });
+}
+
 describe('cleanSourceHTML — the pending-ignored original for print', () => {
   it('serializes the source view to HTML with NO redline markup', () => {
     const html = cleanSourceHTML(mixedDoc());
@@ -139,5 +190,19 @@ describe('cleanSourceHTML — the pending-ignored original for print', () => {
     // has none of the redline elements or classes the live editor renders.
     expect(html).not.toMatch(/track-insert|track-delete|track-format|data-tracked/);
     expect(html).not.toMatch(/<ins\b|<del\b/);
+  });
+
+  it('inverts a pending format suggestion — the un-accepted bold is dropped', () => {
+    const html = cleanSourceHTML(pendingBoldDoc());
+    expect(html).toContain('word'); // the text stays
+    expect(html).not.toMatch(/<strong\b/i); // ...but the un-accepted bold is gone
+    expect(html).not.toMatch(/track-format|data-tracked/);
+  });
+
+  it('preserves a hard break in the printed HTML', () => {
+    const html = cleanSourceHTML(hardBreakDoc());
+    expect(html).toContain('line one');
+    expect(html).toContain('line two');
+    expect(html).toMatch(/<br\b/i);
   });
 });

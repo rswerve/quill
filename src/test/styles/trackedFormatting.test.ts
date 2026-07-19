@@ -11,12 +11,13 @@ describe('tracked formatting styles', () => {
     expect(rule).not.toContain('text-decoration');
   });
 
-  it('strips only the pending tint for print while preserving the applied formatting', () => {
+  it('keeps the pending-format tint off paper by excluding the live editor from print', () => {
+    // Print no longer masks the .track-format tint in place: the printed artifact
+    // is the detached clean-source render (formatting already inverted), and the
+    // live editor — which carries the pending tint — is hidden entirely. So the
+    // old in-place masking rule must be GONE and the editor excluded.
     const print = css.slice(css.indexOf('@media print'));
-    expect(print).toMatch(
-      /\.ProseMirror span\.track-format\s*\{[^}]*background:\s*none\s*!important/s,
-    );
-    expect(print).not.toMatch(/\.ProseMirror span\.track-format\s*\{[^}]*display:\s*none/s);
-    expect(print).not.toMatch(/\.ProseMirror span\.track-format\s*\{[^}]*font-weight:/s);
+    expect(print).toMatch(/\.editor-page-zoom-wrapper\s*\{[^}]*display:\s*none\s*!important/s);
+    expect(print).not.toMatch(/\.ProseMirror span\.track-format\s*\{[^}]*background:\s*none/s);
   });
 });

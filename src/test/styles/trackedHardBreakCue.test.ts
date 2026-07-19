@@ -11,8 +11,12 @@ describe('tracked hard-break cue styles', () => {
     expect(css).toMatch(/\.track-hard-break-cue\s*{[^}]*pointer-events:\s*none/s);
   });
 
-  it('removes the review-only cue from clean print output', () => {
+  it('keeps the review-only cue off paper by excluding the live editor from print', () => {
+    // The cue lives on the live editor, which print now hides entirely in favor
+    // of the detached clean-source render (which has no such cue). So the old
+    // in-place masking rule is gone and the editor is excluded instead.
     const print = css.slice(css.indexOf('@media print'));
-    expect(print).toMatch(/\.track-hard-break-cue\s*{[^}]*display:\s*none\s*!important/s);
+    expect(print).toMatch(/\.editor-page-zoom-wrapper\s*\{[^}]*display:\s*none\s*!important/s);
+    expect(print).not.toMatch(/\.track-hard-break-cue\s*\{[^}]*display:\s*none/s);
   });
 });

@@ -1020,14 +1020,21 @@ del.track-delete {
   background: var(--color-ink-light);
 }
 
+/* The clean-source print render is invisible and inert on screen; the print
+   block below swaps it in for the live redline editor. */
+.print-doc {
+  display: none;
+}
+
 /* ── Print / Export to PDF ──────────────────────────────────────────
-   "Export to PDF" is print-to-PDF (handleExportPdf → window.print()), so
-   these rules define the printed artifact: a *clean copy* of the document.
-   We strip all app chrome, collapse the on-screen scroll/zoom containers so
-   the document reflows naturally across paper pages, and render the
-   track-changes / comment markup as if every suggestion were accepted —
-   insertions become plain text, deletions and comment highlights vanish.
-   The browser's print pipeline (macOS "Save as PDF") owns pagination. */
+   "Export to PDF" is print-to-PDF (handleExportPdf → window.print()). The
+   printed artifact is the CLEAN-SOURCE document — pending suggestions ignored
+   (accepted edits stay; un-accepted AI proposals are dropped). Rather than mask
+   the live redline with CSS (which cannot invert pending FORMATTING), DocumentTab
+   renders projectDocument(...source) HTML into the detached `.print-doc`
+   container; here we strip app chrome, collapse the on-screen scroll/zoom
+   containers, hide the live editor, and show `.print-doc` so it reflows across
+   paper pages. The browser's print pipeline (macOS "Save as PDF") owns pagination. */
 @media print {
   /* US Letter with comfortable margins; the editor's own page padding is
      reset below so geometry isn't doubled. */
@@ -1087,33 +1094,23 @@ del.track-delete {
     color: #000 !important;
   }
 
-  /* Clean copy of the suggesting-mode markup: accept insertions (plain text),
-     drop deletions entirely, and remove comment / find / focus highlights. */
-  ins.track-insert {
-    background: none !important;
-    color: inherit !important;
-    text-decoration: none !important;
-    padding: 0 !important;
-  }
-  del.track-delete {
+  /* Hide the live redline editor and show the detached clean-source render in
+     its place. The render carries no tracking markup at all — it's already the
+     pending-ignored document, so there is nothing to mask. Only comment-mark
+     highlights survive the projection (comments are annotations, not content),
+     so drop their highlight while keeping the underlying text. */
+  .editor-page-zoom-wrapper {
     display: none !important;
   }
-  .track-hard-break-cue {
-    display: none !important;
-  }
-  .ProseMirror span.track-format {
-    background: none !important;
+  .print-doc {
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
     padding: 0 !important;
+    background: #fff !important;
   }
-  mark.comment-mark,
-  .ProseMirror .pending-comment,
-  .ProseMirror .find-match,
-  .ProseMirror .find-match-active,
-  .ProseMirror .annotation-focus {
+  .print-doc mark.comment-mark {
     background: none !important;
-    border: none !important;
-    text-decoration: none !important;
-    padding: 0 !important;
   }
 
   /* Avoid orphaned headings and split code/quote blocks where possible. */

@@ -71,7 +71,7 @@ import {
   type StructuralReviewState,
 } from '../utils/structuralChanges';
 import { resolveStructuralUnion } from '../utils/structuralResolution';
-import { cleanSourceMarkdown } from '../utils/cleanSourceProjection';
+import { cleanSourceHTML, cleanSourceMarkdown } from '../utils/cleanSourceProjection';
 import { resolveTrackedChanges } from '../extensions/trackChangesResolution';
 import { firstFrozenViolation } from '../extensions/structuralFreeze';
 import { structuralFootprints } from '../utils/structuralFootprints';
@@ -375,6 +375,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
+  const printDocRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
   const [zoom, setZoom] = useState(defaultZoom);
   const [scrollTick, setScrollTick] = useState(0);
@@ -1296,13 +1297,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [getChangeRevision, getIsDirty],
   );
 
-  // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
-  // the chrome and the track-changes/comment markup, leaving a clean copy of
-  // the document, and the OS print dialog offers "Save as PDF". We set
-  // document.title first so that dialog defaults the filename to the doc's
-  // name instead of "Quill"; it's restored after the dialog returns
-  // (window.print blocks synchronously until then).
+  // Export to PDF is print-to-PDF, and the printed artifact is the CLEAN-SOURCE
+  // document — pending suggestions ignored (accepted edits stay; un-accepted AI
+  // proposals are dropped), NOT the live redline. We render the
+  // projectDocument(...source) HTML into a detached, screen-hidden container and
+  // let `@media print` swap it in for the live editor; pure-CSS masking of the
+  // redline can't invert pending FORMATTING, so a detached clean render is the
+  // only faithful option. The snapshot is refreshed both here (toolbar / menu)
+  // and on `beforeprint` (OS Cmd+P), so it's always current when the dialog opens.
+  const refreshPrintDoc = useCallback(() => {
+    const ed = editorRef.current?.getEditor();
+    if (ed && printDocRef.current) printDocRef.current.innerHTML = cleanSourceHTML(ed.state.doc);
+  }, []);
+
+  // We set document.title first so the OS "Save as PDF" dialog defaults the
+  // filename to the doc's name instead of "Quill"; it's restored after the
+  // dialog returns (window.print blocks synchronously until then).
   const handleExportPdf = useCallback(() => {
+    refreshPrintDoc();
     const docName = filePath ? basename(filePath).replace(/\.md$/i, '') : 'Untitled';
     const prevTitle = document.title;
     document.title = docName;
@@ -1311,7 +1323,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     } finally {
       document.title = prevTitle;
     }
-  }, [filePath]);
+  }, [filePath, refreshPrintDoc]);
+
+  // OS-level print (Cmd+P) bypasses handleExportPdf, so refresh the clean-source
+  // render on `beforeprint` too, and clear it on `afterprint` so the detached
+  // tree never lingers in the DOM. Only the active tab paints — inactive tabs
+  // are `hidden`, so their (stale) print container is display:none anyway.
+  useEffect(() => {
+    if (!isActive) return;
+    const onBeforePrint = () => refreshPrintDoc();
+    const onAfterPrint = () => {
+      if (printDocRef.current) printDocRef.current.innerHTML = '';
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
+    };
+  }, [isActive, refreshPrintDoc]);
 
   const performOpen = useCallback(async () => {
     // Drain any in-flight save BEFORE opening: openFile mutates identity (filePath,
@@ -2422,6 +2452,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 onOpenChat={openChat}
               />
             </div>
+            {/* Clean-source render for print / Export-to-PDF: screen-hidden and
+                a11y-ignored (Find, selection, and clipboard never see it),
+                populated on print and swapped in for the live editor by
+                @media print. Class "ProseMirror" gives it the document typography. */}
+            <div
+              className="ProseMirror print-doc"
+              data-print-doc
+              ref={printDocRef}
+              aria-hidden="true"
+            />
           </div>
 
           {selectionInfo &&

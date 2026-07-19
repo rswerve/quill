@@ -769,4 +769,33 @@ describe('DocumentTab structural review wiring', () => {
       expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeNull();
     });
   });
+
+  it('renders the clean-source document into the print container on beforeprint (not the redline)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live)); // heading "Title Here" → paragraph union (pending)
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    const printDoc = mounted.container.querySelector('.print-doc') as HTMLElement;
+    expect(printDoc).toBeTruthy();
+    expect(printDoc.innerHTML).toBe(''); // empty until a print is requested
+
+    act(() => {
+      window.dispatchEvent(new Event('beforeprint'));
+    });
+
+    // The clean-source render keeps the union's SOURCE branch (the heading) and
+    // carries none of the redline / block-track markup the live editor renders.
+    expect(printDoc.querySelector('h1')?.textContent).toBe('Title Here');
+    expect(printDoc.innerHTML).not.toMatch(
+      /track-insert|track-delete|track-format|data-tracked|data-block-track/,
+    );
+
+    // afterprint clears it so the detached tree never lingers in the DOM.
+    act(() => {
+      window.dispatchEvent(new Event('afterprint'));
+    });
+    expect(printDoc.innerHTML).toBe('');
+  });
 });
