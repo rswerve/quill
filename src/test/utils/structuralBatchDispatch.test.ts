@@ -1,0 +1,328 @@
+import { Editor } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import { Markdown } from 'tiptap-markdown';
+import type { Node as PMNode } from '@tiptap/pm/model';
+import { describe, it, expect, afterEach } from 'vitest';
+import { BlockTrack } from '../../extensions/BlockTrack';
+import { StructuralRecordStore, retainedRecords } from '../../extensions/StructuralRecordStore';
+import {
+  TrackChanges,
+  TrackedInsert,
+  TrackedDelete,
+  TrackedFormat,
+  getTrackedChanges,
+} from '../../extensions/TrackChanges';
+import { CommentMark } from '../../extensions/Comment';
+import { planStructuralEdits } from '../../utils/structuralEditPlanner';
+import { compileStructuralMint } from '../../utils/structuralMint';
+import {
+  structuralBatchDispatch,
+  inlineTouchesBlock,
+  type StructuralBatchDeps,
+} from '../../utils/structuralBatchDispatch';
+import type {
+  HeadingLevel,
+  QuillEdit,
+  QuillStructuralEdit,
+  StructuralEditTarget,
+} from '../../types';
+
+/**
+ * 6b-2: the batch orchestrator that lands ONE interleaved batch of Claude's inline and
+ * structural edits together as reviewable tracked suggestions. Verified with Codex as a
+ * boundary: input-order results keyed by the immutable batch index, a cross-axis conflict
+ * graph frozen over the initial plans, and best-effort dispatch where a refused mint keeps
+ * its allocated id reserved and never disturbs disjoint edits.
+ */
+
+const editors: Editor[] = [];
+
+function makeEditor(content: string): Editor {
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  const editor = new Editor({
+    element: el,
+    extensions: [
+      StarterKit.configure({ code: false }),
+      BlockTrack,
+      StructuralRecordStore,
+      TrackedInsert,
+      TrackedDelete,
+      TrackedFormat,
+      TrackChanges,
+      CommentMark,
+      Markdown.configure({ html: false, tightLists: true }),
+    ],
+    content,
+  });
+  editors.push(editor);
+  return editor;
+}
+
+afterEach(() => {
+  while (editors.length) editors.pop()?.destroy();
+});
+
+const structuralEdit = (
+  find: string,
+  to: StructuralEditTarget,
+  level?: HeadingLevel,
+): QuillStructuralEdit => ({
+  find,
+  structural: { to, ...(level !== undefined ? { level } : {}) },
+});
+
+const textEdit = (find: string, replace: string): QuillEdit => ({ find, replace });
+
+/** A deterministic id source `${prefix}-1`, `${prefix}-2`, … (fresh per call). */
+function seqIds(prefix: string): () => string {
+  let n = 0;
+  return () => {
+    n += 1;
+    return `${prefix}-${n}`;
+  };
+}
+
+function baseDeps(
+  editor: Editor,
+  overrides: Partial<StructuralBatchDeps> = {},
+): StructuralBatchDeps {
+  return {
+    editor,
+    authorID: 'claude',
+    fallbackAuthor: 'Anonymous',
+    nextId: seqIds('mint'),
+    now: () => '2026-02-02T00:00:00.000Z',
+    readReservedIds: () => new Set<string>(),
+    ...overrides,
+  };
+}
+
+/** Every blockTrack change id present in the document (both union branches). */
+function unionChangeIds(doc: PMNode): Set<string> {
+  const ids = new Set<string>();
+  doc.descendants((node) => {
+    const blockTrack = node.attrs?.blockTrack as { changeId?: string } | undefined;
+    if (typeof blockTrack?.changeId === 'string') ids.add(blockTrack.changeId);
+  });
+  return ids;
+}
+
+/** The text of a union's inserted (proposed) branch — proof of which block was minted. */
+function insertBranchText(doc: PMNode, changeId: string): string | null {
+  let text: string | null = null;
+  doc.descendants((node) => {
+    const blockTrack = node.attrs?.blockTrack as { changeId?: string; op?: string } | undefined;
+    if (blockTrack?.changeId === changeId && blockTrack.op === 'insert') text = node.textContent;
+  });
+  return text;
+}
+
+/** Pre-dispatch a real heading→paragraph union so a later batch can collide with it. */
+function preMintUnion(editor: Editor, find: string, changeId: string): void {
+  const { placed } = planStructuralEdits(editor.state.doc, [structuralEdit(find, 'paragraph')]);
+  if (placed.length !== 1) throw new Error(`preMintUnion: "${find}" did not plan uniquely`);
+  const mint = compileStructuralMint(editor.state, {
+    op: placed[0].op,
+    targetPos: placed[0].sourceTargetPos, // clean doc → source position IS the live position
+    changeId,
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  if (!mint.ok) throw new Error(`preMintUnion: "${find}" refused ${mint.reason}`);
+  editor.view.dispatch(mint.tr);
+}
+
+describe('structuralBatchDispatch', () => {
+  it('lands a disjoint inline edit and structural mint together, recording both ids', () => {
+    const editor = makeEditor('# Heading here\n\nSome body text');
+    const out = structuralBatchDispatch(
+      [structuralEdit('Heading here', 'paragraph'), textEdit('body text', 'BODY TEXT')],
+      baseDeps(editor, { origin: { kind: 'comment', id: 'c-42' } }),
+    );
+
+    expect(out.results.map((r) => r.batchIndex)).toEqual([0, 1]);
+    expect(out.results[0].outcome).toEqual({
+      kind: 'structural',
+      status: 'minted',
+      changeId: 'mint-1',
+    });
+    expect(out.results[1].outcome).toMatchObject({ kind: 'inline', result: { status: 'applied' } });
+
+    // Provenance: the batch reports the inline id AND the structural id.
+    expect(out.suggestionIds).toContain('mint-1');
+    expect(out.suggestionIds).toHaveLength(2);
+
+    // Structural union minted on the heading, origin stamped on the record.
+    expect(unionChangeIds(editor.state.doc).has('mint-1')).toBe(true);
+    const record = retainedRecords(editor.state).get('mint-1');
+    expect(record?.op).toEqual({ kind: 'headingToParagraph', level: 1 });
+    expect(record?.originCommentId).toBe('c-42');
+
+    // Inline suggestion minted, origin stamped.
+    expect(getTrackedChanges(editor)[0]?.originCommentId).toBe('c-42');
+  });
+
+  it('preserves global batch order with axis-discriminated results', () => {
+    const editor = makeEditor('# Alpha\n\nBravo\n\n# Charlie\n\nDelta');
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Alpha', 'paragraph'),
+        textEdit('Bravo', 'BRAVO'),
+        structuralEdit('Charlie', 'paragraph'),
+        textEdit('Delta', 'DELTA'),
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results.map((r) => r.batchIndex)).toEqual([0, 1, 2, 3]);
+    expect(out.results.map((r) => r.outcome.kind)).toEqual([
+      'structural',
+      'inline',
+      'structural',
+      'inline',
+    ]);
+    expect(out.results[0].outcome).toMatchObject({ status: 'minted' });
+    expect(out.results[2].outcome).toMatchObject({ status: 'minted' });
+    expect(out.results[1].outcome).toMatchObject({ result: { status: 'applied' } });
+    expect(out.results[3].outcome).toMatchObject({ result: { status: 'applied' } });
+    expect(out.suggestionIds).toHaveLength(4);
+  });
+
+  it('rejects two same-block structural edits AND a touching inline edit together', () => {
+    const editor = makeEditor('# Title\n\nBody');
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Title', 'paragraph'),
+        structuralEdit('Title', 'paragraph'), // same target block
+        textEdit('Title', 'Titles'), // inline edit inside that block
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
+    expect(out.results[1].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
+    expect(out.results[2].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+
+    // Removing the structural pair never retroactively frees the inline edit: nothing lands.
+    expect(out.suggestionIds).toEqual([]);
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+  });
+
+  it('mints two disjoint structural edits, both as unions (back-to-front stays valid)', () => {
+    const editor = makeEditor('# First\n\nSecond para\n\n# Third');
+    const out = structuralBatchDispatch(
+      [structuralEdit('First', 'paragraph'), structuralEdit('Third', 'paragraph')],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toMatchObject({ kind: 'structural', status: 'minted' });
+    expect(out.results[1].outcome).toMatchObject({ kind: 'structural', status: 'minted' });
+    const ids = unionChangeIds(editor.state.doc);
+    expect(ids.has('mint-1')).toBe(true);
+    expect(ids.has('mint-2')).toBe(true);
+    expect(out.suggestionIds.slice().sort()).toEqual(['mint-1', 'mint-2']);
+    expect(retainedRecords(editor.state).size).toBe(2);
+    // Each union landed on its own block — no cross-contamination from ordering.
+    expect(insertBranchText(editor.state.doc, 'mint-1')).toBe('Third'); // higher pos, minted first
+    expect(insertBranchText(editor.state.doc, 'mint-2')).toBe('First');
+  });
+
+  it('re-targets a structural mint after an inline edit shifts its live position', () => {
+    const editor = makeEditor('Intro para\n\n# Movable');
+    const out = structuralBatchDispatch(
+      [
+        textEdit('Intro para', 'Intro paragraph now considerably longer than it was'),
+        structuralEdit('Movable', 'paragraph'),
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toMatchObject({ kind: 'inline', result: { status: 'applied' } });
+    expect(out.results[1].outcome).toEqual({
+      kind: 'structural',
+      status: 'minted',
+      changeId: 'mint-1',
+    });
+    // The re-plan + post-apply translation kept the union on 'Movable', not a shifted block.
+    expect(insertBranchText(editor.state.doc, 'mint-1')).toBe('Movable');
+    expect(retainedRecords(editor.state).get('mint-1')?.op).toEqual({
+      kind: 'headingToParagraph',
+      level: 1,
+    });
+  });
+
+  it('refuses only the edit whose allocation is exhausted; a later edit still mints', () => {
+    const editor = makeEditor('# First\n\nSecond para');
+    const reserved = new Set<string>();
+    for (let i = 0; i < 200; i += 1) reserved.add(`r${i}`);
+    // The provider hands back 200 already-reserved ids, then one fresh id. The
+    // first-dispatched mint burns its whole 128-attempt budget on reserved ids and
+    // fails; the next allocation reaches the fresh id and succeeds.
+    let i = 0;
+    const nextId = (): string => {
+      if (i >= 200) return 'fresh';
+      const id = `r${i}`;
+      i += 1;
+      return id;
+    };
+
+    const out = structuralBatchDispatch(
+      [structuralEdit('First', 'paragraph'), structuralEdit('Second para', 'heading', 2)],
+      baseDeps(editor, { nextId, readReservedIds: () => reserved }),
+    );
+
+    const statuses = out.results.map((r) => ('status' in r.outcome ? r.outcome.status : undefined));
+    expect(statuses.filter((s) => s === 'id-allocation-failed')).toHaveLength(1);
+    expect(statuses.filter((s) => s === 'minted')).toHaveLength(1);
+    expect(unionChangeIds(editor.state.doc).has('fresh')).toBe(true);
+    expect(out.suggestionIds).toEqual(['fresh']);
+  });
+
+  it('refuses a mint onto an existing union, keeps its id reserved, and spares disjoint edits', () => {
+    const editor = makeEditor('Lead para\n\n# Existing');
+    preMintUnion(editor, 'Existing', 'union-x');
+
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Lead para', 'heading', 2), // clean, lower position → dispatched second
+        structuralEdit('Existing', 'paragraph'), // onto the union, higher position → dispatched first
+      ],
+      baseDeps(editor, { readReservedIds: () => new Set(['union-x']) }),
+    );
+
+    // The union collision refuses — and consumed 'mint-1', which stays reserved.
+    expect(out.results[1].outcome).toMatchObject({
+      kind: 'structural',
+      status: 'mint-refused',
+      reason: 'overlapping-structural',
+    });
+    // The disjoint edit still mints — with 'mint-2', proving 'mint-1' was NOT reused.
+    expect(out.results[0].outcome).toEqual({
+      kind: 'structural',
+      status: 'minted',
+      changeId: 'mint-2',
+    });
+    expect(out.suggestionIds).toEqual(['mint-2']);
+    // The pre-existing union is untouched.
+    expect(unionChangeIds(editor.state.doc).has('union-x')).toBe(true);
+  });
+});
+
+describe('inlineTouchesBlock (cross-axis point semantics)', () => {
+  // Structural target block envelope [10, 20).
+  it('conflicts a nonempty inline range on half-open overlap, allows exact outer edges', () => {
+    expect(inlineTouchesBlock(5, 11, 10, 20)).toBe(true); // reaches into the interior
+    expect(inlineTouchesBlock(19, 25, 10, 20)).toBe(true); // reaches out of the interior
+    expect(inlineTouchesBlock(12, 18, 10, 20)).toBe(true); // fully inside
+    expect(inlineTouchesBlock(5, 10, 10, 20)).toBe(false); // abuts the outer start
+    expect(inlineTouchesBlock(20, 25, 10, 20)).toBe(false); // abuts the outer end
+  });
+
+  it('conflicts a zero-width inline edit only STRICTLY inside; outer boundaries allowed', () => {
+    expect(inlineTouchesBlock(15, 15, 10, 20)).toBe(true); // strictly inside
+    expect(inlineTouchesBlock(10, 10, 10, 20)).toBe(false); // exact outer start
+    expect(inlineTouchesBlock(20, 20, 10, 20)).toBe(false); // exact outer end
+  });
+});
