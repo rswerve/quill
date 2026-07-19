@@ -63,13 +63,23 @@ describe('formatBatchResultNotice', () => {
   });
 
   it('reports system/provider faults blamelessly, never blaming the instruction', () => {
+    // In 6b the id/author/timestamp/origin and the target coordinates are ALL injected by
+    // the orchestrator — Claude supplies none of them — so these four are internal faults.
     const results = [
       entry(0, { kind: 'structural', status: 'metadata-provider-failed' }),
       entry(1, { kind: 'structural', status: 'id-allocation-failed' }),
+      entry(2, { kind: 'structural', status: 'mint-refused', reason: 'invalid-metadata' }),
+      entry(3, { kind: 'structural', status: 'mint-refused', reason: 'target-not-found' }),
     ];
-    const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'B' }]);
-    expect(notice).toContain('an internal error stopped it; try asking again.');
-    expect(notice).not.toContain('malformed');
+    const notice = formatBatchResultNotice(results, [
+      { find: 'A' },
+      { find: 'B' },
+      { find: 'C' },
+      { find: 'D' },
+    ]);
+    expect(notice.match(/an internal error stopped it; try asking again\./g)).toHaveLength(4);
+    expect(notice).not.toContain('malformed'); // invalid-metadata must NOT blame the instruction
+    expect(notice).not.toContain('couldn’t be located'); // target-not-found must NOT either
   });
 
   it('explains an xor-violation as declaring both change kinds', () => {

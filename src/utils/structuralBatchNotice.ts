@@ -64,10 +64,13 @@ function structuralMintRefusalText(reason: StructuralMintRefusal): string {
       return 'the document has an unresolved structural change; resolve it first.';
     case 'native-no-op':
       return 'the conversion would make no change.';
+    // System faults, NOT the model's instruction: in 6b the changeId/author/timestamp/
+    // origin are all injected by the orchestrator (allocateReservedId, the AI author,
+    // now(), the comment/chat origin) and the op is planner-validated before the mint,
+    // so a mint-level invalid-metadata can only be bad injected metadata; target-not-found
+    // is a coordinate/translation fault on an already-located block. Both stay blameless.
     case 'invalid-metadata':
-      return 'the edit instruction is malformed.';
     case 'target-not-found':
-      return 'that block couldn’t be located.';
     case 'id-unavailable':
     case 'self-check-failed':
       return SYSTEM_FAULT;
