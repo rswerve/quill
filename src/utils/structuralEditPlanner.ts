@@ -1,5 +1,6 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { HeadingLevel, QuillStructuralEdit, StructuralOp } from '../types';
+import { locateEditTextMatches } from './editTextProjection';
 
 /**
  * 6b-1: plan Claude's structural edits (heading↔paragraph, list↔paragraph) against
@@ -25,6 +26,7 @@ export type StructuralPlanStatus =
 export type StructuralPlanReason =
   | 'text-not-found'
   | 'ambiguous-target'
+  | 'cross-block-target'
   | 'unsupported-op'
   | 'already-target'
   | 'missing-level'
@@ -54,19 +56,51 @@ function isHeadingLevel(value: unknown): value is HeadingLevel {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 6;
 }
 
-/** Locate the single top-level block whose trimmed text equals the trimmed find. */
+/** The top-level block whose content range wholly contains [from, to), or null. */
+function topLevelBlockContaining(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+): { node: ProseMirrorNode; pos: number } | null {
+  let found: { node: ProseMirrorNode; pos: number } | null = null;
+  doc.forEach((node, offset) => {
+    if (found) return;
+    const contentFrom = offset + 1;
+    const contentTo = offset + node.nodeSize - 1;
+    if (from >= contentFrom && to <= contentTo) found = { node, pos: offset };
+  });
+  return found;
+}
+
+/**
+ * Locate the single top-level block a structural edit targets, using the SAME
+ * matcher as inline edits (`locateEditTextMatches`) so `find` is an exact plaintext
+ * substring with the shared markdown/whitespace fallbacks — never the block's whole
+ * text. Every match's COMPLETE [from, to) must fit inside one top-level block
+ * envelope; a match spanning blocks is 'cross-block' (a find can't identify one
+ * block to convert). Distinct contained blocks are deduped by start: 0 →
+ * 'not-found', 1 → that block (repeated matches inside it are fine), >1 →
+ * 'ambiguous'. No minimum quote length — a unique containing block is sufficient.
+ */
 function locateBlock(
   doc: ProseMirrorNode,
   find: string,
-): { node: ProseMirrorNode; pos: number } | 'not-found' | 'ambiguous' {
-  const needle = find.trim();
-  const hits: Array<{ node: ProseMirrorNode; pos: number }> = [];
-  doc.forEach((node, offset) => {
-    if (node.textContent.trim() === needle) hits.push({ node, pos: offset });
-  });
-  if (hits.length === 0) return 'not-found';
-  if (hits.length > 1) return 'ambiguous';
-  return hits[0];
+):
+  | { node: ProseMirrorNode; pos: number }
+  | 'text-not-found'
+  | 'ambiguous-target'
+  | 'cross-block-target' {
+  const matches = locateEditTextMatches(doc, 0, doc.content.size, find);
+  if (matches.length === 0) return 'text-not-found';
+  const blocks = new Map<number, { node: ProseMirrorNode; pos: number }>();
+  for (const match of matches) {
+    const block = topLevelBlockContaining(doc, match.from, match.to);
+    if (!block) return 'cross-block-target';
+    blocks.set(block.pos, block);
+  }
+  if (blocks.size === 0) return 'text-not-found';
+  if (blocks.size > 1) return 'ambiguous-target';
+  return [...blocks.values()][0];
 }
 
 type OpDerivation = StructuralOp | 'unsupported-op' | 'already-target';
@@ -99,7 +133,10 @@ function deriveOp(
     if (to === 'heading') return { kind: 'paragraphToHeading', level: level as HeadingLevel };
     return 'unsupported-op'; // paragraph → list (V1b)
   }
-  return 'unsupported-op'; // list source, blockquote, code block, etc.
+  // A list already the requested list type is a real no-op, not unsupported —
+  // even though executing any list conversion is V1b.
+  if (type === to) return 'already-target';
+  return 'unsupported-op'; // list source (different type), blockquote, code, etc.
 }
 
 /** Validate the edit's shape; returns a refusal reason, or null when well-formed. */
@@ -131,6 +168,7 @@ function refusalStatus(reason: StructuralPlanReason): StructuralPlanStatus {
     case 'text-not-found':
       return 'not-found';
     case 'ambiguous-target':
+    case 'cross-block-target':
       return 'ambiguous';
     case 'unsupported-op':
       return 'unsupported';
@@ -161,12 +199,8 @@ export function planStructuralEdits(
     }
 
     const located = locateBlock(doc, edit.find);
-    if (located === 'not-found') {
-      results.push({ edit, status: 'not-found', reason: 'text-not-found' });
-      return;
-    }
-    if (located === 'ambiguous') {
-      results.push({ edit, status: 'ambiguous', reason: 'ambiguous-target' });
+    if (typeof located === 'string') {
+      results.push({ edit, status: refusalStatus(located), reason: located });
       return;
     }
 

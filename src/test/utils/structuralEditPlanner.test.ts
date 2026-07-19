@@ -142,6 +142,68 @@ describe('planStructuralEdits', () => {
     });
   });
 
+  it('plans from a partial substring of the block, not the whole block text', () => {
+    const doc = docOf([heading(2, 'The Quarterly Report Summary')]);
+    const { placed, results } = planStructuralEdits(doc, [
+      edit('Quarterly Report', { to: 'paragraph' }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed[0].op).toEqual({ kind: 'headingToParagraph', level: 2 });
+    // The whole containing block is the target, even though find was a fragment.
+    const { from, to } = placed[0].sourceTarget;
+    expect(doc.textBetween(from + 1, to - 1)).toBe('The Quarterly Report Summary');
+  });
+
+  it('plans when the substring repeats WITHIN one block (still one target)', () => {
+    const doc = docOf([para('go go go')]);
+    const { placed, results } = planStructuralEdits(doc, [edit('go', { to: 'heading', level: 2 })]);
+    expect(results[0].status).toBe('planned');
+    expect(placed).toHaveLength(1);
+    expect(placed[0].op).toEqual({ kind: 'paragraphToHeading', level: 2 });
+  });
+
+  it('refuses when the substring appears across MULTIPLE blocks (ambiguous)', () => {
+    const doc = docOf([para('shared text here'), heading(1, 'also shared text now')]);
+    const { placed, results } = planStructuralEdits(doc, [
+      edit('shared text', { to: 'paragraph' }),
+    ]);
+    expect(placed).toEqual([]);
+    expect(results[0]).toMatchObject({ status: 'ambiguous', reason: 'ambiguous-target' });
+  });
+
+  it('plans a find crossing a hard break WITHIN one block (one target)', () => {
+    const doc = docOf([
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'line one' },
+          { type: 'hardBreak' },
+          { type: 'text', text: 'line two' },
+        ],
+      },
+    ]);
+    const { placed, results } = planStructuralEdits(doc, [
+      edit('line one', { to: 'heading', level: 3 }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed).toHaveLength(1);
+  });
+
+  it('refuses a find that spans two blocks (cross-block-target)', () => {
+    const doc = docOf([para('alpha'), para('beta')]);
+    const { placed, results } = planStructuralEdits(doc, [
+      edit('alpha\nbeta', { to: 'paragraph' }),
+    ]);
+    expect(placed).toEqual([]);
+    expect(results[0]).toMatchObject({ status: 'ambiguous', reason: 'cross-block-target' });
+  });
+
+  it('treats a list already the requested list type as a no-op (already-target)', () => {
+    const doc = docOf([bullet('item')]);
+    const { results } = planStructuralEdits(doc, [edit('item', { to: 'bulletList' })]);
+    expect(results[0]).toMatchObject({ status: 'no-op', reason: 'already-target' });
+  });
+
   it('keeps results in input order and places only the planned edits', () => {
     const doc = docOf([heading(1, 'Keep'), para('Body')]);
     const { placed, results } = planStructuralEdits(doc, [

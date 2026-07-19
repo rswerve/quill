@@ -386,7 +386,7 @@ export interface QuillStructuralEdit {
   find: string;
   structural: {
     to: StructuralEditTarget;
-    /** Required for `to: 'heading'`; ignored otherwise. */
+    /** Required for `to: 'heading'`; must be absent otherwise (else invalid-level). */
     level?: HeadingLevel;
   };
 }
