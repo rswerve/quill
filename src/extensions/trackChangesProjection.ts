@@ -5,13 +5,26 @@ import type {
   Node as ProseMirrorNode,
   Slice,
 } from '@tiptap/pm/model';
-import type { Transaction } from '@tiptap/pm/state';
+import { EditorState, type Transaction } from '@tiptap/pm/state';
+import type { Mapping } from '@tiptap/pm/transform';
+import { resolveTrackedChanges } from './trackChangesResolution';
 
 const REVIEW_MARK_NAMES = new Set(['tracked_insert', 'tracked_delete', 'tracked_format']);
 
 export interface TrackedDocumentProjection {
   /** The document users get after accepting every pending change. */
   accepted: ProseMirrorNode;
+  /**
+   * The clean original document: pending insertions are absent, pending
+   * deletions survive, and pending formatting is inverted. This is exactly the
+   * document produced by rejecting every pending inline change, without
+   * mutating the live editor.
+   */
+  source: ProseMirrorNode;
+  /** Maps review-document positions onto {@link source}. */
+  sourceMapping: Mapping;
+  /** Review-coordinate ranges removed from {@link source} (pending insertions). */
+  sourceRemovedRanges: Array<{ from: number; to: number }>;
   /** The immutable source document used by the review renderer. */
   review: ProseMirrorNode;
 }
@@ -41,8 +54,27 @@ function projectAcceptedNode(node: ProseMirrorNode): ProseMirrorNode | null {
  * review text as accepted-content context.
  */
 export function projectTrackedDocument(doc: ProseMirrorNode): TrackedDocumentProjection {
+  // Reject is the source/original projection by definition. Reusing the actual
+  // resolution kernel keeps all three tracked operations honest:
+  //   insert -> dropped, delete -> retained, format -> delta inverted.
+  // The detached state has no plugins and is never dispatched, so projection is
+  // side-effect-free while retaining the transaction's exact position mapping.
+  const sourceTr = resolveTrackedChanges(EditorState.create({ doc }), null, 'reject');
+  const sourceRemovedRanges: Array<{ from: number; to: number }> = [];
+  doc.descendants((node, pos) => {
+    if (!node.isInline) return;
+    const pendingInsert = node.marks.some((mark) => {
+      if (mark.type.name !== 'tracked_insert') return false;
+      const data = mark.attrs.dataTracked as Record<string, unknown> | undefined;
+      return data?.status === 'pending';
+    });
+    if (pendingInsert) sourceRemovedRanges.push({ from: pos, to: pos + node.nodeSize });
+  });
   return {
     accepted: projectAcceptedNode(doc) ?? doc.type.create(doc.attrs),
+    source: sourceTr.doc,
+    sourceMapping: sourceTr.mapping,
+    sourceRemovedRanges,
     review: doc,
   };
 }
