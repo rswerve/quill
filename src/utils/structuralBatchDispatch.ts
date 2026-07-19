@@ -87,6 +87,7 @@ export type StructuralDispatchOutcome =
   | { kind: 'structural'; status: 'plan-refused'; reason: StructuralPlanReason }
   | { kind: 'structural'; status: 'cross-axis-conflict' }
   | { kind: 'structural'; status: 'id-allocation-failed' }
+  | { kind: 'structural'; status: 'metadata-provider-failed' }
   | { kind: 'structural'; status: 'mint-refused'; reason: StructuralMintRefusal };
 
 export interface BatchResultEntry {
@@ -244,12 +245,23 @@ function dispatchStructuralMints(
       setOutcome(candidate.batchIndex, { kind: 'structural', status: 'id-allocation-failed' });
       continue;
     }
+    // The timestamp provider is an injected boundary. If it throws, it must NOT abort a
+    // partially-applied batch (inline edits and earlier mints have already landed): the
+    // allocated id stays reserved, this one candidate is refused, and later candidates
+    // still mint. (allocateReservedId already contains a throwing nextId the same way.)
+    let createdAt: string;
+    try {
+      createdAt = config.now();
+    } catch {
+      setOutcome(candidate.batchIndex, { kind: 'structural', status: 'metadata-provider-failed' });
+      continue;
+    }
     const mint = compileStructuralMint(editor.state, {
       op: candidate.placed.op,
       targetPos: candidate.liveTargetPos,
       changeId: allocation.id,
       author: config.authorID,
-      createdAt: config.now(),
+      createdAt,
       origin: config.origin,
     });
     if (mint.ok) {
@@ -294,17 +306,20 @@ export function structuralBatchDispatch(
   const preProjection = projectCleanSourceDocument(preDoc);
 
   const inlineEdits = inlineItems.map((item) => item.edit);
+  // The FULL initial inline plan — both placements and per-edit results. Retaining the
+  // results is load-bearing: an inline edit the initial planner rejected via a cross-edit
+  // interaction (an exact duplicate deduped to already-applied, a format/text edit
+  // overlapping a placed text edit) must keep that outcome. If it were re-planned in a
+  // subset where its conflicting partner was removed (e.g. cross-axis-rejected), it would
+  // be RETROACTIVELY FREED and applied — leaking a refused edit. So a non-placed inline
+  // outcome is final, and pass 2 (the apply engine's re-plan) only ever sees survivors.
+  const inlinePlan = planEdits(preDoc, 0, preDoc.content.size, inlineEdits, authorID);
+  const placedInlineIndexes = new Set(inlinePlan.placed.map((placement) => placement.editIndex));
   // planEdits returns LIVE placements (already source-view gated); map each back to
   // clean-source coordinates for the graph. The gate accepted a placement only after
   // `mapping.map(liveFrom, 1) === sourceFrom` (trackedEdits.ts), so this recovers the
   // EXACT source range — no re-planning, and both axes share one coordinate system.
-  const inlineSourceRanges = planEdits(
-    preDoc,
-    0,
-    preDoc.content.size,
-    inlineEdits,
-    authorID,
-  ).placed.map((placement) => ({
+  const inlineSourceRanges = inlinePlan.placed.map((placement) => ({
     inlineEditIndex: placement.editIndex,
     from: preProjection.mapping.map(placement.from, 1),
     to: preProjection.mapping.map(placement.to, -1),
@@ -366,8 +381,21 @@ export function structuralBatchDispatch(
   });
 
   // ---- STEP 3: apply the surviving inline edits through the existing engine. ----
+  // Every initially non-placed inline edit keeps its pass-1 result verbatim — it is NEVER
+  // re-planned (see the retroactive-freeing note in step 1). Cross-axis edits are always
+  // placed, so the partition is exhaustive and disjoint: non-placed → pass-1 result;
+  // placed + cross-axis → cross-axis-conflict (set above); placed + survivor → pass 2.
+  inlineItems.forEach((item, inlineEditIndex) => {
+    if (!placedInlineIndexes.has(inlineEditIndex)) {
+      outcomeByIndex.set(item.batchIndex, {
+        kind: 'inline',
+        result: inlinePlan.results[inlineEditIndex],
+      });
+    }
+  });
   const applyItems = inlineItems.filter(
-    (_, inlineEditIndex) => !conflictedInline.has(inlineEditIndex),
+    (_, inlineEditIndex) =>
+      placedInlineIndexes.has(inlineEditIndex) && !conflictedInline.has(inlineEditIndex),
   );
   let inlineSuggestionIds: string[] = [];
   if (applyItems.length > 0) {

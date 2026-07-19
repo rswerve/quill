@@ -308,6 +308,83 @@ describe('structuralBatchDispatch', () => {
     // The pre-existing union is untouched.
     expect(unionChangeIds(editor.state.doc).has('union-x')).toBe(true);
   });
+
+  it('does NOT retroactively free an exact-duplicate inline edit of a cross-axis-rejected one', () => {
+    // Codex's repro: structural + two identical inline edits on the same block. The first
+    // inline edit is cross-axis-rejected; the duplicate (deduped in pass 1) must NOT be
+    // re-applied alone in pass 2.
+    const editor = makeEditor('# Title\n\nBody');
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Title', 'paragraph'),
+        textEdit('Title', 'Titles'),
+        textEdit('Title', 'Titles'), // exact duplicate
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
+    expect(out.results[1].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+    // The duplicate keeps its immutable pass-1 outcome (deduped) — never re-applied.
+    expect(out.results[2].outcome).toMatchObject({
+      kind: 'inline',
+      result: { status: 'no-op' },
+    });
+    // The critical property: no tracked replacement leaked into the document.
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(out.suggestionIds).toEqual([]);
+  });
+
+  it('does NOT retroactively free a format edit shadowed by a cross-axis-removed text edit', () => {
+    // A format op rejected in pass 1 for overlapping a placed text edit must stay rejected
+    // even after that text edit is removed for a cross-axis conflict.
+    const editor = makeEditor('# Section\n\nBody');
+    const out = structuralBatchDispatch(
+      [
+        structuralEdit('Section', 'paragraph'), // targets the heading block
+        textEdit('Section', 'Sections'), // text edit in that block → cross-axis-removed
+        { find: 'Section', format: { bold: true } }, // format op overlapping the text edit
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
+    expect(out.results[1].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+    // The format op keeps its pass-1 overlapping-edit refusal — not re-applied.
+    expect(out.results[2].outcome).toMatchObject({
+      kind: 'inline',
+      result: { status: 'conflict', reason: 'overlapping-edit' },
+    });
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(out.suggestionIds).toEqual([]);
+  });
+
+  it('survives a throwing timestamp provider: refuses only that candidate, later ones still mint', () => {
+    const editor = makeEditor('# First\n\n# Third');
+    let calls = 0;
+    const now = (): string => {
+      calls += 1;
+      if (calls === 1) throw new Error('clock exploded');
+      return '2026-02-02T00:00:00.000Z';
+    };
+
+    const out = structuralBatchDispatch(
+      [structuralEdit('First', 'paragraph'), structuralEdit('Third', 'paragraph')],
+      baseDeps(editor, { now }),
+    );
+
+    // Back-to-front: 'Third' is dispatched first, its now() throws → refused, id reserved.
+    // 'First' is dispatched second → mints with the NEXT id ('mint-2'), never reusing 'mint-1'.
+    const statuses = out.results.map((r) => ('status' in r.outcome ? r.outcome.status : undefined));
+    expect(statuses.filter((s) => s === 'metadata-provider-failed')).toHaveLength(1);
+    expect(statuses.filter((s) => s === 'minted')).toHaveLength(1);
+    const ids = unionChangeIds(editor.state.doc);
+    expect(ids.has('mint-2')).toBe(true);
+    expect(ids.has('mint-1')).toBe(false); // the failed candidate's id was NOT reused
+    expect(out.suggestionIds).toEqual(['mint-2']);
+  });
 });
 
 describe('inlineTouchesBlock (cross-axis point semantics)', () => {
