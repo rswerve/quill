@@ -72,6 +72,9 @@ export interface StructuralSuggestionCardGroup {
   change: StructuralChangeInfo;
 }
 
+/** The umbrella the review panel renders: an inline card group or a structural one. */
+export type ReviewCardGroup = InlineSuggestionCardGroup | StructuralSuggestionCardGroup;
+
 /** Build the structural card groups from enumerated structural changes (already ordered). */
 export function structuralCardGroups(
   changes: StructuralChangeInfo[],

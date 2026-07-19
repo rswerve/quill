@@ -4,7 +4,7 @@ import { clip, timeAgo } from '../utils/format';
 import { cx } from '../utils/cx';
 import styles from './SuggestionCard.module.css';
 
-export type SuggestionCardKind = 'insert' | 'delete' | 'replace' | 'format';
+export type SuggestionCardKind = 'insert' | 'delete' | 'replace' | 'format' | 'structural';
 
 interface SuggestionCardShellProps {
   cardId: string;

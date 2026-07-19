@@ -13,7 +13,7 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { StructuralRecordStore, addStructuralRecord } from '../../extensions/StructuralRecordStore';
-import { getStructuralChanges } from '../../utils/structuralChanges';
+import { getStructuralChanges, getStructuralReviewState } from '../../utils/structuralChanges';
 import { structuralCardGroups } from '../../utils/suggestionCards';
 import { validateSnapshot } from '../../utils/reviewSnapshotIntegrity';
 import { compileStructuralMint } from '../../utils/structuralMint';
@@ -162,6 +162,50 @@ describe('getStructuralChanges — omitted (non-persistable) unions', () => {
       }),
     );
     expect(getStructuralChanges(state)).toEqual([]);
+  });
+});
+
+describe('getStructuralReviewState — changes + attention', () => {
+  function forge(state: EditorState, changeId: string, complete: boolean): EditorState {
+    const heading = state.doc.child(0);
+    const tr = state.tr.setNodeMarkup(0, undefined, {
+      ...heading.attrs,
+      blockTrack: { changeId, op: 'delete' },
+    });
+    if (complete) {
+      tr.insert(
+        heading.nodeSize,
+        state.schema.nodes.paragraph.create(
+          { blockTrack: { changeId, op: 'insert' } },
+          heading.content,
+        ),
+      );
+    }
+    return state.apply(tr);
+  }
+
+  it('reports a persistable union as an actionable change with no issues', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    const state = applyMint(editor.state, 1, 'c1', H2P);
+    const review = getStructuralReviewState(state);
+    expect(review.changes.map((c) => c.changeId)).toEqual(['c1']);
+    expect(review.issues).toEqual([]);
+  });
+
+  it('synthesizes a missing-metadata issue for an orphan union (no card)', () => {
+    editor = makeEditor('<h1>A</h1>');
+    const state = forge(editor.state, 'orphan', true); // complete union, no record
+    const review = getStructuralReviewState(state);
+    expect(review.changes).toEqual([]);
+    expect(review.issues).toContainEqual({ changeId: 'orphan', code: 'missing-metadata' });
+  });
+
+  it('reports a malformed topology as an issue, not a change', () => {
+    editor = makeEditor('<h1>A</h1><p>B</p>');
+    const state = forge(editor.state, 'lone', false); // lone delete → branch-count issue
+    const review = getStructuralReviewState(state);
+    expect(review.changes).toEqual([]);
+    expect(review.issues.some((issue) => issue.changeId === 'lone')).toBe(true);
   });
 });
 
