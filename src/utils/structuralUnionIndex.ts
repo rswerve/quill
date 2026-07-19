@@ -237,7 +237,7 @@ function candidateFor(
 }
 
 /** A single-item list of the declared type wrapping exactly one paragraph. */
-function isSingleItemList(node: PMNode, listType: StructuralListType): boolean {
+export function isSingleItemList(node: PMNode, listType: StructuralListType): boolean {
   if (node.type.name !== listType || node.childCount !== 1) return false;
   const item = node.child(0);
   return item.childCount === 1 && item.child(0).type.name === 'paragraph';

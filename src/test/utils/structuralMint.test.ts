@@ -702,32 +702,149 @@ describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () =
   });
 });
 
-describe('compileStructuralMint — V1b-1 top-level block resolution', () => {
-  it('resolves a top-level LIST target (reaches the command → unsupported-shape, not target-not-found)', () => {
-    editor = makeEditor('<ul><li>item text</li></ul><p>Body</p>');
-    // Before V1b-1 a list target did not resolve (target-not-found). Now it resolves and
-    // reaches the command lookup, which still refuses list ops until V1b-2 → unsupported-shape.
+describe('compileStructuralMint — V1b list ↔ paragraph', () => {
+  it('mints a paragraph→bulletList union (source==paragraph, accepted==single-item list)', () => {
+    editor = makeEditor('<p>Item text</p>');
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'paragraphToList', listType: 'bulletList' }, targetPos: posInBlock(0) }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('paragraph');
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    expect(doc.child(1).type.name).toBe('bulletList');
+    expect(doc.child(1).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(doc.child(1).textContent).toBe('Item text');
+    // Projection invariants: source keeps the paragraph, accepted becomes the list.
+    expect(projectBlockUnions(doc, 'source').doc.child(0).type.name).toBe('paragraph');
+    expect(projectBlockUnions(doc, 'source').doc.childCount).toBe(1);
+    const accepted = projectBlockUnions(doc, 'accepted').doc;
+    expect(accepted.childCount).toBe(1);
+    expect(accepted.child(0).type.name).toBe('bulletList');
+    expect(accepted.child(0).attrs.blockTrack).toBeNull();
+  });
+
+  it('mints a single-item bulletList→paragraph union from a caret INSIDE the item text (depth 3)', () => {
+    editor = makeEditor('<ul><li>Item text</li></ul>');
+    // A REAL position inside the nested paragraph's text (depth 3) — Codex's V1b-1 fix.
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'bulletList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('bulletList');
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    expect(doc.child(1).type.name).toBe('paragraph');
+    expect(doc.child(1).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(doc.child(1).textContent).toBe('Item text');
+    expect(projectBlockUnions(doc, 'accepted').doc.child(0).type.name).toBe('paragraph');
+  });
+
+  it('mints paragraph→taskList with a taskItem defaulting to checked:false', () => {
+    editor = makeEditor('<p>Task text</p>');
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'paragraphToList', listType: 'taskList' }, targetPos: posInBlock(0) }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const list = editor.state.doc.child(1);
+    expect(list.type.name).toBe('taskList');
+    expect(list.child(0).type.name).toBe('taskItem');
+    expect(list.child(0).attrs.checked).toBe(false);
+  });
+
+  it('refuses a MULTI-item list source (single-item only in V1b)', () => {
+    editor = makeEditor('<ul><li>one</li><li>two</li></ul>');
     const r = compileStructuralMint(
       editor.state,
-      req({ op: { kind: 'listToParagraph', listType: 'bulletList' }, targetPos: posInBlock(0) }),
+      req({
+        op: { kind: 'listToParagraph', listType: 'bulletList' },
+        targetPos: posInBlock(0) + 3,
+      }),
     );
     expect(r).toEqual({ ok: false, reason: 'unsupported-shape' });
   });
 
-  it('resolves a single-item TASK list target too', () => {
-    editor = makeEditor('<ul data-type="taskList"><li data-type="taskItem">task text</li></ul>');
+  it('refuses a listType mismatch (source bulletList declared as orderedList)', () => {
+    editor = makeEditor('<ul><li>item</li></ul>');
     const r = compileStructuralMint(
       editor.state,
-      req({ op: { kind: 'listToParagraph', listType: 'taskList' }, targetPos: posInBlock(0) }),
+      req({
+        op: { kind: 'listToParagraph', listType: 'orderedList' },
+        targetPos: posInBlock(0) + 3,
+      }),
     );
     expect(r).toEqual({ ok: false, reason: 'unsupported-shape' });
+  });
+
+  it('wraps a paragraph adjacent to a same-type list WITHOUT merging into it (neighbor untouched)', () => {
+    // Empirically, wrapInList in Quill's schema creates a SEPARATE new list rather than
+    // joining the neighbor, so the conversion stays a single-child change and mints; the
+    // existing list is left untouched (and reconstruction is JSON-based, so the union does
+    // not coalesce with it on reload). onlyChildChanged remains the backstop if a future
+    // schema DID merge.
+    editor = makeEditor('<p>Loner</p><ul><li>existing</li></ul>');
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({ op: { kind: 'paragraphToList', listType: 'bulletList' }, targetPos: posInBlock(0) }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('paragraph'); // Loner — delete branch
+    expect(doc.child(1).type.name).toBe('bulletList'); // Loner — insert branch
+    expect(doc.child(1).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    // The pre-existing neighbor list is a SEPARATE, untouched block.
+    expect(doc.child(2).type.name).toBe('bulletList');
+    expect(doc.child(2).attrs.blockTrack).toBeNull();
+    expect(doc.child(2).textContent).toBe('existing');
+  });
+
+  it('carries a contained origin comment on a paragraph→list mint (oracle uses the converted size)', () => {
+    // WITHOUT the buildAcceptedOracle size fix this refuses self-check-failed: the oracle
+    // would strip only a source-paragraph-sized range while the real union strips the whole
+    // (larger) list branch, so accepted != oracle. The fix aligns them → mint succeeds.
+    editor = makeEditor('<p>Item text</p>');
+    editor.chain().setTextSelection({ from: 1, to: 5 }).setComment('cm1').run(); // on "Item"
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'paragraphToList', listType: 'bulletList' },
+          targetPos: posInBlock(0),
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('paragraph');
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(true); // source paragraph keeps it
+    expect(doc.child(1).type.name).toBe('bulletList');
+    expect(blockHasComment(doc.child(1), 'cm1')).toBe(false); // list branch fully stripped
+    expect(activeRecords(editor.state)[0].originCommentId).toBe('cm1');
   });
 
   it('still refuses a non-list, non-textblock container (blockquote) as target-not-found', () => {
     editor = makeEditor('<blockquote><p>quote</p></blockquote>');
     const r = compileStructuralMint(
       editor.state,
-      req({ op: { kind: 'headingToParagraph', level: 1 }, targetPos: posInBlock(0) }),
+      req({
+        op: { kind: 'paragraphToList', listType: 'bulletList' },
+        targetPos: posInBlock(0) + 1,
+      }),
     );
     expect(r).toEqual({ ok: false, reason: 'target-not-found' });
   });

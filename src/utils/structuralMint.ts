@@ -2,6 +2,7 @@ import type { Mark, Node as PMNode, Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection, type Command, type Transaction } from '@tiptap/pm/state';
 import { Transform } from '@tiptap/pm/transform';
 import { setBlockType } from '@tiptap/pm/commands';
+import { wrapInList, liftListItem } from '@tiptap/pm/schema-list';
 import type { StructuralOp } from '../types';
 import {
   addStructuralRecord,
@@ -11,6 +12,7 @@ import {
 } from '../extensions/StructuralRecordStore';
 import {
   analyzeStructuralUnions,
+  isSingleItemList,
   structuralOpShapeValid,
   type StructuralUnionMetadata,
 } from './structuralUnionIndex';
@@ -26,8 +28,9 @@ import {
 } from '../extensions/trackChangesMeta';
 
 /**
- * Deterministic compiler for a single V1a block-type structural mint
- * (heading ↔ paragraph). It is side-effect-free: it reads an {@link EditorState}
+ * Deterministic compiler for a single block-type structural mint: V1a heading ↔
+ * paragraph and V1b single-item list ↔ paragraph (bulleted / numbered / task).
+ * It is side-effect-free: it reads an {@link EditorState}
  * and returns a {@link Transaction} it never dispatches, so it is safe to run
  * speculatively (e.g. inside a future batch planner) and to unit-test without a
  * live view. All identity and provenance is caller-supplied and immutable — the
@@ -43,10 +46,10 @@ import {
  * and a `{kind:'mint'}` {@link STRUCTURAL_BYPASS_META} so the freeze guard can
  * recognize it as authorized.
  *
- * List operations (product V1b) are a later compiler extension and refuse with
- * `unsupported-shape` here. The origin-comment carveout (mint slice 1b) will relax
- * the annotation-free rule for the single origin comment; V1a refuses any change
- * whose captured subtree carries a review mark.
+ * V1b supports single-item lists only — a multi-item list refuses (`unsupported-shape`
+ * via isSingleItemList, and onlyChildChanged as a backstop). The origin-comment carveout
+ * (mint slice 1b) relaxes the annotation-free rule for the single origin comment; every
+ * other review mark in the captured subtree refuses.
  */
 
 /** Caller-supplied provenance; discriminated so both origins cannot be set at once. */
@@ -130,9 +133,11 @@ function resolveTopLevelBlock(doc: PMNode, pos: number): TargetBlock | null {
   // bare range check but throws in `doc.resolve`, so reject it as target-not-found.
   if (!Number.isInteger(pos) || pos <= 0 || pos >= doc.content.size) return null;
   const $pos = doc.resolve(pos);
-  // depth 1 = directly inside a top-level block; a boundary position is depth 0.
-  if ($pos.depth !== 1) return null;
-  const node = $pos.parent;
+  // Only a boundary position (depth 0, between top-level blocks) is rejected. A position
+  // at ANY depth inside a block — a heading's text (depth 1) or a list item's paragraph
+  // text (depth 3) — resolves to its depth-1 ancestor, so a real caret inside a list works.
+  if ($pos.depth < 1) return null;
+  const node = $pos.node(1);
   const from = $pos.before(1);
   const to = $pos.after(1);
   const base = { node, from, to, index: $pos.index(0) };
@@ -147,9 +152,11 @@ function resolveTopLevelBlock(doc: PMNode, pos: number): TargetBlock | null {
 }
 
 /**
- * The native ProseMirror command for a V1a op; null for ops outside V1a or when
- * the schema lacks the node type the conversion needs (so a schema without
- * paragraph/heading refuses cleanly rather than passing `undefined` to a command).
+ * The native ProseMirror command for a V1 op; null when the schema lacks the node type
+ * the conversion needs (so a schema without paragraph/heading/list refuses cleanly rather
+ * than passing `undefined` to a command). List types map to their item: bullet/ordered use
+ * `listItem`, task uses `taskItem`. wrapInList/liftListItem run against the detached capture
+ * state whose selection is the target's `contentSelection` (the nested textblock for a list).
  */
 function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
   switch (op.kind) {
@@ -157,8 +164,14 @@ function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
       return schema.nodes.paragraph ? setBlockType(schema.nodes.paragraph) : null;
     case 'paragraphToHeading':
       return schema.nodes.heading ? setBlockType(schema.nodes.heading, { level: op.level }) : null;
-    default:
-      return null; // list operations are product V1b, a later compiler extension
+    case 'paragraphToList': {
+      const listType = schema.nodes[op.listType];
+      return listType ? wrapInList(listType) : null;
+    }
+    case 'listToParagraph': {
+      const itemType = schema.nodes[op.listType === 'taskList' ? 'taskItem' : 'listItem'];
+      return itemType ? liftListItem(itemType) : null;
+    }
   }
 }
 
@@ -169,8 +182,12 @@ function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
       return block.type.name === 'heading' && block.attrs.level === op.level;
     case 'paragraphToHeading':
       return block.type.name === 'paragraph';
-    default:
-      return false;
+    case 'paragraphToList':
+      return block.type.name === 'paragraph';
+    case 'listToParagraph':
+      // Single-item only in V1b (multi-item lists are a later phase); a multi-item source
+      // also fails onlyChildChanged after the lift, but this refuses it up front.
+      return isSingleItemList(block, op.listType);
   }
 }
 
@@ -360,10 +377,13 @@ function buildAcceptedOracle(
 ): PMNode {
   const commentType = schema.marks.comment;
   if (!originContained || !commentType) return afterDoc;
-  // The converted target keeps its position/extent (a block-type change preserves
-  // content size), so its content range is [target.from + 1, target.to - 1).
+  // The converted target starts at `target.from` (onlyChildChanged guarantees the earlier
+  // children are unchanged), but its SIZE changes under list wrapping/lifting — so its
+  // content range must use the converted child's actual nodeSize, not the source extent.
+  // (For heading↔paragraph this equals [target.from + 1, target.to - 1].)
+  const convertedSize = afterDoc.child(target.index).nodeSize;
   const transform = new Transform(afterDoc);
-  transform.removeMark(target.from + 1, target.to - 1, commentType);
+  transform.removeMark(target.from + 1, target.from + convertedSize - 1, commentType);
   return transform.doc;
 }
 
