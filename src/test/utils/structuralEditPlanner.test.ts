@@ -1,15 +1,17 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { TaskList, TaskItem } from '@tiptap/extension-list';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { planStructuralEdits } from '../../utils/structuralEditPlanner';
 import type { QuillStructuralEdit } from '../../types';
 
 /**
- * 6b-1: the pure structural-edit planner. Locates the target block by find text,
- * derives the directional StructuralOp from (current type, requested `to`), and
- * returns source-coordinate geometry — or a typed refusal. Only heading↔paragraph
- * plans (V1a); list source/target refuse `unsupported-op` until the V1b mint.
+ * 6b-1 / V1b: the pure structural-edit planner. Locates the target block by find
+ * text, derives the directional StructuralOp from (current type, requested `to`),
+ * and returns source-coordinate geometry — or a typed refusal. Plans heading↔paragraph
+ * and SINGLE-item list↔paragraph (all three list types); a multi-item list, a
+ * list-kind change, and a heading-level change refuse `unsupported-op`.
  */
 
 let editor: Editor;
@@ -19,7 +21,7 @@ beforeEach(() => {
   document.body.appendChild(el);
   editor = new Editor({
     element: el,
-    extensions: [StarterKit.configure({ trailingNode: false })],
+    extensions: [StarterKit.configure({ trailingNode: false }), TaskList, TaskItem],
     content: '<p></p>',
   });
 });
@@ -39,6 +41,14 @@ const para = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', t
 const bullet = (text: string) => ({
   type: 'bulletList',
   content: [{ type: 'listItem', content: [para(text)] }],
+});
+const ordered = (text: string) => ({
+  type: 'orderedList',
+  content: [{ type: 'listItem', content: [para(text)] }],
+});
+const task = (text: string) => ({
+  type: 'taskList',
+  content: [{ type: 'taskItem', attrs: { checked: false }, content: [para(text)] }],
 });
 
 /** Build a (possibly malformed) structural edit without fighting the strict type. */
@@ -253,4 +263,30 @@ describe('planStructuralEdits', () => {
     expect(placed[0].editIndex).toBe(1);
     expect(placed[0].op).toEqual({ kind: 'headingToParagraph', level: 1 });
   });
+});
+
+describe('planStructuralEdits — list↔paragraph across ALL three list types', () => {
+  const LISTS = [
+    { to: 'bulletList', make: bullet },
+    { to: 'orderedList', make: ordered },
+    { to: 'taskList', make: task },
+  ] as const;
+
+  for (const { to, make } of LISTS) {
+    it(`plans paragraph → ${to}`, () => {
+      const { placed, results } = planStructuralEdits(docOf([para('convert me')]), [
+        edit('convert me', { to }),
+      ]);
+      expect(results[0].status).toBe('planned');
+      expect(placed[0].op).toEqual({ kind: 'paragraphToList', listType: to });
+    });
+
+    it(`plans single-item ${to} → paragraph`, () => {
+      const { placed, results } = planStructuralEdits(docOf([make('list item')]), [
+        edit('list item', { to: 'paragraph' }),
+      ]);
+      expect(results[0].status).toBe('planned');
+      expect(placed[0].op).toEqual({ kind: 'listToParagraph', listType: to });
+    });
+  }
 });
