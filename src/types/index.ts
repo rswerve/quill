@@ -292,6 +292,37 @@ export interface TrackedChangeInfo extends TrackedChangeBase {
   segments: TrackedChangeSegment[];
 }
 
+/** A half-open document range. Branch envelopes, not single-node guarantees. */
+export interface StructuralChangeRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * A live block-union structural change surfaced to the review layer — the
+ * block-scale sibling of {@link TrackedChangeInfo}, discriminated by
+ * `kind: 'structural'`. Enumerated from the canonical record store joined with the
+ * analyzed union topology, never from raw `blockTrack` attributes. `source` and
+ * `proposed` are branch **envelopes** (from the first block to the last), so the
+ * shape stays valid once split/merge introduces multi-block branches.
+ */
+export interface StructuralChangeInfo {
+  kind: 'structural';
+  changeId: string;
+  op: StructuralOp;
+  author: string;
+  createdAt: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+  /** The whole-union envelope (original branch through proposed branch). */
+  from: number;
+  to: number;
+  /** The original (delete-flagged) branch's envelope. */
+  source: StructuralChangeRange;
+  /** The proposed (insert-flagged) branch's envelope. */
+  proposed: StructuralChangeRange;
+}
+
 /**
  * One quote-based text edit Claude proposes: replace the first occurrence of
  * the plaintext `find` (within the scoped range) with `replace`. An empty
