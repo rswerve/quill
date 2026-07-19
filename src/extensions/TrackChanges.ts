@@ -300,6 +300,9 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
             // accepted or rejected. Veto atomically in both modes and surface a
             // notice (an unrelated edit around the union still applies normally).
             if (firstFrozenViolation(tr) !== null) {
+              // The refused gesture still breaks the tracked-delete coalescing
+              // window, so a later delete cannot merge across it in history.
+              transactionAdapter.resetHistoryGroup();
               origDispatch(
                 editorView.state.tr
                   .setMeta(TRACKING_BLOCKED_META, {

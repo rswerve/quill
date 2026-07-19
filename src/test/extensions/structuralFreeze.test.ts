@@ -147,6 +147,26 @@ describe('firstFrozenViolation — locking a single union', () => {
     const tr = state.tr.insertText('!', lastStart).insertText('*', 1);
     expect(firstFrozenViolation(tr)).toBeNull();
   });
+
+  it('blocks a later edit into a union that an earlier step shifted', () => {
+    editor = makeEditor('<p>Before</p><h1>Mid</h1>');
+    // "Before"=6 → p[0,8); mint on Mid → h1(del)[8,13) p(ins Mid)[13,18); c1 [8,18).
+    const state = applyMint(editor.state, 9, 'c1', { kind: 'headingToParagraph', level: 1 });
+    // Step 0 inserts in "Before" (shifting the union +3); step 1 types inside the
+    // now-shifted delete branch. Per-step envelopes over docs[i] must still catch it.
+    const tr = state.tr.insertText('XXX', 1).insertText('y', 13);
+    expect(firstFrozenViolation(tr)).toEqual({ reason: 'locked', changeId: 'c1' });
+  });
+
+  it('a resolve bypass with a bogus action does NOT exempt (fails closed)', () => {
+    const state = unionState();
+    const tr = state.tr.insertText('x', 3).setMeta(STRUCTURAL_BYPASS_META, {
+      kind: 'resolve',
+      changeId: null,
+      action: 'bogus',
+    } as unknown as StructuralBypass);
+    expect(firstFrozenViolation(tr)).toEqual({ reason: 'locked', changeId: 'c1' });
+  });
 });
 
 describe('firstFrozenViolation — scoped bypass across two unions', () => {
@@ -188,8 +208,8 @@ describe('firstFrozenViolation — scoped bypass across two unions', () => {
 });
 
 describe('structural freeze — end-to-end dispatch veto', () => {
-  it('vetoes interactive typing inside a union and surfaces the notice', () => {
-    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+  /** Mint a union through the real view dispatch (the mint carries its bypass). */
+  function mintViaDispatch(): void {
     const mint = compileStructuralMint(editor.state, {
       op: { kind: 'headingToParagraph', level: 1 },
       targetPos: 1,
@@ -197,7 +217,12 @@ describe('structural freeze — end-to-end dispatch veto', () => {
       ...META,
     });
     if (!mint.ok) throw new Error(mint.reason);
-    editor.view.dispatch(mint.tr); // authorized — the mint carries its bypass
+    editor.view.dispatch(mint.tr);
+  }
+
+  it('vetoes interactive typing inside a union and surfaces the notice', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    mintViaDispatch();
     const beforeJSON = editor.state.doc.toJSON();
 
     let notice: string | null = null;
@@ -215,5 +240,24 @@ describe('structural freeze — end-to-end dispatch veto', () => {
 
     expect(editor.state.doc.toJSON()).toEqual(beforeJSON); // nothing applied
     expect(notice).toBe(STRUCTURAL_FREEZE_NOTICE);
+  });
+
+  it('vetoes typing inside a union in Suggesting mode too', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    editor.commands.setTrackChangesEnabled(true);
+    mintViaDispatch();
+    const beforeJSON = editor.state.doc.toJSON();
+    editor.commands.insertContentAt(3, 'X');
+    expect(editor.state.doc.toJSON()).toEqual(beforeJSON); // freeze runs before tracking
+  });
+
+  it('lets a real mint Undo and Redo through history despite the freeze', () => {
+    editor = makeEditor('<h1>Title</h1><p>Body</p>');
+    mintViaDispatch();
+    expect(editor.state.doc.childCount).toBe(3); // union present
+    editor.commands.undo();
+    expect(editor.state.doc.childCount).toBe(2); // reverted — history transactions are exempt
+    editor.commands.redo();
+    expect(editor.state.doc.childCount).toBe(3); // restored
   });
 });

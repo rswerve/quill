@@ -89,21 +89,38 @@ function rangeTouchesEnvelope(range: Envelope, envelope: Envelope): boolean {
 
 type BypassScope = { kind: 'all' } | { kind: 'one'; changeId: string } | null;
 
-/** Runtime-validate the bypass meta and reduce it to a lock-scope authorization. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * Strictly validate the bypass meta and reduce it to a lock-scope authorization.
+ * Every variant of {@link StructuralBypass} is checked exactly — kind, required
+ * fields, and no extra keys — so a malformed or spoofed meta (e.g. a `resolve`
+ * with a bogus `action`) receives NO exemption and fails closed against the lock.
+ */
 function bypassScope(raw: unknown): BypassScope {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const bypass = raw as Partial<StructuralBypass>;
-  const scoped = (changeId: unknown): BypassScope =>
-    typeof changeId === 'string' && changeId.length > 0 ? { kind: 'one', changeId } : null;
-  switch (bypass.kind) {
+  if (!isPlainObject(raw)) return null;
+  const keys = Object.keys(raw);
+  switch (raw.kind) {
     case 'restore':
-      return { kind: 'all' };
+      return keys.length === 1 ? { kind: 'all' } : null;
     case 'mint':
-      return scoped(bypass.changeId);
-    case 'resolve':
+      return keys.length === 2 && nonBlankString(raw.changeId)
+        ? { kind: 'one', changeId: raw.changeId }
+        : null;
+    case 'resolve': {
       // A whole-document resolution (`changeId: null`) bypasses every lock; a
-      // scoped resolution bypasses only its own union.
-      return bypass.changeId === null ? { kind: 'all' } : scoped(bypass.changeId);
+      // scoped resolution bypasses only its own union. Either way `action` must
+      // be a real resolution verb.
+      if (keys.length !== 3 || (raw.action !== 'accept' && raw.action !== 'reject')) return null;
+      if (raw.changeId === null) return { kind: 'all' };
+      return nonBlankString(raw.changeId) ? { kind: 'one', changeId: raw.changeId } : null;
+    }
     default:
       return null;
   }
