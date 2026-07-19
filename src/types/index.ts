@@ -369,6 +369,28 @@ export interface QuillFormatEdit {
   format: QuillFormatOp;
 }
 
+/** The block type a structural edit targets. `heading` also needs a `level`. */
+export type StructuralEditTarget = 'paragraph' | 'heading' | StructuralListType;
+
+/**
+ * One structural edit Claude proposes: convert the block that contains the
+ * plaintext `find` into `to` (a paragraph, a heading of `level`, or a list). It's
+ * DIRECTIONAL — the engine derives the {@link StructuralOp} from the block's
+ * current type and `to` — and lands as a reviewable block union, never applied
+ * directly. Parsed from the same quill-edits block as text/format edits, but
+ * planned and dispatched on a separate path. V1 executes only heading↔paragraph;
+ * list targets/sources are parsed but refused `unsupported-op` until the V1b mint
+ * compiler extension lands.
+ */
+export interface QuillStructuralEdit {
+  find: string;
+  structural: {
+    to: StructuralEditTarget;
+    /** Required for `to: 'heading'`; ignored otherwise. */
+    level?: HeadingLevel;
+  };
+}
+
 /** One edit inside a quill-edits block: a text replacement XOR a format op. */
 export type QuillEdit = QuillTextEdit | QuillFormatEdit;
 
