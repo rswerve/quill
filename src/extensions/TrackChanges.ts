@@ -9,6 +9,7 @@ import { TRACKED_INLINE_FORMAT_MARK_NAMES } from './trackChangesPolicy';
 import type { TrackingBlockedInfo } from './trackChangesPolicy';
 import { SKIP_TRACKING_META, TRACKING_BLOCKED_META } from './trackChangesMeta';
 import { firstFrozenViolation, STRUCTURAL_FREEZE_NOTICE } from './structuralFreeze';
+import { resolveStructuralUnion } from '../utils/structuralResolution';
 import { resolveTrackedChanges } from './trackChangesResolution';
 import type { ChangeResolution } from './trackChangesResolution';
 import { reconcileEditingFormatDeltas, TrackingTransactionAdapter } from './trackChangesTransform';
@@ -47,6 +48,10 @@ declare module '@tiptap/core' {
       rejectChange: (id: string) => ReturnType;
       acceptAllChanges: () => ReturnType;
       rejectAllChanges: () => ReturnType;
+      /** Collapse one structural (block-union) change to its proposed branch. */
+      acceptStructuralChange: (changeId: string) => ReturnType;
+      /** Collapse one structural (block-union) change back to its original branch. */
+      rejectStructuralChange: (changeId: string) => ReturnType;
     };
   }
 }
@@ -396,6 +401,27 @@ export const TrackChanges = Extension.create<TrackChangesOptions, TrackChangesSt
         ({ state, dispatch }) => {
           if (!dispatch) return true;
           dispatch(resolveTrackedChanges(state, id, 'reject'));
+          return true;
+        },
+
+      // Structural resolution returns a typed result so a stale/non-resolvable id
+      // or a cross-union origin lock reports `false` (and `editor.can()` is honest)
+      // instead of dispatching an indistinguishable empty transaction.
+      acceptStructuralChange:
+        (changeId: string) =>
+        ({ state, dispatch }) => {
+          const result = resolveStructuralUnion(state, changeId, 'accept');
+          if (!result.ok) return false;
+          if (dispatch) dispatch(result.tr);
+          return true;
+        },
+
+      rejectStructuralChange:
+        (changeId: string) =>
+        ({ state, dispatch }) => {
+          const result = resolveStructuralUnion(state, changeId, 'reject');
+          if (!result.ok) return false;
+          if (dispatch) dispatch(result.tr);
           return true;
         },
 

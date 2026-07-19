@@ -127,6 +127,23 @@ export function captureCommentsResolvedByAccept(
   return { captured: [...byId.values()], provenanceCommentIds };
 }
 
+/**
+ * The origin comment a structural Accept should auto-resolve — its live anchor,
+ * captured BEFORE the resolution transaction removes the mark (a contained origin
+ * rides the dropped delete branch; a disjoint origin is unset in the same tx). The
+ * caller queues this through {@link autoResolveCapturedComments} before dispatch,
+ * exactly as the inline accept path does. Reject resolves nothing.
+ */
+export function captureStructuralAcceptResolution(
+  doc: ProseMirrorNode,
+  originCommentId: string | undefined,
+): CapturedCommentAnchor[] {
+  if (!originCommentId) return [];
+  const live = findAnnotationRange(doc, 'comment', originCommentId);
+  if (!live) return [];
+  return [{ ...live, id: originCommentId, anchorText: rangeText(doc, live.from, live.to) }];
+}
+
 /** Queue-safe state transform using snapshots captured before the text removal. */
 export function autoResolveCapturedComments(
   comments: Comment[],
