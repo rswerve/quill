@@ -1,4 +1,4 @@
-import { DOMSerializer, type Node as PMNode } from '@tiptap/pm/model';
+import { DOMSerializer, Slice, type Node as PMNode } from '@tiptap/pm/model';
 import { projectDocument, type BlockUnionProjection } from './blockUnionProjection';
 import { stripReviewMarks } from './canonicalDocument';
 
@@ -47,4 +47,27 @@ export function cleanSourceHTML(doc: PMNode): string {
   const container = document.createElement('div');
   container.appendChild(serializer.serializeFragment(clean.content));
   return container.innerHTML;
+}
+
+/**
+ * The clean-source slice for a live selection [from, to), for copy / clipboard.
+ * Copy places the pending-ignored version of the selection on the clipboard, not
+ * the live redline. Returns:
+ *   - null when the selection is empty — nothing to copy; let the default run;
+ *   - Slice.empty when a NONEMPTY selection is entirely hidden pending content
+ *     (it maps to a collapsed source range) — copy nothing;
+ *   - otherwise the {@link projectCleanSourceDocument} slice over the mapped
+ *     source range, so a selection spanning hidden content yields only its
+ *     source-visible part, a retained deletion yields its original text without
+ *     tracking, a pending format yields the original formatting, a structural
+ *     union yields its source branch, and comment anchors never come along.
+ * The from+1 / to-1 associations pin the range to visible content at the edges.
+ */
+export function cleanSourceSlice(doc: PMNode, from: number, to: number): Slice | null {
+  if (from >= to) return null;
+  const projection = projectCleanSourceDocument(doc);
+  const sourceFrom = projection.mapping.map(from, 1);
+  const sourceTo = projection.mapping.map(to, -1);
+  if (sourceFrom >= sourceTo) return Slice.empty;
+  return projection.doc.slice(sourceFrom, sourceTo);
 }
