@@ -508,6 +508,29 @@ del.track-delete {
   padding: 0 1px;
 }
 
+/* Structural (block-union) redline — the block-scale sibling of the inline
+   ins/del paint above, applied by the view-only StructuralRedline decoration.
+   A whole flagged block reads as a suggested removal or addition; the same
+   track tokens keep it visually consistent with inline tracked changes. */
+.ProseMirror .structural-delete,
+.ProseMirror .structural-insert {
+  border-radius: 3px;
+  padding: 0 6px;
+  border-left: 3px solid;
+}
+.ProseMirror .structural-delete {
+  background: var(--color-track-del-bg);
+  color: var(--color-track-del-text);
+  border-left-color: var(--color-track-del-line);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-track-del-line);
+}
+.ProseMirror .structural-insert {
+  background: var(--color-track-add-bg);
+  color: var(--color-track-add-text);
+  border-left-color: var(--color-track-add-line);
+}
+
 /* A hard break has no visible character to carry the ordinary ins/del paint.
    TrackChanges inserts an empty, pointer-inert widget immediately before each
    pending break; the glyph lives in CSS so it never enters editor textContent,
