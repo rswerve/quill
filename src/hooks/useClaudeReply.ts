@@ -4,7 +4,6 @@ import type {
   AISessionBinding,
   Comment,
   EditScope,
-  QuillEdit,
   QuillEditsBlock,
   ClaudeRunOptions,
   StructuralOp,
@@ -13,11 +12,9 @@ import type {
   TrackedEditOrigin,
 } from '../types';
 import { clip } from '../utils/format';
-import {
-  formatEditResultNotice,
-  stripTrailingNewlines,
-  type EditResult,
-} from '../utils/trackedEdits';
+import { stripTrailingNewlines } from '../utils/trackedEdits';
+import { formatBatchResultNotice } from '../utils/structuralBatchNotice';
+import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
@@ -48,10 +45,10 @@ interface UseClaudeReplyOptions {
    *  with the comment that caused them. */
   applyTrackedEdits: (
     comment: Comment,
-    edits: QuillEdit[],
+    edits: unknown[],
     scope: EditScope,
     origin?: TrackedEditOrigin,
-  ) => { results: EditResult[]; suggestionIds?: string[] };
+  ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
@@ -449,7 +446,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             if (suggestionIds.length > 0) {
               opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
             }
-            const skippedNotice = formatEditResultNotice(results);
+            const skippedNotice = formatBatchResultNotice(results, parsed.edits);
             if (skippedNotice) {
               opts.appendAIReplyChunk(comment.id, replyId, `\n\n${skippedNotice}`);
             }

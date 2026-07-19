@@ -5,7 +5,6 @@ import type {
   ChatMessage,
   ClaudeRunOptions,
   DocumentChatThread,
-  QuillEdit,
   QuillEditsBlock,
   StructuralPromptEntry,
   TrackedChangeInfo,
@@ -19,7 +18,8 @@ import {
 } from './useClaudeReply';
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
-import { formatEditResultNotice, type EditResult } from '../utils/trackedEdits';
+import { formatBatchResultNotice } from '../utils/structuralBatchNotice';
+import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { stripTransientChatState } from '../utils/chatThread';
 
 export interface ChatCursorContext {
@@ -31,9 +31,9 @@ interface UseDocumentChatOptions {
   getDocMarkdown: () => string;
   getCursorContext: () => ChatCursorContext;
   applyTrackedEdits: (
-    edits: QuillEdit[],
+    edits: unknown[],
     originChatMessageId: string,
-  ) => { results: EditResult[]; suggestionIds?: string[] };
+  ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   getContextFolder: () => string | null;
   getPendingSuggestions: () => TrackedChangeInfo[];
   /** Pending structural (block-union) changes, flattened for the manifest. */
@@ -231,7 +231,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                   if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
                   const result = opts.applyTrackedEdits(parsed.edits, assistantId);
                   suggestionIds = result.suggestionIds ?? [];
-                  const skippedNotice = formatEditResultNotice(result.results);
+                  const skippedNotice = formatBatchResultNotice(result.results, parsed.edits);
                   if (skippedNotice) {
                     appended += `${appended ? '\n\n' : ''}${skippedNotice}`;
                   }

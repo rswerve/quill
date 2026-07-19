@@ -18,6 +18,7 @@ import { compileStructuralMint } from '../../utils/structuralMint';
 import {
   structuralBatchDispatch,
   inlineTouchesBlock,
+  batchOriginFrom,
   type StructuralBatchDeps,
 } from '../../utils/structuralBatchDispatch';
 import type {
@@ -430,6 +431,22 @@ describe('structuralBatchDispatch — XOR classification', () => {
     for (const entry of out.results) {
       expect(entry.outcome).toMatchObject({ kind: 'inline', result: { status: 'malformed' } });
     }
+  });
+});
+
+describe('batchOriginFrom (exactly-one-of provenance)', () => {
+  it('maps a comment-only origin', () => {
+    expect(batchOriginFrom({ commentId: 'c-1' })).toEqual({ kind: 'comment', id: 'c-1' });
+  });
+  it('maps a chat-only origin', () => {
+    expect(batchOriginFrom({ chatMessageId: 'm-1' })).toEqual({ kind: 'chat', id: 'm-1' });
+  });
+  it('refuses both-set (never stamps ambiguous provenance)', () => {
+    expect(batchOriginFrom({ commentId: 'c-1', chatMessageId: 'm-1' })).toBeUndefined();
+  });
+  it('refuses neither-set (undefined origin, and no origin object)', () => {
+    expect(batchOriginFrom({})).toBeUndefined();
+    expect(batchOriginFrom(undefined)).toBeUndefined();
   });
 });
 

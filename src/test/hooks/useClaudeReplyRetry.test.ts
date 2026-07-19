@@ -22,7 +22,7 @@ import type {
   QuillEdit,
   TrackedChangeInfo,
 } from '../../types';
-import type { EditResult } from '../../utils/trackedEdits';
+import type { BatchResultEntry } from '../../utils/structuralBatchDispatch';
 
 const invokeMock = vi.mocked(invoke);
 
@@ -89,8 +89,14 @@ function makeOpts(mock: MockClaude) {
   const getRangeTexts = vi.fn(
     (_c: Comment): RangeTexts => ({ highlightText: 'anchor', paragraphText: 'anchor para' }),
   );
-  const applyTrackedEdits = vi.fn((_c: Comment, _e: QuillEdit[], _s: EditScope) => ({
-    results: _e.map((edit) => ({ edit, status: 'applied' as const })) as EditResult[],
+  const applyTrackedEdits = vi.fn((_c: Comment, _e: unknown[], _s: EditScope) => ({
+    results: _e.map((edit, batchIndex) => ({
+      batchIndex,
+      outcome: {
+        kind: 'inline' as const,
+        result: { edit: edit as QuillEdit, status: 'applied' as const },
+      },
+    })) as BatchResultEntry[],
     suggestionIds: [] as string[],
   }));
   const getContextFolder = vi.fn(() => null);
@@ -223,7 +229,15 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
   it('holds a fragmented edits fence, reports the model, and finalizes suggestions once', async () => {
     const { opts, spies } = makeOpts(mock);
     opts.applyTrackedEdits.mockReturnValue({
-      results: [{ edit: { find: 'old', replace: 'new' }, status: 'applied' }],
+      results: [
+        {
+          batchIndex: 0,
+          outcome: {
+            kind: 'inline',
+            result: { edit: { find: 'old', replace: 'new' }, status: 'applied' },
+          },
+        },
+      ],
       suggestionIds: ['change-1'],
     });
     const { result } = renderHook(() => useClaudeReply(opts));
@@ -259,9 +273,15 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
     opts.applyTrackedEdits.mockReturnValue({
       results: [
         {
-          edit: { find: 'missing phrase', replace: 'new phrase' },
-          status: 'not-found',
-          reason: 'text-not-found',
+          batchIndex: 0,
+          outcome: {
+            kind: 'inline',
+            result: {
+              edit: { find: 'missing phrase', replace: 'new phrase' },
+              status: 'not-found',
+              reason: 'text-not-found',
+            },
+          },
         },
       ],
       suggestionIds: [],

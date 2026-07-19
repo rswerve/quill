@@ -394,10 +394,15 @@ export interface QuillStructuralEdit {
 /** One edit inside a quill-edits block: a text replacement XOR a format op. */
 export type QuillEdit = QuillTextEdit | QuillFormatEdit;
 
-/** The parsed contents of a ```quill-edits fenced block in Claude's reply. */
+/**
+ * The parsed contents of a ```quill-edits fenced block in Claude's reply. `edits` is
+ * UNTRUSTED model JSON — an interleaved mix of inline text/format and structural
+ * conversions — so it stays `unknown[]` until the batch orchestrator classifies and
+ * narrows each entry (inline XOR structural), never cast into a typed union up front.
+ */
 export interface QuillEditsBlock {
   summary: string;
-  edits: QuillEdit[];
+  edits: unknown[];
 }
 
 /** How far Claude's edits may reach, derived from the user's wording. */

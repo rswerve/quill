@@ -132,6 +132,22 @@ function classifyEntry(entry: unknown): 'inline' | 'structural' | 'invalid' {
   return hasStructural ? 'structural' : 'inline';
 }
 
+/**
+ * Convert an inline `TrackedEditOrigin` to the batch's discriminated origin, firing ONLY
+ * when EXACTLY ONE of comment / chat is present. Both-set or neither-set → undefined, so a
+ * malformed origin never stamps the wrong provenance onto minted changes.
+ */
+export function batchOriginFrom(origin?: TrackedEditOrigin): BatchOrigin | undefined {
+  const commentId = typeof origin?.commentId === 'string' ? origin.commentId : undefined;
+  const chatMessageId =
+    typeof origin?.chatMessageId === 'string' ? origin.chatMessageId : undefined;
+  if (commentId !== undefined && chatMessageId === undefined)
+    return { kind: 'comment', id: commentId };
+  if (chatMessageId !== undefined && commentId === undefined)
+    return { kind: 'chat', id: chatMessageId };
+  return undefined;
+}
+
 function toInlineOrigin(origin: BatchOrigin | undefined): TrackedEditOrigin | undefined {
   if (!origin) return undefined;
   return origin.kind === 'comment' ? { commentId: origin.id } : { chatMessageId: origin.id };

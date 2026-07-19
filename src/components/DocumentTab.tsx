@@ -44,7 +44,13 @@ import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { isEffort } from '../utils/claudePreferences';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import { rangeText } from '../utils/trackedEdits';
-import { applyTrackedEditsToEditor } from '../utils/applyTrackedEdits';
+import {
+  structuralBatchDispatch,
+  batchOriginFrom,
+  type StructuralBatchDispatchOutcome,
+} from '../utils/structuralBatchDispatch';
+import { collectReservedIds } from '../utils/structuralReservedIds';
+import { extractReservedIdSources } from '../utils/reservedIdExtraction';
 import {
   mergeQuarantinedSuggestions,
   normalizePersistedSuggestions,
@@ -413,6 +419,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const pendingAIRequestRef = useRef<{ commentId: string; userText: string } | null>(null);
   const pendingChatTurnRef = useRef<string | null>(null);
   const chatThreadRef = useRef<DocumentChatThread | undefined>(undefined);
+  // Mirrored each render so readReservedIds (invoked mid-dispatch, after inline apply)
+  // reads the freshest comment thread without churning the applyTrackedEdits identity.
+  const commentsRef = useRef<Comment[]>([]);
   const openSessionPicker = useCallback(
     () => onOpenSessionPicker(tabId),
     [onOpenSessionPicker, tabId],
@@ -541,6 +550,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     linkAIReplySuggestions,
     dismissAIReply,
   } = useComments();
+  commentsRef.current = comments;
   const { suggestions, setSuggestions } = useSuggestions();
   const quarantinedSuggestionsRef = useRef<Suggestion[]>([]);
   // Structural records that failed reconstruction on the last load (whole-doc hash
@@ -685,47 +695,60 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // blocked-formatting notice only ever fires for the user's own gestures.
   const applyingClaudeEditsRef = useRef(false);
 
-  // Apply Claude's quote-based edits as tracked-change suggestions. Forces
-  // suggesting mode on (under Claude's author id, stamped with the originating
-  // comment when one is given) for the duration, applies each located edit
-  // back-to-front, then restores the user's prior mode/author.
+  // Apply Claude's proposed batch (inline text/format XOR structural block
+  // conversions) as reviewable tracked suggestions. Routes through the batch
+  // orchestrator, which forces suggesting mode for the inline apply and mints
+  // structural unions, then restores the prior mode/author. The `_comment` anchor
+  // and `_scope` are vestigial: Claude's edits are document-scale, so the batch is
+  // planned doc-wide (the anchor frames the request, it never fences where changes land).
   const applyTrackedEdits = useCallback(
     (
-      comment: { from: number; to: number },
-      edits: QuillEdit[],
-      scope: EditScope,
+      _comment: { from: number; to: number },
+      edits: readonly unknown[],
+      _scope: EditScope,
       origin?: TrackedEditOrigin,
-    ) => {
+    ): StructuralBatchDispatchOutcome => {
       const ed = editor;
       if (!ed) {
         return {
-          results: edits.map((edit) => ({
-            edit,
-            status: 'not-found' as const,
-            reason: 'document-unavailable' as const,
+          results: edits.map((edit, batchIndex) => ({
+            batchIndex,
+            outcome: {
+              kind: 'inline' as const,
+              result: {
+                edit: edit as QuillEdit,
+                status: 'not-found' as const,
+                reason: 'document-unavailable' as const,
+              },
+            },
           })),
           suggestionIds: [],
         };
       }
 
-      // The seam itself (plan → dispatch → engine-honest results) lives in
-      // utils/applyTrackedEdits.ts so it is testable against a real editor.
-      // This wrapper owns only the React-specific parts: the null-editor early
-      // return above, and suppressing the blocked-gesture notices for
-      // automated applies (planEdits pre-blocks Claude's conflicting format
-      // ops and reports them as skipped; a modal mid-apply would be noise —
-      // the engine-veto flip inside the seam keeps the RESULT honest while
-      // the notice stays quiet).
+      // applyingClaudeEditsRef suppresses the blocked-gesture modal for the WHOLE batch
+      // (inline apply AND structural mints) while the per-op results stay honest.
       try {
         applyingClaudeEditsRef.current = true;
-        return applyTrackedEditsToEditor({
+        return structuralBatchDispatch(edits, {
           editor: ed,
-          comment,
-          edits,
-          scope,
           authorID: CLAUDE_AUTHOR_ID,
           fallbackAuthor: AUTHOR,
-          origin,
+          origin: batchOriginFrom(origin),
+          nextId: () => crypto.randomUUID(),
+          now: () => new Date().toISOString(),
+          // Built FRESH at dispatch time (after inline apply) from the live state + the
+          // durable side-tables, so a mint never aliases an id already in use anywhere.
+          readReservedIds: () =>
+            collectReservedIds(
+              extractReservedIdSources({
+                state: ed.state,
+                quarantinedSuggestions: quarantinedSuggestionsRef.current,
+                quarantinedStructural: quarantinedStructuralRef.current,
+                comments: commentsRef.current,
+                chatMessages: chatThreadRef.current?.messages ?? [],
+              }),
+            ),
         });
       } finally {
         applyingClaudeEditsRef.current = false;
@@ -839,7 +862,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getDocMarkdown: getClaudeDocMarkdown,
     getCursorContext,
     applyTrackedEdits: useCallback(
-      (edits: QuillEdit[], originChatMessageId: string) =>
+      (edits: readonly unknown[], originChatMessageId: string) =>
         applyTrackedEdits({ from: 0, to: 0 }, edits, 'doc', {
           chatMessageId: originChatMessageId,
         }),
