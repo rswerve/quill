@@ -243,32 +243,67 @@ export function isSingleItemList(node: PMNode, listType: StructuralListType): bo
   return item.childCount === 1 && item.child(0).type.name === 'paragraph';
 }
 
-/** The live source/proposed roots must be a shape the declared V1 op can mint. */
+/** The four V1 ops are strictly one source block → one proposed block. */
+function oneToOne(source: readonly PMNode[], proposed: readonly PMNode[]): boolean {
+  return source.length === 1 && proposed.length === 1;
+}
+
+const isParagraph = (node: PMNode): boolean => node.type.name === 'paragraph';
+
+/**
+ * The live source/proposed roots must be a shape the declared op can mint. The
+ * V1 ops (heading/list ↔ paragraph) are one-to-one; V2 `splitParagraph` is one
+ * paragraph → ≥2 paragraphs and `mergeParagraphs` is ≥2 paragraphs → one — the
+ * branch counts differ, so the 1:1 check is per-op, not a blanket precondition.
+ * This validates SHAPE (node types + counts) only; text-preservation is a
+ * mint-time assertion, never a persistence-format invariant (design doc).
+ */
 export function structuralOpShapeValid(
   op: StructuralOp,
   source: readonly PMNode[],
   proposed: readonly PMNode[],
 ): boolean {
-  if (source.length !== 1 || proposed.length !== 1) return false;
-  const sourceRoot = source[0];
-  const proposedRoot = proposed[0];
   switch (op.kind) {
     case 'headingToParagraph':
       return (
-        sourceRoot.type.name === 'heading' &&
-        sourceRoot.attrs.level === op.level &&
-        proposedRoot.type.name === 'paragraph'
+        oneToOne(source, proposed) &&
+        source[0].type.name === 'heading' &&
+        source[0].attrs.level === op.level &&
+        proposed[0].type.name === 'paragraph'
       );
     case 'paragraphToHeading':
       return (
-        sourceRoot.type.name === 'paragraph' &&
-        proposedRoot.type.name === 'heading' &&
-        proposedRoot.attrs.level === op.level
+        oneToOne(source, proposed) &&
+        source[0].type.name === 'paragraph' &&
+        proposed[0].type.name === 'heading' &&
+        proposed[0].attrs.level === op.level
       );
     case 'listToParagraph':
-      return isSingleItemList(sourceRoot, op.listType) && proposedRoot.type.name === 'paragraph';
+      return (
+        oneToOne(source, proposed) &&
+        isSingleItemList(source[0], op.listType) &&
+        proposed[0].type.name === 'paragraph'
+      );
     case 'paragraphToList':
-      return sourceRoot.type.name === 'paragraph' && isSingleItemList(proposedRoot, op.listType);
+      return (
+        oneToOne(source, proposed) &&
+        source[0].type.name === 'paragraph' &&
+        isSingleItemList(proposed[0], op.listType)
+      );
+    case 'splitParagraph':
+      return (
+        source.length === 1 &&
+        isParagraph(source[0]) &&
+        proposed.length >= 2 &&
+        proposed.every(isParagraph)
+      );
+    case 'mergeParagraphs':
+      return (
+        source.length >= 2 &&
+        source.every(isParagraph) &&
+        proposed.length === 1 &&
+        isParagraph(proposed[0])
+      );
   }
 }
 

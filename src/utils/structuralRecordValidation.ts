@@ -35,6 +35,11 @@ export function isStructuralOp(value: unknown): value is StructuralOp {
     case 'listToParagraph':
     case 'paragraphToList':
       return isStructuralListType(value.listType);
+    case 'splitParagraph':
+    case 'mergeParagraphs':
+      // No op-level fields; the block counts are validated from the record's
+      // anchor.childCount and proposed[] at reconstruction, not from the op.
+      return true;
     default:
       return false;
   }

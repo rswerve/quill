@@ -172,13 +172,18 @@ export type StructuralListType = 'bulletList' | 'orderedList' | 'taskList';
  * The typed V1 structural operation a record claims. Reconstruction validates the
  * source/proposed shape against it, so an untrusted sidecar cannot turn a
  * paragraph into an arbitrary heading/list that no V1 command could have minted.
- * V2 adds split/merge variants.
+ * V2 adds `splitParagraph` (one paragraph → several) and `mergeParagraphs`
+ * (several adjacent paragraphs → one). Those carry no op-level fields — the block
+ * counts live in the record's `anchor.childCount` (source) and `proposed.length`,
+ * so the shape is validated against those node arrays, not a count on the op.
  */
 export type StructuralOp =
   | { kind: 'headingToParagraph'; level: HeadingLevel }
   | { kind: 'paragraphToHeading'; level: HeadingLevel }
   | { kind: 'listToParagraph'; listType: StructuralListType }
-  | { kind: 'paragraphToList'; listType: StructuralListType };
+  | { kind: 'paragraphToList'; listType: StructuralListType }
+  | { kind: 'splitParagraph' }
+  | { kind: 'mergeParagraphs' };
 
 /** One block-structure suggestion, persisted in the sidecar's structural envelope. */
 export interface StructuralSuggestionRecord {

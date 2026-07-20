@@ -172,6 +172,11 @@ function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
       const itemType = schema.nodes[op.listType === 'taskList' ? 'taskItem' : 'listItem'];
       return itemType ? liftListItem(itemType) : null;
     }
+    // V2-2/V2-3 give split/merge a dedicated multi-block capture path (not a single
+    // in-place command). Until then the mint refuses them cleanly (null → refuse).
+    case 'splitParagraph':
+    case 'mergeParagraphs':
+      return null;
   }
 }
 
@@ -188,6 +193,11 @@ function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
       // Single-item only in V1b (multi-item lists are a later phase); a multi-item source
       // also fails onlyChildChanged after the lift, but this refuses it up front.
       return isSingleItemList(block, op.listType);
+    // V2-2/V2-3: split/merge match against a multi-block footprint, not one block;
+    // refuse here until the dedicated capture path exists.
+    case 'splitParagraph':
+    case 'mergeParagraphs':
+      return false;
   }
 }
 

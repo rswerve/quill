@@ -20,6 +20,10 @@ export function structuralOpLabel(op: StructuralOp): string {
       return `${listKindLabel(op.listType)} → Paragraph`;
     case 'paragraphToList':
       return `Paragraph → ${listKindLabel(op.listType)}`;
+    case 'splitParagraph':
+      return 'Split paragraph';
+    case 'mergeParagraphs':
+      return 'Merge paragraphs';
   }
 }
 

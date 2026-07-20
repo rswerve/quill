@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import {
   analyzeStructuralUnions,
+  structuralOpShapeValid,
   type StructuralUnionIssueCode,
 } from '../../utils/structuralUnionIndex';
 
@@ -52,6 +53,45 @@ function codesFor(editor: Editor, changeId: string): Set<StructuralUnionIssueCod
       .map((issue) => issue.code),
   );
 }
+
+describe('structuralOpShapeValid — per-op shape (V1 one-to-one, V2 N→M)', () => {
+  const doc = makeEditor([paragraph('a'), paragraph('b'), heading('H'), bulletList([item('x')])])
+    .state.doc;
+  const p0 = doc.child(0);
+  const p1 = doc.child(1);
+  const h1 = doc.child(2);
+  const list = doc.child(3);
+
+  it('splitParagraph accepts one paragraph → ≥2 paragraphs, rejects other shapes', () => {
+    const op = { kind: 'splitParagraph' as const };
+    expect(structuralOpShapeValid(op, [p0], [p0, p1])).toBe(true);
+    expect(structuralOpShapeValid(op, [p0], [p0, p1, p0])).toBe(true);
+    expect(structuralOpShapeValid(op, [p0], [p0])).toBe(false); // needs ≥2 proposed
+    expect(structuralOpShapeValid(op, [h1], [p0, p1])).toBe(false); // source not a paragraph
+    expect(structuralOpShapeValid(op, [p0], [p0, h1])).toBe(false); // a proposed block isn't a paragraph
+    expect(structuralOpShapeValid(op, [p0, p1], [p0, p1])).toBe(false); // needs exactly one source
+  });
+
+  it('mergeParagraphs accepts ≥2 paragraphs → one paragraph, rejects other shapes', () => {
+    const op = { kind: 'mergeParagraphs' as const };
+    expect(structuralOpShapeValid(op, [p0, p1], [p0])).toBe(true);
+    expect(structuralOpShapeValid(op, [p0, p1, p0], [p0])).toBe(true);
+    expect(structuralOpShapeValid(op, [p0], [p0])).toBe(false); // needs ≥2 source
+    expect(structuralOpShapeValid(op, [p0, p1], [p0, p1])).toBe(false); // needs exactly one proposed
+    expect(structuralOpShapeValid(op, [p0, h1], [p0])).toBe(false); // a source block isn't a paragraph
+    expect(structuralOpShapeValid(op, [p0, p1], [h1])).toBe(false); // proposed not a paragraph
+  });
+
+  it('the four V1 ops still require exactly one source and one proposed block', () => {
+    const h2p = { kind: 'headingToParagraph' as const, level: 1 as const };
+    expect(structuralOpShapeValid(h2p, [h1], [p0])).toBe(true);
+    expect(structuralOpShapeValid(h2p, [h1, h1], [p0])).toBe(false); // 2 source rejected
+    expect(structuralOpShapeValid(h2p, [h1], [p0, p1])).toBe(false); // 2 proposed rejected
+    expect(
+      structuralOpShapeValid({ kind: 'listToParagraph', listType: 'bulletList' }, [list], [p0]),
+    ).toBe(true);
+  });
+});
 
 describe('analyzeStructuralUnions', () => {
   it('indexes one exact V1 union in review and source coordinates', () => {

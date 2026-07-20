@@ -220,6 +220,10 @@ function structuralTargetPhrase(op: StructuralOp): string {
       if (op.listType === 'orderedList') return 'a numbered list';
       if (op.listType === 'taskList') return 'a task list';
       return 'a bullet list';
+    case 'splitParagraph':
+      return 'several paragraphs';
+    case 'mergeParagraphs':
+      return 'a single paragraph';
   }
 }
 

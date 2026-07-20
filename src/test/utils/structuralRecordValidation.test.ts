@@ -28,6 +28,21 @@ describe('structural record deserialization boundary', () => {
     expect(result.quarantined[1]).toBe(malformed);
   });
 
+  it('accepts the V2 splitParagraph / mergeParagraphs op kinds, still rejects unknown kinds', () => {
+    const para = { type: 'paragraph', content: [{ type: 'text', text: 'x' }] };
+    const split = { ...validRecord, op: { kind: 'splitParagraph' }, proposed: [para, para] };
+    const merge = {
+      ...validRecord,
+      op: { kind: 'mergeParagraphs' },
+      anchor: { parentPath: [], childIndex: 0, childCount: 2 },
+    };
+    expect(isStructuralSuggestionRecord(split)).toBe(true);
+    expect(isStructuralSuggestionRecord(merge)).toBe(true);
+    expect(isStructuralSuggestionRecord({ ...validRecord, op: { kind: 'frobnicate' } })).toBe(
+      false,
+    );
+  });
+
   it.each([
     { candidate: { ...validRecord, op: { kind: 'headingToParagraph', level: 9 } }, label: 'op' },
     { candidate: { ...validRecord, createdAt: 'not-a-date' }, label: 'timestamp' },
