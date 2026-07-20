@@ -1,10 +1,17 @@
 import { TextSelection } from '@tiptap/pm/state';
 import type { Editor as TiptapEditor } from '@tiptap/core';
 import { validateSnapshot } from './reviewSnapshotIntegrity';
+import { prepareStructuralRecordSeed } from './structuralCanonical';
+import { markdownSerializer } from './structuralFingerprint';
+import { resetStructuralRecords } from '../extensions/StructuralRecordStore';
 import { FIND_KEY } from '../extensions/Find';
 import { PENDING_COMMENT_KEY } from '../extensions/PendingComment';
 import { ANNOTATION_FOCUS_KEY } from '../extensions/AnnotationFocus';
-import { SKIP_TRACKING_META } from '../extensions/trackChangesMeta';
+import {
+  SKIP_TRACKING_META,
+  STRUCTURAL_BYPASS_META,
+  type StructuralBypass,
+} from '../extensions/trackChangesMeta';
 import type { Comment, JSONContent, Suggestion } from '../types';
 
 /** Outcome of a lossless (PM-JSON) recovery restore. */
@@ -28,9 +35,17 @@ export function restoreDocJSONInto(
   json: JSONContent,
   comments: Comment[],
   suggestions: Suggestion[],
+  structural: readonly unknown[] = [],
 ): DocJSONRestoreResult {
   const validation = validateSnapshot(editor.schema, json, comments, suggestions);
   if (!validation.ok) return { ok: false, reason: validation.reason };
+  // Validate the structural records against the to-be-restored review union BEFORE mutating: a
+  // failure leaves the editor untouched so the caller degrades. The seed is metadata only
+  // (CanonicalRecord[]) — seeding it in the SAME transaction preserves the restored docJSON
+  // byte-for-byte, unlike a reconstruction, which would mutate the losslessly-restored document.
+  const serialize = markdownSerializer(editor);
+  const seed = prepareStructuralRecordSeed(validation.doc, [...structural], serialize);
+  if (!seed.ok) return { ok: false, reason: seed.error };
 
   const { state, view } = editor;
   const tr = state.tr;
@@ -38,11 +53,15 @@ export function restoreDocJSONInto(
   tr.setSelection(TextSelection.atStart(tr.doc));
   tr.setStoredMarks(null);
   tr.setMeta(SKIP_TRACKING_META, true);
+  // Authorize the whole-document restore past the structural freeze guard (it may
+  // replace a prior document's live unions).
+  tr.setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' } satisfies StructuralBypass);
   tr.setMeta('preventUpdate', true);
   tr.setMeta('addToHistory', false);
   tr.setMeta(PENDING_COMMENT_KEY, null);
   tr.setMeta(ANNOTATION_FOCUS_KEY, null);
   tr.setMeta(FIND_KEY, { type: 'query', query: '' });
+  resetStructuralRecords(tr, seed.records);
   view.dispatch(tr);
   return { ok: true };
 }

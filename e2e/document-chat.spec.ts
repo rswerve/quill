@@ -190,7 +190,7 @@ test('chat identifies a skipped edit and its precise reason', async ({ page }) =
   await sendChat(page, 'Fix the missing phrase');
 
   const assistant = activeTabHost(page).locator('[data-chat-role="assistant"]').last();
-  await expect(assistant).toContainText('1 change wasn’t applied:');
+  await expect(assistant).toContainText('Nothing was applied:');
   await expect(assistant).toContainText('“missing phrase” — this text isn’t in the document.');
   await expect(assistant).not.toContainText('it already matches the proposal');
 });

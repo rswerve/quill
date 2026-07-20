@@ -44,8 +44,10 @@ endpoints' shared parent, as it already does before placing a text edit
 
 - **Joining or splitting paragraphs, headings, list items, table cells, or
   other block structure.** Those operations change the ProseMirror tree and
-  remain part of the structural-suggestions epic. The current product policy
-  blocks paragraph structure (`src/extensions/trackChangesPolicy.ts:16-25`).
+  remain part of the structural-suggestions epic, now designed in
+  `docs/design/structural-suggestions.md` (block-union model, frozen V1). The
+  current product policy blocks paragraph structure
+  (`src/extensions/trackChangesPolicy.ts:16-25`).
 - **Images and other inline leaf nodes.** An image is represented as an
   anonymous space in the quote projection and carries meaningful attributes
   such as `src`, `alt`, `title`, and dimensions. Text `find`/`replace` cannot

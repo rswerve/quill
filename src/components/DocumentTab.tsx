@@ -1,4 +1,12 @@
-import { forwardRef, useState, useCallback, useRef, useEffect, useImperativeHandle } from 'react';
+import {
+  forwardRef,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+  useImperativeHandle,
+} from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './Editor';
 import type { AnnotationClickInfo, EditorRef, SelectionInfo } from './Editor';
@@ -11,14 +19,14 @@ import ChatPanel from './ChatPanel';
 import {
   useFileManager,
   stripTransientReplyState,
-  type SaveOutcome,
   type OpenResult,
   type ReviewUnboundReason,
 } from '../hooks/useFileManager';
-import { useSaveCoordinator } from '../hooks/useSaveCoordinator';
+import { useDocumentSaveOrchestration } from '../hooks/useDocumentSaveOrchestration';
 import { useAutosave, type AutosaveStatus } from '../hooks/useAutosave';
 import ConflictBanner from './ConflictBanner';
 import { useAnnotationNavigation } from '../hooks/useAnnotationNavigation';
+import type { ReviewAnnotationKind } from '../hooks/useAnnotationNavigation';
 import type { DraftSnapshot } from '../hooks/useDraftAutosave';
 import { useComments } from '../hooks/useComments';
 import { useSuggestions } from '../hooks/useSuggestions';
@@ -35,9 +43,14 @@ import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { detectLossyConstructs } from '../utils/markdownFidelity';
 import { isEffort } from '../utils/claudePreferences';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
-import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { rangeText } from '../utils/trackedEdits';
-import { applyTrackedEditsToEditor } from '../utils/applyTrackedEdits';
+import {
+  structuralBatchDispatch,
+  batchOriginFrom,
+  type StructuralBatchDispatchOutcome,
+} from '../utils/structuralBatchDispatch';
+import { collectReservedIds } from '../utils/structuralReservedIds';
+import { extractReservedIdSources } from '../utils/reservedIdExtraction';
 import {
   mergeQuarantinedSuggestions,
   normalizePersistedSuggestions,
@@ -46,13 +59,36 @@ import {
   type ReviewRestoreMode,
   type ReviewRestoreResult,
 } from '../utils/reviewPersistence';
+import {
+  buildStructuralSavePayload,
+  type StructuralSavePayload,
+} from '../utils/structuralSavePayload';
+import {
+  reconstructStructuralIntoEditor,
+  reconstructStructuralFromRecords,
+} from '../utils/structuralReload';
+import {
+  resetStructuralRecords,
+  structuralRecordStoreKey,
+} from '../extensions/StructuralRecordStore';
+import {
+  getStructuralReviewState,
+  type StructuralAttention,
+  type StructuralReviewState,
+} from '../utils/structuralChanges';
+import { resolveStructuralUnion } from '../utils/structuralResolution';
+import { cleanSourceHTML, cleanSourceMarkdown } from '../utils/cleanSourceProjection';
+import { resolveTrackedChanges } from '../extensions/trackChangesResolution';
+import { firstFrozenViolation } from '../extensions/structuralFreeze';
+import { structuralFootprints } from '../utils/structuralFootprints';
+import {
+  prepareCanonicalPersistence,
+  rebaseForDegradedRecovery,
+  type CanonicalSaveState,
+} from '../utils/canonicalPersistence';
 import { countLogicalSuggestionCards } from '../utils/suggestionCards';
 import { reconcileCommentsWithDocument } from '../utils/commentReconciler';
 import { locateCommentForRepair } from '../utils/commentAnchors';
-import {
-  captureCanonicalReviewState,
-  type CanonicalCaptureResult,
-} from '../utils/canonicalCapture';
 import {
   autoResolveCapturedComments,
   captureCommentsConsumedByTrackedRemoval,
@@ -75,8 +111,10 @@ import type {
   Comment,
   DraftFile,
   EditScope,
-  QuillEdit,
   Suggestion,
+  StructuralPromptEntry,
+  StructuralReviewEnvelope,
+  StructuralSuggestionRecord,
   TrackedChangeInfo,
   TrackedEditOrigin,
   DocumentChatThread,
@@ -194,26 +232,6 @@ export function degradedRecoveryNotice(): { title: string; message: string } {
   };
 }
 
-/** The manual-save "Save blocked" notice, pluralized for the offending records. */
-export function reviewBlockedNotice(
-  unmappable: ReadonlyArray<{ kind: 'comment' | 'suggestion'; id: string }>,
-): { title: string; message: string } {
-  const comments = unmappable.filter((u) => u.kind === 'comment').length;
-  const suggestions = unmappable.length - comments;
-  const parts: string[] = [];
-  if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
-  if (suggestions) parts.push(`${suggestions} suggestion${suggestions === 1 ? '' : 's'}`);
-  const verb = unmappable.length === 1 ? 'covers' : 'cover';
-  const pointer = unmappable.length === 1 ? "It's highlighted" : 'The first is highlighted';
-  return {
-    title: "Save blocked — an annotation can't be anchored",
-    message:
-      `${parts.join(' and ')} ${verb} text that changes shape when the file is written ` +
-      '(for example, extra spaces that collapse on save), so Quill can’t save without ' +
-      `risking a mismatched anchor. ${pointer} — adjust or remove it, then save again.`,
-  };
-}
-
 export interface DocumentTabChromeSnapshot {
   editor: TiptapEditor | null;
   filePath: string | null;
@@ -251,7 +269,7 @@ export interface DocumentTabHandle {
   unlinkSession: () => void;
   linkContextFolder: () => void;
   unlinkContextFolder: () => void;
-  getWorkspaceSnapshot: () => DraftSnapshot;
+  getWorkspaceSnapshot: () => DraftSnapshot | null;
   /**
    * Flush a pending autosave and drain the coordinator; awaited by the shell on
    * close/quit. Resolves with whether the tab is STILL dirty afterward (true = the
@@ -348,12 +366,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // The one annotation (comment or suggestion) currently in focus: its card
   // is outlined and its text highlighted. Set by clicking either side.
   const [activeAnnotation, setActiveAnnotation] = useState<{
-    kind: AnnotationKind;
+    kind: ReviewAnnotationKind;
     id: string;
   } | null>(null);
   const [highlightActivationRevision, setHighlightActivationRevision] = useState(0);
   const activeCommentId = activeAnnotation?.kind === 'comment' ? activeAnnotation.id : null;
   const activeSuggestionId = activeAnnotation?.kind === 'suggestion' ? activeAnnotation.id : null;
+  const activeStructuralId = activeAnnotation?.kind === 'structural' ? activeAnnotation.id : null;
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [pendingCommentSelection, setPendingCommentSelection] = useState<SelectionInfo | null>(
     null,
@@ -361,6 +380,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [commentComposerOpen, setCommentComposerOpen] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const commentLayerRef = useRef<HTMLDivElement>(null);
+  const printDocRef = useRef<HTMLDivElement>(null);
   const [editorKey] = useState(0);
   const [zoom, setZoom] = useState(defaultZoom);
   const [scrollTick, setScrollTick] = useState(0);
@@ -371,6 +391,17 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const [showResolvedComments, setShowResolvedComments] = useState(false);
   const [chatFocusRevision, setChatFocusRevision] = useState(0);
   const [trackedChanges, setTrackedChanges] = useState<TrackedChangeInfo[]>([]);
+  // The live structural (block-union) review inventory, refreshed off the editor
+  // transaction seam. `runtimeUncleanIds` are the RUNTIME-only attention flags a
+  // refused Accept/Reject raises (contamination the analyzer can't see); they are
+  // reconciled away once their union disappears and cleared on New/Open.
+  const [structuralReview, setStructuralReview] = useState<StructuralReviewState>({
+    changes: [],
+    issues: [],
+  });
+  const [runtimeUncleanIds, setRuntimeUncleanIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [aiSession, setAISession] = useState<AISessionBinding | null>(null);
   const aiGate = useDocumentAIGate();
   const [lastKnownModel, setLastKnownModel] = useState<string | null>(null);
@@ -387,6 +418,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const pendingAIRequestRef = useRef<{ commentId: string; userText: string } | null>(null);
   const pendingChatTurnRef = useRef<string | null>(null);
   const chatThreadRef = useRef<DocumentChatThread | undefined>(undefined);
+  // Mirrored each render so readReservedIds (invoked mid-dispatch, after inline apply)
+  // reads the freshest comment thread without churning the applyTrackedEdits identity.
+  const commentsRef = useRef<Comment[]>([]);
   const openSessionPicker = useCallback(
     () => onOpenSessionPicker(tabId),
     [onOpenSessionPicker, tabId],
@@ -431,15 +465,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const bumpSchedulerGen = useCallback(() => setSchedulerGen((generation) => generation + 1), []);
 
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  // External-conflict state for this tab: which on-disk file changed underneath us.
-  // Persists through edits and failed/cancelled resolutions; cleared only by a
-  // successful Overwrite / Save-a-Copy / Reload, or by New / a successful Open.
-  const [saveConflict, setSaveConflict] = useState<{ which: 'doc' | 'sidecar' } | null>(null);
-  // True while a resolution job (Overwrite / Save-a-Copy / Reload) is running, so the
-  // banner disables its actions. A bump of `conflictFlash` re-announces the banner
-  // when a conflicted Cmd+S is pressed (no write happens).
-  const [resolvingConflict, setResolvingConflict] = useState(false);
-  const [conflictFlash, setConflictFlash] = useState(0);
 
   const chooseContextFolder = useCallback(
     async (permissionPath = filePath) => {
@@ -515,6 +540,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     deleteComment,
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyText,
     setAIReplyModel,
     setAIReplyEffort,
     finishAIReply,
@@ -524,10 +550,33 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     linkAIReplySuggestions,
     dismissAIReply,
   } = useComments();
+  commentsRef.current = comments;
   const { suggestions, setSuggestions } = useSuggestions();
   const quarantinedSuggestionsRef = useRef<Suggestion[]>([]);
+  // Structural records that failed reconstruction on the last load (whole-doc hash
+  // mismatch or a per-record validation failure). Kept so the notice can report
+  // them; re-persistence of quarantined structural records lands with the mint
+  // slice (the only path that puts structural records on disk today), so no real
+  // sidecar can carry one yet.
+  const quarantinedStructuralRef = useRef<unknown[]>([]);
+  // The most recent successfully-built workspace snapshot, retained so that if the
+  // structural payload can't be built the recovery data is kept intact rather than
+  // degraded (Codex's crash-recovery correction). Never source-flattened.
+  const lastGoodWorkspaceSnapshotRef = useRef<DraftSnapshot | null>(null);
 
   const getDocMarkdown = useCallback(() => editorRef.current?.getMarkdown() ?? '', []);
+
+  // The document Claude sees is the CLEAN-SOURCE projection (pending suggestions
+  // ignored) — Maz's Option 1. This MUST stay consistent with planEdits, which
+  // now matches Claude's finds against the same source projection: what Claude
+  // reads and where its edits land are one view. (The save/recovery paths keep
+  // getDocMarkdown = the review doc; only the Claude prompt uses this.)
+  const getClaudeDocMarkdown = useCallback(() => {
+    const ref = editorRef.current;
+    const ed = ref?.getEditor();
+    if (!ref || !ed) return '';
+    return cleanSourceMarkdown(ed.state.doc, (doc) => ref.serializeDoc(doc));
+  }, []);
 
   // Marks are the runtime truth for review data. The update listener below
   // projects comments into React state while editing; write paths reconcile once
@@ -542,63 +591,71 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     };
   }, [comments, suggestions]);
 
-  // The FILE save paths (save, Save As, overwrite) canonicalize review coordinates to the
-  // document a reopen produces, so a source-hashed sidecar's positions are honest. (The
-  // workspace snapshot does NOT yet canonicalize — it stays unbound until that lands.)
-  // Fails closed (ok:false) when an annotation covers text that changes shape on write;
-  // the caller then aborts the ENTIRE save. The editor is always present during a save —
-  // if somehow absent, fail closed rather than persist non-canonical positions.
-  const getCanonicalReviewState = useCallback((): {
-    capture: CanonicalCaptureResult;
-    markdown: string;
-  } => {
+  // The combined pre-write pipeline every FILE save route funnels through lives in
+  // `prepareCanonicalPersistence` (pure, editor-scoped). This thin wrapper supplies the live
+  // editor, serialization, quarantined structural records, and live review state.
+  const captureCanonicalSaveState = useCallback((): CanonicalSaveState => {
     const ed = editorRef.current?.getEditor();
-    const liveMarkdown = getDocMarkdown();
-    const canonDoc = editorRef.current?.parseMarkdown(liveMarkdown);
-    const live = getLiveReviewState();
-    if (!ed || !canonDoc) return { capture: { ok: false, unmappable: [] }, markdown: liveMarkdown };
-    const capture = captureCanonicalReviewState(
-      ed.state.doc,
-      canonDoc,
-      live.comments,
-      live.suggestions,
+    if (!ed) return { ok: false, reason: 'structural', error: 'editor not ready' };
+    return prepareCanonicalPersistence(
+      ed,
+      getDocMarkdown(),
+      quarantinedStructuralRef.current,
+      getLiveReviewState(),
     );
-    // Normalize on write: persist the CANONICAL Markdown — the exact document a reopen
-    // rebuilds — so a typed double space is stored as the single space it always collapses
-    // to and the on-disk bytes match what the editor shows. Coordinates were captured against
-    // THIS canonDoc; the write is only correct if a reopen rebuilds canonDoc EXACTLY, i.e.
-    // the canonical Markdown is a true round-trip fixed point (`parse(serialize(canonDoc))
-    // === canonDoc`). Verify that before trusting it — if some construct is not idempotent
-    // under a second round-trip, fall back to the live serialization, whose reopen is canonDoc
-    // by definition, so a bound reopen never drifts either way. This keeps normalization
-    // provably safe by construction rather than by enumerating every Markdown construct.
-    const canonicalMarkdown = editorRef.current?.serializeDoc(canonDoc);
-    const reparsed =
-      canonicalMarkdown != null ? editorRef.current?.parseMarkdown(canonicalMarkdown) : null;
-    const markdown =
-      canonicalMarkdown != null && reparsed != null && reparsed.eq(canonDoc)
-        ? canonicalMarkdown
-        : liveMarkdown;
-    return { capture, markdown };
   }, [getDocMarkdown, getLiveReviewState]);
 
   // The shell owns persistence and asks each mounted tab for a live snapshot.
   // Keep transient AI reply state out of this second on-disk write path just as
   // the regular sidecar serializer does.
-  const getWorkspaceSnapshot = useCallback((): DraftSnapshot => {
+  const getWorkspaceSnapshot = useCallback((): DraftSnapshot | null => {
+    // Symmetric with captureDiskPayload's fail-closed: while there are unreconciled
+    // quarantined structural records (the on-disk sidecar holds the only copy), do
+    // NOT produce a snapshot that would launder that state away. Retain the last
+    // good snapshot so recovery re-reads the sidecar — which still holds the
+    // records — instead of restoring a quarantine-free doc and then overwriting the
+    // sidecar on the next save. A crash here reopens the file from disk, which
+    // re-establishes the quarantine; the un-saveable edits were already blocked.
+    if (quarantinedStructuralRef.current.length > 0) {
+      return lastGoodWorkspaceSnapshotRef.current;
+    }
+    const reviewMd = getDocMarkdown();
+    const ed = editorRef.current?.getEditor();
+    // Capture the structural SOURCE (the `.md` view) + records, mirroring a disk
+    // save, so recovery reconstructs unions the same way a file reload does. If the
+    // payload can't be built (a malformed/orphan union — the same should-never-happen
+    // state the save path fails closed on), do NOT degrade the recovery data: retain
+    // the last good snapshot (or skip the write, leaving the existing workspace file
+    // untouched) rather than flatten the document and drop the proposed branch.
+    const payload = ed
+      ? buildStructuralSavePayload(ed, reviewMd)
+      : ({ ok: true, content: reviewMd, structural: [] } satisfies StructuralSavePayload);
+    if (!payload.ok) return lastGoodWorkspaceSnapshotRef.current;
+    // The DEGRADED-recovery bundle: the same structural records rebased into the canonical
+    // source coordinate space (the normalized reparse of `payload.content`). Lossless recovery
+    // uses `structural` (live) against the byte-exact docJSON; the degraded path reparses the
+    // source (normalizing whitespace) and needs these instead, or a proposal would spuriously
+    // quarantine. Fail closed like the payload guard: if the rebase can't be built, keep the
+    // last good snapshot rather than emit a degraded bundle that can't be reconstructed.
+    const degraded = ed
+      ? rebaseForDegradedRecovery(ed, payload.content, payload.structural)
+      : { ok: true as const, records: [] as StructuralSuggestionRecord[] };
+    if (!degraded.ok) return lastGoodWorkspaceSnapshotRef.current;
     // One stable document node for BOTH the lossless docJSON and the records derived from
     // its marks, so the snapshot is internally coherent (the bijection recovery relies on).
-    const doc = editorRef.current?.getEditor()?.state.doc;
+    const doc = ed?.state.doc;
     const live = getLiveReviewState();
     const baselines = getBaselines();
-    return {
+    const snapshot: DraftSnapshot = {
       filePath,
-      content: getDocMarkdown(),
+      content: payload.content,
       // The lossless representation: byte-exact recovery when it survives; Markdown remains
       // the back-compat + degraded-salvage fallback.
       ...(doc ? { docJSON: doc.toJSON(), docJSONVersion: 1 as const } : {}),
       comments: stripTransientReplyState(live.comments),
       suggestions: live.suggestions,
+      ...(payload.structural.length > 0 ? { structural: payload.structural } : {}),
+      ...(degraded.records.length > 0 ? { degradedStructural: degraded.records } : {}),
       aiSession,
       contextFolder,
       ...(chatThreadRef.current ? { chat: chatThreadRef.current } : {}),
@@ -607,7 +664,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       expectedDoc: baselines.expectedDoc,
       expectedSidecar: baselines.expectedSidecar,
       sidecarProtected: baselines.sidecarProtected,
+      structuralProtected: baselines.structuralProtected,
     };
+    lastGoodWorkspaceSnapshotRef.current = snapshot;
+    return snapshot;
   }, [filePath, getDocMarkdown, getLiveReviewState, aiSession, contextFolder, getBaselines]);
 
   // Read the live document text for a comment's anchored range and its
@@ -635,47 +695,48 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // blocked-formatting notice only ever fires for the user's own gestures.
   const applyingClaudeEditsRef = useRef(false);
 
-  // Apply Claude's quote-based edits as tracked-change suggestions. Forces
-  // suggesting mode on (under Claude's author id, stamped with the originating
-  // comment when one is given) for the duration, applies each located edit
-  // back-to-front, then restores the user's prior mode/author.
+  // Apply Claude's proposed batch (inline text/format XOR structural block
+  // conversions) as reviewable tracked suggestions. Routes through the batch
+  // orchestrator, which forces suggesting mode for the inline apply and mints
+  // structural unions, then restores the prior mode/author. The `_comment` anchor
+  // and `_scope` are vestigial: Claude's edits are document-scale, so the batch is
+  // planned doc-wide (the anchor frames the request, it never fences where changes land).
   const applyTrackedEdits = useCallback(
     (
-      comment: { from: number; to: number },
-      edits: QuillEdit[],
-      scope: EditScope,
+      _comment: { from: number; to: number },
+      edits: readonly unknown[],
+      _scope: EditScope,
       origin?: TrackedEditOrigin,
-    ) => {
+    ): StructuralBatchDispatchOutcome => {
       const ed = editor;
-      if (!ed) {
-        return {
-          results: edits.map((edit) => ({
-            edit,
-            status: 'not-found' as const,
-            reason: 'document-unavailable' as const,
-          })),
-          suggestionIds: [],
-        };
-      }
-
-      // The seam itself (plan → dispatch → engine-honest results) lives in
-      // utils/applyTrackedEdits.ts so it is testable against a real editor.
-      // This wrapper owns only the React-specific parts: the null-editor early
-      // return above, and suppressing the blocked-gesture notices for
-      // automated applies (planEdits pre-blocks Claude's conflicting format
-      // ops and reports them as skipped; a modal mid-apply would be noise —
-      // the engine-veto flip inside the seam keeps the RESULT honest while
-      // the notice stays quiet).
+      // A null editor is handled INSIDE the orchestrator (behind the classifier): a hybrid
+      // stays an xor-violation and every valid-axis entry becomes `unavailable`, so the
+      // result never depends on editor availability or mislabels an entry's axis.
+      // applyingClaudeEditsRef suppresses the blocked-gesture modal for the WHOLE batch
+      // (inline apply AND structural mints) while the per-op results stay honest.
       try {
         applyingClaudeEditsRef.current = true;
-        return applyTrackedEditsToEditor({
+        return structuralBatchDispatch(edits, {
           editor: ed,
-          comment,
-          edits,
-          scope,
           authorID: CLAUDE_AUTHOR_ID,
           fallbackAuthor: AUTHOR,
-          origin,
+          origin: batchOriginFrom(origin),
+          nextId: () => crypto.randomUUID(),
+          now: () => new Date().toISOString(),
+          // Built FRESH at dispatch time (after inline apply) from the live state + the
+          // durable side-tables, so a mint never aliases an id already in use anywhere.
+          readReservedIds: () =>
+            ed
+              ? collectReservedIds(
+                  extractReservedIdSources({
+                    state: ed.state,
+                    quarantinedSuggestions: quarantinedSuggestionsRef.current,
+                    quarantinedStructural: quarantinedStructuralRef.current,
+                    comments: commentsRef.current,
+                    chatMessages: chatThreadRef.current?.messages ?? [],
+                  }),
+                )
+              : new Set<string>(),
         });
       } finally {
         applyingClaudeEditsRef.current = false;
@@ -732,9 +793,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [retryAIReply, markDirty],
   );
 
+  // Pending structural changes flattened for the prompt manifest, read live at
+  // ask time (like getPendingSuggestions) from the authoritative persistable
+  // record/index path — never raw blockTrack — with each block's current
+  // (source-branch) text as the anchor.
+  const getStructuralPending = useCallback((): StructuralPromptEntry[] => {
+    const ed = editorRef.current?.getEditor();
+    if (!ed) return [];
+    return getStructuralReviewState(ed.state).changes.map((change) => ({
+      op: change.op,
+      anchorText: rangeText(ed.state.doc, change.source.from, change.source.to).trim(),
+      ...(change.originCommentId ? { originCommentId: change.originCommentId } : {}),
+      ...(change.originChatMessageId ? { originChatMessageId: change.originChatMessageId } : {}),
+    }));
+  }, []);
+
   const claudeReply = useClaudeReply({
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyText,
     setAIReplyModel,
     setAIReplyEffort,
     onModelObserved: setLastKnownModel,
@@ -744,7 +821,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     cancelAIReply: cancelAIReplyAndDirty,
     retryAIReply: retryAIReplyAndDirty,
     linkAIReplySuggestions,
-    getDocMarkdown,
+    getDocMarkdown: getClaudeDocMarkdown,
     getRangeTexts,
     applyTrackedEdits,
     getContextFolder: useCallback(() => contextFolderRef.current, []),
@@ -754,6 +831,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       () => (editor ? getTrackedChanges(editor).filter((c) => c.status === 'pending') : []),
       [editor],
     ),
+    getStructuralPending,
     getRunOptions: getClaudeRunOptions,
     aiGate,
   });
@@ -770,10 +848,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   }, []);
 
   const documentChat = useDocumentChat({
-    getDocMarkdown,
+    getDocMarkdown: getClaudeDocMarkdown,
     getCursorContext,
     applyTrackedEdits: useCallback(
-      (edits: QuillEdit[], originChatMessageId: string) =>
+      (edits: readonly unknown[], originChatMessageId: string) =>
         applyTrackedEdits({ from: 0, to: 0 }, edits, 'doc', {
           chatMessageId: originChatMessageId,
         }),
@@ -785,6 +863,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         editor ? getTrackedChanges(editor).filter((change) => change.status === 'pending') : [],
       [editor],
     ),
+    getStructuralPending,
     getRunOptions: getClaudeRunOptions,
     onModelObserved: setLastKnownModel,
     onEffortObserved: setLastKnownEffort,
@@ -856,6 +935,58 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [onNotice],
   );
 
+  const warnStructuralQuarantine = useCallback(
+    (count: number) => {
+      if (count <= 0) return;
+      onNotice({
+        title: 'Structural suggestions need review',
+        message:
+          `${count} saved structural suggestion${count === 1 ? '' : 's'} could not be restored — ` +
+          `the document may have changed outside Quill, or a saved record is no longer valid. ` +
+          `Quill will not overwrite the saved data while this is unresolved; reconcile the ` +
+          `document (reopen or fix it) to clear this.`,
+      });
+    },
+    [onNotice],
+  );
+
+  // A document-identity reconciliation (New / Open / recover). Clear the per-document
+  // structural refs so a payload failure can't return a prior document's last-good
+  // snapshot, and quarantine/last-good state never leaks across documents.
+  const resetStructuralIdentity = useCallback(() => {
+    quarantinedStructuralRef.current = [];
+    lastGoodWorkspaceSnapshotRef.current = null;
+    // A new document identity retires every runtime attention flag; the analyzer
+    // rebuild alone can't (a flag whose union never reappears would linger).
+    setRuntimeUncleanIds((prev) => (prev.size === 0 ? prev : new Set<string>()));
+  }, []);
+
+  // The structural half of the two-axis FILE reload: rebuild the block unions (and
+  // reset the canonical record store) BEFORE inline/comment marks are restored, then
+  // stash any quarantined records and warn about them.
+  const restoreStructuralUnions = useCallback(
+    (ed: TiptapEditor, envelope: StructuralReviewEnvelope | null, docHash: string) => {
+      resetStructuralIdentity();
+      const result = reconstructStructuralIntoEditor(ed, envelope, docHash);
+      quarantinedStructuralRef.current = result.quarantined;
+      warnStructuralQuarantine(result.quarantined.length);
+    },
+    [resetStructuralIdentity, warnStructuralQuarantine],
+  );
+
+  // The workspace-RECOVERY counterpart: reconstruct from in-memory records (no hash
+  // gate — the snapshot's source and records were captured together). There is no
+  // on-disk envelope to preserve, so a save after recovery rebuilds from live state.
+  const restoreStructuralFromDraft = useCallback(
+    (ed: TiptapEditor, records: readonly unknown[]) => {
+      resetStructuralIdentity();
+      const result = reconstructStructuralFromRecords(ed, records);
+      quarantinedStructuralRef.current = result.quarantined;
+      warnStructuralQuarantine(result.quarantined.length);
+    },
+    [resetStructuralIdentity, warnStructuralQuarantine],
+  );
+
   // A mounted background tab keeps its editor state, but layout APIs return
   // stale/zero coordinates while its host is display:none. Re-measure after
   // activation so comments and the selection affordance snap back to the
@@ -872,12 +1003,51 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     return () => cancelAnimationFrame(raf);
   }, [editor, isActive]);
 
+  // Save/conflict ORCHESTRATION lives in useDocumentSaveOrchestration: the three save routes,
+  // the save coordinator, manual-outcome handling, and the external-conflict state. It sits here —
+  // after the review-state graph (captureCanonicalSaveState) and documentChat, before the load
+  // pipeline — so the load routes can call `clearSaveConflict` and useAutosave (below) can consume
+  // `saveAndDrain`. `flushSaves` drains before load/open/new change identity; the conflict state is
+  // read by autosave-eligibility, the meta/chrome effects, and the ConflictBanner. Reload-conflict
+  // stays in this component (it depends on performOpenPath) and drives `runConflictResolution`.
+  const {
+    handleSave,
+    handleSaveAs,
+    handleOverwriteConflict,
+    handleSaveCopyConflict,
+    flushSaves,
+    saveAndDrain,
+    saveConflict,
+    resolvingConflict,
+    conflictFlash,
+    clearSaveConflict,
+    runConflictResolution,
+  } = useDocumentSaveOrchestration({
+    filePath,
+    captureCanonicalSaveState,
+    getChangeRevision,
+    saveFile,
+    saveFileAs,
+    aiSession,
+    contextFolder,
+    documentChat,
+    editorRef,
+    tabId,
+    lastGoodWorkspaceSnapshotRef,
+    bumpSchedulerGen,
+    setLastSavedAt,
+    onRecentFile,
+    onRequestSavePath,
+    showError,
+    focusAnnotation: setActiveAnnotation,
+  });
+
   const loadFileResult = useCallback(
     (result: OpenResult, promptForSession = true) => {
       // A successful (re)load reconciles the document with disk, resolving any
       // pending conflict for this tab. Bump the scheduler generation so a same-path
       // Reload/Reopen also resets autosave (clears a latch, drops a stale completion).
-      setSaveConflict(null);
+      clearSaveConflict();
       bumpSchedulerGen();
       // Must precede setContent: ProseMirror draws the document (and thus
       // resolves image srcs) synchronously when content is set.
@@ -885,21 +1055,26 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       if (liveEditor) setImageBaseDir(liveEditor, dirname(result.filePath));
       onRecentFile(result.filePath);
       setLastSavedAt(Date.now());
+      // setContent parses the structural SOURCE Markdown (original branches only).
       editorRef.current?.setContent(result.content);
       const loadedComments = result.sidecar.comments ?? [];
       const loadedSuggestions = normalizePersistedSuggestions(result.sidecar.suggestions ?? []);
       setComments(loadedComments);
       setSuggestions(loadedSuggestions);
-      // Stamp the marks back onto the parsed document: highlights, click
-      // linking, and suggestion cards all read live marks, which Markdown
-      // serialization dropped at save time. The restore suppresses the update
-      // event (a load must not look dirty), so the tracked-changes state that
-      // normally follows update events is refreshed by hand.
+      // Two-axis reload. Reconstruct the structural unions FIRST — that rebuilds the
+      // review document whose positions the inline/comment marks were captured
+      // against — THEN stamp those marks back on top. Reconstruction resets the
+      // canonical record store (even with no envelope, clearing a prior document's
+      // records). The mark restore suppresses the update event (a load must not look
+      // dirty), so the tracked-changes state is refreshed by hand.
       const ed = editorRef.current?.getEditor();
       if (ed) {
-        // Apply the load's detected authority: a legacy/externally-edited file (unbound)
-        // relocates its anchors instead of trusting stale coordinates. No fallback — a
-        // missing mode is a compile error, never a silent trust-granting default.
+        // Two-axis reload (Codex's composition invariant): reconstruct the structural
+        // unions FIRST — that rebuilds the review document whose positions the inline/comment
+        // marks were captured against — THEN restore those marks under the load's bound/unbound
+        // authority. A legacy/externally-edited file (unbound) relocates its anchors instead of
+        // trusting stale coordinates; a missing mode is a compile error, never a silent default.
+        restoreStructuralUnions(ed, result.sidecar.structural ?? null, result.docHash);
         const restored = restorePersistedReviewMarks(
           ed,
           loadedComments,
@@ -1004,9 +1179,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       chooseContextFolder,
       onOpenSessionPicker,
       restorePersistedReviewMarks,
+      restoreStructuralUnions,
       announceUnboundLoad,
       tabId,
       bumpSchedulerGen,
+      clearSaveConflict,
     ],
   );
 
@@ -1032,105 +1209,6 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       )
       .catch((error) => console.warn('Could not record Claude session document:', error));
   }, [aiSession, filePath]);
-
-  // Reduce a typed save outcome to a path for callers that only care whether the
-  // save landed, surfacing the outcomes that must not read as silent success:
-  // a `blocked` sidecar (text saved, annotations withheld) and an external
-  // `conflict`. `failed` already reported itself inside useFileManager; a
-  // Shared by every write (manual AND autosave, via performSave): raise the persistent
-  // conflict banner when the on-disk file changed underneath us. This is wanted for both
-  // sources — autosave detecting an external change is exactly when the banner should
-  // appear. `blocked` and `failed` are NOT presented here: a background write must never
-  // pop a modal (see presentManualSaveFailure). `saved`/`cancelled` are silent.
-  const notifySaveOutcome = useCallback((outcome: SaveOutcome) => {
-    if (outcome.status === 'conflict') {
-      // Sticky until the user resolves it (Overwrite / Save a Copy / Reload).
-      setSaveConflict({ which: outcome.which });
-    }
-  }, []);
-
-  // Present a save failure LOUDLY — only from a manual save. Autosave leaves these to
-  // the footer/tab status (blocked → 'stopped', failed → 'retrying') so a background
-  // write never interrupts the user; a manual Cmd+S promotes them to these modals.
-  const presentManualSaveFailure = useCallback(
-    (outcome: SaveOutcome) => {
-      if (outcome.status === 'blocked' && outcome.reason === 'sidecar-protected') {
-        showError(
-          'Comments not saved',
-          'The document text was saved, but its comments and suggestions could not be ' +
-            "written: the existing .comments.json file is unreadable and Quill won't " +
-            'overwrite it. Recover or remove that file, then save again.',
-        );
-      } else if (outcome.status === 'blocked') {
-        // baseline-unknown: a recovered draft with no trustworthy on-disk baseline.
-        showError(
-          "Couldn't save — this file's state is unknown",
-          "Quill recovered unsaved work for this file but can't tell whether the file on " +
-            "disk changed while Quill was closed, so it won't overwrite it. Reopen the file " +
-            'to reconcile, or use Save As to write your recovered work to a new file.',
-        );
-      } else if (outcome.status === 'failed') {
-        // Name the destination that failed when we know it (actionable), else just why.
-        const detail = outcome.path ? `${outcome.path}\n\n${outcome.message}` : outcome.message;
-        showError('Could not save file', detail);
-      } else if (outcome.status === 'review-blocked') {
-        // Focus the first offending annotation so the user can find and fix it.
-        const [first] = outcome.unmappable;
-        if (first) setActiveAnnotation({ kind: first.kind, id: first.id });
-        const notice = reviewBlockedNotice(outcome.unmappable);
-        showError(notice.title, notice.message);
-      }
-    },
-    [showError, setActiveAnnotation],
-  );
-
-  // The coordinator's default-save job: capture the live payload NOW (at
-  // write-begin) and save to the current path. Post-write side effects and
-  // notices live here so they run exactly once per write, even when several
-  // coalesced requests share it.
-  const performSave = useCallback(async (): Promise<SaveOutcome> => {
-    // Canonicalize BEFORE any write. On failure nothing is written and the doc stays
-    // dirty — a review annotation covers text that changes shape when saved.
-    const { capture, markdown } = getCanonicalReviewState();
-    if (!capture.ok) {
-      const outcome: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
-      notifySaveOutcome(outcome);
-      return outcome;
-    }
-    const outcome = await saveFile(
-      markdown,
-      capture.comments,
-      capture.suggestions,
-      aiSession,
-      contextFolder,
-      undefined,
-      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-    );
-    if (outcome.status === 'saved') {
-      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
-      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
-      setLastSavedAt(Date.now());
-    }
-    notifySaveOutcome(outcome);
-    return outcome;
-  }, [
-    saveFile,
-    getCanonicalReviewState,
-    aiSession,
-    contextFolder,
-    documentChat,
-    notifySaveOutcome,
-  ]);
-
-  const {
-    requestSave,
-    runExclusive,
-    flush: flushSaves,
-    saveAndDrain,
-  } = useSaveCoordinator({
-    performSave,
-    getRevision: getChangeRevision,
-  });
 
   // Autosave: a debounced background save for documents with a real saved path, running
   // only inside Tauri (there is no file I/O in the browser dev server). It drives the
@@ -1231,89 +1309,24 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [getChangeRevision, getIsDirty],
   );
 
-  // Save As is a distinct job (it prompts and changes the target path), so it runs
-  // through the coordinator's exclusive lane — waiting for any in-flight save and
-  // blocking new saves until it finishes — so writes never overlap the path change.
-  const performSaveAs = useCallback(async (): Promise<SaveOutcome> => {
-    // Canonicalize before prompting for a path — don't open the dialog for a save that
-    // would fail, and never write non-canonical positions under a source hash.
-    const { capture, markdown } = getCanonicalReviewState();
-    if (!capture.ok) {
-      const blocked: SaveOutcome = { status: 'review-blocked', unmappable: capture.unmappable };
-      notifySaveOutcome(blocked);
-      return blocked;
-    }
-    const outcome = await saveFileAs(
-      markdown,
-      capture.comments,
-      capture.suggestions,
-      aiSession,
-      contextFolder,
-      aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-      (path) => onRequestSavePath(tabId, path),
-    );
-    if (outcome.status === 'saved') {
-      // The document gained (or moved) a directory — relative image paths now
-      // resolve against it for anything drawn from here on.
-      const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) setImageBaseDir(liveEditor, dirname(outcome.path));
-      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
-      rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
-      onRecentFile(outcome.path);
-      setLastSavedAt(Date.now());
-    }
-    notifySaveOutcome(outcome);
-    return outcome;
-  }, [
-    saveFileAs,
-    getCanonicalReviewState,
-    aiSession,
-    contextFolder,
-    documentChat,
-    onRecentFile,
-    onRequestSavePath,
-    tabId,
-    notifySaveOutcome,
-  ]);
+  // Export to PDF is print-to-PDF, and the printed artifact is the CLEAN-SOURCE
+  // document — pending suggestions ignored (accepted edits stay; un-accepted AI
+  // proposals are dropped), NOT the live redline. We render the
+  // projectDocument(...source) HTML into a detached, screen-hidden container and
+  // let `@media print` swap it in for the live editor; pure-CSS masking of the
+  // redline can't invert pending FORMATTING, so a detached clean render is the
+  // only faithful option. The snapshot is refreshed both here (toolbar / menu)
+  // and on `beforeprint` (OS Cmd+P), so it's always current when the dialog opens.
+  const refreshPrintDoc = useCallback(() => {
+    const ed = editorRef.current?.getEditor();
+    if (ed && printDocRef.current) printDocRef.current.innerHTML = cleanSourceHTML(ed.state.doc);
+  }, []);
 
-  const handleSaveAs = useCallback(async () => {
-    const outcome = await runExclusive(performSaveAs);
-    // Manual save: reconcile the scheduler on success, present blocked/failed loudly.
-    if (outcome.status === 'saved') bumpSchedulerGen();
-    else presentManualSaveFailure(outcome);
-    return outcome.status === 'saved' ? outcome.path : null;
-  }, [runExclusive, performSaveAs, bumpSchedulerGen, presentManualSaveFailure]);
-
-  const handleSave = useCallback(async () => {
-    // While conflicted, Cmd+S must not write or re-pop a modal — it re-announces the
-    // banner so the user resolves it there (Overwrite / Save a Copy / Reload).
-    if (saveConflict) {
-      setConflictFlash((flash) => flash + 1);
-      return null;
-    }
-    if (!filePath) {
-      return handleSaveAs();
-    }
-    const outcome = await requestSave();
-    if (outcome.status === 'saved') bumpSchedulerGen();
-    else presentManualSaveFailure(outcome);
-    return outcome.status === 'saved' ? outcome.path : null;
-  }, [
-    saveConflict,
-    filePath,
-    requestSave,
-    handleSaveAs,
-    bumpSchedulerGen,
-    presentManualSaveFailure,
-  ]);
-
-  // Export to PDF is print-to-PDF: the `@media print` rules in App.css strip
-  // the chrome and the track-changes/comment markup, leaving a clean copy of
-  // the document, and the OS print dialog offers "Save as PDF". We set
-  // document.title first so that dialog defaults the filename to the doc's
-  // name instead of "Quill"; it's restored after the dialog returns
-  // (window.print blocks synchronously until then).
+  // We set document.title first so the OS "Save as PDF" dialog defaults the
+  // filename to the doc's name instead of "Quill"; it's restored after the
+  // dialog returns (window.print blocks synchronously until then).
   const handleExportPdf = useCallback(() => {
+    refreshPrintDoc();
     const docName = filePath ? basename(filePath).replace(/\.md$/i, '') : 'Untitled';
     const prevTitle = document.title;
     document.title = docName;
@@ -1322,7 +1335,25 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     } finally {
       document.title = prevTitle;
     }
-  }, [filePath]);
+  }, [filePath, refreshPrintDoc]);
+
+  // OS-level print (Cmd+P) bypasses handleExportPdf, so refresh the clean-source
+  // render on `beforeprint` too, and clear it on `afterprint` so the detached
+  // tree never lingers in the DOM. Only the active tab paints — inactive tabs
+  // are `hidden`, so their (stale) print container is display:none anyway.
+  useEffect(() => {
+    if (!isActive) return;
+    const onBeforePrint = () => refreshPrintDoc();
+    const onAfterPrint = () => {
+      if (printDocRef.current) printDocRef.current.innerHTML = '';
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
+    };
+  }, [isActive, refreshPrintDoc]);
 
   const performOpen = useCallback(async () => {
     // Drain any in-flight save BEFORE opening: openFile mutates identity (filePath,
@@ -1358,14 +1389,29 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     // can't complete against the old identity (epoch guard is the backstop).
     await flushSaves();
     newFile();
-    setSaveConflict(null); // a brand-new document has nothing to conflict with
+    clearSaveConflict(); // a brand-new document has nothing to conflict with
     bumpSchedulerGen(); // reset autosave even when replacing an Untitled (filePath stays null)
     const liveEditor = editorRef.current?.getEditor();
     if (liveEditor) setImageBaseDir(liveEditor, null);
+    // setContent is the authoritative load boundary — it clears past the freeze
+    // and skips tracking itself, so no pre-clear is needed here.
     editorRef.current?.setContent('');
+    // Clear a prior document's canonical structural records; setContent alone does
+    // not reset the session-retained store.
+    if (liveEditor) {
+      liveEditor.view.dispatch(
+        resetStructuralRecords(liveEditor.state.tr, [])
+          .setMeta('preventUpdate', true)
+          .setMeta('skipTracking', true)
+          .setMeta('addToHistory', false),
+      );
+    }
     setComments([]);
     setSuggestions([]);
+    setRuntimeUncleanIds((prev) => (prev.size === 0 ? prev : new Set<string>()));
     quarantinedSuggestionsRef.current = [];
+    quarantinedStructuralRef.current = [];
+    lastGoodWorkspaceSnapshotRef.current = null; // new identity: forget prior last-good
     onReleaseSession(tabId);
     setAISession(null);
     documentChat.reset();
@@ -1383,68 +1429,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     tabId,
     flushSaves,
     bumpSchedulerGen,
+    clearSaveConflict,
   ]);
 
-  // --- External-conflict resolution. Each action runs through the coordinator (never
-  // a raw save) and clears the conflict only on success; a failed/cancelled action
-  // keeps it. Actions are disabled by the banner while `resolvingConflict` is true.
-  const handleOverwriteConflict = useCallback(async () => {
-    if (!filePath || resolvingConflict) return;
-    setResolvingConflict(true);
-    try {
-      // Overwrite = an explicit same-path Save As: an unconditional write that also
-      // re-syncs the baseline, through the exclusive lane, with a FRESH live payload.
-      const outcome = await runExclusive(async () => {
-        const { capture, markdown } = getCanonicalReviewState();
-        if (!capture.ok) {
-          return { status: 'review-blocked', unmappable: capture.unmappable } as SaveOutcome;
-        }
-        return saveFile(
-          markdown,
-          capture.comments,
-          capture.suggestions,
-          aiSession,
-          contextFolder,
-          filePath,
-          aiSession ? documentChat.getThread(aiSession.sessionId) : null,
-        );
-      });
-      if (outcome.status === 'saved') {
-        setSaveConflict(null);
-        bumpSchedulerGen(); // reconciled: clear the scheduler's latch, drop stale epochs
-        rememberSessionPermission(window.localStorage, outcome.path, aiSession);
-        rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
-        setLastSavedAt(Date.now());
-      } else {
-        presentManualSaveFailure(outcome); // e.g. a protected sidecar or unanchored annotation
-      }
-    } finally {
-      setResolvingConflict(false);
-    }
-  }, [
-    filePath,
-    resolvingConflict,
-    runExclusive,
-    saveFile,
-    getCanonicalReviewState,
-    aiSession,
-    contextFolder,
-    documentChat,
-    presentManualSaveFailure,
-    bumpSchedulerGen,
-  ]);
-
-  const handleSaveCopyConflict = useCallback(async () => {
-    if (resolvingConflict) return;
-    setResolvingConflict(true);
-    try {
-      const path = await handleSaveAs(); // exclusive Save As to a NEW file
-      if (path) setSaveConflict(null); // now editing the copy — nothing to conflict with
-    } finally {
-      setResolvingConflict(false);
-    }
-  }, [resolvingConflict, handleSaveAs]);
-
+  // External-conflict RELOAD stays in the component — it depends on performOpenPath, which is
+  // declared after the save coordinator, so it can't be passed into the earlier hook. Overwrite /
+  // Save-a-Copy live in useDocumentSaveOrchestration; reload drives the hook's
+  // `runConflictResolution`, which owns the resolvingConflict lifecycle (banner-disabled while busy).
   const handleReloadConflict = useCallback(() => {
     if (!filePath || resolvingConflict) return;
     onNotice({
@@ -1453,21 +1444,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       actions: [
         {
           label: 'Discard and reload',
-          onClick: async () => {
-            setResolvingConflict(true);
-            try {
-              // performOpenPath flushes, re-reads, and loadFileResult clears the
-              // conflict on success. A failed reload keeps the conflict.
-              await performOpenPath(filePath, false);
-            } finally {
-              setResolvingConflict(false);
-            }
-          },
+          // performOpenPath flushes, re-reads, and loadFileResult clears the conflict on success.
+          // A failed reload keeps the conflict. runConflictResolution owns the busy lifecycle.
+          onClick: () => runConflictResolution(() => performOpenPath(filePath, false)),
         },
         { label: 'Keep editing', onClick: () => {} },
       ],
     });
-  }, [filePath, resolvingConflict, onNotice, performOpenPath]);
+  }, [filePath, resolvingConflict, onNotice, performOpenPath, runConflictResolution]);
 
   // Adopt a shell-selected workspace snapshot without reading the older file
   // from disk. Dirty recovery snapshots remain dirty; clean Untitled tabs are
@@ -1478,6 +1462,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         expectedDoc: draft.expectedDoc ?? null,
         expectedSidecar: draft.expectedSidecar ?? null,
         sidecarProtected: draft.sidecarProtected,
+        structuralProtected: draft.structuralProtected,
       });
       setLastSavedAt(null);
       const liveEditor = editorRef.current?.getEditor();
@@ -1497,10 +1482,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       const state = draft.docJSONState ?? (draft.docJSON ? 'valid' : 'absent');
       const lossless =
         state === 'valid' && draft.docJSON
-          ? editorRef.current?.restoreDocJSON(draft.docJSON, draftComments, draftSuggestions)
+          ? editorRef.current?.restoreDocJSON(
+              draft.docJSON,
+              draftComments,
+              draftSuggestions,
+              draft.structural ?? [],
+            )
           : undefined;
       const ed = editorRef.current?.getEditor();
-
       let outcome: WorkspaceRecoveryOutcome;
       if (lossless?.ok && ed) {
         outcome = 'lossless';
@@ -1509,6 +1498,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         // Detached/quarantined records are mark-less BY DESIGN, so they cannot be rebuilt
         // from the live marks — seed them back into the quarantine store, or they'd vanish.
         quarantinedSuggestionsRef.current = draftSuggestions.filter((s) => s.detached === true);
+        // The lossless docJSON restore is self-contained: it restored the document and every
+        // mark byte-exact AND seeded the structural record store (metadata-only, in the same
+        // transaction, after validating the records against the restored union) — so nothing is
+        // re-reconstructed here, which would disturb the byte-exact restored document.
         setTrackedChanges(getTrackedChanges(ed));
       } else {
         // A lossless doc that was INTENDED but couldn't be used — `invalid` envelope, or a
@@ -1521,6 +1514,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         setSuggestions(draftSuggestions);
         const ed2 = editorRef.current?.getEditor();
         if (ed2) {
+          // Reconstruct the structural unions FIRST (source → union), then restore inline marks.
+          // `setContent(draft.content)` above normalized whitespace, so use the records rebased
+          // to that canonical source (`degradedStructural`); a legacy snapshot without them falls
+          // back to the live-coordinate `structural` (its pre-fix, possibly-quarantining behavior).
+          restoreStructuralFromDraft(ed2, draft.degradedStructural ?? draft.structural ?? []);
           const restored = restorePersistedReviewMarks(
             ed2,
             draftComments,
@@ -1548,6 +1546,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       documentChat,
       restoreDraft,
       restorePersistedReviewMarks,
+      restoreStructuralFromDraft,
       announceUnboundLoad,
       onNotice,
       setComments,
@@ -1571,18 +1570,63 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     tabId,
   ]);
 
+  // Comment RECONCILIATION stays on `update`: it must not run mid-load, before a
+  // reload has restored the persisted comment marks (setContent suppresses
+  // `update`), or it would drop every comment as detached.
   useEffect(() => {
     if (!editor) return;
-    const refresh = () => {
-      setTrackedChanges(getTrackedChanges(editor));
+    const reconcile = () =>
       setComments((current) => reconcileCommentsWithDocument(current, editor.state.doc));
-    };
-    editor.on('update', refresh);
-    refresh();
+    editor.on('update', reconcile);
+    reconcile();
     return () => {
-      editor.off('update', refresh);
+      editor.off('update', reconcile);
     };
   }, [editor, setComments]);
+
+  // The review INVENTORY (inline tracked changes + structural review) lives on
+  // the TRANSACTION seam, not `update`. Two load-time mutations fire a
+  // transaction but NO `update`: a metadata-only record change (reconstruction
+  // on load) mutates the store without touching the document, and a programmatic
+  // whole-document replacement (setContent stamps preventUpdate) — so `update`
+  // alone would leave stale inline OR structural cards after New / Open / reload.
+  // Gating on `docChanged || getMeta(structuralRecordStoreKey)` catches a
+  // mint/resolve, a pure record reset, and a document replacement; being purely
+  // transaction-driven, no hand-copied refresh site can drift out of sync.
+  useEffect(() => {
+    if (!editor) return;
+    const refreshInventories = () => {
+      setTrackedChanges(getTrackedChanges(editor));
+      setStructuralReview(getStructuralReviewState(editor.state));
+    };
+    const onTransaction = ({
+      transaction,
+    }: {
+      transaction: import('@tiptap/pm/state').Transaction;
+    }) => {
+      if (transaction.docChanged || transaction.getMeta(structuralRecordStoreKey)) {
+        refreshInventories();
+      }
+    };
+    editor.on('transaction', onTransaction);
+    refreshInventories();
+    return () => {
+      editor.off('transaction', onTransaction);
+    };
+  }, [editor]);
+
+  // A runtime union-not-clean flag survives only while its union is still a live,
+  // persistable change; once the union collapses or the document is reloaded the
+  // flag is stale and must drop (the analyzer never sees this condition, so it
+  // can't retire the flag for us).
+  useEffect(() => {
+    setRuntimeUncleanIds((prev) => {
+      if (prev.size === 0) return prev;
+      const liveIds = new Set(structuralReview.changes.map((change) => change.changeId));
+      const next = new Set([...prev].filter((id) => liveIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [structuralReview]);
 
   // Chrome reads word/character counts and the current line/column through a
   // value snapshot rather than reaching into this tab. Selection-only
@@ -1651,7 +1695,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // its text is visibly highlighted alongside the outlined card.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    if (activeAnnotation) {
+    // A structural change anchors to a block-union NODE, not an inline mark, so
+    // the mark-based focus decoration can't (and shouldn't) paint it — the
+    // redline is its in-text emphasis. Clear any prior mark focus instead.
+    if (activeAnnotation && activeAnnotation.kind !== 'structural') {
       editor.commands.setAnnotationFocus(activeAnnotation.kind, activeAnnotation.id);
     } else {
       editor.commands.clearAnnotationFocus();
@@ -1660,7 +1707,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
 
   // Drop the focus when the annotation it points at goes away (resolved,
   // accepted, rejected, deleted) — a stale focus would point at nothing.
-  const clearActiveIf = useCallback((kind: AnnotationKind, id: string) => {
+  const clearActiveIf = useCallback((kind: ReviewAnnotationKind, id: string) => {
     setActiveAnnotation((prev) => (prev?.kind === kind && prev.id === id ? null : prev));
   }, []);
 
@@ -1668,10 +1715,10 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // clicking plain text dismisses the focus). Focus the innermost one, by
   // smallest live range, like Google Docs.
   const handleAnnotationClick = useCallback(
-    ({ commentIds, suggestionIds }: AnnotationClickInfo) => {
+    ({ commentIds, suggestionIds, structuralIds }: AnnotationClickInfo) => {
       const doc = editor?.state.doc;
       if (!doc) return;
-      const candidates: { kind: AnnotationKind; id: string; size: number }[] = [];
+      const candidates: { kind: ReviewAnnotationKind; id: string; size: number }[] = [];
       for (const id of commentIds) {
         const range = findAnnotationRange(doc, 'comment', id);
         if (range) candidates.push({ kind: 'comment', id, size: range.to - range.from });
@@ -1679,6 +1726,13 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       for (const id of suggestionIds) {
         const range = findAnnotationRange(doc, 'suggestion', id);
         if (range) candidates.push({ kind: 'suggestion', id, size: range.to - range.from });
+      }
+      // A structural branch is a node, not a mark, so its live extent is the
+      // union envelope from the review inventory (which is what a click on either
+      // branch should activate), ranked by size beside the inline candidates.
+      for (const id of structuralIds) {
+        const change = structuralReview.changes.find((candidate) => candidate.changeId === id);
+        if (change) candidates.push({ kind: 'structural', id, size: change.to - change.from });
       }
       if (candidates.length === 0) {
         setActiveAnnotation(null);
@@ -1689,7 +1743,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       setActiveAnnotation({ kind: winner.kind, id: winner.id });
       setHighlightActivationRevision((revision) => revision + 1);
     },
-    [editor],
+    [editor, structuralReview],
   );
 
   const queueAutoResolveForTrackedRemoval = useCallback(
@@ -1734,17 +1788,160 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [editor, setComments, clearActiveIf],
   );
 
+  // Bulk resolution resolves STRUCTURAL unions FIRST, then inline suggestions.
+  // Order matters: a union-not-clean union (a tracked mark inside a still-frozen
+  // envelope) left behind would otherwise make the single inline
+  // `resolveChange(null)` transaction touch that frozen region and be VETOED as a
+  // whole — turning best-effort into a global abort of every inline suggestion.
+  // Bulk resolution is intentionally BEST-EFFORT and multi-undo (each structural
+  // kernel closeHistory's its own step): clean changes resolve, contaminated /
+  // locked ones are preserved, and Accept All is NOT atomic.
+
+  // Resolve every persistable structural union for `action`, reading fresh state
+  // each dispatch. Accept queues each coupled resolvedComment BEFORE its dispatch.
+  // union-not-clean is TERMINAL (never retried); origin-comment-locked is DEFERRED
+  // and retried while any OTHER union makes progress (resolving one can unlock
+  // another). Returns the union-not-clean ids to flag as runtime attention; a
+  // locked-cycle union stays an ordinary card (still clean, resolvable later).
+  const resolveAllStructural = useCallback(
+    (action: 'accept' | 'reject'): string[] => {
+      if (!editor) return [];
+      const unclean = new Set<string>();
+      // Work an id set to natural termination — NO numeric ceiling. Each pass
+      // resolves every id it can (by id, against fresh state, so intra-pass
+      // position shifts are handled); success / not-resolvable / union-not-clean
+      // drop the id, origin-comment-locked defers it. A pass that resolves nothing
+      // stops the loop, and the id set only ever shrinks, so it always finishes.
+      let pending = getStructuralReviewState(editor.state).changes.map((change) => change.changeId);
+      let progress = true;
+      while (progress) {
+        progress = false;
+        const deferred: string[] = [];
+        for (const changeId of pending) {
+          const result = resolveStructuralUnion(editor.state, changeId, action);
+          if (result.ok) {
+            if (result.resolvedComment) {
+              const resolved = result.resolvedComment;
+              setComments((current) => autoResolveCapturedComments(current, [resolved]));
+              clearActiveIf('comment', resolved.id);
+            }
+            editor.view.dispatch(result.tr);
+            progress = true;
+          } else if (result.reason === 'union-not-clean') {
+            unclean.add(changeId); // terminal
+          } else if (result.reason !== 'not-resolvable') {
+            deferred.push(changeId); // origin-comment-locked — retry while progress
+          }
+          // not-resolvable → gone (dropped)
+        }
+        pending = deferred;
+      }
+      return [...unclean];
+    },
+    [editor, setComments, clearActiveIf],
+  );
+
+  // Accept ONE inline id in the freeze-constrained fallback: skip it entirely,
+  // BEFORE any React update, if either its resolution transaction OR its
+  // provenance-comment removal (a second mutation path `prepareCommentsForAccept`
+  // takes) would touch a remaining frozen union — never queue a comment
+  // resolution that the freeze guard then vetoes.
+  const acceptInlineIdWithinFootprints = useCallback(
+    (id: string): void => {
+      if (!editor) return;
+      const state = editor.state;
+      if (firstFrozenViolation(resolveTrackedChanges(state, id, 'accept')) !== null) return;
+      // Footprints recomputed FRESH from the current doc: an earlier per-id
+      // resolution in this loop shifted positions, so a snapshot captured before
+      // the loop would compare this id's fresh comment ranges against stale union
+      // coordinates — and a false negative would queue a comment resolved whose
+      // mark removal the freeze then vetoes.
+      const footprints = structuralFootprints(state.doc);
+      const { captured, provenanceCommentIds } = captureCommentsResolvedByAccept(
+        state.doc,
+        getTrackedChanges(editor),
+        id,
+      );
+      const provenanceBlocked = provenanceCommentIds.some((commentId) => {
+        const range = findAnnotationRange(state.doc, 'comment', commentId);
+        return range
+          ? footprints.some((footprint) => range.from < footprint.to && footprint.from < range.to)
+          : false;
+      });
+      if (provenanceBlocked) return;
+      if (captured.length > 0) {
+        setComments((current) => autoResolveCapturedComments(current, captured));
+      }
+      for (const commentId of provenanceCommentIds) {
+        editor.commands.unsetComment(commentId);
+        clearActiveIf('comment', commentId);
+      }
+      editor.view.dispatch(resolveTrackedChanges(editor.state, id, 'accept'));
+    },
+    [editor, setComments, clearActiveIf],
+  );
+
+  // Resolve inline suggestions AFTER the structural pass. With no frozen union
+  // remaining the single bulk transaction is safe (today's path). Otherwise fall
+  // back to per-id, skipping any id whose resolution — or, for Accept, whose
+  // provenance-comment removal — would touch a remaining footprint. (Reject only
+  // preflights the resolution tx; its comment capture is React-only.)
+  const resolveInlineBulk = useCallback(
+    (action: 'accept' | 'reject'): void => {
+      if (!editor) return;
+      // Decide bulk-vs-per-id ONCE: a frozen union remains iff there are
+      // footprints now (inline resolution never collapses a union, so this stays
+      // true through the loop). The per-id path recomputes footprint POSITIONS
+      // fresh for each id.
+      if (structuralFootprints(editor.state.doc).length === 0) {
+        if (action === 'accept') prepareCommentsForAccept();
+        else queueAutoResolveForTrackedRemoval('tracked_insert');
+        editor.commands.resolveChange(null, action);
+        return;
+      }
+      for (const change of getTrackedChanges(editor).filter((c) => c.status === 'pending')) {
+        if (action === 'accept') {
+          acceptInlineIdWithinFootprints(change.id);
+        } else {
+          const rejectTr = resolveTrackedChanges(editor.state, change.id, 'reject');
+          if (firstFrozenViolation(rejectTr) !== null) continue;
+          queueAutoResolveForTrackedRemoval('tracked_insert', change.id);
+          editor.view.dispatch(rejectTr);
+        }
+      }
+    },
+    [
+      editor,
+      prepareCommentsForAccept,
+      queueAutoResolveForTrackedRemoval,
+      acceptInlineIdWithinFootprints,
+    ],
+  );
+
+  const flagStructuralAttention = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setRuntimeUncleanIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
   const handleAcceptAll = useCallback(() => {
     if (!editor) return;
-    prepareCommentsForAccept();
-    editor.commands.resolveChange(null, 'accept');
-  }, [editor, prepareCommentsForAccept]);
+    const attentionIds = resolveAllStructural('accept');
+    resolveInlineBulk('accept');
+    flagStructuralAttention(attentionIds);
+    setActiveAnnotation(null);
+  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
 
   const handleRejectAll = useCallback(() => {
     if (!editor) return;
-    queueAutoResolveForTrackedRemoval('tracked_insert');
-    editor.commands.resolveChange(null, 'reject');
-  }, [editor, queueAutoResolveForTrackedRemoval]);
+    const attentionIds = resolveAllStructural('reject');
+    resolveInlineBulk('reject');
+    flagStructuralAttention(attentionIds);
+    setActiveAnnotation(null);
+  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
 
   const handleAcceptChange = useCallback(
     (id: string) => {
@@ -1762,6 +1959,63 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       clearActiveIf('suggestion', id);
     },
     [editor, clearActiveIf, queueAutoResolveForTrackedRemoval],
+  );
+
+  // Structural resolution runs through the kernel directly (not the fire-and-
+  // forget command) so we can drive React comment state from its coupled
+  // `resolvedComment`: on Accept, queue the auto-resolution and clear the origin
+  // comment's focus BEFORE the synchronous dispatch — mirroring inline Accept so
+  // the post-dispatch reconciler sees a resolved record — then clear the
+  // structural focus. A refusal never dispatches: an origin lock surfaces a
+  // notice, a contaminated union raises runtime attention, and a vanished union
+  // just refreshes the inventory.
+  const handleAcceptStructuralChange = useCallback(
+    (changeId: string) => {
+      if (!editor) return;
+      const result = resolveStructuralUnion(editor.state, changeId, 'accept');
+      if (!result.ok) {
+        if (result.reason === 'origin-comment-locked') {
+          onNotice({
+            title: 'Resolve the overlapping change first',
+            message:
+              'This structure change shares a comment with another pending change. Resolve that ' +
+              'one first, then accept this.',
+          });
+        } else if (result.reason === 'union-not-clean') {
+          setRuntimeUncleanIds((prev) => (prev.has(changeId) ? prev : new Set(prev).add(changeId)));
+        } else {
+          setStructuralReview(getStructuralReviewState(editor.state));
+        }
+        return;
+      }
+      if (result.resolvedComment) {
+        const resolved = result.resolvedComment;
+        setComments((current) => autoResolveCapturedComments(current, [resolved]));
+        clearActiveIf('comment', resolved.id);
+      }
+      editor.view.dispatch(result.tr);
+      clearActiveIf('structural', changeId);
+    },
+    [editor, onNotice, clearActiveIf, setComments],
+  );
+
+  const handleRejectStructuralChange = useCallback(
+    (changeId: string) => {
+      if (!editor) return;
+      const result = resolveStructuralUnion(editor.state, changeId, 'reject');
+      if (!result.ok) {
+        if (result.reason === 'union-not-clean') {
+          setRuntimeUncleanIds((prev) => (prev.has(changeId) ? prev : new Set(prev).add(changeId)));
+        } else if (result.reason === 'not-resolvable') {
+          setStructuralReview(getStructuralReviewState(editor.state));
+        }
+        // 'origin-comment-locked' cannot occur on Reject — it performs no origin op.
+        return;
+      }
+      editor.view.dispatch(result.tr);
+      clearActiveIf('structural', changeId);
+    },
+    [editor, clearActiveIf],
   );
 
   const handleAddComment = useCallback(
@@ -1914,12 +2168,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     handleActivateComment,
     handleActivateHistoryComment,
     handleActivateSuggestion,
+    handleActivateStructural,
     handleViewReplySuggestion,
     handleSyncActivate,
   } = useAnnotationNavigation({
     editor,
     comments,
     trackedChanges,
+    structuralChanges: structuralReview.changes,
     commentLayerRef,
     setActiveAnnotation,
   });
@@ -2042,6 +2298,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const pendingSuggestionCount = countLogicalSuggestionCards(
     trackedChanges.filter((change) => change.status === 'pending'),
   );
+  const structuralChangeCount = structuralReview.changes.length;
+  // The full pending-review count spans BOTH axes — inline suggestions and
+  // structural changes — so the Topbar total and the panel header agree.
+  const pendingReviewCount = pendingSuggestionCount + structuralChangeCount;
+  // The analyzer's structural issues plus the runtime union-not-clean flags,
+  // unified into the panel's non-actionable needs-attention list.
+  const structuralAttention = useMemo<StructuralAttention[]>(
+    () => [
+      ...structuralReview.issues,
+      ...[...runtimeUncleanIds].map(
+        (changeId): StructuralAttention => ({ changeId, code: 'union-not-clean' }),
+      ),
+    ],
+    [structuralReview.issues, runtimeUncleanIds],
+  );
   const unresolvedCommentCount = comments.filter((comment) => !comment.resolved).length;
   const resolvedCommentCount = comments.length - unresolvedCommentCount;
 
@@ -2117,7 +2388,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       isDirty,
       lastSavedAt,
       isSuggesting,
-      pendingSuggestionCount,
+      pendingSuggestionCount: pendingReviewCount,
       zoom,
       aiSession,
       contextFolder,
@@ -2140,7 +2411,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     lastKnownEffort,
     lastSavedAt,
     onChromeChange,
-    pendingSuggestionCount,
+    pendingReviewCount,
     tabId,
     zoom,
   ]);
@@ -2193,6 +2464,16 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
                 onOpenChat={openChat}
               />
             </div>
+            {/* Clean-source render for print / Export-to-PDF: screen-hidden and
+                a11y-ignored (Find, selection, and clipboard never see it),
+                populated on print and swapped in for the live editor by
+                @media print. Class "ProseMirror" gives it the document typography. */}
+            <div
+              className="ProseMirror print-doc"
+              data-print-doc
+              ref={printDocRef}
+              aria-hidden="true"
+            />
           </div>
 
           {selectionInfo &&
@@ -2220,7 +2501,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         <aside className="comment-layer" ref={commentLayerRef} aria-label="Review panel">
           <PanelHeader
             mode={panelMode}
-            commentCount={unresolvedCommentCount + pendingSuggestionCount}
+            commentCount={unresolvedCommentCount + pendingReviewCount}
             showResolved={showResolvedComments}
             resolvedCount={resolvedCommentCount}
             aiSession={aiSession}
@@ -2238,8 +2519,11 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             comments={comments}
             activeCommentId={activeCommentId}
             activeSuggestionId={activeSuggestionId}
+            activeStructuralId={activeStructuralId}
             containerRef={commentLayerRef}
             trackedChanges={trackedChanges}
+            structuralChanges={structuralReview.changes}
+            structuralAttention={structuralAttention}
             commentComposer={commentComposerOpen ? pendingCommentSelection : null}
             scrollTop={scrollTop}
             zoom={zoom}
@@ -2272,6 +2556,9 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
             onActivateChatMessage={handleActivateChatMessage}
             onAcceptChange={handleAcceptChange}
             onRejectChange={handleRejectChange}
+            onAcceptStructuralChange={handleAcceptStructuralChange}
+            onRejectStructuralChange={handleRejectStructuralChange}
+            onActivateStructural={handleActivateStructural}
             onSubmitComment={handleAddComment}
             onCancelComment={handleCancelCommentComposer}
             hasSession={aiSession != null}

@@ -32,6 +32,8 @@ import {
   getTrackedChanges,
 } from '../../extensions/TrackChanges';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
+import { BlockTrack } from '../../extensions/BlockTrack';
+import { StructuralRecordStore } from '../../extensions/StructuralRecordStore';
 import { CommentMark } from '../../extensions/Comment';
 import { suggestionsFromTrackedChanges } from '../../utils/reviewPersistence';
 import { sanitizeDraft } from '../../hooks/useDraftAutosave';
@@ -47,6 +49,8 @@ function mintEditor(): TiptapCore {
     extensions: [
       StarterKit.configure({ code: false, trailingNode: false }),
       ReviewableCode,
+      BlockTrack,
+      StructuralRecordStore,
       TrackedInsert,
       TrackedDelete,
       TrackedFormat,
@@ -230,6 +234,7 @@ describe('DocumentTab lossless recovery', () => {
 
     // Round trip: the recovered tab's next snapshot reproduces the SAME lossless document.
     const snap = m.handle.getWorkspaceSnapshot();
+    if (!snap) throw new Error('expected a workspace snapshot');
     expect(snap.docJSON).toEqual(docJSON);
     expect(snap.docJSONVersion).toBe(1);
     // And it reports a lossless outcome so the shell resumes persistence normally.
@@ -240,6 +245,7 @@ describe('DocumentTab lossless recovery', () => {
     const { draft } = coherentDraft();
     const m = await mountRecovery(throughDisk(draft));
     const snap = m.handle.getWorkspaceSnapshot();
+    if (!snap) throw new Error('expected a workspace snapshot');
     const detached = snap.suggestions.find((s) => s.id === 's-detached');
     expect(detached?.detached).toBe(true);
   });

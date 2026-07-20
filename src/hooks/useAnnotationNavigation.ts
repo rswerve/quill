@@ -4,14 +4,24 @@ import type { Editor as TiptapEditor } from '@tiptap/react';
 import { findAnnotationRange } from '../extensions/AnnotationFocus';
 import type { AnnotationKind } from '../extensions/AnnotationFocus';
 import { locateCommentForRepair } from '../utils/commentAnchors';
-import type { Comment, TrackedChangeInfo } from '../types';
+import type { Comment, StructuralChangeInfo, TrackedChangeInfo } from '../types';
 
-type ActiveAnnotation = { kind: AnnotationKind; id: string } | null;
+/**
+ * The active-annotation kinds the review panel tracks. Structural changes are a
+ * distinct kind: they anchor to a block-union node (`blockTrack` attr), not an
+ * inline mark, so they navigate to their delete branch rather than through the
+ * mark-based {@link findAnnotationRange} lookup used for comments/suggestions.
+ */
+export type ReviewAnnotationKind = AnnotationKind | 'structural';
+
+type ActiveAnnotation = { kind: ReviewAnnotationKind; id: string } | null;
 
 interface UseAnnotationNavigationOptions {
   editor: TiptapEditor | null;
   comments: Comment[];
   trackedChanges: TrackedChangeInfo[];
+  /** Live structural changes, so a reply/View jump can target a structural id. */
+  structuralChanges: StructuralChangeInfo[];
   /** The review panel element; used to scroll the target card into view. */
   commentLayerRef: RefObject<HTMLDivElement | null>;
   setActiveAnnotation: Dispatch<SetStateAction<ActiveAnnotation>>;
@@ -21,8 +31,9 @@ export interface AnnotationNavigation {
   handleActivateComment: (commentId: string) => void;
   handleActivateHistoryComment: (commentId: string) => void;
   handleActivateSuggestion: (id: string) => void;
+  handleActivateStructural: (changeId: string) => void;
   handleViewReplySuggestion: (suggestionIds: string[]) => void;
-  handleSyncActivate: (kind: AnnotationKind, id: string) => void;
+  handleSyncActivate: (kind: ReviewAnnotationKind, id: string) => void;
 }
 
 /**
@@ -39,6 +50,7 @@ export function useAnnotationNavigation({
   editor,
   comments,
   trackedChanges,
+  structuralChanges,
   commentLayerRef,
   setActiveAnnotation,
 }: UseAnnotationNavigationOptions): AnnotationNavigation {
@@ -67,12 +79,27 @@ export function useAnnotationNavigation({
   );
 
   const handleSyncActivate = useCallback(
-    (kind: AnnotationKind, id: string) => {
+    (kind: ReviewAnnotationKind, id: string) => {
       setActiveAnnotation((previous) =>
         previous?.kind === kind && previous.id === id ? previous : { kind, id },
       );
     },
     [setActiveAnnotation],
+  );
+
+  // A structural change anchors to its DELETE branch node (the original block),
+  // decorated by StructuralRedline with a distinguishing op attribute. Target
+  // that specific branch — never a bare `[data-change-id]`, which a stray inline
+  // suggestion sharing the id would also match.
+  const scrollToStructuralDeleteBranch = useCallback(
+    (changeId: string) => {
+      if (!editor) return;
+      const el = editor.view.dom.querySelector(
+        `[data-structural-op="delete"][data-change-id="${CSS.escape(changeId)}"]`,
+      );
+      el?.scrollIntoView({ behavior: 'instant', block: 'center' });
+    },
+    [editor],
   );
 
   const handleActivateComment = useCallback(
@@ -136,34 +163,68 @@ export function useAnnotationNavigation({
     [editor, scrollCardIntoView, setActiveAnnotation],
   );
 
+  // Card click TOGGLES the active structural change off on re-click, like the
+  // other card-activation handlers, and snaps the document to its delete branch.
+  const handleActivateStructural = useCallback(
+    (changeId: string) => {
+      setActiveAnnotation((prev) =>
+        prev?.kind === 'structural' && prev.id === changeId
+          ? null
+          : { kind: 'structural', id: changeId },
+      );
+      scrollToStructuralDeleteBranch(changeId);
+      scrollCardIntoView(changeId);
+    },
+    [scrollToStructuralDeleteBranch, scrollCardIntoView, setActiveAnnotation],
+  );
+
   // Reply -> suggestion is a directed provenance jump, so it never toggles an
   // already-active target off. If one linked change has been resolved, advance
-  // to the first linked suggestion that is still pending.
+  // to the first linked suggestion that is still pending. A linked STRUCTURAL id
+  // (block-union, invisible to trackedChanges) is recognized as a fallback so the
+  // chip activates its card rather than silently no-opping.
   const handleViewReplySuggestion = useCallback(
     (suggestionIds: string[]) => {
       const change = trackedChanges.find(
         (candidate) => suggestionIds.includes(candidate.id) && candidate.status === 'pending',
       );
-      if (!change) return;
-      const cardId = change.id;
-      setActiveAnnotation({ kind: 'suggestion', id: cardId });
-      if (editor) {
-        const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);
-        if (range) {
-          const { node } = editor.view.domAtPos(range.from);
-          const element = node instanceof HTMLElement ? node : node.parentElement;
-          element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+      if (change) {
+        const cardId = change.id;
+        setActiveAnnotation({ kind: 'suggestion', id: cardId });
+        if (editor) {
+          const range = findAnnotationRange(editor.state.doc, 'suggestion', cardId);
+          if (range) {
+            const { node } = editor.view.domAtPos(range.from);
+            const element = node instanceof HTMLElement ? node : node.parentElement;
+            element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+          }
         }
+        scrollCardIntoView(cardId);
+        return;
       }
-      scrollCardIntoView(cardId);
+      const structural = structuralChanges.find((candidate) =>
+        suggestionIds.includes(candidate.changeId),
+      );
+      if (!structural) return;
+      setActiveAnnotation({ kind: 'structural', id: structural.changeId });
+      scrollToStructuralDeleteBranch(structural.changeId);
+      scrollCardIntoView(structural.changeId);
     },
-    [editor, scrollCardIntoView, trackedChanges, setActiveAnnotation],
+    [
+      editor,
+      scrollCardIntoView,
+      scrollToStructuralDeleteBranch,
+      structuralChanges,
+      trackedChanges,
+      setActiveAnnotation,
+    ],
   );
 
   return {
     handleActivateComment,
     handleActivateHistoryComment,
     handleActivateSuggestion,
+    handleActivateStructural,
     handleViewReplySuggestion,
     handleSyncActivate,
   };

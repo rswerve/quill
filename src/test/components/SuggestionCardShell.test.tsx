@@ -20,6 +20,7 @@ const labels: Record<SuggestionCardKind, string> = {
   delete: 'Deletion',
   replace: 'Replacement',
   format: 'Formatting',
+  structural: 'Heading → Paragraph',
 };
 
 describe('SuggestionCardShell', () => {

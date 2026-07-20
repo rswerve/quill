@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
-import type { Comment, TrackedChangeInfo } from '../types';
+import type { Comment, StructuralChangeInfo, TrackedChangeInfo } from '../types';
 import CommentCard from './CommentCard';
 import SuggestionCard from './SuggestionCard';
 import ReplacementCard from './ReplacementCard';
 import FormattingCard from './FormattingCard';
+import StructuralCard from './StructuralCard';
 import CommentComposerCard, { type ComposerIntent } from './CommentComposerCard';
 import AnnotationGutter from './AnnotationGutter';
 import type { SelectionInfo } from './Editor';
+import type { StructuralAttention } from '../utils/structuralChanges';
 import { groupSuggestionCards } from '../utils/suggestionCards';
 import { cx } from '../utils/cx';
 import styles from './CommentLayer.module.css';
@@ -24,8 +26,13 @@ interface CommentLayerProps {
   comments: Comment[];
   activeCommentId: string | null;
   activeSuggestionId: string | null;
+  activeStructuralId: string | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   trackedChanges: TrackedChangeInfo[];
+  /** Live block-union structural changes, merged into the list by document position. */
+  structuralChanges: StructuralChangeInfo[];
+  /** Corrupt/incomplete/contaminated unions surfaced as a non-actionable banner. */
+  structuralAttention: StructuralAttention[];
   commentComposer: SelectionInfo | null;
   scrollTop: number;
   zoom: number;
@@ -55,6 +62,9 @@ interface CommentLayerProps {
   onActivateChatMessage: (messageId: string) => void;
   onAcceptChange: (id: string) => void;
   onRejectChange: (id: string) => void;
+  onAcceptStructuralChange: (changeId: string) => void;
+  onRejectStructuralChange: (changeId: string) => void;
+  onActivateStructural: (changeId: string) => void;
   onSubmitComment: (text: string, intent: ComposerIntent) => void;
   onCancelComment: () => void;
   /** Whether a Claude session is linked — drives the composer's Ask-Claude
@@ -78,6 +88,13 @@ type OpenPanelItem =
       documentPosition: number;
       documentOrder: number;
       group: SuggestionGroup;
+    }
+  | {
+      type: 'structural';
+      cardId: string;
+      documentPosition: number;
+      documentOrder: number;
+      change: StructuralChangeInfo;
     }
   | {
       type: 'composer';
@@ -155,8 +172,11 @@ export default function CommentLayer({
   comments,
   activeCommentId,
   activeSuggestionId,
+  activeStructuralId,
   containerRef,
   trackedChanges,
+  structuralChanges,
+  structuralAttention,
   commentComposer,
   scrollTop,
   zoom,
@@ -183,6 +203,9 @@ export default function CommentLayer({
   onActivateChatMessage,
   onAcceptChange,
   onRejectChange,
+  onAcceptStructuralChange,
+  onRejectStructuralChange,
+  onActivateStructural,
   onSubmitComment,
   onCancelComment,
   hasSession,
@@ -217,10 +240,13 @@ export default function CommentLayer({
   );
   const pendingSuggestionIds = useMemo(
     () =>
-      new Set(
-        trackedChanges.filter((change) => change.status === 'pending').map((change) => change.id),
-      ),
-    [trackedChanges],
+      new Set([
+        ...trackedChanges
+          .filter((change) => change.status === 'pending')
+          .map((change) => change.id),
+        ...structuralChanges.map((change) => change.changeId),
+      ]),
+    [structuralChanges, trackedChanges],
   );
 
   const openItems = useMemo(() => {
@@ -244,6 +270,15 @@ export default function CommentLayer({
         group,
       });
     });
+    structuralChanges.forEach((change) => {
+      items.push({
+        type: 'structural',
+        cardId: change.changeId,
+        documentPosition: change.from,
+        documentOrder: documentOrder++,
+        change,
+      });
+    });
     if (commentComposer) {
       items.push({
         type: 'composer',
@@ -256,7 +291,7 @@ export default function CommentLayer({
     return items.sort(
       (a, b) => a.documentPosition - b.documentPosition || a.documentOrder - b.documentOrder,
     );
-  }, [commentComposer, suggestionGroups, visibleComments]);
+  }, [commentComposer, structuralChanges, suggestionGroups, visibleComments]);
 
   // A provenance chip is a directed jump, not a toggle: clicking it while its
   // comment is already active must not deactivate the target. Resolved origin
@@ -404,7 +439,7 @@ export default function CommentLayer({
     : null;
   const activePanelCardId = commentComposer
     ? COMMENT_COMPOSER_CARD_ID
-    : (activeCommentId ?? activeSuggestionCardId ?? null);
+    : (activeCommentId ?? activeSuggestionCardId ?? activeStructuralId ?? null);
 
   // An explicit clear (Escape, plain-text click, or toggling the active card)
   // must remain visibly clear until the document actually scrolls again. A
@@ -470,7 +505,9 @@ export default function CommentLayer({
   const gutterTicks = useMemo(() => {
     if (hidden || showResolved) return [];
     return openItems.flatMap<GutterTickInput>((item, documentOrder) => {
-      if (item.type === 'composer') return [];
+      // Structural changes carry no gutter tick in V1 (the redline + card cover
+      // them); the composer has none by design.
+      if (item.type === 'composer' || item.type === 'structural') return [];
       const anchorTop = anchorTops.get(item.cardId);
       if (anchorTop === undefined) return [];
       let annotationKind: GutterAnnotationKind;
@@ -679,7 +716,35 @@ export default function CommentLayer({
     );
   };
 
-  const listIsEmpty = showResolved ? resolvedComments.length === 0 : openItems.length === 0;
+  const renderStructural = (change: StructuralChangeInfo) => {
+    const originId = change.originCommentId;
+    const originComment = originId
+      ? (comments.find((comment) => comment.id === originId) ?? null)
+      : null;
+    const originActive = originComment !== null && originComment.id === activeCommentId;
+    return (
+      <StructuralCard
+        key={change.changeId}
+        change={change}
+        isActive={change.changeId === activeStructuralId}
+        originComment={originComment}
+        originChatMessageId={change.originChatMessageId}
+        originActive={originActive}
+        onAccept={onAcceptStructuralChange}
+        onReject={onRejectStructuralChange}
+        onClick={onActivateStructural}
+        onActivateComment={activateOriginComment}
+        onActivateChatMessage={onActivateChatMessage}
+      />
+    );
+  };
+
+  // The needs-attention banner is a review-mode concern only; the resolved-history
+  // view never shows structural cards or their attention state.
+  const showStructuralAttention = !showResolved && structuralAttention.length > 0;
+  const listIsEmpty =
+    (showResolved ? resolvedComments.length === 0 : openItems.length === 0) &&
+    !showStructuralAttention;
 
   return (
     <section
@@ -711,6 +776,19 @@ export default function CommentLayer({
         }}
         tabIndex={0}
       >
+        {showStructuralAttention && (
+          <div className={styles.attentionBanner} role="status" data-structural-attention>
+            <strong>
+              {structuralAttention.length} structure change
+              {structuralAttention.length === 1 ? '' : 's'} need attention
+            </strong>
+            <p>
+              These couldn&rsquo;t be applied cleanly, so they can&rsquo;t be accepted or rejected
+              here. Reopen or fix the document to resolve them.
+            </p>
+          </div>
+        )}
+
         {listIsEmpty && (
           <div className={styles.empty} data-empty-comments>
             <span className={styles.emptyQuote} aria-hidden>
@@ -730,6 +808,7 @@ export default function CommentLayer({
           : openItems.map((item) => {
               if (item.type === 'comment') return renderComment(item.comment, false);
               if (item.type === 'suggestion') return renderSuggestion(item.group);
+              if (item.type === 'structural') return renderStructural(item.change);
               return (
                 <CommentComposerCard
                   key={item.cardId}

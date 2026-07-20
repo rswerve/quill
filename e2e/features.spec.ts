@@ -14,13 +14,13 @@ import {
   expectPageTitleToContain,
   expectSelectionText,
 } from './helpers/deterministicWaits';
-import { selectLastCharacters } from './helpers/memoryTauri';
+import { activeEditor, activeTabHost, selectLastCharacters } from './helpers/memoryTauri';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await expect(editor).toBeFocused();
@@ -120,8 +120,15 @@ test('the empty-document Claude hint opens document chat', async ({ page }) => {
 
 test('editor mounts and is focusable', async ({ page }) => {
   const { editor } = await setup(page);
+  const printDoc = activeTabHost(page).locator('[data-print-doc]');
+
+  await expect(editor).toHaveCount(1);
+  await expect(editor).toHaveAttribute('contenteditable', 'true');
   await expect(editor).toBeVisible();
   await expect(editor).toBeFocused();
+  await expect(printDoc).toHaveCount(1);
+  await expect(printDoc).toHaveAttribute('aria-hidden', 'true');
+  await expect(printDoc).toBeHidden();
 });
 
 test('typing inserts text in normal mode', async ({ page }) => {
@@ -701,9 +708,9 @@ test('selected range stays highlighted while composing a comment', async ({ page
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
   // The textarea has focus (native selection is gone) — the decoration
   // stands in for it.
-  await expect(page.locator('.ProseMirror .pending-comment')).toContainText('hello world');
+  await expect(activeEditor(page).locator('.pending-comment')).toContainText('hello world');
   await page.locator('[data-card-id="comment-composer"] textarea').fill('still highlighted?');
-  await expect(page.locator('.ProseMirror .pending-comment')).toContainText('hello world');
+  await expect(activeEditor(page).locator('.pending-comment')).toContainText('hello world');
 });
 
 test('pending highlight hands off to the comment mark on submit', async ({ page }) => {
@@ -711,7 +718,7 @@ test('pending highlight hands off to the comment mark on submit', async ({ page 
   await page.keyboard.type('hello world');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'shipped');
-  await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.pending-comment')).toHaveCount(0);
   await expectEditorHtml(editor, { contains: ['comment-mark'] });
 });
 
@@ -720,9 +727,9 @@ test('pending highlight disappears when the composer is cancelled', async ({ pag
   await page.keyboard.type('hello world');
   await selectAll(page);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
+  await expect(activeEditor(page).locator('.pending-comment')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.pending-comment')).toHaveCount(0);
   await expectEditorHtml(editor, { excludes: ['comment-mark'] });
 });
 
@@ -731,9 +738,9 @@ test('Escape in the composer also clears the pending highlight', async ({ page }
   await page.keyboard.type('hello world');
   await selectAll(page);
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
-  await expect(page.locator('.ProseMirror .pending-comment')).toBeVisible();
+  await expect(activeEditor(page).locator('.pending-comment')).toBeVisible();
   await page.locator('[data-card-id="comment-composer"] textarea').press('Escape');
-  await expect(page.locator('.ProseMirror .pending-comment')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.pending-comment')).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -875,7 +882,7 @@ test('adding a comment focuses it: card active and text highlighted', async ({ p
   await selectAll(page);
   await addCommentViaPlusButton(page, 'note');
   await expect(page.locator('[data-active]')).toBeVisible();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
+  await expect(activeEditor(page).locator('.annotation-focus')).toContainText('hello world');
   await expect(
     page
       .getByRole('navigation', { name: 'Document annotations' })
@@ -891,7 +898,7 @@ test('Escape clears the annotation focus', async ({ page }) => {
   await expect(page.locator('[data-active]')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('[data-active]')).toHaveCount(0);
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
   await expect(
     page
       .getByRole('navigation', { name: 'Document annotations' })
@@ -909,7 +916,7 @@ test('clicking commented text activates its card', async ({ page }) => {
 
   await editor.locator('mark.comment-mark').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('hello world');
+  await expect(activeEditor(page).locator('.annotation-focus')).toContainText('hello world');
   await expect(
     page
       .getByRole('navigation', { name: 'Document annotations' })
@@ -930,7 +937,7 @@ test('clicking plain text clears the annotation focus', async ({ page }) => {
     .first()
     .click({ position: { x: 5, y: 5 } });
   await expect(page.locator('[data-active]')).toHaveCount(0);
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
 });
 
 test('clicking suggested text activates its accept/reject card', async ({ page }) => {
@@ -943,7 +950,7 @@ test('clicking suggested text activates its accept/reject card', async ({ page }
 
   await editor.locator('ins.track-insert').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('suggested text');
+  await expect(activeEditor(page).locator('.annotation-focus')).toContainText('suggested text');
 });
 
 test('clicking a suggestion card highlights its text in the document', async ({ page }) => {
@@ -954,12 +961,12 @@ test('clicking a suggestion card highlights its text in the document', async ({ 
 
   await page.locator('[data-suggestion-kind]').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('suggested text');
+  await expect(activeEditor(page).locator('.annotation-focus')).toContainText('suggested text');
 
   // Clicking the active card again toggles the focus off.
   await page.locator('[data-suggestion-kind]').click();
   await expect(page.locator('[data-active]')).toHaveCount(0);
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
 });
 
 test('clicking a comment card highlights its anchor text', async ({ page }) => {
@@ -968,11 +975,11 @@ test('clicking a comment card highlights its anchor text', async ({ page }) => {
   await selectLastNChars(page, 3); // "fox"
   await addCommentViaPlusButton(page, 'animal');
   await page.keyboard.press('Escape');
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
 
   await page.locator('[data-comment-card]').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toContainText('fox');
+  await expect(activeEditor(page).locator('.annotation-focus')).toContainText('fox');
 });
 
 test('overlapping annotations: the innermost one wins the click', async ({ page }) => {
@@ -999,7 +1006,7 @@ test('accepting a suggestion clears its focus', async ({ page }) => {
   await expect(page.locator('[data-active]')).toBeVisible();
 
   await page.getByRole('button', { name: 'Accept', exact: true }).click();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
 });
 
 test('resolving a focused comment clears its focus', async ({ page }) => {
@@ -1007,10 +1014,10 @@ test('resolving a focused comment clears its focus', async ({ page }) => {
   await page.keyboard.type('hello');
   await selectAll(page);
   await addCommentViaPlusButton(page, 'todo');
-  await expect(page.locator('.ProseMirror .annotation-focus')).toBeVisible();
+  await expect(activeEditor(page).locator('.annotation-focus')).toBeVisible();
 
   await page.getByTitle(/^(un)?resolve$/i).click();
-  await expect(page.locator('.ProseMirror .annotation-focus')).toHaveCount(0);
+  await expect(activeEditor(page).locator('.annotation-focus')).toHaveCount(0);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1075,7 +1082,7 @@ test('clicking a replacement card highlights both old and new text', async ({ pa
 
   await page.locator('[data-suggestion-kind="replace"]').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  const focused = page.locator('.ProseMirror .annotation-focus');
+  const focused = activeEditor(page).locator('.annotation-focus');
   await expect(focused.filter({ hasText: 'earth' }).first()).toBeVisible();
   await expect(focused.filter({ hasText: 'world' }).first()).toBeVisible();
 });
@@ -1094,7 +1101,7 @@ test('clicking either text half activates the replacement card', async ({ page }
   // …and the deleted half both focus the pair: card active, both texts lit.
   await editor.locator('del.track-delete').click();
   await expect(page.locator('[data-active]')).toBeVisible();
-  const focused = page.locator('.ProseMirror .annotation-focus');
+  const focused = activeEditor(page).locator('.annotation-focus');
   await expect(focused.filter({ hasText: 'earth' }).first()).toBeVisible();
   await expect(focused.filter({ hasText: 'world' }).first()).toBeVisible();
 });
@@ -1241,8 +1248,7 @@ test('zoom scales document text and reflows inside a fixed-width page', async ({
 
   const metrics = async () => {
     const pageBox = (await page.locator('.editor-page').boundingBox())!;
-    return page
-      .locator('.ProseMirror')
+    return activeEditor(page)
       .evaluate((element) => {
         const paragraph = element.querySelector('p')!;
         return {

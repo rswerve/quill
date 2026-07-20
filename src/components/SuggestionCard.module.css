@@ -45,6 +45,11 @@
 .card.format {
   border-left-color: var(--sugg-format);
 }
+/* A structural (block-union) change is a replacement at block scale; it reuses the
+   replacement accent so the panel reads consistently with inline suggestions. */
+.card.structural {
+  border-left-color: var(--sugg-replace);
+}
 :global(:root[data-theme='gruvbox']) .card.delete {
   border-left-color: var(--removed-accent);
 }
@@ -106,6 +111,10 @@
   background: var(--badge-format-bg);
   color: var(--sugg-format);
 }
+.typeBadge.structural {
+  background: var(--accent-soft);
+  color: var(--sugg-replace);
+}
 
 /* Provenance chip: links a Claude suggestion card back to the comment or chat
    turn whose request produced it. Muted by design — metadata, not an action. */
@@ -158,6 +167,14 @@
 }
 .changeDescription {
   margin: 0 0 3px;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+}
+.structuralNote {
+  margin: 6px 0 0;
+  padding: 0 13px;
   color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: 12px;

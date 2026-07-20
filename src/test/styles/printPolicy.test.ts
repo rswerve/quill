@@ -37,4 +37,14 @@ describe('print policy', () => {
     // preserved global class hook.
     expect(css).not.toContain('.app-modal-overlay');
   });
+
+  it('swaps the live editor for the detached clean-source render in print', () => {
+    // The printed artifact is the CLEAN-SOURCE document (pending suggestions
+    // ignored), rendered by DocumentTab into `.print-doc` via cleanSourceHTML.
+    // Print hides the live redline editor and shows that container in its place —
+    // CSS masking can't invert pending formatting, so the render is detached.
+    const body = mediaPrintBody(css);
+    expect(body).toMatch(/\.editor-page-zoom-wrapper\s*\{[^}]*display:\s*none\s*!important/);
+    expect(body).toMatch(/\.print-doc\s*\{[^}]*display:\s*block\s*!important/);
+  });
 });

@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
-import { selectLastCharacters } from './helpers/memoryTauri';
+import { activeEditor, selectLastCharacters } from './helpers/memoryTauri';
 
 async function focusEditor(page: Page): Promise<Locator> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await expect(editor).toBeFocused();

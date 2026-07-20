@@ -35,6 +35,7 @@ import {
   buildDiscardedRecoveryWorkspaceFile,
   buildDiscardedWorkspaceFile,
   buildWorkspaceFile,
+  projectDraftSnapshot,
   type WorkspaceTabSource,
 } from './utils/workspacePersistence';
 import type {
@@ -42,7 +43,6 @@ import type {
   ClaudeEffort,
   ClaudeModelAlias,
   ClaudeRunOptions,
-  DraftFile,
   WorkspaceFile,
   WorkspaceTab,
 } from './types';
@@ -108,22 +108,6 @@ function tabsFromWorkspace(
     ? workspace.activeTabId
     : tabs[0].id;
   return { tabs, activeTabId };
-}
-
-function draftSnapshot(draft: DraftFile) {
-  return {
-    filePath: draft.filePath,
-    content: draft.content,
-    // Carry the lossless representation through the shell so a restored-but-not-remounted
-    // tab keeps byte-exact recovery instead of silently degrading to Markdown.
-    ...(draft.docJSON && draft.docJSONVersion
-      ? { docJSON: draft.docJSON, docJSONVersion: draft.docJSONVersion }
-      : {}),
-    comments: draft.comments,
-    suggestions: draft.suggestions,
-    aiSession: draft.aiSession,
-    contextFolder: draft.contextFolder,
-  };
 }
 
 function emptyChrome(tab: TabMeta, zoom: number): DocumentTabChromeSnapshot {
@@ -251,7 +235,7 @@ export default function App() {
 
   const getTabSnapshot = useCallback((tabId: string) => {
     const initial = tabsRef.current.find((tab) => tab.id === tabId)?.initialWorkspaceSnapshot;
-    if (initial) return draftSnapshot(initial);
+    if (initial) return projectDraftSnapshot(initial);
     return tabHandlesRef.current.get(tabId)?.getWorkspaceSnapshot() ?? null;
   }, []);
 

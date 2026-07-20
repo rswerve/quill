@@ -25,7 +25,9 @@ export default defineConfig({
   // run on any flaky result in CI (this is exactly what hid the Cmd+Shift+S
   // strike collision behind workspace-persistence.spec.ts:185).
   failOnFlakyTests: !!process.env.CI,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter: process.env.CI
+    ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+    : 'list',
   use: {
     baseURL: e2eUrl,
     trace: 'on-first-retry',

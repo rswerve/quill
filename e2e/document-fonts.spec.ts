@@ -1,9 +1,10 @@
 /** Fixed, bundled document typography and its persistent zoom multiplier. */
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { activeEditor } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   return { editor };
@@ -80,7 +81,7 @@ test('keeps fixed document fonts separate from chrome and clears retired picker 
   });
   await page.reload();
 
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   const stored = await page.evaluate(() => ({
     font: localStorage.getItem('quill-doc-font'),
@@ -145,13 +146,13 @@ test('persists zoom across reloads and restores the document scale', async ({ pa
   expect(zoomedSize).toBeCloseTo(18 * 1.8, 1);
 
   await page.reload();
-  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await activeEditor(page).waitFor({ timeout: 5000 });
   await expect(
     page.getByRole('group', { name: 'Document zoom' }).getByRole('status', { name: 'Zoom level' }),
   ).toHaveText('180%');
   await expect(page.locator('[data-editor-zoom]')).toHaveAttribute('data-editor-zoom', '1.8');
-  const restoredSize = await page
-    .locator('.ProseMirror')
-    .evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+  const restoredSize = await activeEditor(page).evaluate((element) =>
+    parseFloat(getComputedStyle(element).fontSize),
+  );
   expect(restoredSize).toBeCloseTo(18 * 1.8, 1);
 });

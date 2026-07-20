@@ -71,6 +71,10 @@ interface RouterConfig {
   writeResult?: () => { status: 'written'; hash: string } | { status: 'conflict'; actual: unknown };
   /** Path returned by show_save_dialog (Save As). */
   saveDialogPath?: string | null;
+  /** MUTABLE: reads of a path in this set throw (a permission-style failure) — for reload-failure. */
+  readErrorPaths?: Set<string>;
+  /** A gate every write awaits before resolving — for asserting a drain waits on an in-flight save. */
+  writeGate?: Promise<unknown>;
 }
 
 /**
@@ -84,6 +88,7 @@ function installRouter(config: RouterConfig) {
     const path = a.path as string | undefined;
     switch (command) {
       case 'read_file_with_fingerprint': {
+        if (path && config.readErrorPaths?.has(path)) throw new Error('Permission denied');
         const hit = path ? config.reads[path] : undefined;
         return hit
           ? { state: 'present', content: hit.content, hash: hit.hash }
@@ -96,6 +101,7 @@ function installRouter(config: RouterConfig) {
           content: a.content as string,
           expected: a.expected,
         });
+        if (config.writeGate) await config.writeGate;
         return config.writeResult ? config.writeResult() : { status: 'written', hash: DOC_HASH };
       case 'delete_file_if_match':
         mutations.push({ kind: 'delete', path: path!, expected: a.expected });
@@ -160,17 +166,23 @@ function deletionSuggestion(id: string, text: string, from: number, to: number):
   } as Suggestion;
 }
 
+interface Notice {
+  title: string;
+  message: string;
+  actions?: Array<{ label: string; onClick: () => void | Promise<void> }>;
+}
+
 interface Mounted {
   handle: DocumentTabHandle;
   mutations: MutationRecord[];
-  notices: Array<{ title: string; message: string }>;
+  notices: Notice[];
   container: HTMLElement;
 }
 
 /** Mount a DocumentTab bound to DOC_PATH and wait for its initial load to settle. */
 async function mountTab(config: RouterConfig): Promise<Mounted> {
   const mutations = installRouter(config);
-  const notices: Array<{ title: string; message: string }> = [];
+  const notices: Notice[] = [];
   const ref = createRef<DocumentTabHandle>();
   const onInitialFileLoaded = vi.fn();
 
@@ -187,7 +199,7 @@ async function mountTab(config: RouterConfig): Promise<Mounted> {
       onInitialFileLoaded={onInitialFileLoaded}
       onInitialWorkspaceLoaded={() => {}}
       onOpenSessionPicker={() => {}}
-      onNotice={(n) => notices.push({ title: n.title, message: n.message })}
+      onNotice={(n) => notices.push(n)}
       onRecentFile={() => {}}
       onRequestSavePath={() => true}
       onClaimSession={() => ({ allowed: true })}
@@ -490,6 +502,7 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     // Attached at the correct, relocated span — proving unbound relocation, not bound trust.
     expect(commentText(ed)).toBe('gamma');
     const snap = m.handle.getWorkspaceSnapshot();
+    if (!snap) throw new Error('expected a workspace snapshot');
     const restored = snap.comments.find((c) => c.id === 'c1')!;
     expect(restored.detached).toBeUndefined(); // authoritative, not detached
     expect(restored.anchorText).toBe('gamma');
@@ -520,6 +533,7 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     // No mark installed (ambiguous), and the record is preserved detached.
     expect(findAnnotationRange(ed.state.doc, 'comment', 'c1')).toBeNull();
     const snap = m.handle.getWorkspaceSnapshot();
+    if (!snap) throw new Error('expected a workspace snapshot');
     const restored = snap.comments.find((c) => c.id === 'c1')!;
     expect(restored.detached).toBe(true);
   });
@@ -563,6 +577,7 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
 
     // The workspace snapshot merges both: the live relocated one and the detached one.
     const snap = m.handle.getWorkspaceSnapshot();
+    if (!snap) throw new Error('expected a workspace snapshot');
     const unique = snap.suggestions.find((s) => s.id === 's-unique')!;
     expect(unique.detached).toBeUndefined();
     const ambig = snap.suggestions.find((s) => s.id === 's-ambig')!;
@@ -572,5 +587,199 @@ describe('DocumentTab load boundary — unbound relocation installs authoritativ
     expect(notice).toBeTruthy();
     expect(notice!.message).toContain('changed outside Quill');
     expect(notice!.message).toContain('open the review panel');
+  });
+});
+
+describe('DocumentTab conflict gate — a conflict blocks autosave I/O (E4b-1 composition)', () => {
+  const conflictWrite = () => ({
+    status: 'conflict' as const,
+    actual: { state: 'present' as const, hash: 'x'.repeat(64) },
+  });
+
+  /** Dirty the doc (edit at the end keeps the bound comment mappable) then save into a conflict. */
+  async function intoConflict(m: Mounted): Promise<void> {
+    const ed = editorOf(m.handle);
+    act(() => {
+      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' x');
+    });
+    await act(async () => {
+      await m.handle.save();
+    });
+    expect(m.container.textContent).toContain('changed on disk'); // banner latched
+  }
+
+  it('a successful Open clears an existing conflict banner (exercises the hook-above-load ordering)', async () => {
+    const OTHER = '/docs/other.md';
+    const m = await mountTab({
+      reads: { ...boundReads(), [OTHER]: { content: 'other body here', hash: 'o'.repeat(64) } },
+      writeResult: conflictWrite,
+    });
+    await intoConflict(m);
+    await act(async () => {
+      await m.handle.openPath(OTHER); // loadFileResult → clearSaveConflict
+    });
+    expect(m.container.textContent).not.toContain('changed on disk');
+  });
+
+  it('New clears an existing conflict banner', async () => {
+    const m = await mountTab({ reads: boundReads(), writeResult: conflictWrite });
+    await intoConflict(m);
+    await act(async () => {
+      await m.handle.newDocument(); // performNew → clearSaveConflict
+    });
+    expect(m.container.textContent).not.toContain('changed on disk');
+  });
+
+  it('reload: a successful reload clears the conflict through the confirmation action', async () => {
+    const m = await mountTab({ reads: boundReads(), writeResult: conflictWrite });
+    await intoConflict(m);
+    // The banner's Reload asks for confirmation; drive the real "Discard and reload" action.
+    const reload = [...m.container.querySelectorAll('button')].find((b) =>
+      b.textContent?.startsWith('Reload'),
+    );
+    expect(reload).toBeTruthy();
+    fireEvent.click(reload!);
+    const notice = m.notices.find((n) => n.title === 'Discard your changes and reload?');
+    const discard = notice?.actions?.find((a) => a.label === 'Discard and reload');
+    expect(discard).toBeTruthy();
+    await act(async () => {
+      await discard!.onClick(); // runConflictResolution(() => performOpenPath(DOC_PATH))
+    });
+    expect(m.container.textContent).not.toContain('changed on disk'); // reopened → cleared
+  });
+
+  it('reload: a failed reload RETAINS the conflict', async () => {
+    const readErrorPaths = new Set<string>();
+    const m = await mountTab({ reads: boundReads(), writeResult: conflictWrite, readErrorPaths });
+    await intoConflict(m);
+    readErrorPaths.add(DOC_PATH); // the reload's re-read now fails
+    const reload = [...m.container.querySelectorAll('button')].find((b) =>
+      b.textContent?.startsWith('Reload'),
+    );
+    fireEvent.click(reload!);
+    const discard = m.notices
+      .find((n) => n.title === 'Discard your changes and reload?')
+      ?.actions?.find((a) => a.label === 'Discard and reload');
+    await act(async () => {
+      await discard!.onClick(); // performOpenPath fails → loadFileResult never clears
+    });
+    expect(m.container.textContent).toContain('changed on disk'); // conflict kept
+  });
+
+  it('New drains an in-flight save before changing identity (a change-identity-then-flush reorder fails this)', async () => {
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((r) => (releaseWrite = r));
+    const m = await mountTab({ reads: boundReads(), writeGate });
+    act(() => {
+      editorOf(m.handle).commands.insertContentAt(
+        editorOf(m.handle).state.doc.content.size - 1,
+        ' x',
+      );
+    });
+    // A manual save whose write hangs on the gate — now in-flight in the coordinator.
+    let savePromise!: Promise<string | null>;
+    act(() => {
+      savePromise = m.handle.save();
+    });
+    // New must wait for that in-flight save (await flushSaves) before it switches to Untitled.
+    let newDone = false;
+    let newPromise!: Promise<void>;
+    act(() => {
+      newPromise = m.handle.newDocument().then(() => {
+        newDone = true;
+      });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5)); // flush micro/macrotasks; the gate stays closed
+    });
+    expect(newDone).toBe(false); // blocked draining the in-flight save
+    // IDENTITY must not change while it waits: the OLD document is still loaded.
+    expect(editorOf(m.handle).state.doc.textContent).toContain('target here');
+
+    await act(async () => {
+      releaseWrite(); // save resolves → drain completes → New proceeds
+      await Promise.all([savePromise, newPromise]);
+    });
+    expect(newDone).toBe(true);
+    expect(editorOf(m.handle).state.doc.textContent).not.toContain('target here'); // now the empty Untitled
+  });
+
+  it('Open drains an in-flight save before loading the other document', async () => {
+    const OTHER = '/docs/other.md';
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((r) => (releaseWrite = r));
+    const m = await mountTab({
+      reads: {
+        ...boundReads(),
+        [OTHER]: { content: 'entirely other content', hash: 'o'.repeat(64) },
+      },
+      writeGate,
+    });
+    act(() => {
+      editorOf(m.handle).commands.insertContentAt(
+        editorOf(m.handle).state.doc.content.size - 1,
+        ' x',
+      );
+    });
+    let savePromise!: Promise<string | null>;
+    act(() => {
+      savePromise = m.handle.save();
+    });
+    let openDone = false;
+    let openPromise!: Promise<void>;
+    act(() => {
+      openPromise = m.handle.openPath(OTHER).then(() => {
+        openDone = true;
+      });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    expect(openDone).toBe(false);
+    // The OLD document is still loaded while the in-flight save drains — the other file has NOT loaded.
+    expect(editorOf(m.handle).state.doc.textContent).toContain('target here');
+    expect(editorOf(m.handle).state.doc.textContent).not.toContain('entirely other content');
+
+    await act(async () => {
+      releaseWrite();
+      await Promise.all([savePromise, openPromise]);
+    });
+    expect(openDone).toBe(true);
+    expect(editorOf(m.handle).state.doc.textContent).toContain('entirely other content'); // identity changed after the drain
+  });
+
+  it('after a conflict outcome, an edit + autosave flush performs zero further writes', async () => {
+    // Every write returns an external conflict, so the first save latches the ConflictBanner.
+    const m = await mountTab({
+      reads: boundReads(),
+      writeResult: () => ({
+        status: 'conflict',
+        actual: { state: 'present', hash: 'x'.repeat(64) },
+      }),
+    });
+    const ed = editorOf(m.handle);
+
+    // Dirty the doc (edit at the end keeps the bound comment mappable), then a manual save
+    // hits the on-disk conflict and raises the banner.
+    act(() => {
+      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' one');
+    });
+    await act(async () => {
+      await m.handle.save();
+    });
+    expect(m.mutations.filter((x) => x.kind === 'write').length).toBeGreaterThanOrEqual(1);
+    expect(m.container.textContent).toContain('changed on disk'); // banner is up
+
+    // The extraction moved saveConflict into useDocumentSaveOrchestration, but useAutosave still
+    // reads it through isEligible. A fresh edit + autosave flush must therefore perform ZERO
+    // further disk I/O of any kind — the saveConflict → useAutosave composition still holds.
+    const before = m.mutations.length;
+    act(() => {
+      ed.commands.insertContentAt(ed.state.doc.content.size - 1, ' two');
+    });
+    await act(async () => {
+      await m.handle.flushPendingSave();
+    });
+    expect(m.mutations).toHaveLength(before);
   });
 });

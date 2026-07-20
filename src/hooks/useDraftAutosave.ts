@@ -107,6 +107,18 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
   const chat = sanitizeDocumentChat(d.chat);
   const expectedDoc = sanitizeFingerprint(d.expectedDoc);
   const expectedSidecar = sanitizeFingerprint(d.expectedSidecar);
+  // Shallow only — PRESERVE every well-shaped entry as opaque `unknown` and let the seed /
+  // reconstruction trust boundary (`partitionStructuralRecords`) validate or quarantine each.
+  // No cast to `StructuralSuggestionRecord[]`: these are untrusted restored bytes, and dropping
+  // non-object noise while keeping malformed-but-object evidence is the honest boundary.
+  const structural: unknown[] = Array.isArray(d.structural)
+    ? d.structural.filter((r) => typeof r === 'object' && r !== null)
+    : [];
+  // The degraded-recovery coordinate set (rebased to the canonical source). Same shallow,
+  // preserving, untrusted boundary; kept distinct from `structural` (the lossless set).
+  const degradedStructural: unknown[] = Array.isArray(d.degradedStructural)
+    ? d.degradedStructural.filter((r) => typeof r === 'object' && r !== null)
+    : [];
   const docJSON = classifyDocJSON(d);
   return {
     version: 1,
@@ -118,12 +130,17 @@ export function sanitizeDraft(raw: unknown): DraftFile | null {
     ...(docJSON.docJSONVersion ? { docJSONVersion: docJSON.docJSONVersion } : {}),
     comments: sanitizeComments(d.comments),
     suggestions: normalizePersistedSuggestions(sanitizeSuggestions(d.suggestions)),
+    ...(structural.length > 0 ? { structural } : {}),
+    ...(degradedStructural.length > 0 ? { degradedStructural } : {}),
     aiSession: sanitizeAISession(d.aiSession) ?? null,
     contextFolder: sanitizeContextFolder(d.contextFolder) ?? null,
     ...(chat ? { chat } : {}),
     ...(expectedDoc ? { expectedDoc } : {}),
     ...(expectedSidecar ? { expectedSidecar } : {}),
     ...(typeof d.sidecarProtected === 'boolean' ? { sidecarProtected: d.sidecarProtected } : {}),
+    ...(typeof d.structuralProtected === 'boolean'
+      ? { structuralProtected: d.structuralProtected }
+      : {}),
   };
 }
 

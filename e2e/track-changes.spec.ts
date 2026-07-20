@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
 import { expectEditorHtml, expectSelectionText } from './helpers/deterministicWaits';
+import { activeEditor } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await expect(editor).toBeFocused();

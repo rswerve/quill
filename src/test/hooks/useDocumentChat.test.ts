@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { buildChatPrompt, useDocumentChat } from '../../hooks/useDocumentChat';
 import type { ChunkEvent } from '../../hooks/useClaudeResumeStream';
 import type { AISessionBinding, QuillEdit } from '../../types';
-import type { EditResult } from '../../utils/trackedEdits';
+import type { BatchResultEntry } from '../../utils/structuralBatchDispatch';
 
 const BINDING: AISessionBinding = {
   provider: 'claude-code',
@@ -50,8 +50,14 @@ class MockClaude {
 }
 
 function makeOptions() {
-  const applyTrackedEdits = vi.fn((_edits: QuillEdit[], _messageId: string) => ({
-    results: _edits.map((edit) => ({ edit, status: 'applied' as const })) as EditResult[],
+  const applyTrackedEdits = vi.fn((_edits: unknown[], _messageId: string) => ({
+    results: _edits.map((edit, batchIndex) => ({
+      batchIndex,
+      outcome: {
+        kind: 'inline' as const,
+        result: { edit: edit as QuillEdit, status: 'applied' as const },
+      },
+    })) as BatchResultEntry[],
     suggestionIds: ['suggestion-1'],
   }));
   return {
@@ -61,6 +67,7 @@ function makeOptions() {
       applyTrackedEdits,
       getContextFolder: () => '/refs',
       getPendingSuggestions: () => [],
+      getStructuralPending: () => [],
       getRunOptions: () => ({ model: 'sonnet' as const, effort: 'high' as const }),
       onModelObserved: vi.fn(),
       onChanged: vi.fn(),
@@ -165,9 +172,15 @@ describe('useDocumentChat', () => {
     applyTrackedEdits.mockReturnValue({
       results: [
         {
-          edit: { find: '[same](https://one.example)', replace: 'new' },
-          status: 'conflict',
-          reason: 'ambiguous-link',
+          batchIndex: 0,
+          outcome: {
+            kind: 'inline',
+            result: {
+              edit: { find: '[same](https://one.example)', replace: 'new' },
+              status: 'conflict',
+              reason: 'ambiguous-link',
+            },
+          },
         },
       ],
       suggestionIds: [],
@@ -185,6 +198,8 @@ describe('useDocumentChat', () => {
     expect(result.current.messages[1].text).toContain(
       '“[same](https://one.example)” — more than one link has that label.',
     );
+    expect(result.current.messages[1].text).toContain('Nothing was applied:');
+    expect(result.current.messages[1].text).not.toContain('I tried.');
     expect(result.current.messages[1].text).not.toContain("text wasn't found, was already");
   });
 
