@@ -453,23 +453,26 @@ function isValidMergeCount(value: unknown): value is number {
 /**
  * Discriminated request validation: `splitParagraph` REQUIRES valid `splitParts` and FORBIDS
  * `mergeCount`; `mergeParagraphs` REQUIRES a valid `mergeCount` and FORBIDS `splitParts`; every
- * other op FORBIDS both. Checked by PRESENCE (an `undefined` value still counts as "declared"
- * for the forbidding ops, so a stray key can't slip through). Returns the refusal, or null.
+ * other op FORBIDS both. The forbidding side is checked by KEY PRESENCE on the request — a
+ * DECLARED key counts even when its value is `undefined`, matching the planner's presence-based
+ * XOR — so a stray `mergeCount: undefined` on a retype can't slip through. Returns the refusal,
+ * or null.
  */
 function partsAndCountRefusal(
   op: StructuralOp,
-  splitParts: unknown,
-  mergeCount: unknown,
+  request: StructuralMintRequest,
 ): StructuralMintRefusal | null {
+  const hasParts = Object.prototype.hasOwnProperty.call(request, 'splitParts');
+  const hasCount = Object.prototype.hasOwnProperty.call(request, 'mergeCount');
   if (op.kind === 'splitParagraph') {
-    if (mergeCount !== undefined || !isValidSplitParts(splitParts)) return 'invalid-metadata';
+    if (hasCount || !isValidSplitParts(request.splitParts)) return 'invalid-metadata';
     return null;
   }
   if (op.kind === 'mergeParagraphs') {
-    if (splitParts !== undefined || !isValidMergeCount(mergeCount)) return 'invalid-metadata';
+    if (hasParts || !isValidMergeCount(request.mergeCount)) return 'invalid-metadata';
     return null;
   }
-  return splitParts === undefined && mergeCount === undefined ? null : 'invalid-metadata';
+  return hasParts || hasCount ? 'invalid-metadata' : null;
 }
 
 /**
@@ -623,7 +626,7 @@ export function compileStructuralMint(
   //    of 99) is refused. splitParts/mergeCount are discriminated: split requires parts + forbids
   //    count, merge requires count + forbids parts, every other op forbids both.
   if (!isStructuralOp(op)) return refuse('unsupported-shape');
-  const partsRefusal = partsAndCountRefusal(op, request.splitParts, request.mergeCount);
+  const partsRefusal = partsAndCountRefusal(op, request);
   if (partsRefusal) return refuse(partsRefusal);
 
   // 5. The target resolves to the source block(s) — one for retype/list/split, `mergeCount`

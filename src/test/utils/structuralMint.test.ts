@@ -1361,6 +1361,32 @@ describe('compileStructuralMint — V2 mergeParagraphs', () => {
     ).toEqual({ ok: false, reason: 'invalid-metadata' });
   });
 
+  it.each([
+    [
+      'split with a DECLARED mergeCount:undefined',
+      { op: { kind: 'splitParagraph' as const }, splitParts: ['a', 'b'], mergeCount: undefined },
+    ],
+    [
+      'merge with a DECLARED splitParts:undefined',
+      { op: { kind: 'mergeParagraphs' as const }, mergeCount: 2, splitParts: undefined },
+    ],
+    [
+      'retype with a DECLARED mergeCount:undefined',
+      { op: { kind: 'headingToParagraph', level: 1 } as const, mergeCount: undefined },
+    ],
+    [
+      'retype with a DECLARED splitParts:undefined',
+      { op: { kind: 'headingToParagraph', level: 1 } as const, splitParts: undefined },
+    ],
+  ])('refuses a forbidden key by KEY PRESENCE — %s (invalid-metadata)', (_label, over) => {
+    editor = makeEditor('<p>x</p>');
+    // The refusal happens at validation (step 4), BEFORE target resolution — a declared
+    // forbidden key is a contract violation even when its value is undefined.
+    expect(compileStructuralMint(editor.state, req({ targetPos: posInBlock(0), ...over }))).toEqual(
+      { ok: false, reason: 'invalid-metadata' },
+    );
+  });
+
   it('is one undo step: Undo restores the K paragraphs, Redo restores the merge union', () => {
     editor = makeEditor('<p>one</p><p>two</p>');
     const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)));
