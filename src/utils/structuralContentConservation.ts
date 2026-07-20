@@ -119,6 +119,13 @@ function listItemParagraphContent(list: PMNode): Fragment {
   return list.child(0).child(0).content;
 }
 
+/** The paragraph content of EVERY item in a flat list, in order (shape pre-validated). */
+function listItemContents(list: PMNode): Fragment[] {
+  const contents: Fragment[] = [];
+  list.forEach((item) => contents.push(item.child(0).content));
+  return contents;
+}
+
 /**
  * Whether `proposed` preserves the source's semantic inline content under the declared
  * op's seam policy. Assumes the shape is already valid (`structuralOpShapeValid`), so the
@@ -134,10 +141,9 @@ export function structuralContentConserved(
     case 'paragraphToHeading':
       return tokensEqual(streamOf(source[0].content), streamOf(proposed[0].content));
     case 'listToParagraph':
-      return tokensEqual(
-        streamOf(listItemParagraphContent(source[0])),
-        streamOf(proposed[0].content),
-      );
+      // Every item's content, joined at one separator per seam, must equal the flattened
+      // paragraph — so a tamper in ANY item (not just the first) is caught.
+      return tokensEqual(joinedStream(listItemContents(source[0])), streamOf(proposed[0].content));
     case 'paragraphToList':
       return tokensEqual(
         streamOf(source[0].content),

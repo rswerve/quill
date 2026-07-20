@@ -10,8 +10,9 @@ import type { QuillStructuralEdit } from '../../types';
  * 6b-1 / V1b: the pure structural-edit planner. Locates the target block by find
  * text, derives the directional StructuralOp from (current type, requested `to`),
  * and returns source-coordinate geometry — or a typed refusal. Plans heading↔paragraph
- * and SINGLE-item list↔paragraph (all three list types); a multi-item list, a
- * list-kind change, and a heading-level change refuse `unsupported-op`.
+ * and FLAT-list↔paragraph (any item count, all three list types); a list with
+ * nested/multi-block items, a list-kind change, and a heading-level change refuse
+ * `unsupported-op`.
  */
 
 let editor: Editor;
@@ -101,6 +102,16 @@ describe('planStructuralEdits', () => {
     expect(results[0]).toMatchObject({ status: 'malformed', reason: 'invalid-level' });
   });
 
+  it('refuses a present level KEY (undefined value) on a non-heading target (invalid-level)', () => {
+    // Key presence, not value: {to:'paragraph', level:undefined} still declares a contradictory
+    // level. A value-only check (level !== undefined) would let it through — this pins hasLevel.
+    const doc = docOf([heading(1, 'H')]);
+    const { results } = planStructuralEdits(doc, [
+      edit('H', { to: 'paragraph', level: undefined }),
+    ]);
+    expect(results[0]).toMatchObject({ status: 'malformed', reason: 'invalid-level' });
+  });
+
   it('refuses a same-type conversion (no-op)', () => {
     const doc = docOf([para('same'), heading(2, 'H2')]);
     expect(planStructuralEdits(doc, [edit('same', { to: 'paragraph' })]).results[0]).toMatchObject({
@@ -134,7 +145,7 @@ describe('planStructuralEdits', () => {
     expect(placed[0].op).toEqual({ kind: 'listToParagraph', listType: 'bulletList' });
   });
 
-  it('refuses a MULTI-item list → paragraph (single-item only in V1b)', () => {
+  it('plans a MULTI-item flat list → paragraph, matching text in any one item', () => {
     const doc = docOf([
       {
         type: 'bulletList',
@@ -144,7 +155,20 @@ describe('planStructuralEdits', () => {
         ],
       },
     ]);
-    const { results } = planStructuralEdits(doc, [edit('one', { to: 'paragraph' })]);
+    // A find that matches the SECOND item still targets — and converts — the whole list.
+    const { placed, results } = planStructuralEdits(doc, [edit('two', { to: 'paragraph' })]);
+    expect(results[0].status).toBe('planned');
+    expect(placed[0].op).toEqual({ kind: 'listToParagraph', listType: 'bulletList' });
+  });
+
+  it('refuses a list with a MULTI-BLOCK item as unsupported (not a flat list)', () => {
+    const doc = docOf([
+      {
+        type: 'bulletList',
+        content: [{ type: 'listItem', content: [para('a'), para('b')] }],
+      },
+    ]);
+    const { results } = planStructuralEdits(doc, [edit('a', { to: 'paragraph' })]);
     expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
   });
 
@@ -318,9 +342,14 @@ describe('planStructuralEdits — V2 split', () => {
     },
     { label: 'neither to nor split', structural: {} },
     { label: 'split not an array', structural: { split: 'a b' } },
+    { label: 'a SPARSE split array', structural: { split: Array(2) } },
     { label: 'fewer than two pieces', structural: { split: ['a'] } },
     { label: 'a whitespace-only piece', structural: { split: ['a', '  '] } },
     { label: 'a level alongside split', structural: { split: ['a', 'b'], level: 2 } },
+    {
+      label: 'a present level KEY (undefined value) alongside split',
+      structural: { split: ['a', 'b'], level: undefined },
+    },
   ])('refuses a malformed structural shape ($label) as invalid-edit', ({ structural }) => {
     const doc = docOf([para('a b')]);
     const { placed, results } = planStructuralEdits(doc, [edit('a b', structural)]);

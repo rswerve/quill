@@ -152,7 +152,7 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
   });
 
-  it('documents structural edits incl. single-item list↔paragraph, with the honest V1 scope', () => {
+  it('documents structural edits incl. flat list↔paragraph, with the honest scope', () => {
     const prompt = buildPrompt(makeComment([]), 'make this a list', 'doc body', RANGES, null, null);
     // The structural edit shape + the "uniquely identifies ONE block, not the whole block" precision.
     expect(prompt).toContain('use a "structural" edit');
@@ -162,14 +162,15 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
     expect(prompt).toContain('REQUIRES a "level"');
     expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
-    // Block-type changes span heading↔paragraph AND single-item list↔paragraph, plus splitting.
-    expect(prompt).toContain("Changing one existing block's TYPE");
+    // Block-type changes span heading↔paragraph AND flat list↔paragraph, plus splitting.
     expect(prompt).toContain('splitting a paragraph into paragraphs');
+    // Matching text in ONE item flattens the WHOLE list — the model must know one find suffices.
+    expect(prompt).toContain('flattens the WHOLE list');
     // The split grammar: "split" (2+ pieces) instead of "to", pieces from the paragraph's text.
     expect(prompt).toContain('"structural":{"split":["First point.","Second point."]}');
     expect(prompt).toContain('EXACTLY ONE of "to" or "split"');
-    // Honest scope: multi-item lists, list-kind changes, and merging remain unavailable.
-    expect(prompt).toContain('Converting a list of MORE THAN ONE item');
+    // Honest scope: nested/multi-block list items, list-kind changes, and merging remain unavailable.
+    expect(prompt).toContain('nested or hold more than one block');
     expect(prompt).toContain("changing a list's kind");
     expect(prompt).toContain('are NOT available yet');
   });

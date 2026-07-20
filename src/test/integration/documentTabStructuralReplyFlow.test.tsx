@@ -106,9 +106,9 @@ interface MountedTab {
   unmount: () => void;
 }
 
-async function mountReplyTab(sidecar?: SidecarFile): Promise<MountedTab> {
+async function mountReplyTab(sidecar?: SidecarFile, docMd: string = DOC_MD): Promise<MountedTab> {
   installRouter({
-    [DOC_PATH]: { content: DOC_MD, hash: DOC_HASH },
+    [DOC_PATH]: { content: docMd, hash: DOC_HASH },
     ...(sidecar
       ? { [SIDECAR_PATH]: { content: JSON.stringify(sidecar), hash: SIDECAR_HASH } }
       : {}),
@@ -483,5 +483,63 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     doc.forEach((node) => texts.push(node.textContent));
     expect(texts).toEqual(['Title Here', 'Body', 'text']); // heading + the two split paragraphs
     expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
+  });
+
+  it('mints and ACCEPTS a three-item list → one paragraph end to end (the flatten construction)', async () => {
+    // A three-item bullet list loaded from the file, then comment on the SECOND item and ask
+    // Claude to flatten it: matching text in ONE item must convert the WHOLE list.
+    const mounted = await mountReplyTab(undefined, '- one\n- two\n- three');
+    const editor = mounted.getHandle().getEditor()!;
+    expect(editor.state.doc.child(0).type.name).toBe('bulletList');
+    let twoFrom = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'two') twoFrom = pos;
+    });
+    expect(twoFrom).toBeGreaterThan(0);
+    await askClaudeOn(mounted, twoFrom, twoFrom + 3, 'flatten this list into a paragraph');
+    await waitFor(() => expect(mock.dispatchers.size).toBe(1));
+
+    streamEdits(mock.latestToken(), [{ find: 'two', structural: { to: 'paragraph' } }]);
+
+    await waitFor(() => expect(retainedRecords(editor.state).size).toBe(1));
+    const [changeId, record] = [...retainedRecords(editor.state).entries()][0];
+    expect(record.op).toEqual({ kind: 'listToParagraph', listType: 'bulletList' });
+
+    // The proposed branch is ONE inserted paragraph joining all three items.
+    const insert = blockTrackNode(editor.state.doc, changeId, 'insert');
+    expect(insert?.type.name).toBe('paragraph');
+    expect(insert?.textContent).toBe('one two three');
+
+    const card = await waitFor(() => {
+      const el = mounted.container.querySelector(
+        `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(card.textContent).toContain('→ Paragraph');
+
+    act(() => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Accept' }));
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector(`[data-card-id="${changeId}"]`)).toBeNull();
+    });
+    const doc = editor.state.doc;
+    expect(unionChangeIds(doc).size).toBe(0);
+    // The list collapsed to a single flattened paragraph.
+    expect(doc.child(0).type.name).toBe('paragraph');
+    expect(doc.child(0).textContent).toBe('one two three');
+    expect(topLevelOfType(doc, 'bulletList')).toBeNull();
+    // The origin comment resolved on accept: its mark is gone from the document. (The
+    // workspace-snapshot `resolved` flag is asserted in the split/taskList mounted tests; a
+    // list-SOURCE pending union currently nulls getWorkspaceSnapshot — see the degraded-recovery
+    // KNOWN LIMITATION pinned in structuralSaveReload.test.ts — so here we read the doc marks.)
+    let anyCommentMark = false;
+    doc.descendants((node) => {
+      if (node.marks.some((mark) => mark.type.name === 'comment')) anyCommentMark = true;
+    });
+    expect(anyCommentMark).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { HeadingLevel, QuillStructuralEdit, StructuralListType, StructuralOp } from '../types';
-import { isSingleItemList } from './structuralUnionIndex';
+import { isFlatParagraphList } from './structuralUnionIndex';
 import { locateEditTextMatches } from './editTextProjection';
 
 /**
@@ -11,9 +11,9 @@ import { locateEditTextMatches } from './editTextProjection';
  * round-trip validation before cross-axis conflict detection and mint dispatch.
  * This module never touches live coordinates and never dispatches.
  *
- * V1 executes heading↔paragraph and SINGLE-ITEM list↔paragraph (the compiler's
- * V1a+V1b scope); a multi-item list, a list-type change, or a heading-level change
- * is planned as a typed `unsupported-op`, so those proposals are refused honestly.
+ * This executes heading↔paragraph and FLAT-list↔paragraph (any item count, each item
+ * one paragraph); a nested/composite-item list, a list-type change, or a heading-level
+ * change is planned as a typed `unsupported-op`, so those proposals are refused honestly.
  */
 
 export type StructuralPlanStatus =
@@ -141,9 +141,9 @@ function deriveListOp(
 ): OpDerivation {
   if (to === listType) return 'already-target'; // same list type
   if (to === 'paragraph') {
-    return isSingleItemList(source, listType)
+    return isFlatParagraphList(source, listType)
       ? { kind: 'listToParagraph', listType }
-      : 'unsupported-op'; // a multi-item list is a later phase
+      : 'unsupported-op'; // a nested/composite-item list is a later phase
   }
   return 'unsupported-op'; // list → heading, or list → a different list type
 }
@@ -151,9 +151,9 @@ function deriveListOp(
 /**
  * Derive the directional {@link StructuralOp} from the source block's current type
  * and the requested target (dispatched to a per-source-type helper). Level validity is
- * checked by the caller; here `to` === 'heading' always carries a valid level. V1
- * resolves heading↔paragraph and SINGLE-ITEM list↔paragraph; unsupported (typed
- * `unsupported-op`): a multi-item list source (a later phase), a list-type change
+ * checked by the caller; here `to` === 'heading' always carries a valid level. Resolves
+ * heading↔paragraph and FLAT-list↔paragraph; unsupported (typed `unsupported-op`): a
+ * nested/composite-item list source (a later phase), a list-type change
  * (bullet↔ordered↔task), a heading-level change, a list↔heading, or any other block
  * type. A conversion to the block's own type is `already-target`.
  */
@@ -204,10 +204,11 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   const hasSplit = Object.prototype.hasOwnProperty.call(structural, 'split');
   const hasTo = Object.prototype.hasOwnProperty.call(structural, 'to');
   if (hasSplit === hasTo) return 'invalid-edit'; // exactly one of split / to
+  // `level` is also checked by KEY PRESENCE: a declared level key on split or a non-heading
+  // target is contradictory even when its value is undefined.
+  const hasLevel = Object.prototype.hasOwnProperty.call(structural, 'level');
   if (hasSplit) {
-    if (!isValidSplitParts(structural.split) || structural.level !== undefined) {
-      return 'invalid-edit';
-    }
+    if (!isValidSplitParts(structural.split) || hasLevel) return 'invalid-edit';
     return null;
   }
   const { to, level } = structural;
@@ -215,7 +216,7 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   if (to === 'heading') {
     if (level === undefined) return 'missing-level';
     if (!isHeadingLevel(level)) return 'invalid-level';
-  } else if (level !== undefined) {
+  } else if (hasLevel) {
     // A level on a non-heading target is contradictory — refuse rather than ignore.
     return 'invalid-level';
   }

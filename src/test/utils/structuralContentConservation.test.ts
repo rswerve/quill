@@ -231,6 +231,14 @@ describe('locateSplitSeams — construction offsets', () => {
     expect(locateSplitSeams(p([t('alpha beta gamma')]).content, ['alpha', 'beta'])).toBeNull();
   });
 
+  it('refuses a SPARSE-array parts list (holes are undefined, never throws)', () => {
+    // Array(2) has two holes — .some/.every would skip them and then throw on undefined in
+    // anchoredParse; the indexed guard classifies it null up front. Pins that guard.
+    expect(
+      locateSplitSeams(p([t('alpha beta')]).content, Array(2) as unknown as string[]),
+    ).toBeNull();
+  });
+
   it('sliced pieces reconstruct the source under content conservation (marks preserved)', () => {
     const source = p([t('alpha', bold), t(' beta')]);
     const ranges = locateSplitSeams(source.content, ['alpha', 'beta']);

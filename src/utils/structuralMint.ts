@@ -12,12 +12,16 @@ import {
 } from '../extensions/StructuralRecordStore';
 import {
   analyzeStructuralUnions,
-  isSingleItemList,
+  isFlatParagraphList,
   structuralOpShapeValid,
   type StructuralUnionMetadata,
 } from './structuralUnionIndex';
 import { getTrackedChanges } from '../extensions/TrackChanges';
-import { locateSplitSeams, structuralContentConserved } from './structuralContentConservation';
+import {
+  locateSplitSeams,
+  mergeParagraphContent,
+  structuralContentConserved,
+} from './structuralContentConservation';
 import { projectBlockUnions } from './blockUnionProjection';
 import { lockedChangeIds } from './structuralFootprints';
 import { isReviewMarkName } from './canonicalDocument';
@@ -29,9 +33,9 @@ import {
 } from '../extensions/trackChangesMeta';
 
 /**
- * Deterministic compiler for a single block-type structural mint: V1a heading ↔
- * paragraph and V1b single-item list ↔ paragraph (bulleted / numbered / task).
- * It is side-effect-free: it reads an {@link EditorState}
+ * Deterministic compiler for a single block-type structural mint: heading ↔ paragraph,
+ * flat list → paragraph (any item count, bulleted / numbered / task), and paragraph →
+ * single-item list. It is side-effect-free: it reads an {@link EditorState}
  * and returns a {@link Transaction} it never dispatches, so it is safe to run
  * speculatively (e.g. inside a future batch planner) and to unit-test without a
  * live view. All identity and provenance is caller-supplied and immutable — the
@@ -47,10 +51,11 @@ import {
  * and a `{kind:'mint'}` {@link STRUCTURAL_BYPASS_META} so the freeze guard can
  * recognize it as authorized.
  *
- * V1b supports single-item lists only — a multi-item list refuses (`unsupported-shape`
- * via isSingleItemList, and onlyChildChanged as a backstop). The origin-comment carveout
- * (mint slice 1b) relaxes the annotation-free rule for the single origin comment; every
- * other review mark in the captured subtree refuses.
+ * V2 flattens a FLAT list of any item count — each item exactly one paragraph — into one
+ * paragraph by joining the items' content (`isFlatParagraphList`); a nested/composite list
+ * refuses (`unsupported-shape`, a later phase). The origin-comment carveout (mint slice 1b)
+ * relaxes the annotation-free rule for the single origin comment; every other review mark in
+ * the captured subtree refuses.
  */
 
 /** Caller-supplied provenance; discriminated so both origins cannot be set at once. */
@@ -201,9 +206,9 @@ function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
     case 'paragraphToList':
       return block.type.name === 'paragraph';
     case 'listToParagraph':
-      // Single-item only in V1b (multi-item lists are a later phase); a multi-item source
-      // also fails onlyChildChanged after the lift, but this refuses it up front.
-      return isSingleItemList(block, op.listType);
+      // A FLAT list of the kind (any item count, each item one paragraph) — V2 flattens a
+      // multi-item list by joining its items; a nested/composite list refuses (later phase).
+      return isFlatParagraphList(block, op.listType);
     case 'splitParagraph':
       return block.type.name === 'paragraph';
     // V2-3: merge matches against an adjacent pair, not one block; refuse until then.
@@ -424,6 +429,28 @@ function splitPartsRefusal(op: StructuralOp, splitParts: unknown): StructuralMin
   return splitParts === undefined ? null : 'invalid-metadata';
 }
 
+/**
+ * The block attrs shared by every item paragraph, identity `blockTrack` stripped, or null
+ * when they disagree — flattening divergent styling would silently pick or drop one. The
+ * returned attrs (identity-free; the flagging step re-stamps `blockTrack`) style the single
+ * flattened paragraph, so a uniformly-aligned list keeps its alignment. A single item
+ * trivially agrees → its own styling, matching V1b's native lift. Compared by canonical JSON;
+ * paragraph attrs are primitives, so key order is stable within one schema.
+ */
+function commonBlockAttrs(paragraphs: readonly PMNode[]): Record<string, unknown> | null {
+  const styleOf = (node: PMNode): Record<string, unknown> => {
+    const rest: Record<string, unknown> = { ...node.attrs };
+    delete rest.blockTrack;
+    return rest;
+  };
+  const first = styleOf(paragraphs[0]);
+  const firstKey = JSON.stringify(first);
+  for (let i = 1; i < paragraphs.length; i += 1) {
+    if (JSON.stringify(styleOf(paragraphs[i])) !== firstKey) return null;
+  }
+  return first;
+}
+
 type CaptureResult = { nodes: PMNode[] } | { refuse: StructuralMintRefusal };
 
 /**
@@ -451,6 +478,20 @@ function captureProposedNodes(
       ),
     );
     return { nodes };
+  }
+  if (op.kind === 'listToParagraph') {
+    const paragraph = state.schema.nodes.paragraph;
+    if (!paragraph) return { refuse: 'unsupported-shape' };
+    // Flatten a flat list into ONE paragraph: the items' paragraph contents joined by a
+    // single space. A single-item list joins one item → identical to V1b's native lift.
+    const itemParagraphs: PMNode[] = [];
+    target.node.forEach((item) => itemParagraphs.push(item.child(0)));
+    // Preserve the items' shared block styling. A list whose items disagree on their
+    // non-identity paragraph attrs (e.g. mixed alignment) has no single flattened answer —
+    // choosing or dropping one silently would still pass content conservation, so refuse.
+    const attrs = commonBlockAttrs(itemParagraphs);
+    if (attrs === null) return { refuse: 'unsupported-shape' };
+    return { nodes: [paragraph.create(attrs, mergeParagraphContent(itemParagraphs))] };
   }
   const command = nativeCommandFor(state.schema, op);
   if (!command) return { refuse: 'unsupported-shape' };

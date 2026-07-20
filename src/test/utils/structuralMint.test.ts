@@ -566,6 +566,45 @@ describe('compileStructuralMint — Option-B origin-comment carveout (1b)', () =
     expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
   });
 
+  it('tolerates an origin comment inside ONE item of a multi-item list (contained)', () => {
+    editor = makeEditor('<ul><li>one</li><li>two</li></ul>');
+    editor.chain().setTextSelection({ from: 3, to: 6 }).setComment('cm1').run(); // "one"
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'bulletList' },
+          targetPos: posInBlock(0) + 3,
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(true); // retained list keeps it
+    expect(doc.child(1).type.name).toBe('paragraph');
+    expect(blockHasComment(doc.child(1), 'cm1')).toBe(false); // flattened paragraph stripped
+    expect(activeRecords(editor.state)[0].originCommentId).toBe('cm1');
+  });
+
+  it('refuses an origin comment SPANNING two list items (non-contiguous footprint)', () => {
+    // The comment mark lands on "one" and "two" but not the item wrapper positions between
+    // them, so its footprint spans are non-contiguous — a cross-item anchor can't be one run.
+    // Codified fail-closed: cross-item origin comments are NOT supported (would need a
+    // deliberate multi-span generalization), so the mint refuses rather than silently corrupt.
+    editor = makeEditor('<ul><li>one</li><li>two</li></ul>');
+    editor.chain().setTextSelection({ from: 3, to: 12 }).setComment('cm1').run();
+    const r = compileStructuralMint(
+      editor.state,
+      req({
+        op: { kind: 'listToParagraph', listType: 'bulletList' },
+        targetPos: posInBlock(0) + 3,
+        origin: { kind: 'comment', id: 'cm1' },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
   it('does not extend the carveout to a chat origin — a footprint comment still refuses', () => {
     editor = makeEditor('<h1>Title</h1>');
     editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('cm1').run();
@@ -750,6 +789,53 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     expect(projectBlockUnions(doc, 'accepted').doc.child(0).type.name).toBe('paragraph');
   });
 
+  it('single-item flatten preserves the item paragraph content verbatim (marks + hard break)', () => {
+    editor = makeEditor('<ul><li><p>a <strong>bold</strong><br>x</p></li></ul>');
+    const sourceItemPara = editor.state.doc.child(0).child(0).child(0); // the item's paragraph
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'bulletList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const flattened = editor.state.doc.child(1); // the inserted paragraph
+    expect(flattened.type.name).toBe('paragraph');
+    // Byte-for-byte content equality (marks + hard break) — the construction join-of-one
+    // matches what the old native liftListItem produced, so V1b behavior is unchanged.
+    expect(flattened.content.eq(sourceItemPara.content)).toBe(true);
+  });
+
+  it('flattens a checked task list — checks kept on the retained source, dropped on accept', () => {
+    editor = makeEditor(
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>done</p></li><li data-type="taskItem" data-checked="false"><p>todo</p></li></ul>',
+    );
+    // Guard: the fixture really parsed as a task list with the first item checked.
+    expect(editor.state.doc.child(0).type.name).toBe('taskList');
+    expect(editor.state.doc.child(0).child(0).attrs.checked).toBe(true);
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'taskList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    // Retained source (delete) branch keeps the task list + checked state — Reject/Undo restores it.
+    expect(doc.child(0).type.name).toBe('taskList');
+    expect(doc.child(0).child(0).attrs.checked).toBe(true);
+    // Accept intentionally flattens to a plain paragraph; the checked state is dropped by design.
+    const accepted = projectBlockUnions(doc, 'accepted').doc;
+    expect(accepted.child(0).type.name).toBe('paragraph');
+    expect(accepted.child(0).textContent).toBe('done todo');
+  });
+
   it('mints paragraph→taskList with a taskItem defaulting to checked:false', () => {
     editor = makeEditor('<p>Task text</p>');
     const r = expectOk(
@@ -765,8 +851,32 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     expect(list.child(0).attrs.checked).toBe(false);
   });
 
-  it('refuses a MULTI-item list source (single-item only in V1b)', () => {
-    editor = makeEditor('<ul><li>one</li><li>two</li></ul>');
+  it('flattens a MULTI-item flat list into one space-joined paragraph', () => {
+    editor = makeEditor('<ul><li>one</li><li>two</li><li>three</li></ul>');
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'listToParagraph', listType: 'bulletList' },
+          targetPos: posInBlock(0) + 3,
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.child(0).type.name).toBe('bulletList'); // retained source (delete) branch
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    expect(doc.child(1).type.name).toBe('paragraph');
+    expect(doc.child(1).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(doc.child(1).textContent).toBe('one two three');
+    const accepted = projectBlockUnions(doc, 'accepted').doc;
+    expect(accepted.childCount).toBe(1);
+    expect(accepted.child(0).type.name).toBe('paragraph');
+    expect(accepted.child(0).textContent).toBe('one two three');
+  });
+
+  it('refuses a list with a MULTI-BLOCK item (not a flat list)', () => {
+    editor = makeEditor('<ul><li><p>a</p><p>b</p></li></ul>');
     const r = compileStructuralMint(
       editor.state,
       req({
@@ -1035,6 +1145,23 @@ describe('compileStructuralMint — V2 splitParagraph', () => {
     });
   });
 
+  it('validates the split payload BEFORE resolving the target (step-order pin)', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    // A sparse splitParts AND an invalid target (pos 0 is a doc boundary). splitParts is
+    // validated at step 4, before the target resolves at step 5, so the refusal is
+    // invalid-metadata; moving target resolution first would return target-not-found instead.
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'splitParagraph' },
+          targetPos: 0,
+          splitParts: Array(2) as unknown as string[],
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
   it('is one undo step: Undo restores the paragraph, Redo restores the split union', () => {
     editor = makeEditor('<p>alpha beta</p>');
     const r = expectOk(compileStructuralMint(editor.state, splitReq(['alpha', 'beta'])));
@@ -1146,12 +1273,16 @@ describe('onlyTopLevelRangeChanged — N→M prefix/suffix parity', () => {
     ).toBe(false);
   });
 
-  it('rejects a wrong count delta (claimed 1→2 but actually 1→3)', () => {
+  it('rejects a wrong count delta with aligned prefix/suffix (PINS the count check)', () => {
     editor = makeEditor('<p>x</p>');
+    // before [A,B,C,D] → after [A,B1,B2,C,D,EXTRA], claimed 1→2 at index 1. The prefix (A) and
+    // the suffix (C,D) align despite the wrong delta, so ONLY the count check catches the
+    // trailing EXTRA node — removing that check would let this pass. The earlier 1→3 fixture
+    // was caught by the suffix comparison, so it never pinned the count check.
     expect(
       onlyTopLevelRangeChanged(
-        docOf(['A', 'B', 'C']),
-        docOf(['A', 'B1', 'B2', 'B3', 'C']),
+        docOf(['A', 'B', 'C', 'D']),
+        docOf(['A', 'B1', 'B2', 'C', 'D', 'EXTRA']),
         1,
         1,
         2,

@@ -43,13 +43,15 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('1 change wasn’t applied:');
   });
 
-  it('names the real V1 boundary for an unsupported structural op (single-item lists ARE supported)', () => {
+  it('names the real boundary for an unsupported structural op (flat lists of any size ARE supported)', () => {
     const results = [
       entry(0, { kind: 'structural', status: 'plan-refused', reason: 'unsupported-op' }),
     ];
-    const notice = formatBatchResultNotice(results, [{ find: 'Make this a multi-item list' }]);
+    const notice = formatBatchResultNotice(results, [{ find: 'Change a list kind' }]);
     expect(notice).toContain('splitting a paragraph are supported');
-    expect(notice).toContain('multi-item list');
+    // Nested/multi-block items are the real unsupported list shape now, not multi-item lists.
+    expect(notice).toContain('nest or hold more than one block');
+    expect(notice).not.toContain('multi-item list');
     expect(notice).toContain('list-kind change');
     expect(notice).toContain('heading-level change');
     // The stale "list conversions are coming later" claim is gone.
@@ -62,7 +64,7 @@ describe('formatBatchResultNotice', () => {
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
     expect(notice).toContain('splitting a paragraph are supported');
-    expect(notice).toContain('multi-item list');
+    expect(notice).toContain('nest or hold more than one block');
   });
 
   it('names a split-source-mismatch as a model-facing "pieces don’t match" message', () => {

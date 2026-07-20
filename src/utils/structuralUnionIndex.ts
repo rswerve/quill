@@ -274,6 +274,31 @@ export function isSingleItemList(node: PMNode, listType: StructuralListType): bo
   return item.childCount === 1 && item.child(0).type.name === 'paragraph';
 }
 
+/** The list-item node types V2 flattens: ordered/bullet use `listItem`, task lists `taskItem`. */
+const FLAT_ITEM_TYPES = new Set<string>(['listItem', 'taskItem']);
+
+/**
+ * A FLAT list of the given kind: one-or-more items, each a real list item (`listItem` /
+ * `taskItem`) wrapping EXACTLY one paragraph — no nesting, no composite/blockquote item
+ * children. This is the source shape a multi-item list→paragraph flattens by joining the
+ * items' text; a nested/composite list fails closed (a later phase). Single-item is the
+ * `isSingleItemList` special case.
+ */
+export function isFlatParagraphList(node: PMNode, listType: StructuralListType): boolean {
+  if (node.type.name !== listType || node.childCount < 1) return false;
+  for (let i = 0; i < node.childCount; i += 1) {
+    const item = node.child(i);
+    if (
+      !FLAT_ITEM_TYPES.has(item.type.name) ||
+      item.childCount !== 1 ||
+      item.child(0).type.name !== 'paragraph'
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** The four V1 ops are strictly one source block → one proposed block. */
 function oneToOne(source: readonly PMNode[], proposed: readonly PMNode[]): boolean {
   return source.length === 1 && proposed.length === 1;
@@ -312,7 +337,7 @@ export function structuralOpShapeValid(
     case 'listToParagraph':
       return (
         oneToOne(source, proposed) &&
-        isSingleItemList(source[0], op.listType) &&
+        isFlatParagraphList(source[0], op.listType) &&
         proposed[0].type.name === 'paragraph'
       );
     case 'paragraphToList':
