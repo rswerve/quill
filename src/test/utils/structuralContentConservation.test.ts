@@ -1,6 +1,7 @@
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
+import { CommentMark } from '../../extensions/Comment';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { structuralContentConserved } from '../../utils/structuralContentConservation';
@@ -18,7 +19,11 @@ let editor: Editor;
 beforeEach(() => {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  editor = new Editor({ element: el, extensions: [StarterKit, MarkdownImage], content: '' });
+  editor = new Editor({
+    element: el,
+    extensions: [StarterKit, MarkdownImage, CommentMark],
+    content: '',
+  });
 });
 afterEach(() => editor.destroy());
 
@@ -43,6 +48,7 @@ const hb: JSONContent = { type: 'hardBreak' };
 const img = (src: string): JSONContent => ({ type: 'image', attrs: { src } });
 const bold = [{ type: 'bold' }];
 const link = (href: string) => [{ type: 'link', attrs: { href } }];
+const comment = [{ type: 'comment', attrs: { commentId: 'o1', resolved: false, kind: 'claude' } }];
 
 const H2P: StructuralOp = { kind: 'headingToParagraph', level: 1 };
 const MERGE: StructuralOp = { kind: 'mergeParagraphs' };
@@ -97,6 +103,15 @@ describe('structuralContentConserved — retype', () => {
         [p([t('a '), img('evil.png')])],
       ),
     ).toBe(false);
+  });
+
+  it('ignores review marks then coalesces across the strip (contained origin comment conserves)', () => {
+    // Source "Ti" carries an origin comment, "tle" is unmarked; proposed is unmarked "Title".
+    // Conserves ONLY if the comment (review mark) is stripped AND the two now-identical-mark
+    // segments coalesce — this one control pins both behaviors.
+    expect(
+      structuralContentConserved(H2P, [h([t('Ti', comment), t('tle')])], [p([t('Title')])]),
+    ).toBe(true);
   });
 });
 
