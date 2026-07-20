@@ -19,10 +19,11 @@ import type { StructuralMintRefusal } from './structuralMint';
 const CROSS_AXIS =
   'it changes a block that another edit in this batch is restructuring; ask for them one at a time.';
 
-// V1 executes heading↔paragraph and SINGLE-item list↔paragraph. The requested target alone
-// can't reveal which unsupported case was asked for, so the message names the whole boundary.
+// The supported set is heading↔paragraph, single-item list↔paragraph, and splitting a
+// paragraph. The requested op alone can't reveal which unsupported case was asked for, so
+// the message names the whole boundary.
 const UNSUPPORTED_STRUCTURAL =
-  'that structural change isn’t available yet — heading↔paragraph and single-item list↔paragraph are supported, but a multi-item list, a list-kind change (bulleted↔numbered↔checklist), and a heading-level change aren’t.';
+  'that structural change isn’t available yet — heading↔paragraph, single-item list↔paragraph, and splitting a paragraph are supported, but a multi-item list, a list-kind change (bulleted↔numbered↔checklist), a heading-level change, and merging blocks aren’t.';
 
 // System/provider faults are NOT the model's fault: keep the wording blameless and quiet.
 const SYSTEM_FAULT = 'an internal error stopped it; try asking again.';
@@ -67,6 +68,10 @@ function structuralMintRefusalText(reason: StructuralMintRefusal): string {
       return 'the document has an unresolved structural change; resolve it first.';
     case 'native-no-op':
       return 'the conversion would make no change.';
+    // The split pieces are model-supplied, so this is a model-facing message: the pieces
+    // must reflow the paragraph's own text (its exact words, split only at whitespace).
+    case 'split-source-mismatch':
+      return 'the split pieces don’t match that paragraph’s text — they must be its exact words, split at the spaces.';
     // System faults, NOT the model's instruction: in 6b the changeId/author/timestamp/
     // origin are all injected by the orchestrator (allocateReservedId, the AI author,
     // now(), the comment/chat origin) and the op is planner-validated before the mint,

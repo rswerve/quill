@@ -290,3 +290,37 @@ describe('planStructuralEdits — list↔paragraph across ALL three list types',
     });
   }
 });
+
+describe('planStructuralEdits — V2 split', () => {
+  it('plans splitParagraph from {split:[...]} on a paragraph, threading the parts', () => {
+    const doc = docOf([para('alpha beta'), para('other')]);
+    const { placed, results } = planStructuralEdits(doc, [
+      edit('alpha beta', { split: ['alpha', 'beta'] }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed).toHaveLength(1);
+    expect(placed[0].op).toEqual({ kind: 'splitParagraph' });
+    expect(placed[0].splitParts).toEqual(['alpha', 'beta']);
+  });
+
+  it('refuses a split of a non-paragraph source (heading) as unsupported', () => {
+    const doc = docOf([heading(1, 'Title')]);
+    const { placed, results } = planStructuralEdits(doc, [edit('Title', { split: ['Ti', 'tle'] })]);
+    expect(placed).toHaveLength(0);
+    expect(results[0].reason).toBe('unsupported-op');
+  });
+
+  it.each([
+    { label: 'both to and split', structural: { to: 'paragraph', split: ['a', 'b'] } },
+    { label: 'neither to nor split', structural: {} },
+    { label: 'split not an array', structural: { split: 'a b' } },
+    { label: 'fewer than two pieces', structural: { split: ['a'] } },
+    { label: 'a whitespace-only piece', structural: { split: ['a', '  '] } },
+    { label: 'a level alongside split', structural: { split: ['a', 'b'], level: 2 } },
+  ])('refuses a malformed structural shape ($label) as invalid-edit', ({ structural }) => {
+    const doc = docOf([para('a b')]);
+    const { placed, results } = planStructuralEdits(doc, [edit('a b', structural)]);
+    expect(placed).toHaveLength(0);
+    expect(results[0].reason).toBe('invalid-edit');
+  });
+});

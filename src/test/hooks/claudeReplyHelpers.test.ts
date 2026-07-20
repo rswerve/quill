@@ -162,10 +162,13 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
     expect(prompt).toContain('REQUIRES a "level"');
     expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
-    // A block-type change now spans heading↔paragraph AND single-item list↔paragraph.
+    // Block-type changes span heading↔paragraph AND single-item list↔paragraph, plus splitting.
     expect(prompt).toContain("Changing one existing block's TYPE");
-    expect(prompt).toContain('SINGLE-item list↔paragraph only');
-    // Honest scope: multi-item lists and list-kind changes remain unavailable.
+    expect(prompt).toContain('splitting a paragraph into paragraphs');
+    // The split grammar: "split" (2+ pieces) instead of "to", pieces from the paragraph's text.
+    expect(prompt).toContain('"structural":{"split":["First point.","Second point."]}');
+    expect(prompt).toContain('EXACTLY ONE of "to" or "split"');
+    // Honest scope: multi-item lists, list-kind changes, and merging remain unavailable.
     expect(prompt).toContain('Converting a list of MORE THAN ONE item');
     expect(prompt).toContain("changing a list's kind");
     expect(prompt).toContain('are NOT available yet');

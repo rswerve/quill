@@ -49,6 +49,8 @@ export interface PlannedStructuralEdit {
   /** The target block's node range [from, to). */
   sourceTarget: { from: number; to: number };
   editIndex: number;
+  /** For `splitParagraph`: the piece texts to thread to the mint request (validated). */
+  splitParts?: readonly string[];
 }
 
 const VALID_TARGETS = new Set(['paragraph', 'heading', 'bulletList', 'orderedList', 'taskList']);
@@ -167,7 +169,24 @@ function deriveOp(
   return 'unsupported-op'; // blockquote, code, etc.
 }
 
-/** Validate the edit's shape; returns a refusal reason, or null when well-formed. */
+/**
+ * A valid split-piece list: ≥2 entries, each a nonempty AND already-trimmed string. Indexed
+ * iteration (NOT .every, which skips sparse holes) so a sparse array fails as malformed.
+ */
+function isValidSplitParts(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length < 2) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const part = value[i];
+    if (typeof part !== 'string' || part.length === 0 || part !== part.trim()) return false;
+  }
+  return true;
+}
+
+/**
+ * Validate the edit's shape; returns a refusal reason, or null when well-formed. The
+ * `structural` object carries EXACTLY ONE of `to` (retype) or `split` (split into pieces) —
+ * both or neither is malformed; a `level` is only legal with `to: 'heading'`.
+ */
 function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   if (
     typeof edit !== 'object' ||
@@ -179,7 +198,17 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   ) {
     return 'invalid-edit';
   }
-  const { to, level } = edit.structural;
+  const structural = edit.structural as Record<string, unknown>;
+  const hasSplit = structural.split !== undefined;
+  const hasTo = structural.to !== undefined;
+  if (hasSplit === hasTo) return 'invalid-edit'; // exactly one of split / to
+  if (hasSplit) {
+    if (!isValidSplitParts(structural.split) || structural.level !== undefined) {
+      return 'invalid-edit';
+    }
+    return null;
+  }
+  const { to, level } = structural;
   if (typeof to !== 'string' || !VALID_TARGETS.has(to)) return 'invalid-edit';
   if (to === 'heading') {
     if (level === undefined) return 'missing-level';
@@ -232,7 +261,20 @@ export function planStructuralEdits(
       return;
     }
 
-    const op = deriveOp(located.node, edit.structural.to, edit.structural.level);
+    const structural = edit.structural as Record<string, unknown>;
+    let op: OpDerivation;
+    let splitParts: string[] | undefined;
+    if (structural.split !== undefined) {
+      // Split: V2 splits a PARAGRAPH into paragraphs; any other source type is unsupported.
+      op = located.node.type.name === 'paragraph' ? { kind: 'splitParagraph' } : 'unsupported-op';
+      splitParts = structural.split as string[]; // shape-validated by shapeRefusal
+    } else {
+      op = deriveOp(
+        located.node,
+        structural.to as string,
+        structural.level as HeadingLevel | undefined,
+      );
+    }
     if (op === 'unsupported-op' || op === 'already-target') {
       results.push({ edit, status: refusalStatus(op), reason: op });
       return;
@@ -245,6 +287,7 @@ export function planStructuralEdits(
       sourceTargetPos: from + 1, // strictly inside the target block (resolves via node(1))
       sourceTarget: { from, to },
       editIndex,
+      ...(splitParts ? { splitParts } : {}),
     });
     results.push({ edit, status: 'planned' });
   });

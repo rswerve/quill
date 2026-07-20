@@ -48,7 +48,7 @@ describe('formatBatchResultNotice', () => {
       entry(0, { kind: 'structural', status: 'plan-refused', reason: 'unsupported-op' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'Make this a multi-item list' }]);
-    expect(notice).toContain('single-item list↔paragraph are supported');
+    expect(notice).toContain('splitting a paragraph are supported');
     expect(notice).toContain('multi-item list');
     expect(notice).toContain('list-kind change');
     expect(notice).toContain('heading-level change');
@@ -61,8 +61,17 @@ describe('formatBatchResultNotice', () => {
       entry(0, { kind: 'structural', status: 'mint-refused', reason: 'unsupported-shape' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
-    expect(notice).toContain('single-item list↔paragraph are supported');
+    expect(notice).toContain('splitting a paragraph are supported');
     expect(notice).toContain('multi-item list');
+  });
+
+  it('names a split-source-mismatch as a model-facing "pieces don’t match" message', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'mint-refused', reason: 'split-source-mismatch' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
+    expect(notice).toContain('the split pieces don’t match');
+    expect(notice).not.toContain('internal error'); // model-facing, not a blameless system fault
   });
 
   it('names the real blocker for an annotated block — not the comment being asked from', () => {

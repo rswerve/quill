@@ -68,10 +68,12 @@ export interface StructuralMintRequest {
   createdAt: string;
   origin?: StructuralMintOrigin;
   /**
-   * V2 `splitParagraph` ONLY: the resulting piece texts (≥2, each trimmed + nonempty). The
-   * compiler slices the LIVE source content at whitespace seams matching these — it never
-   * accepts caller-built nodes, so the reflow is always recomputed from live content.
-   * Forbidden on every other op.
+   * `splitParagraph` REQUIRES this (the resulting piece texts, ≥2, each trimmed + nonempty);
+   * every other op FORBIDS it. Enforced at runtime by {@link splitPartsRefusal} BEFORE any
+   * document-dependent step — the request is built from untrusted classification, and every
+   * caller (the batch, tests) supplies a runtime `op`, so a compile-time discriminated union
+   * would only force value-defeating casts, not real safety. The compiler slices the LIVE
+   * source content at whitespace seams matching the parts — never caller-built nodes.
    */
   splitParts?: readonly string[];
 }
@@ -378,7 +380,7 @@ function captureNativeConversion(
  * N→M generalization of the 1→1 `onlyChildChanged`: the prefix and the suffix
  * siblings must be identical, so a conversion can't silently disturb a neighbour.
  */
-function onlyTopLevelRangeChanged(
+export function onlyTopLevelRangeChanged(
   before: PMNode,
   after: PMNode,
   index: number,
@@ -397,13 +399,18 @@ function onlyTopLevelRangeChanged(
   return true;
 }
 
-/** A part list is valid for a split request: ≥2 entries, each nonempty and already trimmed. */
+/**
+ * A part list is valid for a split request: ≥2 entries, each a nonempty AND already-trimmed
+ * string. Indexed iteration (NOT .every, which skips sparse holes) so a sparse array such as
+ * `Array(2)` fails here as invalid-metadata instead of throwing later in the locator.
+ */
 function isValidSplitParts(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length >= 2 &&
-    value.every((part) => typeof part === 'string' && part.length > 0 && part === part.trim())
-  );
+  if (!Array.isArray(value) || value.length < 2) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const part = value[i];
+    if (typeof part !== 'string' || part.length === 0 || part !== part.trim()) return false;
+  }
+  return true;
 }
 
 /**
@@ -508,17 +515,20 @@ export function compileStructuralMint(
     return refuse('invalid-structural-state');
   }
 
-  // 4. The target is strictly inside a single top-level textblock.
-  const target = resolveTopLevelBlock(state.doc, targetPos);
-  if (!target) return refuse('target-not-found');
-
-  // 5. The op is a well-formed structural operation on this block type. isStructuralOp runs
-  //    first so a runtime-invalid op (e.g. a HeadingLevel of 99) is refused before any
-  //    capture. splitParts is discriminated: required for split, forbidden on every other op.
+  // 4. The op is a well-formed structural operation and its payload is valid for its kind,
+  //    validated BEFORE any document-dependent step so a malformed payload (e.g. a sparse or
+  //    non-string splitParts) is always classified invalid-metadata, never target-not-found.
+  //    isStructuralOp runs first so a runtime-invalid op (e.g. a HeadingLevel of 99) is refused.
+  //    splitParts is discriminated: required for split, forbidden on every other op.
   if (!isStructuralOp(op)) return refuse('unsupported-shape');
-  if (!opSourceMatches(op, target.node)) return refuse('unsupported-shape');
   const partsRefusal = splitPartsRefusal(op, request.splitParts);
   if (partsRefusal) return refuse(partsRefusal);
+
+  // 5. The target is strictly inside a single top-level textblock, and its type is a source
+  //    the op can convert.
+  const target = resolveTopLevelBlock(state.doc, targetPos);
+  if (!target) return refuse('target-not-found');
+  if (!opSourceMatches(op, target.node)) return refuse('unsupported-shape');
 
   // 6. The target does not overlap an existing union.
   if (
@@ -541,8 +551,11 @@ export function compileStructuralMint(
   if ('refuse' in capture) return refuse(capture.refuse);
   const proposedNodes = capture.nodes;
 
-  // 8c. The source/proposed pair is a shape the op could have minted AND a PURE reflow
-  //     (content preserved, only re-bounded) — the mint-time content-conservation net.
+  // 8c. Shape validation is load-bearing. The content-conservation check is DEFENSE-IN-DEPTH,
+  //     not mutation-pinned: split pieces are slices of the source and V1 native commands
+  //     preserve content, so a PURE reflow always holds via the construction path — it can only
+  //     fail on a FUTURE construction change that adds/loses content, which no current test can
+  //     trigger (stated honestly rather than claimed as covered).
   if (!structuralOpShapeValid(op, [target.node], proposedNodes)) return refuse('unsupported-shape');
   if (!structuralContentConserved(op, [target.node], proposedNodes)) {
     return refuse('self-check-failed');

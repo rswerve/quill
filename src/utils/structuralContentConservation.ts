@@ -247,10 +247,13 @@ export function locateSplitSeams(
   content: Fragment,
   parts: readonly string[],
 ): { from: number; to: number }[] | null {
-  // ≥2 parts, each nonempty AND already trimmed — outer whitespace belongs to the outer
-  // pieces, so whitespace at a part boundary would make seam ownership ambiguous.
-  if (parts.length < 2 || parts.some((part) => part.length === 0 || part !== part.trim())) {
-    return null;
+  // ≥2 parts, each a nonempty AND already-trimmed string — outer whitespace belongs to the
+  // outer pieces, so whitespace at a part boundary would make seam ownership ambiguous.
+  // Indexed iteration (NOT .some/.every, which skip sparse holes) so a hole → undefined fails.
+  if (parts.length < 2) return null;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (typeof part !== 'string' || part.length === 0 || part !== part.trim()) return null;
   }
 
   const { text, offsets } = plaintextWithOffsets(content);

@@ -20,6 +20,7 @@ import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../../extensions/tra
 import { projectBlockUnions } from '../../utils/blockUnionProjection';
 import {
   compileStructuralMint,
+  onlyTopLevelRangeChanged,
   type StructuralMintRequest,
   type StructuralMintResult,
 } from '../../utils/structuralMint';
@@ -1022,5 +1023,139 @@ describe('compileStructuralMint — V2 splitParagraph', () => {
       ok: false,
       reason: 'annotated-footprint',
     });
+  });
+
+  it('refuses a SPARSE-array splitParts as invalid-metadata (never throws)', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    // A sparse array (holes) — .some/.every would skip the holes and then throw in the
+    // locator; indexed validation classifies it invalid-metadata up front.
+    expect(compileStructuralMint(editor.state, splitReq(Array(2) as unknown as string[]))).toEqual({
+      ok: false,
+      reason: 'invalid-metadata',
+    });
+  });
+
+  it('is one undo step: Undo restores the paragraph, Redo restores the split union', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    const r = expectOk(compileStructuralMint(editor.state, splitReq(['alpha', 'beta'])));
+    editor.view.dispatch(r.tr);
+    expect(editor.state.doc.childCount).toBe(3);
+    editor.commands.undo();
+    expect(editor.state.doc.childCount).toBe(1);
+    expect(editor.state.doc.child(0).textContent).toBe('alpha beta');
+    expect(editor.state.doc.child(0).attrs.blockTrack).toBeNull();
+    editor.commands.redo();
+    expect(editor.state.doc.childCount).toBe(3);
+    expect(activeRecords(editor.state).map((rec) => rec.changeId)).toEqual(['c1']);
+  });
+
+  it('keeps a hard break INSIDE a piece (the atom rides, never a seam)', () => {
+    editor = makeEditor('<p>one<br>two three</p>');
+    // plaintext "onetwo three" (the hard break carries no char); split ["onetwo","three"].
+    const r = expectOk(compileStructuralMint(editor.state, splitReq(['onetwo', 'three'])));
+    const doc = editor.state.apply(r.tr).doc;
+    expect(doc.child(1).textContent).toBe('onetwo');
+    let hasBreak = false;
+    doc.child(1).descendants((n) => {
+      if (n.type.name === 'hardBreak') hasBreak = true;
+    });
+    expect(hasBreak).toBe(true);
+    expect(doc.child(2).textContent).toBe('three');
+  });
+
+  it('mints a split alongside a DISJOINT union, leaving the between-sibling intact', () => {
+    editor = makeEditor('<h1>Head</h1><p>keep</p><p>alpha beta</p>');
+    const u1 = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'headingToParagraph', level: 1 },
+          targetPos: posInBlock(0),
+          changeId: 'u1',
+        }),
+      ),
+    );
+    const state1 = editor.state.apply(u1.tr);
+    // After u1: [Head del][Head ins][keep][alpha beta]. Split "alpha beta" at index 3.
+    let pos = 0;
+    for (let i = 0; i < 3; i += 1) pos += state1.doc.child(i).nodeSize;
+    const r2 = compileStructuralMint(
+      state1,
+      req({
+        op: { kind: 'splitParagraph' },
+        targetPos: pos + 1,
+        changeId: 'u2',
+        splitParts: ['alpha', 'beta'],
+      }),
+    );
+    expect(r2.ok).toBe(true); // the projection self-check passes WITH the disjoint union present
+    if (!r2.ok) return;
+    const doc = state1.apply(r2.tr).doc;
+    expect(doc.child(2).textContent).toBe('keep'); // between-sibling untouched
+    expect(doc.child(2).attrs.blockTrack).toBeNull();
+    expect(doc.child(0).attrs.blockTrack?.changeId).toBe('u1'); // disjoint union intact
+  });
+});
+
+describe('onlyTopLevelRangeChanged — N→M prefix/suffix parity', () => {
+  const docOf = (texts: string[]) =>
+    editor.schema.nodeFromJSON({
+      type: 'doc',
+      content: texts.map((text) => ({
+        type: 'paragraph',
+        ...(text ? { content: [{ type: 'text', text }] } : {}),
+      })),
+    });
+
+  it('accepts a 1→2 change with an unchanged prefix and suffix', () => {
+    editor = makeEditor('<p>x</p>');
+    expect(
+      onlyTopLevelRangeChanged(
+        docOf(['A', 'B', 'C', 'D']),
+        docOf(['A', 'B1', 'B2', 'C', 'D']),
+        1,
+        1,
+        2,
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a changed SUFFIX sibling (pins the suffix half)', () => {
+    editor = makeEditor('<p>x</p>');
+    expect(
+      onlyTopLevelRangeChanged(
+        docOf(['A', 'B', 'C', 'D']),
+        docOf(['A', 'B1', 'B2', 'C', 'X']),
+        1,
+        1,
+        2,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a changed PREFIX sibling', () => {
+    editor = makeEditor('<p>x</p>');
+    expect(
+      onlyTopLevelRangeChanged(
+        docOf(['A', 'B', 'C', 'D']),
+        docOf(['Z', 'B1', 'B2', 'C', 'D']),
+        1,
+        1,
+        2,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a wrong count delta (claimed 1→2 but actually 1→3)', () => {
+    editor = makeEditor('<p>x</p>');
+    expect(
+      onlyTopLevelRangeChanged(
+        docOf(['A', 'B', 'C']),
+        docOf(['A', 'B1', 'B2', 'B3', 'C']),
+        1,
+        1,
+        2,
+      ),
+    ).toBe(false);
   });
 });
