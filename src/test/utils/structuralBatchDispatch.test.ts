@@ -193,7 +193,7 @@ describe('structuralBatchDispatch', () => {
     expect(out.suggestionIds).toHaveLength(4);
   });
 
-  it('rejects two same-block structural edits AND a touching inline edit together', () => {
+  it('rejects two same-block structural edits, then safely frees a touching text edit', () => {
     const editor = makeEditor('# Title\n\nBody');
     const out = structuralBatchDispatch(
       [
@@ -204,14 +204,47 @@ describe('structuralBatchDispatch', () => {
       baseDeps(editor),
     );
 
-    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
-    expect(out.results[1].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
-    expect(out.results[2].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+    expect(out.results[0].outcome).toEqual({
+      kind: 'structural',
+      status: 'batch-conflict',
+      reason: 'structural-overlap',
+    });
+    expect(out.results[1].outcome).toEqual({
+      kind: 'structural',
+      status: 'batch-conflict',
+      reason: 'structural-overlap',
+    });
+    expect(out.results[2].outcome).toMatchObject({
+      kind: 'inline',
+      result: { status: 'applied' },
+    });
 
-    // Removing the structural pair never retroactively frees the inline edit: nothing lands.
-    expect(out.suggestionIds).toEqual([]);
+    // Tiered resolution: mutually-invalid structural edits cannot suppress a safe inline edit.
+    expect(out.suggestionIds).toHaveLength(1);
     expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(getTrackedChanges(editor)).toHaveLength(1);
+  });
+
+  it('gives a viable structural edit priority over same-block formatting', () => {
+    const editor = makeEditor('# **Title**\n\nBody');
+    const out = structuralBatchDispatch(
+      [structuralEdit('Title', 'paragraph'), { find: 'Title', format: { bold: false } }],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toMatchObject({ kind: 'structural', status: 'minted' });
+    expect(out.results[1].outcome).toEqual({
+      kind: 'inline',
+      status: 'batch-conflict',
+      reason: 'structural-priority',
+    });
+    expect(out.suggestionIds).toHaveLength(1);
+    expect(unionChangeIds(editor.state.doc).size).toBe(1);
     expect(getTrackedChanges(editor)).toHaveLength(0);
+    // Formatting was not silently composed: the accepted paragraph still carries bold.
+    const inserted = editor.state.doc.child(1);
+    expect(inserted.type.name).toBe('paragraph');
+    expect(inserted.child(0).marks.some((mark) => mark.type.name === 'bold')).toBe(true);
   });
 
   it('mints two disjoint structural edits, both as unions (back-to-front stays valid)', () => {
@@ -327,8 +360,16 @@ describe('structuralBatchDispatch', () => {
       baseDeps(editor),
     );
 
-    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
-    expect(out.results[1].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+    expect(out.results[0].outcome).toEqual({
+      kind: 'structural',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
+    });
+    expect(out.results[1].outcome).toEqual({
+      kind: 'inline',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
+    });
     // The duplicate keeps its immutable pass-1 outcome (deduped) — never re-applied.
     expect(out.results[2].outcome).toMatchObject({
       kind: 'inline',
@@ -353,8 +394,16 @@ describe('structuralBatchDispatch', () => {
       baseDeps(editor),
     );
 
-    expect(out.results[0].outcome).toEqual({ kind: 'structural', status: 'cross-axis-conflict' });
-    expect(out.results[1].outcome).toEqual({ kind: 'inline', status: 'cross-axis-conflict' });
+    expect(out.results[0].outcome).toEqual({
+      kind: 'structural',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
+    });
+    expect(out.results[1].outcome).toEqual({
+      kind: 'inline',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
+    });
     // The format op keeps its pass-1 overlapping-edit refusal — not re-applied.
     expect(out.results[2].outcome).toMatchObject({
       kind: 'inline',
@@ -413,9 +462,14 @@ describe('structuralBatchDispatch — V2 merge', () => {
     );
     expect(out.results[0].outcome).toMatchObject({
       kind: 'structural',
-      status: 'cross-axis-conflict',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
     });
-    expect(out.results[1].outcome).toMatchObject({ kind: 'inline', status: 'cross-axis-conflict' });
+    expect(out.results[1].outcome).toMatchObject({
+      kind: 'inline',
+      status: 'batch-conflict',
+      reason: 'text-structural-conflict',
+    });
     // Nothing minted; the document is byte-identical.
     expect(unionChangeIds(editor.state.doc).size).toBe(0);
     expect(getTrackedChanges(editor)).toHaveLength(0);

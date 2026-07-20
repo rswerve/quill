@@ -127,14 +127,33 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('the document was not ready.');
   });
 
-  it('deduplicates one shared cross-axis wording for inline and structural conflicts', () => {
+  it('deduplicates identical text/structural conflict wording across both axes', () => {
     const results = [
-      entry(0, { kind: 'inline', status: 'cross-axis-conflict' }),
-      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+      entry(0, {
+        kind: 'inline',
+        status: 'batch-conflict',
+        reason: 'text-structural-conflict',
+      }),
+      entry(1, {
+        kind: 'structural',
+        status: 'batch-conflict',
+        reason: 'text-structural-conflict',
+      }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'B' }]);
-    expect(notice.match(/ask for them one at a time/g)).toHaveLength(1);
+    expect(notice.match(/ask for them separately/g)).toHaveLength(1);
     expect(notice).toContain('2 changes —');
+  });
+
+  it('explains structural priority over formatting without claiming formatting applied', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'minted', changeId: 's1' }),
+      entry(1, { kind: 'inline', status: 'batch-conflict', reason: 'structural-priority' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'A' }]);
+    expect(notice).toContain('block restructuring took priority');
+    expect(notice).toContain('request the formatting separately');
+    expect(notice).toContain('Some changes were applied');
   });
 
   it('emits one input-order block, quoting each find and skipping successes', () => {
@@ -166,8 +185,16 @@ describe('formatBatchResultNotice', () => {
 
   it('replaces optimistic prose when nothing applied', () => {
     const results = [
-      entry(0, { kind: 'structural', status: 'cross-axis-conflict' }),
-      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+      entry(0, {
+        kind: 'structural',
+        status: 'batch-conflict',
+        reason: 'structural-overlap',
+      }),
+      entry(1, {
+        kind: 'structural',
+        status: 'batch-conflict',
+        reason: 'structural-overlap',
+      }),
     ];
     const text = reconcileBatchReplyText(
       'Converted both paragraphs successfully.',
@@ -186,7 +213,7 @@ describe('formatBatchResultNotice', () => {
         kind: 'inline',
         result: { edit: { find: 'A', format: { bold: false } }, status: 'applied' },
       }),
-      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+      entry(1, { kind: 'inline', status: 'batch-conflict', reason: 'structural-priority' }),
     ];
     const text = reconcileBatchReplyText(
       'Unbolded and converted everything.',

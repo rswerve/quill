@@ -33,10 +33,10 @@ import { allocateReservedId } from './structuralReservedIds';
  *  1. Plan BOTH axes on the same PRE-apply clean-source doc (the pending-ignored
  *     document Claude reasoned about) — inline for live positions, structural for
  *     source-coordinate target blocks.
- *  2. Freeze a cross-axis conflict graph over those INITIAL plans, then reject every
- *     node incident to any edge in one pass — two structural edits on the same block,
- *     and any inline edit touching a planned structural target, all refuse together.
- *     Removing the structural pair never retroactively frees the inline edit.
+ *  2. Resolve conflicts over the INITIAL plans in explicit tiers: overlapping structural
+ *     edits reject each other; text replacement ↔ structural rejects both; then each
+ *     surviving structural edit beats formatting on the same block. This maximizes safe
+ *     partial application without composing separate review axes into one suggestion.
  *  3. Apply the surviving inline edits through the existing tracked-change engine.
  *  4. Re-plan the surviving structural edits on a FRESH clean-source projection of the
  *     now-mutated document (inline apply shifted positions), so dispatch coordinates
@@ -81,12 +81,20 @@ export interface StructuralBatchDeps {
 
 export type InlineDispatchOutcome =
   | { kind: 'inline'; result: EditResult }
-  | { kind: 'inline'; status: 'cross-axis-conflict' };
+  | {
+      kind: 'inline';
+      status: 'batch-conflict';
+      reason: 'structural-priority' | 'text-structural-conflict';
+    };
 
 export type StructuralDispatchOutcome =
   | { kind: 'structural'; status: 'minted'; changeId: string }
   | { kind: 'structural'; status: 'plan-refused'; reason: StructuralPlanReason }
-  | { kind: 'structural'; status: 'cross-axis-conflict' }
+  | {
+      kind: 'structural';
+      status: 'batch-conflict';
+      reason: 'structural-overlap' | 'text-structural-conflict';
+    }
   | { kind: 'structural'; status: 'id-allocation-failed' }
   | { kind: 'structural'; status: 'metadata-provider-failed' }
   | { kind: 'structural'; status: 'mint-refused'; reason: StructuralMintRefusal };
@@ -120,6 +128,11 @@ function hasOwn(entry: unknown, key: string): boolean {
   return (
     typeof entry === 'object' && entry !== null && Object.prototype.hasOwnProperty.call(entry, key)
   );
+}
+
+/** A placed inline edit is formatting-only when it declares the `format` axis. */
+function isFormattingEdit(edit: QuillEdit): boolean {
+  return hasOwn(edit, 'format');
 }
 
 /**
@@ -197,6 +210,66 @@ interface DispatchCandidate {
 interface StructuralItem {
   batchIndex: number;
   edit: QuillStructuralEdit;
+}
+
+type StructuralConflictReason = 'structural-overlap' | 'text-structural-conflict';
+type InlineConflictReason = 'structural-priority' | 'text-structural-conflict';
+
+interface InlineSourceRange {
+  inlineEditIndex: number;
+  from: number;
+  to: number;
+}
+
+interface BatchConflicts {
+  structural: Map<number, StructuralConflictReason>;
+  inline: Map<number, InlineConflictReason>;
+}
+
+function markStructuralOverlaps(
+  placed: readonly PlannedStructuralEdit[],
+  conflicts: Map<number, StructuralConflictReason>,
+): void {
+  for (let i = 0; i < placed.length; i += 1) {
+    for (let j = i + 1; j < placed.length; j += 1) {
+      if (!blocksOverlap(placed[i].sourceTarget, placed[j].sourceTarget)) continue;
+      conflicts.set(placed[i].editIndex, 'structural-overlap');
+      conflicts.set(placed[j].editIndex, 'structural-overlap');
+    }
+  }
+}
+
+function touchesPlaced(range: InlineSourceRange, placed: PlannedStructuralEdit): boolean {
+  return inlineTouchesBlock(range.from, range.to, placed.sourceTarget.from, placed.sourceTarget.to);
+}
+
+/** Resolve the three conflict tiers without mutating editor state. */
+function resolveBatchConflicts(
+  inlineRanges: readonly InlineSourceRange[],
+  inlineItems: ReadonlyArray<{ edit: QuillEdit }>,
+  placedStructural: readonly PlannedStructuralEdit[],
+): BatchConflicts {
+  const structural = new Map<number, StructuralConflictReason>();
+  const inline = new Map<number, InlineConflictReason>();
+  markStructuralOverlaps(placedStructural, structural);
+
+  for (const range of inlineRanges) {
+    if (isFormattingEdit(inlineItems[range.inlineEditIndex].edit)) continue;
+    for (const placed of placedStructural) {
+      if (structural.has(placed.editIndex) || !touchesPlaced(range, placed)) continue;
+      inline.set(range.inlineEditIndex, 'text-structural-conflict');
+      structural.set(placed.editIndex, 'text-structural-conflict');
+    }
+  }
+
+  for (const range of inlineRanges) {
+    if (!isFormattingEdit(inlineItems[range.inlineEditIndex].edit)) continue;
+    const touchesSurvivingStructural = placedStructural.some(
+      (placed) => !structural.has(placed.editIndex) && touchesPlaced(range, placed),
+    );
+    if (touchesSurvivingStructural) inline.set(range.inlineEditIndex, 'structural-priority');
+  }
+  return { structural, inline };
 }
 
 /**
@@ -380,7 +453,7 @@ export function structuralBatchDispatch(
   // results is load-bearing: an inline edit the initial planner rejected via a cross-edit
   // interaction (an exact duplicate deduped to already-applied, a format/text edit
   // overlapping a placed text edit) must keep that outcome. If it were re-planned in a
-  // subset where its conflicting partner was removed (e.g. cross-axis-rejected), it would
+  // subset where its conflicting partner was removed (e.g. batch-conflicted), it would
   // be RETROACTIVELY FREED and applied — leaking a refused edit. So a non-placed inline
   // outcome is final, and pass 2 (the apply engine's re-plan) only ever sees survivors.
   const inlinePlan = planEdits(preDoc, 0, preDoc.content.size, inlineEdits, authorID);
@@ -408,45 +481,30 @@ export function structuralBatchDispatch(
     });
   });
 
-  // ---- STEP 2: freeze the cross-axis conflict graph over the initial plans. ----
-  const conflictedStruct = new Set<number>(); // structEditIndex
-  const conflictedInline = new Set<number>(); // inline subset index (planner editIndex)
+  // ---- STEP 2: resolve batch conflicts over the initial plans. ----
+  // Priority is explicit and deterministic:
+  //   1. overlapping structural edits reject each other;
+  //   2. text replacement ↔ surviving structural rejects both;
+  //   3. surviving structural beats formatting on the same block.
+  // Running the tiers in this order maximizes safe partial application: formatting is not
+  // suppressed by a structural edit that already lost to another structural/text edit.
+  const { structural: conflictedStruct, inline: conflictedInline } = resolveBatchConflicts(
+    inlineSourceRanges,
+    inlineItems,
+    prePlan.placed,
+  );
 
-  // structural ↔ structural: two edits on the same or overlapping source block.
-  for (let i = 0; i < prePlan.placed.length; i += 1) {
-    for (let j = i + 1; j < prePlan.placed.length; j += 1) {
-      if (!blocksOverlap(prePlan.placed[i].sourceTarget, prePlan.placed[j].sourceTarget)) continue;
-      conflictedStruct.add(prePlan.placed[i].editIndex);
-      conflictedStruct.add(prePlan.placed[j].editIndex);
-    }
-  }
-  // inline ↔ structural: an inline edit touching a planned structural target block.
-  for (const inlineRange of inlineSourceRanges) {
-    for (const placed of prePlan.placed) {
-      if (
-        !inlineTouchesBlock(
-          inlineRange.from,
-          inlineRange.to,
-          placed.sourceTarget.from,
-          placed.sourceTarget.to,
-        )
-      ) {
-        continue;
-      }
-      conflictedInline.add(inlineRange.inlineEditIndex);
-      conflictedStruct.add(placed.editIndex);
-    }
-  }
-
-  for (const structEditIndex of conflictedStruct) {
+  for (const [structEditIndex, reason] of conflictedStruct) {
     outcomeByIndex.set(structuralItems[structEditIndex].batchIndex, {
       kind: 'structural',
-      status: 'cross-axis-conflict',
+      status: 'batch-conflict',
+      reason,
     });
   }
   inlineItems.forEach((item, inlineEditIndex) => {
-    if (conflictedInline.has(inlineEditIndex)) {
-      outcomeByIndex.set(item.batchIndex, { kind: 'inline', status: 'cross-axis-conflict' });
+    const reason = conflictedInline.get(inlineEditIndex);
+    if (reason) {
+      outcomeByIndex.set(item.batchIndex, { kind: 'inline', status: 'batch-conflict', reason });
     }
   });
 
@@ -454,7 +512,7 @@ export function structuralBatchDispatch(
   // Every initially non-placed inline edit keeps its pass-1 result verbatim — it is NEVER
   // re-planned (see the retroactive-freeing note in step 1). Cross-axis edits are always
   // placed, so the partition is exhaustive and disjoint: non-placed → pass-1 result;
-  // placed + cross-axis → cross-axis-conflict (set above); placed + survivor → pass 2.
+  // placed + batch conflict → typed conflict (set above); placed + survivor → pass 2.
   inlineItems.forEach((item, inlineEditIndex) => {
     if (!placedInlineIndexes.has(inlineEditIndex)) {
       outcomeByIndex.set(item.batchIndex, {

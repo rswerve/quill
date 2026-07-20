@@ -302,10 +302,10 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     // Wait for the reply to finalize (its skipped-notice appended).
     await waitFor(() => {
       const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
-      expect(aiReplyOf(comment)?.text).toContain('ask for them one at a time');
+      expect(aiReplyOf(comment)?.text).toContain('ask for them separately');
     });
 
-    // Cross-axis: BOTH refused → nothing minted, nothing applied, doc unchanged.
+    // Text↔structural remains symmetric: BOTH refused → doc unchanged.
     expect(editor.state.doc.toJSON()).toEqual(before);
     expect(retainedRecords(editor.state).size).toBe(0);
     expect(getTrackedChanges(editor)).toHaveLength(0);

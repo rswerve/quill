@@ -16,8 +16,12 @@ import type { StructuralMintRefusal } from './structuralMint';
  * can quote the edit's find text via the same `editFindLabel` the inline notice uses.
  */
 
-const CROSS_AXIS =
-  'it changes a block that another edit in this batch is restructuring; ask for them one at a time.';
+const TEXT_STRUCTURAL_CONFLICT =
+  'it conflicts with a text replacement and block restructuring on the same content; ask for them separately.';
+const STRUCTURAL_PRIORITY =
+  'the block restructuring took priority; request the formatting separately.';
+const STRUCTURAL_OVERLAP =
+  'multiple structural edits target the same blocks; request them separately.';
 
 // The supported set is heading↔paragraph, list↔paragraph (a flat list of any item count),
 // splitting a paragraph, and merging adjacent paragraphs. The requested op alone can't reveal
@@ -91,8 +95,10 @@ function structuralReasonText(outcome: StructuralDispatchOutcome): string | null
   switch (outcome.status) {
     case 'minted':
       return null; // success is silent
-    case 'cross-axis-conflict':
-      return CROSS_AXIS;
+    case 'batch-conflict':
+      return outcome.reason === 'structural-overlap'
+        ? STRUCTURAL_OVERLAP
+        : TEXT_STRUCTURAL_CONFLICT;
     case 'id-allocation-failed':
     case 'metadata-provider-failed':
       return SYSTEM_FAULT;
@@ -111,7 +117,9 @@ function noticeReason(outcome: BatchOutcome): string | null {
     if ('result' in outcome) {
       return outcome.result.status === 'applied' ? null : editResultReason(outcome.result);
     }
-    return CROSS_AXIS; // inline cross-axis-conflict
+    return outcome.reason === 'structural-priority'
+      ? STRUCTURAL_PRIORITY
+      : TEXT_STRUCTURAL_CONFLICT;
   }
   if (outcome.kind === 'invalid') {
     return 'it asks for both a text/formatting change and a structural change; request just one.';
