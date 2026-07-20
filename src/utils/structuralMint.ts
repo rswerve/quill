@@ -226,9 +226,13 @@ function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
   }
 }
 
-/** True when the op's declared source shape matches the resolved target root(s). */
-function opSourceMatches(op: StructuralOp, roots: readonly TargetRoot[]): boolean {
-  const single = roots.length === 1 ? roots[0].node : null;
+/**
+ * True when the op's declared source shape matches the resolved source root node(s). Exported
+ * as a direct unit seam so the merge all-roots requirement is pinned independently of the
+ * downstream shape/conservation guards that would ALSO reject a bad root.
+ */
+export function opSourceMatches(op: StructuralOp, nodes: readonly PMNode[]): boolean {
+  const single = nodes.length === 1 ? nodes[0] : null;
   switch (op.kind) {
     case 'headingToParagraph':
       return single !== null && single.type.name === 'heading' && single.attrs.level === op.level;
@@ -242,8 +246,8 @@ function opSourceMatches(op: StructuralOp, roots: readonly TargetRoot[]): boolea
       return single !== null && isFlatParagraphList(single, op.listType);
     case 'mergeParagraphs':
       // K adjacent paragraphs (≥2). The exact count came from the request's mergeCount, so
-      // resolveTargetRange already gathered exactly that many roots; every one must be a paragraph.
-      return roots.length >= 2 && roots.every((root) => root.node.type.name === 'paragraph');
+      // resolveTargetRange already gathered exactly that many roots; EVERY one must be a paragraph.
+      return nodes.length >= 2 && nodes.every((node) => node.type.name === 'paragraph');
   }
 }
 
@@ -633,7 +637,13 @@ export function compileStructuralMint(
   //    adjacent blocks for a merge — and their shape is a source the op can convert.
   const target = resolveTargetRange(state.doc, targetPos, request.mergeCount ?? 1);
   if (!target) return refuse('target-not-found');
-  if (!opSourceMatches(op, target.roots)) return refuse('unsupported-shape');
+  if (
+    !opSourceMatches(
+      op,
+      target.roots.map((root) => root.node),
+    )
+  )
+    return refuse('unsupported-shape');
 
   // 6. No source root overlaps an existing union (subtree scan of every root, plus the
   //    locked-range check over the whole [from, to) footprint).

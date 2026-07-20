@@ -171,6 +171,9 @@ describe('buildPrompt document-scale edit protocol', () => {
     // The merge grammar: {"merge":true} with a find SPANNING the paragraphs to combine.
     expect(prompt).toContain('"structural":{"merge":true}');
     expect(prompt).toContain('EXACTLY ONE of "to", "split", or "merge"');
+    // NEGATIVE: the stale prohibition that lumped merge with add/delete as Editing-mode-only is
+    // gone, so the prompt never both forbids merge and instructs {"merge":true} (a contradiction).
+    expect(prompt).not.toContain('merging, adding, or deleting whole blocks');
     // Honest scope: nested/multi-block list items, list-kind changes, cross-block merge unavailable.
     expect(prompt).toContain('nested or hold more than one block');
     expect(prompt).toContain("changing a list's kind");

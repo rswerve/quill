@@ -21,6 +21,7 @@ import { projectBlockUnions } from '../../utils/blockUnionProjection';
 import {
   compileStructuralMint,
   onlyTopLevelRangeChanged,
+  opSourceMatches,
   type StructuralMintRequest,
   type StructuralMintResult,
 } from '../../utils/structuralMint';
@@ -1338,7 +1339,7 @@ describe('compileStructuralMint — V2 mergeParagraphs', () => {
     });
   });
 
-  it('refuses a merge whose MIDDLE root is a heading (opSourceMatches checks EVERY root)', () => {
+  it('refuses a merge whose MIDDLE root is a heading (system fail-closed)', () => {
     editor = makeEditor('<p>x</p>');
     const doc = editor.schema.nodeFromJSON({
       type: 'doc',
@@ -1349,7 +1350,9 @@ describe('compileStructuralMint — V2 mergeParagraphs', () => {
       ],
     });
     const state = EditorState.create({ schema: editor.schema, doc, plugins: editor.state.plugins });
-    // A regression that checked only roots[0] (a paragraph) would slip past opSourceMatches.
+    // A whole-compiler control that a heading in the run refuses. It does NOT pin opSourceMatches
+    // alone (commonBlockAttrs/structuralOpShapeValid would also reject it with the same reason) —
+    // the direct opSourceMatches seam above kills the first-root-only mutation.
     expect(compileStructuralMint(state, mergeReq(1, 3))).toEqual({
       ok: false,
       reason: 'unsupported-shape',
@@ -1568,6 +1571,20 @@ describe('compileStructuralMint — commonBlockAttrs style preservation (test-on
       ok: false,
       reason: 'unsupported-shape',
     });
+  });
+});
+
+describe('opSourceMatches — merge requires EVERY root to be a paragraph (direct seam)', () => {
+  it('rejects a roots array whose MIDDLE node is not a paragraph', () => {
+    editor = makeEditor('<p>x</p>');
+    const para = editor.schema.nodes.paragraph.create(null, editor.schema.text('p'));
+    const heading = editor.schema.nodes.heading.create({ level: 1 }, editor.schema.text('h'));
+    // roots[0] IS a paragraph, so a first-root-only regression would wrongly accept this — the
+    // direct seam kills that mutation independently of the downstream shape/conservation guards.
+    expect(opSourceMatches({ kind: 'mergeParagraphs' }, [para, heading, para])).toBe(false);
+    expect(opSourceMatches({ kind: 'mergeParagraphs' }, [heading, para, para])).toBe(false);
+    expect(opSourceMatches({ kind: 'mergeParagraphs' }, [para, para])).toBe(true);
+    expect(opSourceMatches({ kind: 'mergeParagraphs' }, [para])).toBe(false); // needs ≥2
   });
 });
 
