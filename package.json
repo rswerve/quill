@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage:unit": "vitest run --coverage",
+    "test:coverage:unit": "vitest run --coverage --maxWorkers=1",
     "test:coverage:e2e": "E2E_COVERAGE=1 playwright test",
     "coverage:merge": "node --test scripts/coveragePaths.test.mjs && node scripts/mergeCoverage.mjs",
     "test:coverage": "npm run test:coverage:unit && npm run test:coverage:e2e && npm run coverage:merge"

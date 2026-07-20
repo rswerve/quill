@@ -60,6 +60,12 @@ The combined report is uploaded as a CI artifact and its summary is written to
 the GitHub Actions job summary. Separate unit and Playwright columns remain
 visible so the contribution from each suite is auditable.
 
+The Vitest coverage command deliberately uses one worker. Coverage processing
+can keep a resource-constrained CI runner's main process busy long enough for
+parallel workers to hit Vitest's fixed 60-second `onTaskUpdate` RPC watchdog,
+even after every assertion has passed. Serializing coverage workers avoids that
+reporting-channel starvation; ordinary `npm test` remains parallel.
+
 ## Hot-reload guard
 
 Coverage reporters generate thousands of HTML/assets files. Vite initially
