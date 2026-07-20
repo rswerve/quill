@@ -1316,16 +1316,44 @@ describe('compileStructuralMint — V2 mergeParagraphs', () => {
     });
   });
 
-  it('refuses when a source block already carries a union (overlapping-structural)', () => {
-    editor = makeEditor('<p>one</p><p>two</p>');
-    // Pre-flag the second paragraph with an existing blockTrack identity.
-    const tr = editor.state.tr.setNodeMarkup(posInBlock(1) - 1, undefined, {
-      ...editor.state.doc.child(1).attrs,
-      blockTrack: { changeId: 'existing', op: 'delete' },
+  it('refuses when a source block already carries a COMPLETE union (overlapping-structural)', () => {
+    editor = makeEditor('<p>one</p><p>two</p><p>three</p>');
+    // Mint a REAL, persistable union on the LAST block first (delete+insert+record) — an orphan
+    // would instead trip the step-3 structural-soundness gate before the footprint overlap check.
+    const seed = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'paragraphToList', listType: 'bulletList' },
+          targetPos: posInBlock(2),
+          changeId: 'u1',
+        }),
+      ),
+    );
+    editor.view.dispatch(seed.tr);
+    // Now merge all three source paragraphs; the third already carries the union's delete flag.
+    expect(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 3))).toEqual({
+      ok: false,
+      reason: 'overlapping-structural',
     });
-    tr.setMeta(SKIP_TRACKING_META, true);
-    editor.view.dispatch(tr);
-    expect(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)).ok).toBe(false);
+  });
+
+  it('refuses a merge whose MIDDLE root is a heading (opSourceMatches checks EVERY root)', () => {
+    editor = makeEditor('<p>x</p>');
+    const doc = editor.schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'one' }] },
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'mid' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'three' }] },
+      ],
+    });
+    const state = EditorState.create({ schema: editor.schema, doc, plugins: editor.state.plugins });
+    // A regression that checked only roots[0] (a paragraph) would slip past opSourceMatches.
+    expect(compileStructuralMint(state, mergeReq(1, 3))).toEqual({
+      ok: false,
+      reason: 'unsupported-shape',
+    });
   });
 
   it.each([
@@ -1513,6 +1541,30 @@ describe('compileStructuralMint — commonBlockAttrs style preservation (test-on
       '<ul><li><p data-test-align="center">one</p></li><li><p data-test-align="right">two</p></li></ul>',
     );
     expect(compileStructuralMint(editor.state, alignReq(posInBlock(0) + 3))).toEqual({
+      ok: false,
+      reason: 'unsupported-shape',
+    });
+  });
+
+  const mergeAlignReq = (targetPos: number) =>
+    req({ op: { kind: 'mergeParagraphs' }, targetPos, mergeCount: 2 });
+
+  it('propagates a SHARED block attr through mergeParagraphs (not just the list path)', () => {
+    editor = makeAlignEditor(
+      '<p data-test-align="center">one</p><p data-test-align="center">two</p>',
+    );
+    const r = expectOk(compileStructuralMint(editor.state, mergeAlignReq(posInBlock(0))));
+    editor.view.dispatch(r.tr);
+    const merged = editor.state.doc.child(2);
+    expect(merged.type.name).toBe('paragraph');
+    expect(merged.attrs.testAlign).toBe('center'); // the shared style survives the merge
+  });
+
+  it('refuses a MERGE whose source paragraphs DISAGREE on a block attr', () => {
+    editor = makeAlignEditor(
+      '<p data-test-align="center">one</p><p data-test-align="right">two</p>',
+    );
+    expect(compileStructuralMint(editor.state, mergeAlignReq(posInBlock(0)))).toEqual({
       ok: false,
       reason: 'unsupported-shape',
     });
