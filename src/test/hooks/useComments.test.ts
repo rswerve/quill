@@ -238,6 +238,28 @@ describe('useComments', () => {
     });
   });
 
+  describe('setAIReplyText', () => {
+    it('replaces optimistic streamed prose on the targeted AI reply', () => {
+      const { result } = renderHook(() => useComments());
+      let commentId = '';
+      let replyId = '';
+      act(() => {
+        commentId = result.current.addComment('text', 0, 4, 'Alice').id;
+        result.current.addComment('other', 5, 10, 'Alice');
+      });
+      act(() => {
+        replyId = result.current.startAIReply(commentId);
+      });
+      act(() => {
+        result.current.appendAIReplyChunk(commentId, replyId, 'Everything changed.');
+        result.current.setAIReplyText(commentId, replyId, '(Nothing was applied.)');
+      });
+
+      expect(result.current.comments[0].replies[0].text).toBe('(Nothing was applied.)');
+      expect(result.current.comments[1].replies).toEqual([]);
+    });
+  });
+
   describe('setAIReplyModel', () => {
     it('stamps only the targeted AI reply with the stream-reported model', () => {
       const { result } = renderHook(() => useComments());

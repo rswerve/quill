@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { activeEditor } from './helpers/memoryTauri';
 
 const THEME_IDS = ['paper', 'gruvbox'] as const;
 
@@ -6,7 +7,7 @@ test('rail theme toggle switches between only Paper and Gruvbox and persists Gru
   page,
 }) => {
   await page.goto('/');
-  await page.locator('.ProseMirror').waitFor();
+  await activeEditor(page).waitFor();
 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
   const toggle = page.getByRole('button', { name: 'Toggle theme' });
@@ -27,7 +28,7 @@ test('rail theme toggle switches between only Paper and Gruvbox and persists Gru
 
 test('retired persisted theme ids fall back to Paper and are normalized', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.ProseMirror').waitFor();
+  await activeEditor(page).waitFor();
 
   for (const id of ['sage', 'warm', 'cool', 'earth']) {
     await page.evaluate((themeId) => localStorage.setItem('quill-theme', themeId), id);
@@ -43,7 +44,7 @@ test('retired persisted theme ids fall back to Paper and are normalized', async 
 
 test('review actions stay tonal, borderless, and distinct in both themes', async ({ page }) => {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor();
   await editor.click();
   await page.getByRole('button', { name: 'Suggesting' }).click();

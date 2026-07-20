@@ -343,12 +343,21 @@ describe('sanitizeDraft baselines', () => {
       expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
+      structuralProtected: true,
     });
     expect(out).toMatchObject({
       expectedDoc: { state: 'present', hash: HASH64 },
       expectedSidecar: { state: 'absent' },
       sidecarProtected: true,
+      structuralProtected: true,
     });
+  });
+
+  it('carries structuralProtected independently of sidecarProtected', () => {
+    const out = sanitizeDraft({ ...base, structuralProtected: true });
+    expect(out!.structuralProtected).toBe(true);
+    expect(out!.sidecarProtected).toBeUndefined();
+    expect(sanitizeDraft(base)!.structuralProtected).toBeUndefined();
   });
 
   it('drops a present baseline whose hash is not 64-char lowercase hex', () => {
@@ -381,5 +390,46 @@ describe('sanitizeDraft baselines', () => {
     expect(out!.expectedDoc).toBeUndefined();
     expect(out!.expectedSidecar).toBeUndefined();
     expect(out!.sidecarProtected).toBeUndefined();
+  });
+
+  it('carries structural records through shallowly (reconstruction is the record boundary)', () => {
+    const record = {
+      changeId: 'sc1',
+      author: 'claude',
+      createdAt: 'now',
+      op: { kind: 'headingToParagraph', level: 1 },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: '# Title',
+      proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+    };
+    // One well-shaped record + one non-object entry that the shallow filter drops.
+    const out = sanitizeDraft({ ...base, structural: [record, 42] });
+    expect(out!.structural).toEqual([record]);
+  });
+
+  it('PRESERVES object-shaped MALFORMED entries as opaque evidence (only non-objects dropped)', () => {
+    const record = {
+      changeId: 'sc1',
+      author: 'claude',
+      createdAt: 'now',
+      op: { kind: 'headingToParagraph', level: 1 },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: '# Title',
+      proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+    };
+    // A malformed-but-object entry must SURVIVE the sanitizer (it may be the only copy) so the
+    // seed / reconstruction trust boundary quarantines it — the sanitizer never deep-validates.
+    const malformed = { changeId: 'broken' };
+    const out = sanitizeDraft({
+      ...base,
+      structural: [record, malformed, 42],
+      degradedStructural: [malformed],
+    });
+    expect(out!.structural).toEqual([record, malformed]); // 42 (non-object) dropped, malformed kept
+    expect(out!.degradedStructural).toEqual([malformed]);
+  });
+
+  it('omits structural entirely for a legacy snapshot without the field', () => {
+    expect(sanitizeDraft(base)!.structural).toBeUndefined();
   });
 });

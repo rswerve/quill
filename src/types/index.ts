@@ -155,10 +155,71 @@ export type PersistedSuggestion = LogicalSuggestion | LegacyTextSuggestion | Leg
 /** Canonical in-memory and newly-persisted suggestion model. */
 export type Suggestion = LogicalSuggestion;
 
+/** Locates a structural change's source branch within the document tree. */
+export interface StructuralAnchor {
+  /** Child indices from the document root to the source branch's parent (empty at top level). */
+  parentPath: number[];
+  /** Index of the source branch's first block within that parent. */
+  childIndex: number;
+  /** Number of contiguous source blocks in the branch. */
+  childCount: number;
+}
+
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+export type StructuralListType = 'bulletList' | 'orderedList' | 'taskList';
+
+/**
+ * The typed V1 structural operation a record claims. Reconstruction validates the
+ * source/proposed shape against it, so an untrusted sidecar cannot turn a
+ * paragraph into an arbitrary heading/list that no V1 command could have minted.
+ * V2 adds `splitParagraph` (one paragraph → several) and `mergeParagraphs`
+ * (several adjacent paragraphs → one). Those carry no op-level fields — the block
+ * counts live in the record's `anchor.childCount` (source) and `proposed.length`,
+ * so the shape is validated against those node arrays, not a count on the op.
+ */
+export type StructuralOp =
+  | { kind: 'headingToParagraph'; level: HeadingLevel }
+  | { kind: 'paragraphToHeading'; level: HeadingLevel }
+  | { kind: 'listToParagraph'; listType: StructuralListType }
+  | { kind: 'paragraphToList'; listType: StructuralListType }
+  | { kind: 'splitParagraph' }
+  | { kind: 'mergeParagraphs' };
+
+/** One block-structure suggestion, persisted in the sidecar's structural envelope. */
+export interface StructuralSuggestionRecord {
+  changeId: string;
+  author: string;
+  createdAt: string;
+  op: StructuralOp;
+  originCommentId?: string;
+  originChatMessageId?: string;
+  anchor: StructuralAnchor;
+  /** Markdown of the source subtree at save time; validated on reload. */
+  sourceFingerprint: string;
+  /** The proposed replacement blocks as ProseMirror JSON (no tracking metadata). */
+  proposed: JSONContent[];
+}
+
+/**
+ * The sidecar's structural-suggestion envelope. `sourceDocumentHash` is the
+ * SHA-256 of the source-projected `.md` at save time; on reload a hash mismatch
+ * means the file changed outside Quill, so every structural record is quarantined
+ * rather than risk misbinding onto a shifted block. Versioned independently of
+ * the sidecar.
+ */
+export interface StructuralReviewEnvelope {
+  version: 1;
+  sourceDocumentHash: string;
+  /** Untrusted until `partitionStructuralRecords` + reconstruction validate each entry. */
+  records: unknown[];
+}
+
 export interface SidecarFile {
   version: 2;
   comments: Comment[];
   suggestions: PersistedSuggestion[];
+  /** Block-structure suggestions (the block-union model); absent when there are none. */
+  structural?: StructuralReviewEnvelope;
   aiSession?: AISessionBinding;
   /**
    * Absolute path to a folder of reference documents for this file. Claude
@@ -236,6 +297,52 @@ export interface TrackedChangeInfo extends TrackedChangeBase {
   segments: TrackedChangeSegment[];
 }
 
+/** A half-open document range. Branch envelopes, not single-node guarantees. */
+export interface StructuralChangeRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * A live block-union structural change surfaced to the review layer — the
+ * block-scale sibling of {@link TrackedChangeInfo}, discriminated by
+ * `kind: 'structural'`. Enumerated from the canonical record store joined with the
+ * analyzed union topology, never from raw `blockTrack` attributes. `source` and
+ * `proposed` are branch **envelopes** (from the first block to the last), so the
+ * shape stays valid once split/merge introduces multi-block branches.
+ */
+export interface StructuralChangeInfo {
+  kind: 'structural';
+  changeId: string;
+  op: StructuralOp;
+  author: string;
+  createdAt: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+  /** The whole-union envelope (original branch through proposed branch). */
+  from: number;
+  to: number;
+  /** The original (delete-flagged) branch's envelope. */
+  source: StructuralChangeRange;
+  /** The proposed (insert-flagged) branch's envelope. */
+  proposed: StructuralChangeRange;
+}
+
+/**
+ * A pending structural change flattened for the Claude prompt's pending-changes
+ * manifest — the block's current (source-branch) text plus the target form — so
+ * Claude is aware of proposed block-shape changes it should not re-propose or
+ * collide with. Derived from the authoritative {@link StructuralChangeInfo}, not
+ * raw markup.
+ */
+export interface StructuralPromptEntry {
+  op: StructuralOp;
+  /** The current (source-branch) text of the block the change targets. */
+  anchorText: string;
+  originCommentId?: string;
+  originChatMessageId?: string;
+}
+
 /**
  * One quote-based text edit Claude proposes: replace the first occurrence of
  * the plaintext `find` (within the scoped range) with `replace`. An empty
@@ -267,13 +374,48 @@ export interface QuillFormatEdit {
   format: QuillFormatOp;
 }
 
+/** The block type a structural edit targets. `heading` also needs a `level`. */
+export type StructuralEditTarget = 'paragraph' | 'heading' | StructuralListType;
+
+/**
+ * One structural edit Claude proposes, located by the plaintext `find` and DIRECTIONAL
+ * (the engine derives the {@link StructuralOp}). Exactly one shape per edit:
+ *  - RETYPE: convert the `find` block to `to` (a paragraph, a heading of `level`, or a list).
+ *    A paragraph→list edit may add `items` (≥2) to partition its own text into multiple
+ *    flat list items; omit `items` for the existing single-item conversion.
+ *  - SPLIT: split the `find` PARAGRAPH into the `split` pieces (≥2), each a new paragraph;
+ *    the pieces must be the paragraph's own text re-bounded at whitespace (a pure reflow).
+ *  - MERGE: `merge: true` with a `find` that SPANS ≥2 adjacent paragraphs joins them into
+ *    one paragraph (the mirror of split); the spanned run must be contiguous paragraphs.
+ * Lands as a reviewable block union, never applied directly. Parsed from the same
+ * quill-edits block as text/format edits but planned + dispatched on a separate path.
+ */
+export interface QuillStructuralEdit {
+  find: string;
+  structural:
+    | {
+        to: StructuralEditTarget;
+        /** Required for `to: 'heading'`; must be absent otherwise (else invalid-level). */
+        level?: HeadingLevel;
+        /** Only for a list target: ≥2 exact text pieces that become separate flat items. */
+        items?: string[];
+      }
+    | { split: string[] }
+    | { merge: true };
+}
+
 /** One edit inside a quill-edits block: a text replacement XOR a format op. */
 export type QuillEdit = QuillTextEdit | QuillFormatEdit;
 
-/** The parsed contents of a ```quill-edits fenced block in Claude's reply. */
+/**
+ * The parsed contents of a ```quill-edits fenced block in Claude's reply. `edits` is
+ * UNTRUSTED model JSON — an interleaved mix of inline text/format and structural
+ * conversions — so it stays `unknown[]` until the batch orchestrator classifies and
+ * narrows each entry (inline XOR structural), never cast into a typed union up front.
+ */
 export interface QuillEditsBlock {
   summary: string;
-  edits: QuillEdit[];
+  edits: unknown[];
 }
 
 /** How far Claude's edits may reach, derived from the user's wording. */
@@ -312,6 +454,30 @@ export interface DraftFile {
   docJSONState?: 'absent' | 'valid' | 'invalid';
   comments: Comment[];
   suggestions: Suggestion[];
+  /**
+   * Block-structure suggestion records for the recovered document, in the LOSSLESS
+   * (live-union) coordinate space — they pair with `docJSON`. Recovery seeds the
+   * record store from these when it restores the byte-exact docJSON (the seed
+   * validates them against that live union), so they must match `docJSON`, not the
+   * normalized reparse of `content`. Typed `unknown[]` because this is the untrusted
+   * READ boundary: the writer emits valid `StructuralSuggestionRecord`s, but a
+   * restored workspace file is untrusted and every entry is validated at seed /
+   * reconstruction time (`partitionStructuralRecords`), never trusted from disk.
+   */
+  structural?: unknown[];
+  /**
+   * The SAME structural records rebased into the CANONICAL source coordinate space
+   * (the whitespace-normalized reparse of `content`), for the DEGRADED fallback.
+   * When `docJSON` is corrupt/absent, recovery `setContent(content)` reparses the
+   * source — normalizing whitespace — then reconstructs the unions; a live-coordinate
+   * record's source fingerprint would no longer match and the proposal would
+   * spuriously quarantine, so the degraded path uses THESE (falling back to
+   * `structural` only for legacy snapshots that predate this field). Distinct from
+   * `structural` because the lossless and degraded documents are different coordinate
+   * spaces; captured together with `content` so there is no external-edit surface.
+   * Same untrusted-READ-boundary typing as `structural`.
+   */
+  degradedStructural?: unknown[];
   aiSession: AISessionBinding | null;
   contextFolder: string | null;
   chat?: DocumentChatThread;
@@ -326,6 +492,13 @@ export interface DraftFile {
   expectedSidecar?: Fingerprint | null;
   /** Whether the sidecar was protected (unreadable) when the draft was snapshotted. */
   sidecarProtected?: boolean;
+  /**
+   * Whether the sidecar's STRUCTURAL block was malformed when snapshotted. Carried
+   * separately from `sidecarProtected` so recovery re-establishes the stronger
+   * protection (block BOTH files); a crash must not downgrade it to comments-only
+   * protection, which would overwrite the `.md` the proposal is anchored to.
+   */
+  structuralProtected?: boolean;
   /**
    * Anchor provenance for the embedded `content` (see `SidecarFile.reviewSourceHash`).
    * `reviewSourceHash` is the SHA-256 of THIS draft's `content`, so a recovered draft

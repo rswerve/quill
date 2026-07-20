@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { setupMemoryTauri } from './helpers/memoryTauri';
+import { activeEditor, setupMemoryTauri } from './helpers/memoryTauri';
 
 const EXISTING_SESSION = {
   sessionId: 'existing-session-id',
@@ -37,7 +37,7 @@ test('a session-list failure is explicit and Cancel returns to the untouched doc
   await picker.getByRole('button', { name: 'Cancel' }).click();
   await expect(picker).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Unlink Claude session' })).toHaveCount(0);
-  await expect(page.locator('.ProseMirror')).toBeEditable();
+  await expect(activeEditor(page)).toBeEditable();
 });
 
 test('an empty picker explains the state and keeps local note-taking available', async ({
@@ -51,9 +51,9 @@ test('an empty picker explains the state and keeps local note-taking available',
   await expect(picker.getByText(/Save the document first/)).toBeVisible();
   await picker.getByRole('button', { name: 'Close' }).click();
 
-  await page.locator('.ProseMirror').click();
+  await activeEditor(page).click();
   await page.keyboard.type('Local work continues');
-  await expect(page.locator('.ProseMirror')).toContainText('Local work continues');
+  await expect(activeEditor(page)).toContainText('Local work continues');
 });
 
 test('Cancel after previewing a session never binds or records it', async ({ page }) => {

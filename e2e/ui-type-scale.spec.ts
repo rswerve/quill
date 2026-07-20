@@ -240,8 +240,11 @@ test('document typography stays pinned while both themes keep chrome vertically 
     await expectVerticallyContained(page.locator('.comment-layer button:visible'));
   }
 
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
   await page.emulateMedia({ media: 'print' });
-  await expectType(activeEditor(page), '18px', { checkUiFamily: false });
+  await expectType(activeTabHost(page).locator('[data-print-doc]'), '18px', {
+    checkUiFamily: false,
+  });
   // Raw selector, not the contentinfo role: under print media the footer is
   // display:none, which drops it from the accessibility tree — getByRole would
   // find nothing. The DOM selector still reads the computed display.

@@ -11,7 +11,23 @@ import {
   stripTransientReplyState,
   type SaveOutcome,
 } from '../../hooks/useFileManager';
-import type { ChatMessage, Comment, DocumentChatThread, Reply } from '../../types';
+import type {
+  ChatMessage,
+  Comment,
+  DocumentChatThread,
+  Reply,
+  StructuralSuggestionRecord,
+} from '../../types';
+
+const SAMPLE_STRUCTURAL: StructuralSuggestionRecord = {
+  changeId: 'sc1',
+  author: 'claude',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  op: { kind: 'headingToParagraph', level: 1 },
+  anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+  sourceFingerprint: '# Title',
+  proposed: [{ type: 'paragraph', content: [{ type: 'text', text: 'Title' }] }],
+};
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -1339,6 +1355,267 @@ describe('useFileManager', () => {
       });
       expect(result.current.isDirty).toBe(true);
     });
+  });
+});
+
+describe('structural envelope persistence', () => {
+  const sidecarWrite = () =>
+    mockInvoke.mock.calls.find(
+      (call) =>
+        call[0] === 'write_file_atomic' &&
+        (call[1] as { path?: string })?.path?.endsWith('.comments.json'),
+    );
+
+  it('S1: a structural-only document still writes a sidecar (never deletes it)', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      // No comments/suggestions/session/folder/chat — only a structural record.
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
+    });
+    // A delete would signal "nothing to persist"; the record must reach disk instead.
+    const deleteCall = mockInvoke.mock.calls.find((call) => call[0] === 'delete_file_if_match');
+    expect(deleteCall).toBeUndefined();
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural.records).toHaveLength(1);
+    expect(written.structural.records[0].changeId).toBe('sc1');
+  });
+
+  it('stamps the envelope hash from the .md write, not the sidecar hash', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.saveFile('# Title', [], [], null, null, '/docs/s.md', null, [
+        SAMPLE_STRUCTURAL,
+      ]);
+    });
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural.version).toBe(1);
+    // HASH_DOC is what write_file_atomic returns for the .md; HASH_SIDECAR is the
+    // sidecar's own hash. The envelope must carry the SOURCE .md's hash (the F5 gate).
+    expect(written.structural.sourceDocumentHash).toBe(HASH_DOC);
+    expect(written.structural.sourceDocumentHash).not.toBe(HASH_SIDECAR);
+  });
+
+  it('omits the structural field entirely when there are no structural records', async () => {
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.saveFile('body', [SAMPLE_COMMENT], [], null, null, '/docs/n.md');
+    });
+    const written = JSON.parse((sidecarWrite()![1] as { content: string }).content);
+    expect(written.structural).toBeUndefined();
+  });
+
+  it('loads a valid structural envelope on open', async () => {
+    const withEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 1, sourceDocumentHash: 'abc', records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(withEnvelope));
+    const { result } = renderHook(() => useFileManager());
+    let good: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      good = await result.current.openFilePath('/docs/g.md');
+    });
+    expect(good!.sidecar.structural?.records).toHaveLength(1);
+    expect(good!.docHash).toBe(readHash('# Title'));
+    expect(good!.sidecarError).toBeNull();
+  });
+
+  it('PROTECTS a present-but-malformed structural envelope instead of silently dropping it', async () => {
+    // A malformed structural block may hold the only copy of proposed content, so it
+    // must be treated like a corrupt sidecar (protected), not quietly discarded.
+    const badEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 2, sourceDocumentHash: 'abc', records: [] }, // wrong envelope version
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(badEnvelope));
+    const { result } = renderHook(() => useFileManager());
+    let bad: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      bad = await result.current.openFilePath('/docs/b.md');
+    });
+    // The shape-invalid field is not loaded, but the file is now STRUCTURALLY
+    // protected: a same-path save reports structural-protected and writes NEITHER
+    // file — the `.md` source the proposal is anchored to must stay intact for repair.
+    expect(bad!.sidecar.structural).toBeUndefined();
+    expect(bad!.sidecarError).toBeTruthy();
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# Title changed', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    // Zero writes: neither the `.md` nor the sidecar was touched.
+    const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(writes).toHaveLength(0);
+  });
+
+  it('lets Save As to a DIFFERENT path escape structural protection and clears it', async () => {
+    const badEnvelope = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 2, sourceDocumentHash: 'abc', records: [] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title')) // read .md
+      .mockResolvedValueOnce(fpPresent(badEnvelope)); // read sidecar (malformed structural)
+    mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+      const path = (args as { path?: string } | undefined)?.path;
+      if (command === 'show_save_dialog') return '/docs/copy.md';
+      if (command === 'read_file_with_fingerprint') return fpAbsent();
+      if (command === 'write_file_atomic') {
+        return {
+          status: 'written',
+          hash: path?.endsWith('.comments.json') ? HASH_SIDECAR : HASH_DOC,
+        };
+      }
+      if (command === 'delete_file_if_match') return { status: 'deleted' };
+      return null; // find_session_for_markdown
+    });
+    const { result } = renderHook(() => useFileManager());
+    await act(async () => {
+      await result.current.openFilePath('/docs/b.md');
+    });
+
+    // Save As to a genuinely different path writes a fresh (clean) file.
+    let asOutcome: SaveOutcome;
+    await act(async () => {
+      asOutcome = await result.current.saveFileAs('# Title', [], [], null, null);
+    });
+    expect(asOutcome!).toMatchObject({ status: 'saved', path: '/docs/copy.md' });
+
+    // Protection cleared: a same-path save to the new copy is no longer blocked.
+    let nextOutcome: SaveOutcome;
+    await act(async () => {
+      nextOutcome = await result.current.saveFile('# Title again', [], [], null, null);
+    });
+    expect(nextOutcome!.status).toBe('saved');
+  });
+
+  it('restores structural protection independently of sidecarProtected (crash recovery)', async () => {
+    // A recovery snapshot carries structuralProtected=true WITHOUT sidecarProtected —
+    // structural protection is stronger and must survive restore on its own, blocking
+    // BOTH files (a crash must not downgrade it to comments-only, which writes the .md).
+    installSaveRouter();
+    const { result } = renderHook(() => useFileManager());
+    act(() => {
+      result.current.restoreDraft('/docs/r.md', true, {
+        expectedDoc: { state: 'present', hash: HASH_DOC }, // known baseline (not baseline-unknown)
+        expectedSidecar: { state: 'present', hash: HASH_SIDECAR },
+        sidecarProtected: false,
+        structuralProtected: true,
+      });
+    });
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# changed', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    const writes = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(writes).toHaveLength(0);
+  });
+
+  it('E1: PROTECTS a sidecar whose two source hashes DISAGREE (impossible app state)', async () => {
+    // reviewSourceHash (inline) and structural.sourceDocumentHash (unions) always bind the SAME
+    // .md hash when the app writes them, so a disagreement is a hand-edited/corrupt sidecar — a
+    // split-brain if half-trusted. Protect BOTH files and drop the structural envelope so nothing
+    // reconstructs against a source that disagrees with the inline axis.
+    const mismatched = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'a'.repeat(64),
+      structural: { version: 1, sourceDocumentHash: 'b'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(mismatched));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/m.md');
+    });
+    expect(opened!.sidecar.structural).toBeUndefined(); // dropped: never reconstructed
+    expect(opened!.sidecarError).toBeTruthy();
+    let outcome: SaveOutcome;
+    await act(async () => {
+      outcome = await result.current.saveFile('# Title changed', [], [], null, null);
+    });
+    expect(outcome!).toEqual({ status: 'blocked', reason: 'structural-protected' });
+    const noWrites = mockInvoke.mock.calls.filter((call) => call[0] === 'write_file_atomic');
+    expect(noWrites).toHaveLength(0);
+  });
+
+  it('E1: LOADS a sidecar whose two source hashes AGREE (no false protection)', async () => {
+    // Equal hashes are internally consistent — at worst a plain external edit, which the
+    // per-axis gates already handle. The cross-check must NOT protect this.
+    const consistent = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'c'.repeat(64),
+      structural: { version: 1, sourceDocumentHash: 'c'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(consistent));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/c.md');
+    });
+    expect(opened!.sidecar.structural?.records).toHaveLength(1);
+    expect(opened!.sidecarError).toBeNull();
+  });
+
+  it('E1: one hash absent is legacy/partial, not a conflict — reviewSourceHash absent', async () => {
+    const legacyInline = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      structural: { version: 1, sourceDocumentHash: 'd'.repeat(64), records: [SAMPLE_STRUCTURAL] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(legacyInline));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/l.md');
+    });
+    expect(opened!.sidecar.structural?.records).toHaveLength(1);
+    expect(opened!.sidecarError).toBeNull();
+  });
+
+  it('E1: one hash absent is legacy/partial, not a conflict — structural absent', async () => {
+    const noStructural = JSON.stringify({
+      version: 2,
+      comments: [],
+      suggestions: [],
+      reviewSourceHash: 'e'.repeat(64),
+    });
+    mockInvoke
+      .mockResolvedValueOnce(fpPresent('# Title'))
+      .mockResolvedValueOnce(fpPresent(noStructural));
+    const { result } = renderHook(() => useFileManager());
+    let opened: Awaited<ReturnType<typeof result.current.openFilePath>>;
+    await act(async () => {
+      opened = await result.current.openFilePath('/docs/e.md');
+    });
+    expect(opened!.sidecar.structural).toBeUndefined();
+    expect(opened!.sidecarError).toBeNull();
   });
 });
 

@@ -6,8 +6,11 @@ import type {
   Suggestion,
   AISessionBinding,
   DocumentChatThread,
+  StructuralReviewEnvelope,
+  StructuralSuggestionRecord,
 } from '../types';
 import { sidecarPath } from '../utils/sidecarPath';
+import { parseStructuralEnvelope } from '../utils/structuralEnvelope';
 import { basename } from '../utils/path';
 import {
   sanitizeComments,
@@ -31,6 +34,18 @@ import type { UnmappableAnchor } from '../utils/canonicalCapture';
 
 function emptySidecar(): SidecarFile {
   return { version: 2, comments: [], suggestions: [] };
+}
+
+/**
+ * The structural envelope to persist: a fresh record set stamped with the current
+ * `.md` write's hash (the F5 reload gate). An empty record set writes nothing.
+ */
+function buildStructuralEnvelope(
+  structural: StructuralSuggestionRecord[],
+  docHash: string,
+): StructuralReviewEnvelope | undefined {
+  if (structural.length === 0) return undefined;
+  return { version: 1, sourceDocumentHash: docHash, records: structural };
 }
 
 /**
@@ -59,10 +74,15 @@ export function stripTransientReplyState(comments: Comment[]): Comment[] {
  */
 function normalizeSidecar(raw: unknown): SidecarFile {
   const parsed = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  // Shape-validate the structural envelope only — the per-record trust boundary is
+  // reconstruction (structuralReconstruction), which quarantines a bad record
+  // rather than dropping it, so a shallow parse here must not deep-sanitize.
+  const structural = parseStructuralEnvelope(parsed.structural);
   return {
     version: 2,
     comments: sanitizeComments(parsed.comments),
     suggestions: sanitizeSuggestions(parsed.suggestions),
+    ...(structural ? { structural } : {}),
     aiSession: sanitizeAISession(parsed.aiSession),
     contextFolder: sanitizeContextFolder(parsed.contextFolder),
     chat: sanitizeDocumentChat(parsed.chat),
@@ -86,9 +106,14 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 Carries the document hash and the sidecar's fingerprint (present with
  *                 its hash, or absent when an empty sidecar was removed) so callers can
  *                 track expected on-disk state for external-conflict detection.
- * - `blocked`   — the document was written but the sidecar was deliberately NOT, because
- *                 the on-disk sidecar is unreadable and we won't clobber recoverable
- *                 data. The document stays dirty; this is not a completed save.
+ * - `blocked`   — a deliberate, non-error refusal to complete the save. `sidecar-protected`:
+ *                 the `.md` was written but the sidecar was NOT, because the on-disk sidecar
+ *                 is unreadable and we won't clobber recoverable comments. `structural-protected`:
+ *                 NEITHER file was written — the sidecar's structural block is malformed and holds
+ *                 the only copy of a proposal whose anchors depend on the current `.md` source, so
+ *                 overwriting the `.md` would make it unrepairable. `baseline-unknown`: neither was
+ *                 written because the on-disk baseline can't be verified. The document stays dirty;
+ *                 none of these is a completed save.
  * - `conflict`  — a fingerprint-gated write found the file changed underneath us and
  *                 wrote nothing. (Not produced by unconditional saves; reserved for
  *                 conflict-aware callers.)
@@ -107,7 +132,7 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  */
 export type SaveOutcome =
   | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
-  | { status: 'blocked'; reason: 'sidecar-protected' | 'baseline-unknown' }
+  | { status: 'blocked'; reason: 'sidecar-protected' | 'structural-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
   | { status: 'failed'; message: string; path?: string }
@@ -137,9 +162,60 @@ function reviewProvenanceReason(
   return undefined;
 }
 
+/**
+ * Scan for a Claude session whose cwd matches this markdown, validated across the IPC
+ * boundary (a binding that fails the sidecar's own validator would be persisted only to be
+ * silently dropped on the next open). Returns the binding to adopt, or null (no match, or the
+ * scan itself failed).
+ */
+async function scanAutoBoundSession(content: string): Promise<AISessionBinding | null> {
+  try {
+    const match = sanitizeAISession(
+      await invoke<unknown>('find_session_for_markdown', { content }),
+    );
+    return match ?? null;
+  } catch (e) {
+    console.warn('Auto-bind scan failed:', e);
+    return null;
+  }
+}
+
+/**
+ * True when a parsed sidecar carries a `structural` block that fails shape validation. Its
+ * records may hold the only copy of the proposed content, so a malformed one must protect the
+ * file (block BOTH .md and sidecar) rather than being silently dropped.
+ */
+function hasMalformedStructuralBlock(raw: unknown): boolean {
+  return (
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as Record<string, unknown>).structural !== undefined &&
+    parseStructuralEnvelope((raw as Record<string, unknown>).structural) === null
+  );
+}
+
+/**
+ * True when a sidecar carries BOTH source hashes but they disagree. `reviewSourceHash` (inline
+ * anchors) and `structural.sourceDocumentHash` (block unions) are ALWAYS stamped with the same
+ * `.md` hash by the app, so a disagreement is an impossible app-produced state — a hand-edited
+ * or corrupt sidecar. Left unchecked it is a split-brain: the two subsystems could reach
+ * different bound/unbound verdicts (e.g. inline trusts its positions while structural quarantines,
+ * or vice-versa). Treated like a malformed structural block: protect BOTH files and skip
+ * reconstruction, rather than half-trusting one axis. One hash absent is a legacy/partial sidecar,
+ * not a conflict — that stays the normal compatibility path.
+ */
+function hasStructuralHashMismatch(sidecar: SidecarFile): boolean {
+  const review = sidecar.reviewSourceHash;
+  const structural = sidecar.structural?.sourceDocumentHash;
+  return review !== undefined && structural !== undefined && review !== structural;
+}
+
 /** A successfully opened document: its content, review sidecar, and anchor authority. */
 export interface OpenResult {
   content: string;
+  /** SHA-256 of the `.md` bytes on disk. Both the inline review anchors (`reviewSourceHash`)
+   *  and the structural envelope (`sourceDocumentHash`) bind to these exact bytes. */
+  docHash: string;
   sidecar: SidecarFile;
   filePath: string;
   autoBound?: boolean;
@@ -181,6 +257,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     forcePath?: string,
     chat?: DocumentChatThread | null,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   saveFileAs: (
     content: string,
@@ -190,6 +267,7 @@ interface UseFileManagerReturn {
     contextFolder: string | null,
     chat?: DocumentChatThread | null,
     requestPathOwnership?: (path: string) => boolean,
+    structural?: StructuralSuggestionRecord[],
   ) => Promise<SaveOutcome>;
   newFile: () => void;
   restoreDraft: (
@@ -199,6 +277,7 @@ interface UseFileManagerReturn {
       expectedDoc?: Fingerprint | null;
       expectedSidecar?: Fingerprint | null;
       sidecarProtected?: boolean;
+      structuralProtected?: boolean;
     },
   ) => void;
   /**
@@ -212,6 +291,7 @@ interface UseFileManagerReturn {
     expectedDoc: Fingerprint | null;
     expectedSidecar: Fingerprint | null;
     sidecarProtected: boolean;
+    structuralProtected: boolean;
   };
 }
 
@@ -264,14 +344,25 @@ export function useFileManager(
   // saves read it synchronously (they can run before React commits) and nothing
   // renders from it directly.
   const sidecarProtectedRef = useRef(false);
+  // Stronger than sidecarProtected: the sidecar parsed, but its STRUCTURAL block is
+  // malformed and may hold the only copy of a proposal whose anchors depend on the
+  // current `.md` source. Unlike a corrupt comments sidecar (which still lets the
+  // text save), this blocks BOTH files so the source stays intact for repair.
+  const structuralProtectedRef = useRef(false);
 
   const markDirty = useCallback(() => {
     changeRevisionRef.current += 1;
     setIsDirty(true);
   }, [setIsDirty]);
 
-  const setProtected = useCallback((value: boolean) => {
-    sidecarProtectedRef.current = value;
+  const setProtected = useCallback((value: boolean, structural = false) => {
+    // Structural protection is STRONGER than (and implies) sidecar protection —
+    // blocking BOTH files necessarily blocks the sidecar — so it forces sidecar
+    // protection on rather than being gated by it. This keeps a restored,
+    // structurally-protected draft safe even when its sidecar bit is unset (the
+    // recovery envelope is a trust boundary and may carry the two independently).
+    sidecarProtectedRef.current = value || structural;
+    structuralProtectedRef.current = structural;
   }, []);
 
   // Snapshot the current on-disk baselines + protection for the workspace recovery
@@ -281,6 +372,7 @@ export function useFileManager(
       expectedDoc: expectedDocRef.current,
       expectedSidecar: expectedSidecarRef.current,
       sidecarProtected: sidecarProtectedRef.current,
+      structuralProtected: structuralProtectedRef.current,
     }),
     [],
   );
@@ -308,13 +400,34 @@ export function useFileManager(
         // drop or silently overwrite). On a load error we block the next save from
         // clobbering the file so the user can recover it.
         let sidecarError: string | null = null;
+        let structuralMalformed = false;
         let sidecarFingerprint: Fingerprint | null = { state: 'absent' };
         try {
           const scRead = await readFileWithFingerprint(sidecarPath(path));
           if (scRead.state === 'present') {
             sidecarFingerprint = { state: 'present', hash: scRead.hash };
             try {
-              sidecar = normalizeSidecar(JSON.parse(scRead.content));
+              const raw = JSON.parse(scRead.content);
+              sidecar = normalizeSidecar(raw);
+              // A present-but-malformed structural envelope may hold the only copy of
+              // the proposed content. normalizeSidecar drops the shape-invalid field;
+              // protect the file (STRUCTURALLY — block BOTH files, since the source
+              // the proposal is anchored to must stay intact) rather than silently
+              // discarding those proposals.
+              if (hasMalformedStructuralBlock(raw)) {
+                sidecarError = `structural suggestions block is malformed`;
+                structuralMalformed = true;
+                console.error(`Sidecar at ${sidecarPath(path)} has a malformed structural block`);
+              } else if (hasStructuralHashMismatch(sidecar)) {
+                // Both source hashes present but disagreeing: an impossible app-produced state.
+                // Protect BOTH files (like a malformed block) and DROP the structural envelope in
+                // memory so reconstruction never runs against it — the on-disk sidecar (the only
+                // copy of the proposal) is preserved by the protection for the user to reconcile.
+                sidecarError = `structural source hash disagrees with the review source hash`;
+                structuralMalformed = true;
+                sidecar = { ...sidecar, structural: undefined };
+                console.error(`Sidecar at ${sidecarPath(path)} has mismatched source hashes`);
+              }
             } catch (e) {
               // Present but corrupt JSON: keep an empty in-memory model, flag the
               // error, and protect the on-disk file. The fingerprint still tracks it.
@@ -333,24 +446,14 @@ export function useFileManager(
           sidecarFingerprint = null;
           console.error(`Sidecar at ${sidecarPath(path)} could not be read:`, e);
         }
-        setProtected(sidecarError !== null);
+        setProtected(sidecarError !== null, structuralMalformed);
 
         let autoBound = false;
         if (!sidecar.aiSession) {
-          try {
-            // Validate instead of casting: the backend's result crosses a
-            // serialization boundary, and a binding that doesn't satisfy the
-            // sidecar's own validator would be persisted only to be silently
-            // dropped on the next open.
-            const match = sanitizeAISession(
-              await invoke<unknown>('find_session_for_markdown', { content }),
-            );
-            if (match) {
-              sidecar = { ...sidecar, aiSession: match };
-              autoBound = true;
-            }
-          } catch (e) {
-            console.warn('Auto-bind scan failed:', e);
+          const match = await scanAutoBoundSession(content);
+          if (match) {
+            sidecar = { ...sidecar, aiSession: match };
+            autoBound = true;
           }
         }
 
@@ -370,6 +473,7 @@ export function useFileManager(
         const reviewMode: ReviewRestoreMode = reviewUnboundReason ? 'unbound' : 'bound';
         return {
           content,
+          docHash: docRead.hash,
           sidecar,
           filePath: path,
           autoBound,
@@ -406,6 +510,8 @@ export function useFileManager(
       aiSession: AISessionBinding | null,
       contextFolder: string | null,
       chat: DocumentChatThread | null | undefined,
+      structural: StructuralSuggestionRecord[],
+      docHash: string,
       expectedSidecar: Fingerprint | null,
       // The `.md`'s content hash. The caller passes canonicalized positions, so stamping
       // this proves the sidecar corresponds to those exact bytes — the load reads it back
@@ -423,12 +529,19 @@ export function useFileManager(
       // AI activity still collapses to no sidecar.
       const cleanComments = stripTransientReplyState(comments);
       const cleanChat = chat ? { ...chat, messages: stripTransientChatState(chat.messages) } : null;
+      // Structural records are the whole reason the union's proposed branch survives
+      // a lost sidecar (the .md is source-only), so they count as data to persist —
+      // an empty sidecar with a structural record must NOT be deleted. A fresh record
+      // set is stamped with THIS write's `.md` hash; a preserved envelope is written
+      // verbatim, keeping its own (stale) hash so quarantined records stay inert.
+      const envelope = buildStructuralEnvelope(structural, docHash);
       if (
         cleanComments.length === 0 &&
         suggestions.length === 0 &&
         !aiSession &&
         !contextFolder &&
-        !chat
+        !chat &&
+        !envelope
       ) {
         // Nothing to persist — remove any empty sidecar we may have left behind, but
         // NOT one that changed underneath us (conditional delete → conflict), and
@@ -445,6 +558,7 @@ export function useFileManager(
         version: 2,
         comments: cleanComments,
         suggestions,
+        ...(envelope ? { structural: envelope } : {}),
         ...(aiSession ? { aiSession } : {}),
         ...(contextFolder ? { contextFolder } : {}),
         ...(cleanChat ? { chat: cleanChat } : {}),
@@ -459,6 +573,34 @@ export function useFileManager(
     [],
   );
 
+  // The pre-write fail-closed guards, evaluated before any byte is written:
+  //  - baseline-unknown: a conditional save to an existing path whose baseline is
+  //    UNKNOWN (a recovered draft with no persisted fingerprint) — we can't tell if
+  //    the file changed on disk while away, and an unconditional write would clobber
+  //    it. Only Untitled (no path) and an explicit Save As are legitimately
+  //    unconditional.
+  //  - structural-protected: a malformed structural sidecar block that may hold the
+  //    only copy of a proposal. Unlike a corrupt comments sidecar (which still saves
+  //    the text), block BOTH files so the source the proposal is anchored to stays
+  //    intact for repair. A Save As to a DIFFERENT path writes a fresh file and
+  //    leaves the protected original untouched, so it escapes (isCurrentTarget).
+  const earlyWriteBlock = useCallback(
+    (
+      usingExpected: boolean,
+      currentPath: string | null,
+      isCurrentTarget: boolean,
+    ): SaveOutcome | null => {
+      if (usingExpected && currentPath !== null && expectedDocRef.current === null) {
+        return { status: 'blocked', reason: 'baseline-unknown' };
+      }
+      if (structuralProtectedRef.current && isCurrentTarget) {
+        return { status: 'blocked', reason: 'structural-protected' };
+      }
+      return null;
+    },
+    [],
+  );
+
   const saveFile = useCallback(
     async (
       content: string,
@@ -468,6 +610,7 @@ export function useFileManager(
       contextFolder: string | null,
       forcePath?: string,
       chat?: DocumentChatThread | null,
+      structural?: StructuralSuggestionRecord[],
     ): Promise<SaveOutcome> => {
       // Read the path from the ref, not state: a fresh pass right after a Save As
       // runs before React commits the new filePath, and must target it.
@@ -489,14 +632,10 @@ export function useFileManager(
       const isExplicitSaveAs = forcePath !== undefined;
       const isCurrentTarget = targetPath === currentPath;
       const usingExpected = !isExplicitSaveAs;
-      // Fail CLOSED: a conditional save to an existing path whose baseline is UNKNOWN
-      // (a recovered draft with no persisted fingerprint) must NOT write — we can't
-      // tell whether the file changed on disk while we were away, and an unconditional
-      // write would silently overwrite it. Only Untitled (no path) and explicit Save As
-      // are legitimately unconditional. Block before touching disk.
-      if (usingExpected && currentPath !== null && expectedDocRef.current === null) {
-        return { status: 'blocked', reason: 'baseline-unknown' };
-      }
+      // Fail CLOSED before touching disk on either pre-write guard (baseline-unknown
+      // or a malformed structural block); see earlyWriteBlock.
+      const blocked = earlyWriteBlock(usingExpected, currentPath, isCurrentTarget);
+      if (blocked) return blocked;
       // Protect a corrupt/ambiguous sidecar from being clobbered on a same-path save.
       const skipSidecar = sidecarProtectedRef.current && isCurrentTarget;
       const sameDocument = () => documentEpochRef.current === saveEpoch;
@@ -531,6 +670,8 @@ export function useFileManager(
           aiSession,
           contextFolder,
           chat,
+          structural ?? [],
+          docResult.hash,
           usingExpected ? expectedSidecarRef.current : null,
           docResult.hash,
         );
@@ -588,7 +729,7 @@ export function useFileManager(
         return { status: 'failed', message, path: targetPath };
       }
     },
-    [saveSidecar, updateFilePath, setProtected, setIsDirty],
+    [saveSidecar, earlyWriteBlock, updateFilePath, setProtected, setIsDirty],
   );
 
   const saveFileAs = useCallback(
@@ -600,6 +741,7 @@ export function useFileManager(
       contextFolder: string | null,
       chat?: DocumentChatThread | null,
       requestPathOwnership?: (path: string) => boolean,
+      structural?: StructuralSuggestionRecord[],
     ): Promise<SaveOutcome> => {
       try {
         const defaultName = filePath ? basename(filePath) : 'untitled.md';
@@ -617,6 +759,7 @@ export function useFileManager(
           contextFolder,
           resolvedPath,
           chat,
+          structural,
         );
       } catch (e) {
         console.error('Failed to save as:', e);
@@ -652,6 +795,7 @@ export function useFileManager(
         expectedDoc?: Fingerprint | null;
         expectedSidecar?: Fingerprint | null;
         sidecarProtected?: boolean;
+        structuralProtected?: boolean;
       },
     ) => {
       changeRevisionRef.current += 1;
@@ -668,10 +812,14 @@ export function useFileManager(
       expectedDocRef.current = restoredDoc;
       expectedSidecarRef.current = restoredSidecar;
       // Protect the sidecar if the snapshot recorded it protected OR its baseline is
-      // unknown for a saved path (can't verify → don't clobber). An unknown DOC
-      // baseline is handled by the fail-closed save path, not here.
+      // unknown for a saved path (can't verify → don't clobber). Carry STRUCTURAL
+      // protection through too, so recovery of a doc whose on-disk sidecar had a
+      // malformed structural block still blocks BOTH files (a crash must not
+      // downgrade it to comments-only protection, which would write the `.md`). An
+      // unknown DOC baseline is handled by the fail-closed save path, not here.
       setProtected(
         baselines?.sidecarProtected === true || (path !== null && restoredSidecar === null),
+        baselines?.structuralProtected === true,
       );
     },
     [updateFilePath, setProtected, setIsDirty],

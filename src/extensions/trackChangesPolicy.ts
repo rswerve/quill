@@ -38,7 +38,7 @@ export type BlockedOperation =
   | 'unsafeMappedStep';
 
 export interface TrackingBlockedInfo {
-  operation: BlockedOperation | 'inlineFormat';
+  operation: BlockedOperation | 'inlineFormat' | 'structuralFreeze';
   notice: string;
   markName?: string;
 }

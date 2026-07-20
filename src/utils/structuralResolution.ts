@@ -1,0 +1,266 @@
+import type { Mark, Node as PMNode } from '@tiptap/pm/model';
+import type { EditorState, Transaction } from '@tiptap/pm/state';
+import { closeHistory } from '@tiptap/pm/history';
+import { retainedRecords } from '../extensions/StructuralRecordStore';
+import {
+  SKIP_TRACKING_META,
+  STRUCTURAL_BYPASS_META,
+  type StructuralBypass,
+} from '../extensions/trackChangesMeta';
+import { findAnnotationRange } from '../extensions/AnnotationFocus';
+import { analyzeStructuralUnions, type IndexedStructuralUnion } from './structuralUnionIndex';
+import { structuralFootprints } from './structuralFootprints';
+import { rangeText } from './trackedEdits';
+import type { CapturedCommentAnchor } from './trackedCommentResolution';
+
+/**
+ * The per-change structural resolution kernel. Accept collapses a block union to
+ * its proposed branch, Reject to its original branch — for ONE changeId only,
+ * leaving every other union and all inline suggestions untouched.
+ *
+ * The collapse is ONE `replaceWith` over the whole union (the surviving branch,
+ * identity cleared), so the transaction inverts atomically: Undo restores both
+ * branches in a single step and the session-retained record reactivates. (A
+ * two-step markup+delete does NOT invert cleanly.) The transaction carries
+ * `closeHistory` so it is its own undo event even when Accept immediately follows
+ * the mint, plus {@link SKIP_TRACKING_META} and a scoped
+ * `{kind:'resolve', changeId, action}` {@link STRUCTURAL_BYPASS_META} so the freeze
+ * guard authorizes exactly this change.
+ *
+ * Fail-closed: a union whose live shape violates the mint invariant — any tracked
+ * mark, any foreign comment, or an origin comment not wholly inside the delete
+ * branch (review-mark and structural-skeleton validation are independent, so a
+ * snapshot could carry such a state) — refuses `union-not-clean` rather than
+ * collapse into a highlight for a resolved comment or silently delete a foreign
+ * thread.
+ *
+ * Option-B (accept only): the origin comment is auto-resolved. A CONTAINED origin
+ * rides the dropped delete branch; a DISJOINT origin's exact mark instances are
+ * unset in the same transaction so it does not outlive its resolved record. If the
+ * origin mark sits inside ANOTHER change's footprint the resolution refuses
+ * `origin-comment-locked` (never broadening A's bypass to mutate B); retry once B
+ * resolves. The origin's live anchor is returned as `resolvedComment` so the caller
+ * resolves React comment state ONLY for a successful, dispatched resolution. Reject
+ * performs no comment operation and retains the origin.
+ */
+export type StructuralResolutionResult =
+  | { ok: true; tr: Transaction; resolvedComment: CapturedCommentAnchor | null }
+  | { ok: false; reason: 'not-resolvable' | 'union-not-clean' | 'origin-comment-locked' };
+
+const TRACKED_MARK_NAMES = new Set(['tracked_insert', 'tracked_delete', 'tracked_format']);
+
+interface CommentMarkInstance {
+  from: number;
+  to: number;
+  mark: Mark;
+}
+
+/** Every live instance of one comment id, as exact (removable) mark instances. */
+function commentMarkInstances(doc: PMNode, commentId: string): CommentMarkInstance[] {
+  const instances: CommentMarkInstance[] = [];
+  doc.descendants((node, pos) => {
+    for (const mark of node.marks) {
+      if (mark.type.name === 'comment' && mark.attrs.commentId === commentId) {
+        instances.push({ from: pos, to: pos + node.nodeSize, mark });
+      }
+    }
+  });
+  return instances;
+}
+
+interface CleanCtx {
+  union: IndexedStructuralUnion;
+  deleteFrom: number;
+  deleteTo: number;
+  originCommentId: string | undefined;
+}
+
+interface CleanScan {
+  clean: boolean;
+  originInDeleteBranch: boolean;
+  originOutsideUnion: boolean;
+  originMark: Mark | null;
+}
+
+/** Fold one comment mark into the scan: mark-consistent, and contained-or-disjoint. */
+function inspectCommentMark(
+  mark: Mark,
+  pos: number,
+  nodeTo: number,
+  isInline: boolean,
+  ctx: CleanCtx,
+  scan: CleanScan,
+): void {
+  const { union, deleteFrom, deleteTo, originCommentId } = ctx;
+  const geomInUnion = pos >= union.from && nodeTo <= union.to;
+  const isOrigin = originCommentId !== undefined && mark.attrs.commentId === originCommentId;
+  // A comment mark can only live on inline content. A non-inline ORIGIN mark is a forged
+  // origin → fail globally; a non-inline FOREIGN comment matters only inside the union
+  // (matching the old envelope scan). Only inline instances classify as contained/disjoint.
+  if (!isInline) {
+    if (isOrigin || geomInUnion) scan.clean = false;
+    return;
+  }
+  if (isOrigin) {
+    // Every origin fragment must be mark-identical (kind, resolved, …), matching the mint
+    // boundary — a corrupted mix (note vs claude, resolved vs unresolved) cannot resolve.
+    if (scan.originMark === null) scan.originMark = mark;
+    else if (!scan.originMark.eq(mark)) scan.clean = false;
+  }
+  if (geomInUnion) {
+    // A comment in the union must be the origin, wholly in the delete branch.
+    if (!isOrigin || pos < deleteFrom || nodeTo > deleteTo) scan.clean = false;
+    else scan.originInDeleteBranch = true;
+  } else if (isOrigin) {
+    scan.originOutsideUnion = true;
+  }
+}
+
+/** Fold one node's marks into the cleanliness scan (see {@link unionIsClean}). */
+function inspectUnionNode(node: PMNode, pos: number, ctx: CleanCtx, scan: CleanScan): void {
+  const nodeTo = pos + node.nodeSize;
+  for (const mark of node.marks) {
+    const name = mark.type.name;
+    if (TRACKED_MARK_NAMES.has(name)) {
+      // A tracked mark overlapping the union is dirty; outside it is irrelevant.
+      if (pos < ctx.union.to && ctx.union.from < nodeTo) scan.clean = false;
+    } else if (name === 'comment') {
+      inspectCommentMark(mark, pos, nodeTo, node.isInline, ctx, scan);
+    }
+    if (!scan.clean) return;
+  }
+}
+
+/**
+ * The union's live shape matches the mint invariant: no tracked mark anywhere in it,
+ * no foreign comment in it, and the origin comment is EITHER wholly inside the delete
+ * branch (rides the dropped branch on accept) OR wholly outside the union (disjoint,
+ * unset on accept) — never straddling. The delete branch is the first delete root's
+ * start through the last's end; because the delete run is contiguous, that single span
+ * covers a merge's two source blocks, so an origin inside A, inside B, or spanning A→B
+ * all read as delete-branch.
+ *
+ * The walk is whole-document, not just the union envelope: a PARTIAL origin that
+ * continues from the delete branch into an outside paragraph would otherwise pass the
+ * envelope scan, and the resolver would then strip its outside mark and collapse the
+ * union — mangling a comment it cannot cleanly resolve. Refuse that. Inspects EVERY
+ * node's marks (text, hard breaks, inline atoms, malformed block-node marks).
+ */
+function unionIsClean(
+  doc: PMNode,
+  union: IndexedStructuralUnion,
+  originCommentId: string | undefined,
+): boolean {
+  const ctx: CleanCtx = {
+    union,
+    deleteFrom: union.deleteRoots[0].pos,
+    deleteTo: union.deleteRoots[union.deleteRoots.length - 1].to,
+    originCommentId,
+  };
+  const scan: CleanScan = {
+    clean: true,
+    originInDeleteBranch: false,
+    originOutsideUnion: false,
+    originMark: null,
+  };
+  doc.descendants((node, pos) => {
+    if (!scan.clean) return false;
+    inspectUnionNode(node, pos, ctx, scan);
+    return scan.clean;
+  });
+  // A partial origin — instances in the delete branch AND outside the union — cannot be
+  // cleanly resolved (a wholly-disjoint origin, only outside, stays allowed).
+  if (scan.originInDeleteBranch && scan.originOutsideUnion) return false;
+  return scan.clean;
+}
+
+type OriginAcceptOutcome =
+  | { locked: true }
+  | { locked: false; resolvedComment: CapturedCommentAnchor | null };
+
+/**
+ * Handle the origin comment on Accept: refuse if it sits inside another change's
+ * frozen union, otherwise capture its live anchor (for the caller's React state)
+ * and unset only its DISJOINT instances on `tr` (in-union instances are the delete
+ * branch and ride the dropped branch, so Undo restores them). Runs after the
+ * cleanliness preflight, so any in-union origin instance is delete-branch-only.
+ */
+function resolveOriginCommentOnAccept(
+  state: EditorState,
+  tr: Transaction,
+  union: IndexedStructuralUnion,
+  changeId: string,
+  originCommentId: string,
+): OriginAcceptOutcome {
+  const instances = commentMarkInstances(state.doc, originCommentId);
+  if (instances.length === 0) return { locked: false, resolvedComment: null };
+  const foreignFootprints = structuralFootprints(state.doc).filter(
+    (footprint) => footprint.changeId !== changeId,
+  );
+  const insideForeignUnion = instances.some((instance) =>
+    foreignFootprints.some(
+      (footprint) => instance.from < footprint.to && footprint.from < instance.to,
+    ),
+  );
+  if (insideForeignUnion) return { locked: true };
+  const live = findAnnotationRange(state.doc, 'comment', originCommentId);
+  const resolvedComment: CapturedCommentAnchor | null = live
+    ? {
+        id: originCommentId,
+        from: live.from,
+        to: live.to,
+        anchorText: rangeText(state.doc, live.from, live.to),
+      }
+    : null;
+  for (const instance of instances) {
+    if (instance.from < union.to && union.from < instance.to) continue;
+    tr.removeMark(instance.from, instance.to, instance.mark);
+  }
+  return { locked: false, resolvedComment };
+}
+
+export function resolveStructuralUnion(
+  state: EditorState,
+  changeId: string,
+  action: 'accept' | 'reject',
+): StructuralResolutionResult {
+  const records = retainedRecords(state);
+  const union = analyzeStructuralUnions(state.doc, records).persistable.get(changeId);
+  if (!union) return { ok: false, reason: 'not-resolvable' };
+  const originCommentId = records.get(changeId)?.originCommentId;
+
+  // Fail closed on a union that violates the mint invariant either way.
+  if (!unionIsClean(state.doc, union, originCommentId)) {
+    return { ok: false, reason: 'union-not-clean' };
+  }
+
+  const tr = state.tr;
+  let resolvedComment: CapturedCommentAnchor | null = null;
+
+  if (action === 'accept' && originCommentId) {
+    const outcome = resolveOriginCommentOnAccept(state, tr, union, changeId, originCommentId);
+    if (outcome.locked) return { ok: false, reason: 'origin-comment-locked' };
+    resolvedComment = outcome.resolvedComment;
+  }
+
+  // Keep every root of the surviving branch (accept → all inserts, reject → all
+  // deletes), identity cleared, and replace the whole envelope in ONE step so Undo
+  // restores the union atomically. A split keeps M inserts; a merge keeps one.
+  const keepRoots = action === 'accept' ? union.insertRoots : union.deleteRoots;
+  const survivors = keepRoots.map((root) =>
+    root.node.type.create(
+      { ...root.node.attrs, blockTrack: null },
+      root.node.content,
+      root.node.marks,
+    ),
+  );
+  tr.replaceWith(union.from, union.to, survivors);
+  tr.setMeta(SKIP_TRACKING_META, true);
+  tr.setMeta(STRUCTURAL_BYPASS_META, {
+    kind: 'resolve',
+    changeId,
+    action,
+  } satisfies StructuralBypass);
+  closeHistory(tr);
+  return { ok: true, tr, resolvedComment };
+}

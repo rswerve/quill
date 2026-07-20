@@ -88,3 +88,27 @@
   font-family: var(--font-mono);
   font-size: 10px;
 }
+
+/* Non-actionable needs-attention banner: a structural union that can't be
+   restored, is orphaned, or refused a clean resolution. Uses the track-del
+   accent (a warm "something's wrong" wash) without claiming a card. */
+.attentionBanner {
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--color-track-del-line) 40%, transparent);
+  border-left: 3px solid var(--color-track-del-line);
+  background: var(--color-track-del-bg);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+}
+.attentionBanner strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-body);
+}
+.attentionBanner p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}

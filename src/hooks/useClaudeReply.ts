@@ -4,18 +4,17 @@ import type {
   AISessionBinding,
   Comment,
   EditScope,
-  QuillEdit,
   QuillEditsBlock,
   ClaudeRunOptions,
+  StructuralOp,
+  StructuralPromptEntry,
   TrackedChangeInfo,
   TrackedEditOrigin,
 } from '../types';
 import { clip } from '../utils/format';
-import {
-  formatEditResultNotice,
-  stripTrailingNewlines,
-  type EditResult,
-} from '../utils/trackedEdits';
+import { stripTrailingNewlines } from '../utils/trackedEdits';
+import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
+import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
@@ -30,6 +29,7 @@ export interface RangeTexts {
 interface UseClaudeReplyOptions {
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
+  setAIReplyText: (commentId: string, replyId: string, text: string) => void;
   setAIReplyModel?: (commentId: string, replyId: string, model: string) => void;
   setAIReplyEffort?: (commentId: string, replyId: string, effort: string) => void;
   onModelObserved?: (model: string) => void;
@@ -46,15 +46,17 @@ interface UseClaudeReplyOptions {
    *  with the comment that caused them. */
   applyTrackedEdits: (
     comment: Comment,
-    edits: QuillEdit[],
+    edits: unknown[],
     scope: EditScope,
     origin?: TrackedEditOrigin,
-  ) => { results: EditResult[]; suggestionIds?: string[] };
+  ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
    *  what is already proposed and awaiting review. */
   getPendingSuggestions: () => TrackedChangeInfo[];
+  /** Pending structural (block-union) changes, flattened for the manifest. */
+  getStructuralPending: () => StructuralPromptEntry[];
   /** Global model/effort choices, read immediately before each spawn. */
   getRunOptions?: () => ClaudeRunOptions;
   /** Shared with document chat so this document resumes only one request. */
@@ -193,10 +195,15 @@ export function buildEditProtocolLines(): string[] {
     '- Your edits may touch any part of the document the request warrants. Keep changes minimal and relevant — no unrequested rewrites elsewhere.',
     '- Make "find" strings long/unique enough to be unambiguous.',
     '- A TEXT edit ("find"+"replace") must start and end inside ONE paragraph, list item, or heading. Within that block a single "\\n" means a hard line break (Shift+Enter): in "find" it matches an existing line break, and in "replace" it inserts one. So join two hard-broken lines with {"find":"line one\\nline two","replace":"line one line two"}, or split a line with {"find":"one long sentence","replace":"one long\\nsentence"}.',
-    '- Quill still cannot merge, split, or add separate PARAGRAPHS, list items, or headings (blocks separated by a blank line in the Markdown source). When a change needs that — e.g. turning bullets into one paragraph, or joining two paragraphs — emit no edit for it and explain in prose that it needs Editing mode.',
+    "- A TEXT or FORMAT edit cannot change block BOUNDARIES — it cannot merge, split, add, or remove separate PARAGRAPHS, list items, or headings (blocks separated by a blank line in the Markdown source). Changing an existing block's TYPE (a heading to/from a paragraph, or a list to/from a paragraph), SPLITTING a paragraph into several paragraphs, and MERGING adjacent paragraphs into one ARE all possible with a structural edit (below); only ADDING or DELETING whole blocks still needs Editing mode — emit no edit for those and explain in prose.",
     '- A FORMAT edit\'s "find" MAY span multiple paragraphs, list items, headings, or a hard line break: separate each line with a SINGLE "\\n" — never a blank line. The Markdown source shows blank lines between paragraphs, but the reading text you match against uses one "\\n" for every line break.',
     '- To delete text, use an empty "replace". To insert, you may set "find" to a short unique substring and include it at the start of "replace".',
-    '- For formatting-only changes, use a "format" edit instead of "replace": {"find":"<exact substring>","format":{"bold":true,"italic":false}}. true turns a style on, false turns it off; include only the styles being changed. Supported styles: "bold", "italic", "strikethrough". An edit carries either "replace" or "format", never both — a format edit has NO "replace" key at all — and a format edit needs a non-empty "find".',
+    '- For formatting-only changes, use a "format" edit instead of "replace": {"find":"<exact substring>","format":{"bold":true,"italic":false}}. true turns a style on, false turns it off; include only the styles being changed. Supported styles: "bold", "italic", "strikethrough". An edit carries exactly ONE of "replace", "format", or "structural", never more than one — a format edit has NO "replace" key at all — and a format edit needs a non-empty "find".',
+    '- To change one existing block\'s TYPE, use a "structural" edit whose "find" is plain reading text that UNIQUELY IDENTIFIES ONE block (it need not be the block\'s whole text) and which carries NEITHER "replace" NOR "format". The "to" value picks the new type: "paragraph" turns the heading — or the list — that contains the text into a normal paragraph (matching text in ANY one item flattens the WHOLE list into a single paragraph, its items joined by spaces); "heading" turns a paragraph into a heading and REQUIRES a "level" of 1–6 (omit "level" for every other target); "bulletList", "orderedList", or "taskList" turns the paragraph that contains the text into a list of that kind. Without "items" this is a single-item list. Examples: {"find":"Section title","structural":{"to":"paragraph"}}, {"find":"Make this a heading","structural":{"to":"heading","level":2}}, {"find":"A standalone point","structural":{"to":"bulletList"}}.',
+    '- To turn ONE paragraph into MULTIPLE list items, use a list "to" together with "items" (2+ pieces): each item must be that paragraph\'s OWN reading text, divided only at spaces — no added, removed, or changed words. The list kind stays explicit. Example: {"find":"First sentence. Second sentence.","structural":{"to":"bulletList","items":["First sentence.","Second sentence."]}}. "items" is allowed ONLY with "bulletList", "orderedList", or "taskList" and cannot appear with "level", "split", or "merge".',
+    '- To SPLIT a paragraph into several paragraphs, use a "structural" edit with "split" (an array of 2+ pieces) INSTEAD of "to": each piece must be that paragraph\'s OWN reading text, split only at the spaces — no added, removed, or changed words, and no "level". Example: {"find":"First point. Second point.","structural":{"split":["First point.","Second point."]}}.',
+    '- To MERGE adjacent paragraphs into one, use a "structural" edit with "merge": true INSTEAD of "to"/"split", and a "find" that SPANS the paragraphs to combine — the reading text runs continuously from the first paragraph through the last, with a SINGLE "\\n" at each paragraph break. Every block the find spans is merged; they must be ≥2 ADJACENT paragraphs (a heading or list in the run is not allowed). Example: {"find":"The meeting is Tuesday.\\nBring your laptop.","structural":{"merge":true}}. A structural edit carries EXACTLY ONE of "to", "split", or "merge".',
+    "- Structural edits support heading↔paragraph, list↔paragraph (a flat list of ANY number of items, each item a single line, converts to one paragraph), splitting a paragraph into paragraphs, and merging adjacent paragraphs into one. A list whose items are nested or hold more than one block, changing a list's kind (bulleted↔numbered↔checklist), changing an existing heading's level, merging across a heading or list, and creating or deleting blocks are NOT available yet — for any of those, emit no edit and explain in prose that it needs Editing mode.",
     '- Underline and other styles beyond those three cannot be suggested — if asked, explain that in prose. Never emit an edits block with identical "find" and "replace".',
     '- Keep any prose before the block to one or two sentences; the "summary" is what the user sees, so write it as a human editor would ("Fixed subject-verb agreement and tightened the opening.").',
     '- Output the block only when you actually changed something. If nothing needs changing, omit it.',
@@ -204,42 +211,67 @@ export function buildEditProtocolLines(): string[] {
   ];
 }
 
-export function buildPendingSuggestionsLines(pendingSuggestions: TrackedChangeInfo[]): string[] {
+/** The target block form a pending structural change would produce. */
+function structuralTargetPhrase(op: StructuralOp): string {
+  switch (op.kind) {
+    case 'headingToParagraph':
+      return 'a paragraph';
+    case 'paragraphToHeading':
+      return `a heading (level ${op.level})`;
+    case 'listToParagraph':
+      return 'a paragraph';
+    case 'paragraphToList':
+      if (op.listType === 'orderedList') return 'a numbered list';
+      if (op.listType === 'taskList') return 'a task list';
+      return 'a bullet list';
+    case 'splitParagraph':
+      return 'several paragraphs';
+    case 'mergeParagraphs':
+      return 'a single paragraph';
+  }
+}
+
+function originSuffix(originCommentId?: string, originChatMessageId?: string): string {
+  if (originCommentId) return ` (from comment ${originCommentId})`;
+  if (originChatMessageId) return ` (from chat ${originChatMessageId})`;
+  return '';
+}
+
+export function buildPendingSuggestionsLines(
+  pendingSuggestions: TrackedChangeInfo[],
+  structuralPending: StructuralPromptEntry[] = [],
+): string[] {
+  const inlineLines = pendingSuggestions.map((suggestion) => {
+    const origin = originSuffix(suggestion.originCommentId, suggestion.originChatMessageId);
+    const formatSegments = suggestion.segments.filter((segment) => segment.kind === 'format');
+    const insertions = suggestion.segments.filter((segment) => segment.kind === 'insert');
+    const deletions = suggestion.segments.filter((segment) => segment.kind === 'delete');
+    if (formatSegments.length > 0 && insertions.length === 0 && deletions.length === 0) {
+      const adds = [...new Set(formatSegments.flatMap((segment) => segment.adds))].sort();
+      const removes = [...new Set(formatSegments.flatMap((segment) => segment.removes))].sort();
+      const delta = [...adds.map((name) => `+${name}`), ...removes.map((name) => `-${name}`)].join(
+        ' ',
+      );
+      const text = formatSegments.map((segment) => segment.text).join(' … ');
+      return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
+    }
+    const inserted = insertions.map((segment) => segment.text).join(' … ');
+    const deleted = deletions.map((segment) => segment.text).join(' … ');
+    if (insertions.length > 0 && deletions.length > 0) {
+      return `- [replacement] "${clip(deleted, 80)}" → "${clip(inserted, 80)}"${origin}`;
+    }
+    const kind = insertions.length > 0 ? 'insertion' : 'deletion';
+    return `- [${kind}] "${clip(inserted || deleted, 80)}"${origin}`;
+  });
+  const structuralLines = structuralPending.map((entry) => {
+    const origin = originSuffix(entry.originCommentId, entry.originChatMessageId);
+    return `- [structure] "${clip(entry.anchorText, 80)}" → ${structuralTargetPhrase(entry.op)}${origin}`;
+  });
+  const lines = [...inlineLines, ...structuralLines];
   return [
     '=== PENDING SUGGESTIONS (already proposed, awaiting review) ===',
     'Do not re-propose or conflict with these pending tracked changes.',
-    ...(pendingSuggestions.length > 0
-      ? pendingSuggestions.map((suggestion) => {
-          let origin = '';
-          if (suggestion.originCommentId) {
-            origin = ` (from comment ${suggestion.originCommentId})`;
-          } else if (suggestion.originChatMessageId) {
-            origin = ` (from chat ${suggestion.originChatMessageId})`;
-          }
-          const formatSegments = suggestion.segments.filter((segment) => segment.kind === 'format');
-          const insertions = suggestion.segments.filter((segment) => segment.kind === 'insert');
-          const deletions = suggestion.segments.filter((segment) => segment.kind === 'delete');
-          if (formatSegments.length > 0 && insertions.length === 0 && deletions.length === 0) {
-            const adds = [...new Set(formatSegments.flatMap((segment) => segment.adds))].sort();
-            const removes = [
-              ...new Set(formatSegments.flatMap((segment) => segment.removes)),
-            ].sort();
-            const delta = [
-              ...adds.map((name) => `+${name}`),
-              ...removes.map((name) => `-${name}`),
-            ].join(' ');
-            const text = formatSegments.map((segment) => segment.text).join(' … ');
-            return `- [formatting ${delta}] "${clip(text, 80)}"${origin}`;
-          }
-          const inserted = insertions.map((segment) => segment.text).join(' … ');
-          const deleted = deletions.map((segment) => segment.text).join(' … ');
-          if (insertions.length > 0 && deletions.length > 0) {
-            return `- [replacement] "${clip(deleted, 80)}" → "${clip(inserted, 80)}"${origin}`;
-          }
-          const kind = insertions.length > 0 ? 'insertion' : 'deletion';
-          return `- [${kind}] "${clip(inserted || deleted, 80)}"${origin}`;
-        })
-      : ['(none)']),
+    ...(lines.length > 0 ? lines : ['(none)']),
     '',
   ];
 }
@@ -272,6 +304,7 @@ export function buildPrompt(
   context: PromptContext | null,
   pendingSuggestions: TrackedChangeInfo[] = [],
   freshSession = false,
+  structuralPending: StructuralPromptEntry[] = [],
 ): string {
   // `userText` is appended explicitly as the final line below. Depending on
   // when React flushed state, the same message may or may not already be the
@@ -315,7 +348,7 @@ export function buildPrompt(
     ...head,
     ...buildEditProtocolLines(),
     ...editContext,
-    ...buildPendingSuggestionsLines(pendingSuggestions),
+    ...buildPendingSuggestionsLines(pendingSuggestions, structuralPending),
     ...buildReferenceContextLines(context),
     '=== FULL DOCUMENT ===',
     documentIntroduction,
@@ -393,6 +426,7 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           context,
           opts.getPendingSuggestions(),
           fresh,
+          opts.getStructuralPending(),
         );
 
         const finalize = (rawText: string, visibleText: string) => {
@@ -407,10 +441,6 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           }
 
           if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-            // The prose we already streamed; if it was empty, surface the summary.
-            if (visibleText.trim() === '' && parsed.summary) {
-              opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
-            }
             // Edits are document-scale: the highlight frames the request but
             // does not fence where changes may land.
             const { results, suggestionIds = [] } = opts.applyTrackedEdits(
@@ -422,10 +452,11 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             if (suggestionIds.length > 0) {
               opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
             }
-            const skippedNotice = formatEditResultNotice(results);
-            if (skippedNotice) {
-              opts.appendAIReplyChunk(comment.id, replyId, `\n\n${skippedNotice}`);
-            }
+            opts.setAIReplyText(
+              comment.id,
+              replyId,
+              reconcileBatchReplyText(visibleText, parsed.summary, results, parsed.edits),
+            );
           }
         };
 

@@ -225,4 +225,24 @@ describe('restoreDocJSONInto: transient plugin reset + fail-closed', () => {
     expect(result.ok).toBe(false);
     expect(b.state.doc.toJSON()).toEqual(before); // untouched
   });
+
+  it('fails closed on a malformed structural record and leaves the editor untouched', () => {
+    const a = mintCoherent();
+    const jsonA = a.editor.state.doc.toJSON();
+    const b = makeEditor();
+    b.commands.setContent(
+      {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'original' }] }],
+      },
+      { emitUpdate: false },
+    );
+    const before = b.state.doc.toJSON();
+    // The structural argument is `unknown[]`: a malformed entry partitions as opaque quarantine,
+    // which fails the entire lossless seed BEFORE any mutation — so the editor is untouched and
+    // the caller degrades instead of restoring against unvalidated records.
+    const result = restoreDocJSONInto(b, jsonA, a.comments, a.suggestions, [{ not: 'a record' }]);
+    expect(result.ok).toBe(false);
+    expect(b.state.doc.toJSON()).toEqual(before); // untouched
+  });
 });

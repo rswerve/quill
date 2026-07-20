@@ -1,10 +1,11 @@
 /** End-to-end coverage for Quill's consolidated create/edit link card. */
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
+import { activeEditor } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   return { editor };

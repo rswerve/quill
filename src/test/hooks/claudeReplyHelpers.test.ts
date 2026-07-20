@@ -144,12 +144,49 @@ describe('buildPrompt document-scale edit protocol', () => {
     const prompt = buildPrompt(makeComment([]), 'bold this', 'doc body', RANGES, null, null);
     expect(prompt).toContain('use a "format" edit instead of "replace"');
     expect(prompt).toContain('"bold", "italic", "strikethrough"');
-    expect(prompt).toContain('either "replace" or "format", never both');
+    expect(prompt).toContain('exactly ONE of "replace", "format", or "structural"');
     // Inexpressible styles still get an honest prose answer, and the old
     // identical-find/replace trap stays outlawed.
     expect(prompt).toContain('Underline and other styles beyond those three cannot be suggested');
     expect(prompt).toContain('Never emit an edits block with identical "find" and "replace"');
     expect(prompt).not.toContain('CANNOT be expressed as find/replace edits');
+  });
+
+  it('documents structural edits incl. flat list↔paragraph, with the honest scope', () => {
+    const prompt = buildPrompt(makeComment([]), 'make this a list', 'doc body', RANGES, null, null);
+    // The structural edit shape + the "uniquely identifies ONE block, not the whole block" precision.
+    expect(prompt).toContain('use a "structural" edit');
+    expect(prompt).toContain('"structural":{"to":"paragraph"}');
+    expect(prompt).toContain('"structural":{"to":"heading","level":2}');
+    expect(prompt).toContain('"structural":{"to":"bulletList"}'); // the list-conversion example
+    expect(prompt).toContain(
+      '"structural":{"to":"bulletList","items":["First sentence.","Second sentence."]}',
+    );
+    expect(prompt).toContain('turn ONE paragraph into MULTIPLE list items');
+    expect(prompt).toContain(
+      '"items" is allowed ONLY with "bulletList", "orderedList", or "taskList"',
+    );
+    expect(prompt).toContain('cannot appear with "level", "split", or "merge"');
+    expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
+    expect(prompt).toContain('REQUIRES a "level"');
+    expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
+    // Block-type changes span heading↔paragraph AND flat list↔paragraph, plus split + merge.
+    expect(prompt).toContain('splitting a paragraph into paragraphs');
+    // Matching text in ONE item flattens the WHOLE list — the model must know one find suffices.
+    expect(prompt).toContain('flattens the WHOLE list');
+    // The split grammar: "split" (2+ pieces) instead of "to", pieces from the paragraph's text.
+    expect(prompt).toContain('"structural":{"split":["First point.","Second point."]}');
+    // The merge grammar: {"merge":true} with a find SPANNING the paragraphs to combine.
+    expect(prompt).toContain('"structural":{"merge":true}');
+    expect(prompt).toContain('EXACTLY ONE of "to", "split", or "merge"');
+    // NEGATIVE: the stale prohibition that lumped merge with add/delete as Editing-mode-only is
+    // gone, so the prompt never both forbids merge and instructs {"merge":true} (a contradiction).
+    expect(prompt).not.toContain('merging, adding, or deleting whole blocks');
+    // Honest scope: nested/multi-block list items, list-kind changes, cross-block merge unavailable.
+    expect(prompt).toContain('nested or hold more than one block');
+    expect(prompt).toContain("changing a list's kind");
+    expect(prompt).toContain('merging across a heading or list');
+    expect(prompt).toContain('are NOT available yet');
   });
 
   it('states the single-newline line-break convention for multi-line format finds', () => {
@@ -169,9 +206,9 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('a single "\\n" means a hard line break (Shift+Enter)');
     expect(prompt).toContain('{"find":"line one\\nline two","replace":"line one line two"}'); // join
     expect(prompt).toContain('{"find":"one long sentence","replace":"one long\\nsentence"}'); // split
-    // Cross-block structural changes still refused.
+    // Cross-block structural changes still refused for TEXT/FORMAT edits.
     expect(prompt).toContain(
-      'cannot merge, split, or add separate PARAGRAPHS, list items, or headings',
+      'cannot merge, split, add, or remove separate PARAGRAPHS, list items, or headings',
     );
     expect(prompt).toContain('explain in prose that it needs Editing mode');
     // The Slice-1 "no newlines in replace" ban is gone.
@@ -286,6 +323,38 @@ describe('buildPrompt pending suggestions', () => {
 
     expect(prompt).toContain('- [replacement] "old" → "new"');
     expect(prompt).toContain('- [formatting +bold -italic] "one … two"');
+  });
+
+  it('lists pending STRUCTURAL changes with block text and target form', () => {
+    const prompt = buildPrompt(makeComment([]), 'fix this', 'doc', RANGES, null, null, [], false, [
+      {
+        op: { kind: 'headingToParagraph', level: 1 },
+        anchorText: 'Quarterly Results',
+        originCommentId: 'c7',
+      },
+      { op: { kind: 'paragraphToHeading', level: 2 }, anchorText: 'Overview' },
+      { op: { kind: 'paragraphToList', listType: 'bulletList' }, anchorText: 'first point' },
+    ]);
+    expect(prompt).toContain('- [structure] "Quarterly Results" → a paragraph (from comment c7)');
+    expect(prompt).toContain('- [structure] "Overview" → a heading (level 2)');
+    expect(prompt).toContain('- [structure] "first point" → a bullet list');
+    expect(prompt).not.toContain('(none)');
+  });
+
+  it('combines inline and structural pending changes in one manifest', () => {
+    const prompt = buildPrompt(
+      makeComment([]),
+      'fix this',
+      'doc',
+      RANGES,
+      null,
+      null,
+      [makeChange({ segments: [{ kind: 'insert', from: 1, to: 6, text: 'added text' }] })],
+      false,
+      [{ op: { kind: 'headingToParagraph', level: 1 }, anchorText: 'Title' }],
+    );
+    expect(prompt).toContain('- [insertion] "added text"');
+    expect(prompt).toContain('- [structure] "Title" → a paragraph');
   });
 
   it('renders (none) when nothing is pending', () => {

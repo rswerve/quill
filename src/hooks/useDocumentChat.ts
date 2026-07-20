@@ -5,8 +5,8 @@ import type {
   ChatMessage,
   ClaudeRunOptions,
   DocumentChatThread,
-  QuillEdit,
   QuillEditsBlock,
+  StructuralPromptEntry,
   TrackedChangeInfo,
 } from '../types';
 import {
@@ -18,7 +18,8 @@ import {
 } from './useClaudeReply';
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
-import { formatEditResultNotice, type EditResult } from '../utils/trackedEdits';
+import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
+import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { stripTransientChatState } from '../utils/chatThread';
 
 export interface ChatCursorContext {
@@ -30,11 +31,13 @@ interface UseDocumentChatOptions {
   getDocMarkdown: () => string;
   getCursorContext: () => ChatCursorContext;
   applyTrackedEdits: (
-    edits: QuillEdit[],
+    edits: unknown[],
     originChatMessageId: string,
-  ) => { results: EditResult[]; suggestionIds?: string[] };
+  ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   getContextFolder: () => string | null;
   getPendingSuggestions: () => TrackedChangeInfo[];
+  /** Pending structural (block-union) changes, flattened for the manifest. */
+  getStructuralPending: () => StructuralPromptEntry[];
   getRunOptions: () => ClaudeRunOptions;
   onModelObserved?: (model: string) => void;
   onEffortObserved?: (effort: string) => void;
@@ -72,6 +75,7 @@ export function buildChatPrompt(
   cursor: ChatCursorContext,
   context: PromptContext | null,
   pendingSuggestions: TrackedChangeInfo[] = [],
+  structuralPending: StructuralPromptEntry[] = [],
 ): string {
   const cursorLines = cursor.selectedText
     ? ['Selected text:', cursor.selectedText, 'Enclosing block:', cursor.blockText]
@@ -83,7 +87,7 @@ export function buildChatPrompt(
     "=== USER'S CURRENT SELECTION / CURSOR ===",
     ...cursorLines,
     '',
-    ...buildPendingSuggestionsLines(pendingSuggestions),
+    ...buildPendingSuggestionsLines(pendingSuggestions, structuralPending),
     ...buildReferenceContextLines(context),
     '=== FULL DOCUMENT ===',
     'Current document:',
@@ -165,6 +169,7 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
           opts.getCursorContext(),
           context,
           opts.getPendingSuggestions(),
+          opts.getStructuralPending(),
         );
         if (!opts.aiGate.owns(requestId)) return;
         const runOptions = opts.getRunOptions();
@@ -220,21 +225,22 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                   }
                 }
 
-                let appended = '';
+                let finalText: string | null = null;
                 let suggestionIds: string[] = [];
                 if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-                  if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
                   const result = opts.applyTrackedEdits(parsed.edits, assistantId);
                   suggestionIds = result.suggestionIds ?? [];
-                  const skippedNotice = formatEditResultNotice(result.results);
-                  if (skippedNotice) {
-                    appended += `${appended ? '\n\n' : ''}${skippedNotice}`;
-                  }
+                  finalText = reconcileBatchReplyText(
+                    visibleText,
+                    parsed.summary,
+                    result.results,
+                    parsed.edits,
+                  );
                 }
                 setMessages((current) =>
                   updateMessage(current, assistantId, (message) => ({
                     ...message,
-                    text: message.text + appended,
+                    text: finalText ?? message.text,
                     pending: false,
                     ...(suggestionIds.length > 0 ? { suggestionIds } : {}),
                   })),

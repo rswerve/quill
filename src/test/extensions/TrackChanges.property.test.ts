@@ -112,6 +112,13 @@ function acceptedProjection(editor: Editor): JSONContent {
   return accepted;
 }
 
+/** The pending-ignored/original view. Every generated gesture is still pending,
+ * so this must remain byte-equal to the immutable pre-trace document at EVERY
+ * step — including format deltas, hard breaks, undo, and redo. */
+function sourceProjection(editor: Editor): JSONContent {
+  return projectTrackedDocument(editor.state.doc).source.toJSON();
+}
+
 function trackMarks(editor: Editor): string[] {
   const marks = new Set<string>();
   editor.state.doc.descendants((node) => {
@@ -273,6 +280,13 @@ function runTrace(trace: FuzzOperation[], content = INITIAL_DOCUMENT): RunFailur
       );
       if (rejectProjectionFailure) {
         return { step, reason: `reject clone projection diverged: ${rejectProjectionFailure}` };
+      }
+      const sourceFailure = describeDifference(original, sourceProjection(rejected));
+      if (sourceFailure) {
+        return {
+          step,
+          reason: `source projection diverged from original: ${sourceFailure}; concrete=${JSON.stringify(concreteTrace)}`,
+        };
       }
     }
 

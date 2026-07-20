@@ -508,6 +508,29 @@ del.track-delete {
   padding: 0 1px;
 }
 
+/* Structural (block-union) redline — the block-scale sibling of the inline
+   ins/del paint above, applied by the view-only StructuralRedline decoration.
+   A whole flagged block reads as a suggested removal or addition; the same
+   track tokens keep it visually consistent with inline tracked changes. */
+.ProseMirror .structural-delete,
+.ProseMirror .structural-insert {
+  border-radius: 3px;
+  padding: 0 6px;
+  border-left: 3px solid;
+}
+.ProseMirror .structural-delete {
+  background: var(--color-track-del-bg);
+  color: var(--color-track-del-text);
+  border-left-color: var(--color-track-del-line);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-track-del-line);
+}
+.ProseMirror .structural-insert {
+  background: var(--color-track-add-bg);
+  color: var(--color-track-add-text);
+  border-left-color: var(--color-track-add-line);
+}
+
 /* A hard break has no visible character to carry the ordinary ins/del paint.
    TrackChanges inserts an empty, pointer-inert widget immediately before each
    pending break; the glyph lives in CSS so it never enters editor textContent,
@@ -997,14 +1020,21 @@ del.track-delete {
   background: var(--color-ink-light);
 }
 
+/* The clean-source print render is invisible and inert on screen; the print
+   block below swaps it in for the live redline editor. */
+.print-doc {
+  display: none;
+}
+
 /* ── Print / Export to PDF ──────────────────────────────────────────
-   "Export to PDF" is print-to-PDF (handleExportPdf → window.print()), so
-   these rules define the printed artifact: a *clean copy* of the document.
-   We strip all app chrome, collapse the on-screen scroll/zoom containers so
-   the document reflows naturally across paper pages, and render the
-   track-changes / comment markup as if every suggestion were accepted —
-   insertions become plain text, deletions and comment highlights vanish.
-   The browser's print pipeline (macOS "Save as PDF") owns pagination. */
+   "Export to PDF" is print-to-PDF (handleExportPdf → window.print()). The
+   printed artifact is the CLEAN-SOURCE document — pending suggestions ignored
+   (accepted edits stay; un-accepted AI proposals are dropped). Rather than mask
+   the live redline with CSS (which cannot invert pending FORMATTING), DocumentTab
+   renders projectDocument(...source) HTML into the detached `.print-doc`
+   container; here we strip app chrome, collapse the on-screen scroll/zoom
+   containers, hide the live editor, and show `.print-doc` so it reflows across
+   paper pages. The browser's print pipeline (macOS "Save as PDF") owns pagination. */
 @media print {
   /* US Letter with comfortable margins; the editor's own page padding is
      reset below so geometry isn't doubled. */
@@ -1064,33 +1094,20 @@ del.track-delete {
     color: #000 !important;
   }
 
-  /* Clean copy of the suggesting-mode markup: accept insertions (plain text),
-     drop deletions entirely, and remove comment / find / focus highlights. */
-  ins.track-insert {
-    background: none !important;
-    color: inherit !important;
-    text-decoration: none !important;
-    padding: 0 !important;
-  }
-  del.track-delete {
+  /* Hide the live redline editor and show the detached clean-source render in
+     its place. The render is projectCleanSourceDocument HTML — pending changes
+     rejected AND the whole review-mark axis stripped (tracked marks + comment
+     anchors) — so there is no redline and no comment highlight to mask; it's
+     already the clean document. */
+  .editor-page-zoom-wrapper {
     display: none !important;
   }
-  .track-hard-break-cue {
-    display: none !important;
-  }
-  .ProseMirror span.track-format {
-    background: none !important;
+  .print-doc {
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
     padding: 0 !important;
-  }
-  mark.comment-mark,
-  .ProseMirror .pending-comment,
-  .ProseMirror .find-match,
-  .ProseMirror .find-match-active,
-  .ProseMirror .annotation-focus {
-    background: none !important;
-    border: none !important;
-    text-decoration: none !important;
-    padding: 0 !important;
+    background: #fff !important;
   }
 
   /* Avoid orphaned headings and split code/quote blocks where possible. */

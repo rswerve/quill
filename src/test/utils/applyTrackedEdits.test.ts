@@ -171,11 +171,13 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
 
     const { results, suggestionIds } = apply(editor, [{ find: 'NEW beta', replace: 'nothing' }]);
 
+    // Source view HIDES the foreign insertion "NEW ", so "NEW beta" is not in the
+    // document Claude was given — honestly not found (never dispatched).
     expect(results).toEqual([
       {
         edit: { find: 'NEW beta', replace: 'nothing' },
-        status: 'conflict',
-        reason: 'pending-suggestion',
+        status: 'not-found',
+        reason: 'text-not-found',
       },
     ]);
     expect(editor.state.doc.eq(before)).toBe(true);
@@ -197,7 +199,9 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
       { find: 'beta omega', replace: 'replacement' },
     ]);
 
-    expect(results[0]).toMatchObject({ status: 'conflict', reason: 'pending-suggestion' });
+    // Source view RETAINS the pending deletion, so the find matches — but its
+    // mapped live range overlaps that unresolved deletion, so refuse.
+    expect(results[0]).toMatchObject({ status: 'conflict', reason: 'source-view-conflict' });
     expect(editor.state.doc.eq(before)).toBe(true);
     expect(suggestionIds).toEqual([]);
   });
@@ -217,7 +221,8 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
     // Results stay in INPUT order (editIndex reconciliation), regardless of
     // the back-to-front application order.
     expect(results[0].status).toBe('applied');
-    expect(results[1]).toMatchObject({ status: 'conflict', reason: 'pending-suggestion' });
+    // The "NEW beta" find includes the hidden foreign insertion → not in source.
+    expect(results[1]).toMatchObject({ status: 'not-found', reason: 'text-not-found' });
     expect(docText(editor)).toContain('EPSILON');
     expect(docText(editor)).toContain('NEW beta');
     // Only the good edit minted suggestions.

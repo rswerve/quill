@@ -1,0 +1,830 @@
+import { createRef } from 'react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+  Channel: class {
+    onmessage: unknown = null;
+  },
+  convertFileSrc: (path: string) => path,
+}));
+
+import { invoke } from '@tauri-apps/api/core';
+import type { Editor } from '@tiptap/core';
+import DocumentTab, { type DocumentTabHandle } from '../../components/DocumentTab';
+import { findAnnotationRange } from '../../extensions/AnnotationFocus';
+import { retainedRecords, resetStructuralRecords } from '../../extensions/StructuralRecordStore';
+import type { CanonicalRecord } from '../../extensions/StructuralRecordStore';
+import { compileStructuralMint } from '../../utils/structuralMint';
+import { getStructuralReviewState } from '../../utils/structuralChanges';
+import { getTrackedChanges } from '../../extensions/TrackChanges';
+import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../../extensions/trackChangesMeta';
+
+/**
+ * Slice 3b-card Part 2 / 3c — the mounted review-panel wiring for structural
+ * (block-union) suggestions. These exercise the whole seam: a REAL mint
+ * transaction flowing through DocumentTab's transaction refresh, the card
+ * rendering + Accept/Reject in CommentLayer, comment auto-resolution, the
+ * needs-attention banner, and delete-branch navigation. Mirrors the harness in
+ * documentTabStructuralSave.test.tsx.
+ */
+
+const mockInvoke = vi.mocked(invoke);
+const DOC_PATH = '/docs/structural.md';
+const DOC_HASH = 'd'.repeat(64);
+const SIDECAR_HASH = 's'.repeat(64);
+const CHANGE_ID = 'structural-1';
+const STRUCTURAL_CARD = `[data-card-id="${CHANGE_ID}"]`;
+const ATTENTION_BANNER = '[data-structural-attention]';
+
+interface ReadValue {
+  content: string;
+  hash: string;
+}
+
+function installRouter(reads: Record<string, ReadValue>): void {
+  mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+    const input = (args ?? {}) as Record<string, unknown>;
+    const path = input.path as string | undefined;
+    switch (command) {
+      case 'read_file_with_fingerprint': {
+        const value = path ? reads[path] : undefined;
+        return value
+          ? { state: 'present', content: value.content, hash: value.hash }
+          : { state: 'absent' };
+      }
+      case 'write_file_atomic':
+        return { status: 'written', hash: path === DOC_PATH ? DOC_HASH : SIDECAR_HASH };
+      case 'delete_file_if_match':
+        return { status: 'deleted' };
+      case 'find_session_for_markdown':
+        return null;
+      default:
+        return undefined;
+    }
+  });
+}
+
+interface MountedTab {
+  getHandle: () => DocumentTabHandle;
+  container: HTMLElement;
+  unmount: () => void;
+}
+
+async function mountTab(reads: Record<string, ReadValue>): Promise<MountedTab> {
+  installRouter(reads);
+  const ref = createRef<DocumentTabHandle>();
+  const onInitialFileLoaded = vi.fn();
+  const result = render(
+    <DocumentTab
+      ref={ref}
+      tabId="structural-tab"
+      isActive
+      initialFilePath={DOC_PATH}
+      defaultZoom={100}
+      getClaudeRunOptions={() => ({ model: null, effort: null })}
+      onChromeChange={() => {}}
+      onMetaChange={() => {}}
+      onInitialFileLoaded={onInitialFileLoaded}
+      onInitialWorkspaceLoaded={() => {}}
+      onOpenSessionPicker={() => {}}
+      onNotice={() => {}}
+      onRecentFile={() => {}}
+      onRequestSavePath={() => true}
+      onClaimSession={() => ({ allowed: true })}
+      onReleaseSession={() => {}}
+    />,
+  );
+  await waitFor(() => expect(onInitialFileLoaded).toHaveBeenCalledWith('structural-tab', true));
+  return {
+    getHandle: () => ref.current!,
+    container: result.container,
+    unmount: result.unmount,
+  };
+}
+
+const record: CanonicalRecord = {
+  changeId: CHANGE_ID,
+  op: { kind: 'headingToParagraph', level: 1 },
+  author: 'claude',
+  createdAt: '2026-07-18T00:00:00.000Z',
+};
+
+/** A heading + a Body paragraph disjoint from the union the heading becomes. */
+function setWorkingDoc(editor: Editor): void {
+  editor.commands.setContent(
+    {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Title Here' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Body' }] },
+      ],
+    },
+    { emitUpdate: true },
+  );
+}
+
+/** Mint the V1 heading→paragraph union through the REAL compiler. */
+function mintHeadingUnion(editor: Editor, originCommentId?: string): void {
+  const result = compileStructuralMint(editor.state, {
+    op: record.op,
+    targetPos: 1,
+    changeId: record.changeId,
+    author: record.author,
+    createdAt: record.createdAt,
+    ...(originCommentId ? { origin: { kind: 'comment' as const, id: originCommentId } } : {}),
+  });
+  if (!result.ok) throw new Error(`mint refused: ${result.reason}`);
+  editor.view.dispatch(result.tr);
+}
+
+/** Two convertible headings + a Body paragraph, for two-union scenarios. */
+function setTwoHeadingDoc(editor: Editor): void {
+  editor.commands.setContent(
+    {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Alpha' }] },
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Beta' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Body' }] },
+      ],
+    },
+    { emitUpdate: true },
+  );
+}
+
+/** Mint a heading→paragraph union at an explicit target position + change id. */
+function mintAt(editor: Editor, targetPos: number, changeId: string): void {
+  const result = compileStructuralMint(editor.state, {
+    op: record.op,
+    targetPos,
+    changeId,
+    author: record.author,
+    createdAt: record.createdAt,
+  });
+  if (!result.ok) throw new Error(`mint refused: ${result.reason}`);
+  editor.view.dispatch(result.tr);
+}
+
+/** Add a comment over [from,to) through the real note flow; returns its id. */
+async function addCommentOn(
+  mounted: MountedTab,
+  from: number,
+  to: number,
+  text: string,
+): Promise<string> {
+  const editor = mounted.getHandle().getEditor()!;
+  act(() => {
+    editor.commands.setTextSelection({ from, to });
+  });
+  const addButton = await waitFor(() => {
+    const button = mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add comment to selection"]',
+    );
+    expect(button).toBeTruthy();
+    return button!;
+  });
+  fireEvent.click(addButton);
+  const textarea = await waitFor(() => {
+    const input = mounted.container.querySelector<HTMLTextAreaElement>(
+      'textarea[placeholder^="Ask Claude"]',
+    );
+    expect(input).toBeTruthy();
+    return input!;
+  });
+  fireEvent.change(textarea, { target: { value: text } });
+  const addNote = [...mounted.container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === 'Add note',
+  );
+  expect(addNote).toBeTruthy();
+  fireEvent.click(addNote!);
+  const snapshot = await waitFor(() => {
+    const snap = mounted.getHandle().getWorkspaceSnapshot();
+    expect(snap?.comments).toHaveLength(1);
+    return snap!;
+  });
+  return snapshot.comments[0].id;
+}
+
+/** Contaminate a live union with a foreign comment mark (simulating a corrupt
+ *  reloaded snapshot), authorized past the freeze by a whole-doc restore bypass —
+ *  the only way to inject the inline contamination the analyzer cannot see. */
+function contaminateUnion(editor: Editor): void {
+  const foreign = editor.state.schema.marks.comment.create({
+    commentId: 'foreign',
+    resolved: false,
+    kind: 'note',
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(1, 2, foreign)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Seed a live inline tracked_insert mark INSIDE a union's delete branch (past the
+ *  freeze via a restore bypass) — an unclean union that, under inline-first bulk
+ *  resolution, would make resolveChange(null) touch the frozen envelope and veto
+ *  the ENTIRE inline batch. `contam-<id>` stays pending after Accept All. */
+function contaminateUnionWithTrackedMark(editor: Editor, changeId: string): void {
+  const change = getStructuralReviewState(editor.state).changes.find(
+    (candidate) => candidate.changeId === changeId,
+  );
+  if (!change) throw new Error(`no union ${changeId}`);
+  const from = change.source.from + 1; // first position inside the delete branch content
+  const mark = editor.state.schema.marks.tracked_insert.create({
+    dataTracked: {
+      id: `contam-${changeId}`,
+      operation: 'insert',
+      authorID: 'user',
+      status: 'pending',
+    },
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, from + 1, mark)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Seed a live inline tracked mark with a fully-specified dataTracked (id,
+ *  operation, optional originCommentId) — for constructing precise bulk scenarios. */
+function seedTrackedMark(
+  editor: Editor,
+  from: number,
+  to: number,
+  dataTracked: {
+    id: string;
+    operation: 'insert' | 'delete';
+    authorID: string;
+    status: 'pending';
+    originCommentId?: string;
+  },
+): void {
+  const markName = dataTracked.operation === 'delete' ? 'tracked_delete' : 'tracked_insert';
+  const mark = editor.state.schema.marks[markName].create({ dataTracked });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, to, mark)
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Add a foreign comment mark inside a union's delete branch (past the freeze) —
+ *  both contaminates the union (union-not-clean) and serves as a provenance
+ *  comment for an inline change that points at it. */
+function addForeignCommentInUnion(editor: Editor, changeId: string, commentId: string): void {
+  const change = getStructuralReviewState(editor.state).changes.find(
+    (candidate) => candidate.changeId === changeId,
+  );
+  if (!change) throw new Error(`no union ${changeId}`);
+  const from = change.source.from + 1;
+  const mark = editor.state.schema.marks.comment.create({
+    commentId,
+    resolved: false,
+    kind: 'note',
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, from + 1, mark)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+const clickCardButton = (card: Element, name: 'Accept' | 'Reject'): void => {
+  fireEvent.click(within(card as HTMLElement).getByRole('button', { name }));
+};
+
+const structuralCard = (mounted: MountedTab): Element | null =>
+  mounted.container.querySelector(STRUCTURAL_CARD);
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+const EMPTY_RECT = {
+  top: 0,
+  left: 0,
+  bottom: 0,
+  right: 0,
+  width: 0,
+  height: 0,
+  x: 0,
+  y: 0,
+  toJSON: () => ({}),
+} as DOMRect;
+
+function stubLayoutGeometry(): void {
+  const range = Range.prototype as unknown as Record<string, unknown>;
+  range.getClientRects = () => ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: function* () {},
+  });
+  range.getBoundingClientRect = () => EMPTY_RECT;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  (globalThis as unknown as Record<string, unknown>).ResizeObserver = ResizeObserverStub;
+  // jsdom has no scrollIntoView; annotation activation calls it. Stub it as a
+  // no-op so activation paths don't throw (the nav test overrides it to record).
+  (HTMLElement.prototype as unknown as Record<string, unknown>).scrollIntoView = () => {};
+  stubLayoutGeometry();
+});
+
+afterEach(() => {
+  cleanup();
+  delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+});
+
+const START = { [DOC_PATH]: { content: '# Start\n\nBody', hash: DOC_HASH } };
+
+describe('DocumentTab structural review wiring', () => {
+  it('renders a card solely through the transaction seam; Accept collapses it; Undo/Redo round-trip', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+
+    // No card until the union is minted — proof the card is driven by the seam,
+    // not incidental render.
+    expect(structuralCard(mounted)).toBeNull();
+    act(() => mintHeadingUnion(live));
+
+    const card = await waitFor(() => {
+      const found = structuralCard(mounted);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(card.getAttribute('data-suggestion-kind')).toBe('structural');
+    expect(within(card as HTMLElement).getByText('Heading 1 → Paragraph')).toBeTruthy();
+
+    clickCardButton(card, 'Accept');
+    await waitFor(() => expect(structuralCard(mounted)).toBeNull());
+    // Collapsed to the PROPOSED branch: the heading is now a paragraph.
+    expect(live.state.doc.child(0).type.name).toBe('paragraph');
+
+    act(() => {
+      live.commands.undo();
+    });
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+    expect(live.state.doc.child(0).type.name).toBe('heading');
+
+    act(() => {
+      live.commands.redo();
+    });
+    await waitFor(() => expect(structuralCard(mounted)).toBeNull());
+    expect(live.state.doc.child(0).type.name).toBe('paragraph');
+  });
+
+  it('Accept resolves and preserves the origin comment, strips its mark, and collapses', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    const commentId = await addCommentOn(mounted, 13, 17, 'Look at the body.');
+    act(() => mintHeadingUnion(live, commentId));
+
+    const card = await waitFor(() => {
+      const found = structuralCard(mounted);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    clickCardButton(card, 'Accept');
+    await waitFor(() => expect(structuralCard(mounted)).toBeNull());
+
+    // The disjoint origin comment is auto-resolved (kept, not dropped) and its
+    // mark is gone; the union collapsed to the proposed paragraph.
+    const snap = mounted.getHandle().getWorkspaceSnapshot();
+    expect(snap?.comments).toHaveLength(1);
+    expect(snap?.comments[0].resolved).toBe(true);
+    expect(findAnnotationRange(live.state.doc, 'comment', commentId)).toBeNull();
+    expect(live.state.doc.child(0).type.name).toBe('paragraph');
+    expect(live.state.doc.child(0).textContent).toBe('Title Here');
+  });
+
+  it('Reject retains the source branch and leaves the origin comment unresolved', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    const commentId = await addCommentOn(mounted, 13, 17, 'Keep this.');
+    act(() => mintHeadingUnion(live, commentId));
+
+    const card = await waitFor(() => {
+      const found = structuralCard(mounted);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    clickCardButton(card, 'Reject');
+    await waitFor(() => expect(structuralCard(mounted)).toBeNull());
+
+    // Reverted to the ORIGINAL heading; the origin comment and its mark survive.
+    expect(live.state.doc.child(0).type.name).toBe('heading');
+    const snap = mounted.getHandle().getWorkspaceSnapshot();
+    expect(snap?.comments[0].resolved).toBe(false);
+    expect(findAnnotationRange(live.state.doc, 'comment', commentId)).not.toBeNull();
+  });
+
+  it('an orphaned union (record lost) shows a needs-attention banner and no card', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    // Drop the canonical record while the union nodes remain: an orphan the
+    // analyzer flags as missing-metadata — a metadata-only change, so it reaches
+    // the panel purely through the transaction seam's record-store meta gate.
+    act(() => {
+      live.view.dispatch(resetStructuralRecords(live.state.tr, []).setMeta('addToHistory', false));
+    });
+
+    await waitFor(() => {
+      expect(structuralCard(mounted)).toBeNull();
+      expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
+    });
+  });
+
+  it('a contaminated union refuses Accept with runtime attention; the doc stays byte-identical', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+    act(() => contaminateUnion(live));
+
+    const before = live.state.doc.toJSON();
+    const card = structuralCard(mounted)!;
+    clickCardButton(card, 'Accept');
+
+    // Refused: runtime attention appears, the card stays actionable, and neither
+    // the document nor the record inventory changed.
+    await waitFor(() => expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy());
+    expect(structuralCard(mounted)).toBeTruthy();
+    expect(live.state.doc.toJSON()).toEqual(before);
+    expect(retainedRecords(live.state).has(CHANGE_ID)).toBe(true);
+  });
+
+  it('merges a comment and a structural change in document order and counts both', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    // A Body comment that is NOT the union's origin — an independent list item.
+    const commentId = await addCommentOn(mounted, 13, 17, 'Independent.');
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    // The heading union sits at document position 0, the Body comment after it,
+    // so the structural card renders first.
+    const cardIds = [...mounted.container.querySelectorAll('[data-card-id]')].map((el) =>
+      el.getAttribute('data-card-id'),
+    );
+    expect(cardIds.indexOf(CHANGE_ID)).toBeGreaterThanOrEqual(0);
+    expect(cardIds.indexOf(commentId)).toBeGreaterThan(cardIds.indexOf(CHANGE_ID));
+
+    // The header count folds in the structural change: 1 comment + 1 structural.
+    const commentsTab = [...mounted.container.querySelectorAll('*')].find(
+      (el) => el.children.length > 0 && /^Comments\s*\d/.test(el.textContent ?? ''),
+    );
+    expect(commentsTab?.textContent).toMatch(/Comments\s*2/);
+  });
+
+  it('activating the card navigates to the DELETE branch, not a bare change id', async () => {
+    // jsdom has no scrollIntoView on the prototype, so define a recording stub
+    // (which also proves the production nav call doesn't throw against jsdom).
+    const scrolled: Element[] = [];
+    const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this);
+    };
+    try {
+      const mounted = await mountTab(START);
+      const live = mounted.getHandle().getEditor()!;
+      act(() => setWorkingDoc(live));
+      act(() => mintHeadingUnion(live));
+      const card = await waitFor(() => {
+        const found = structuralCard(mounted);
+        expect(found).toBeTruthy();
+        return found!;
+      });
+
+      scrolled.length = 0;
+      fireEvent.click(card);
+      // The navigation targeted the delete-branch node specifically — the
+      // `[data-structural-op="delete"]` qualifier is what makes it collision-proof
+      // against a stray inline mark sharing the id.
+      await waitFor(() =>
+        expect(scrolled.some((el) => el.getAttribute('data-structural-op') === 'delete')).toBe(
+          true,
+        ),
+      );
+    } finally {
+      proto.scrollIntoView = original;
+    }
+  });
+
+  it('reload replaces a document that still holds a pending union (not vetoed by the freeze)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    // Reopen the same path: loadFileResult replaces the live doc (union and all)
+    // with the on-disk source. Without the freeze-clear the setContent would be
+    // vetoed and the stale union would survive the reload.
+    await act(async () => {
+      await mounted.getHandle().openPath(DOC_PATH);
+    });
+
+    await waitFor(() => {
+      expect(structuralCard(mounted)).toBeNull();
+      expect(live.state.doc.child(0).type.name).toBe('heading');
+      expect(live.state.doc.child(0).textContent).toBe('Start');
+    });
+  });
+
+  it('a reload while Suggesting mode is on installs the file WITHOUT re-tracking it', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mounted.getHandle().setMode(true)); // Suggesting on — tracking active
+
+    await act(async () => {
+      await mounted.getHandle().openPath(DOC_PATH);
+    });
+
+    // The load is content, not a user edit: exact disk content, zero tracked marks
+    // (without SKIP_TRACKING the whole document would re-track as one insertion).
+    await waitFor(() => expect(live.state.doc.child(0).textContent).toBe('Start'));
+    expect(getTrackedChanges(live)).toHaveLength(0);
+  });
+
+  it('New clears stale INLINE suggestion cards even though setContent suppresses update', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mounted.getHandle().setMode(true));
+    // Type in Suggesting mode → a tracked insertion → an inline suggestion card.
+    act(() => live.commands.insertContentAt(1, 'xyz'));
+    await waitFor(() =>
+      expect(mounted.container.querySelector('[data-suggestion-kind="insert"]')).toBeTruthy(),
+    );
+
+    await act(async () => {
+      await mounted.getHandle().newDocument();
+    });
+
+    // The inventory seam (not update, which setContent suppresses) clears it.
+    await waitFor(() =>
+      expect(mounted.container.querySelector('[data-suggestion-kind]')).toBeNull(),
+    );
+  });
+
+  it('resolving one union leaves the other card, redline, and record untouched', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setTwoHeadingDoc(live));
+    // Mint the later union first so the earlier target position stays valid.
+    act(() => mintAt(live, 8, 'u-b'));
+    act(() => mintAt(live, 1, 'u-a'));
+    const cardA = await waitFor(() => {
+      const found = mounted.container.querySelector('[data-card-id="u-a"]');
+      expect(found).toBeTruthy();
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy();
+      return found!;
+    });
+
+    clickCardButton(cardA, 'Accept');
+    await waitFor(() => expect(mounted.container.querySelector('[data-card-id="u-a"]')).toBeNull());
+
+    // B is wholly untouched: card, record, and its in-canvas delete-branch redline.
+    expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy();
+    expect(retainedRecords(live.state).has('u-b')).toBe(true);
+    expect(
+      live.view.dom.querySelector('[data-structural-op="delete"][data-change-id="u-b"]'),
+    ).toBeTruthy();
+  });
+
+  it('Accept resolves a CONTAINED origin comment (Option-B carveout) and drops its mark', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    // Comment the heading text itself — contained in the future delete branch.
+    const commentId = await addCommentOn(mounted, 1, 11, 'On the heading');
+    act(() => mintHeadingUnion(live, commentId));
+    // Activate the origin comment so we exercise the active-comment clearing path.
+    const commentCard = await waitFor(() => {
+      const found = mounted.container.querySelector<HTMLElement>(`[data-card-id="${commentId}"]`);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    fireEvent.click(commentCard);
+
+    const card = await waitFor(() => {
+      const found = structuralCard(mounted);
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    clickCardButton(card, 'Accept');
+    await waitFor(() => expect(structuralCard(mounted)).toBeNull());
+
+    // The contained origin rode the dropped delete branch: record retained as
+    // resolved, mark gone, collapsed to the proposed paragraph, nothing active.
+    const snap = mounted.getHandle().getWorkspaceSnapshot();
+    expect(snap?.comments).toHaveLength(1);
+    expect(snap?.comments[0].resolved).toBe(true);
+    expect(findAnnotationRange(live.state.doc, 'comment', commentId)).toBeNull();
+    expect(live.state.doc.child(0).type.name).toBe('paragraph');
+    expect(mounted.container.querySelector(`[data-card-id="${commentId}"]`)).toBeNull();
+  });
+
+  it('Accept All resolves a clean union + inline but preserves a contaminated union (no global abort)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setTwoHeadingDoc(live));
+    // A clean inline suggestion in Body ("Body" content opens at 14), Suggesting on.
+    act(() => mounted.getHandle().setMode(true));
+    act(() => live.commands.insertContentAt(14, 'ZZ'));
+    // Two unions — u-a clean, u-b contaminated by an inline tracked mark inside it.
+    act(() => mintAt(live, 8, 'u-b'));
+    act(() => mintAt(live, 1, 'u-a'));
+    act(() => contaminateUnionWithTrackedMark(live, 'u-b'));
+    await waitFor(() => {
+      expect(mounted.container.querySelector('[data-card-id="u-a"]')).toBeTruthy();
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy();
+    });
+    expect(getTrackedChanges(live).filter((c) => c.status === 'pending')).toHaveLength(2);
+
+    act(() => mounted.getHandle().acceptAll());
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector('[data-card-id="u-a"]')).toBeNull(); // clean union resolved
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy(); // contaminated preserved
+      expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
+    });
+    // The clean Body inline resolved; ONLY the in-union contaminant remains pending
+    // (skipped per-id, NOT globally aborted — the whole point of structural-first).
+    const pending = getTrackedChanges(live).filter((c) => c.status === 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe('contam-u-b');
+    expect(
+      live.view.dom.querySelector('[data-structural-op="delete"][data-change-id="u-b"]'),
+    ).toBeTruthy();
+  });
+
+  it('Accept All recomputes footprints per id — a shift by an earlier inline does not leak a provenance unset', async () => {
+    // Layout: [para "AAAAAAAA", heading "Beta", para "BBBB"]. Accepting the inline
+    // DELETION on "AAAAAAAA" shifts the union left by 8; the later inline INSERT
+    // has a provenance comment INSIDE that (now shifted) union. Only a per-id
+    // FRESH footprint recompute catches that the provenance unset would be vetoed
+    // and skips it — a stale snapshot would let it through and abort mid-flight.
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() =>
+      live.commands.setContent(
+        {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'AAAAAAAA' }] },
+            { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Beta' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'BBBB' }] },
+          ],
+        },
+        { emitUpdate: true },
+      ),
+    );
+    // Union on "Beta" (heading text at [11,15)); contaminate it with prov-C so it
+    // stays AND becomes the inline insert's provenance comment.
+    act(() => mintAt(live, 11, 'u-b'));
+    act(() => addForeignCommentInUnion(live, 'u-b', 'prov-C'));
+    // Inline DELETE on "AAAAAAAA" [1,9) (before the union); inline INSERT on "BBBB"
+    // (after the union) whose origin comment is prov-C, inside the union.
+    act(() =>
+      seedTrackedMark(live, 1, 9, {
+        id: 'inline-A',
+        operation: 'delete',
+        authorID: 'user',
+        status: 'pending',
+      }),
+    );
+    act(() =>
+      seedTrackedMark(live, 23, 27, {
+        id: 'inline-B',
+        operation: 'insert',
+        authorID: 'user',
+        status: 'pending',
+        originCommentId: 'prov-C',
+      }),
+    );
+    await waitFor(() =>
+      expect(mounted.container.querySelector('[data-card-id="u-b"]')).toBeTruthy(),
+    );
+
+    act(() => mounted.getHandle().acceptAll());
+
+    await waitFor(() => {
+      const pendingIds = getTrackedChanges(live)
+        .filter((c) => c.status === 'pending')
+        .map((c) => c.id);
+      // A resolved (deletion applied, shifting the union); B SKIPPED because its
+      // provenance comment sits inside the shifted union — fresh-footprint caught it.
+      expect(pendingIds).toContain('inline-B');
+      expect(pendingIds).not.toContain('inline-A');
+    });
+    // The provenance comment's mark was never removed.
+    expect(findAnnotationRange(live.state.doc, 'comment', 'prov-C')).not.toBeNull();
+    expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
+  });
+
+  it('New clears a stale card and its attention state', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+    // Orphan it so both a card path and an attention path are exercised.
+    act(() => {
+      live.view.dispatch(resetStructuralRecords(live.state.tr, []).setMeta('addToHistory', false));
+    });
+    await waitFor(() => expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy());
+
+    await act(async () => {
+      await mounted.getHandle().newDocument();
+    });
+
+    await waitFor(() => {
+      expect(structuralCard(mounted)).toBeNull();
+      expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeNull();
+    });
+  });
+
+  it('renders the clean-source document into the print container on beforeprint (not the redline)', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live)); // heading "Title Here" → paragraph union (pending)
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    const printDoc = mounted.container.querySelector('.print-doc') as HTMLElement;
+    expect(printDoc).toBeTruthy();
+    expect(printDoc.innerHTML).toBe(''); // empty until a print is requested
+
+    act(() => {
+      window.dispatchEvent(new Event('beforeprint'));
+    });
+
+    // The clean-source render keeps the union's SOURCE branch (the heading) and
+    // carries none of the redline / block-track markup the live editor renders.
+    expect(printDoc.querySelector('h1')?.textContent).toBe('Title Here');
+    expect(printDoc.innerHTML).not.toMatch(
+      /track-insert|track-delete|track-format|data-tracked|data-block-track/,
+    );
+
+    // afterprint clears it so the detached tree never lingers in the DOM.
+    act(() => {
+      window.dispatchEvent(new Event('afterprint'));
+    });
+    expect(printDoc.innerHTML).toBe('');
+  });
+
+  it('populates the print container via the toolbar exportPdf() path before window.print', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    act(() => mintHeadingUnion(live));
+    await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+    const printDoc = mounted.container.querySelector('.print-doc') as HTMLElement;
+    // Capture the container's contents at the instant window.print() is invoked:
+    // handleExportPdf must refresh the clean-source render BEFORE printing.
+    let htmlAtPrint = '';
+    const originalPrint = window.print;
+    window.print = () => {
+      htmlAtPrint = printDoc.innerHTML;
+    };
+    try {
+      act(() => {
+        mounted.getHandle().exportPdf();
+      });
+    } finally {
+      window.print = originalPrint;
+    }
+
+    expect(htmlAtPrint).toContain('Title Here'); // populated before printing
+    expect(htmlAtPrint).not.toMatch(
+      /track-insert|track-delete|track-format|data-tracked|data-block-track/,
+    );
+  });
+});

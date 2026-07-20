@@ -83,7 +83,7 @@ async function setupWithIPC(
   );
 
   await page.goto('/');
-  await page.locator('.ProseMirror').waitFor({ timeout: 5000 });
+  await activeEditor(page).waitFor({ timeout: 5000 });
 }
 
 async function typeIntoEditor(page: Page, text: string) {

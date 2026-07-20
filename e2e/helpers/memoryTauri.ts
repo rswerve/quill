@@ -399,8 +399,10 @@ export function activeTabHost(page: Page) {
   return page.locator('.document-tab-host:not([hidden])');
 }
 
+export const LIVE_EDITOR_SELECTOR = '.ProseMirror[contenteditable="true"]';
+
 export function activeEditor(page: Page) {
-  return activeTabHost(page).locator('.ProseMirror');
+  return activeTabHost(page).locator(LIVE_EDITOR_SELECTOR);
 }
 
 export async function closeSessionPickerIfOpen(page: Page) {

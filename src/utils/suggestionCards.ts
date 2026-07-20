@@ -1,4 +1,9 @@
-import type { TrackedChangeInfo, TrackedFormatSegment, TrackedTextSegment } from '../types';
+import type {
+  StructuralChangeInfo,
+  TrackedChangeInfo,
+  TrackedFormatSegment,
+  TrackedTextSegment,
+} from '../types';
 
 /** Visible glyph for a hard break in a review-card preview. */
 export const LINE_BREAK_GLYPH = '↵';
@@ -30,8 +35,15 @@ export function segmentsToPreview(segments: TrackedTextSegment[]): string {
   return preview;
 }
 
-/** One review-panel card. Canonical changes no longer need a grouping pass. */
-export type SuggestionCardGroup =
+/**
+ * One INLINE review-panel card — the exact return type of `groupSuggestionCards`.
+ * Deliberately not widened with a structural variant: `CommentLayer` derives its
+ * type from this function and assumes every non-replacement/non-format group has
+ * inline `.segments`. Structural cards are the separate
+ * {@link StructuralSuggestionCardGroup}; an umbrella `ReviewCardGroup` is
+ * introduced only in the production wiring (3b).
+ */
+export type InlineSuggestionCardGroup =
   | {
       kind: 'single';
       cardId: string;
@@ -53,8 +65,25 @@ export type SuggestionCardGroup =
       segments: TrackedFormatSegment[];
     };
 
-export function groupSuggestionCards(changes: TrackedChangeInfo[]): SuggestionCardGroup[] {
-  return changes.flatMap((change): SuggestionCardGroup[] => {
+/** One structural (block-union) review-panel card, keyed by its change id. */
+export interface StructuralSuggestionCardGroup {
+  kind: 'structural';
+  cardId: string;
+  change: StructuralChangeInfo;
+}
+
+/** The umbrella the review panel renders: an inline card group or a structural one. */
+export type ReviewCardGroup = InlineSuggestionCardGroup | StructuralSuggestionCardGroup;
+
+/** Build the structural card groups from enumerated structural changes (already ordered). */
+export function structuralCardGroups(
+  changes: StructuralChangeInfo[],
+): StructuralSuggestionCardGroup[] {
+  return changes.map((change) => ({ kind: 'structural', cardId: change.changeId, change }));
+}
+
+export function groupSuggestionCards(changes: TrackedChangeInfo[]): InlineSuggestionCardGroup[] {
+  return changes.flatMap((change): InlineSuggestionCardGroup[] => {
     const insertions = change.segments.filter(
       (segment): segment is TrackedTextSegment => segment.kind === 'insert',
     );

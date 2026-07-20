@@ -1,0 +1,199 @@
+import { editFindLabel, editResultReason } from './trackedEdits';
+import type {
+  BatchOutcome,
+  BatchResultEntry,
+  StructuralDispatchOutcome,
+} from './structuralBatchDispatch';
+import type { StructuralPlanReason } from './structuralEditPlanner';
+import type { StructuralMintRefusal } from './structuralMint';
+
+/**
+ * 6b-3: the honest, model-facing "N changes weren't applied" notice for a mixed
+ * inline+structural batch. It is ONE input-order block that REUSES the inline wording
+ * table (`editResultReason`) for inline outcomes and adds structural / XOR-violation
+ * lines — never a divergent second table. Successful entries (inline `applied`,
+ * structural `minted`) are silent. The original `entries` array is passed so each line
+ * can quote the edit's find text via the same `editFindLabel` the inline notice uses.
+ */
+
+const TEXT_STRUCTURAL_CONFLICT =
+  'it conflicts with a text replacement and block restructuring on the same content; ask for them separately.';
+const STRUCTURAL_PRIORITY =
+  'the block restructuring took priority; request the formatting separately.';
+const STRUCTURAL_OVERLAP =
+  'multiple structural edits target the same blocks; request them separately.';
+
+// The supported set is heading↔paragraph, list↔paragraph (a flat list of any item count),
+// splitting a paragraph, and merging adjacent paragraphs. The requested op alone can't reveal
+// which unsupported case was asked for, so the message names the whole boundary.
+const UNSUPPORTED_STRUCTURAL =
+  'that structural change isn’t available yet — heading↔paragraph, list↔paragraph, splitting a paragraph, and merging adjacent paragraphs are supported, but a list whose items nest or hold more than one block, a list-kind change (bulleted↔numbered↔checklist), a heading-level change, and merging across a heading or list aren’t.';
+
+// System/provider faults are NOT the model's fault: keep the wording blameless and quiet.
+const SYSTEM_FAULT = 'an internal error stopped it; try asking again.';
+
+function structuralPlanReasonText(reason: StructuralPlanReason): string {
+  switch (reason) {
+    case 'text-not-found':
+      return 'this text isn’t in the document.';
+    case 'ambiguous-target':
+      return 'more than one block matches it; make the text identify a single block.';
+    case 'cross-block-target':
+      return 'it spans more than one block; a structural change targets a single block.';
+    case 'unsupported-op':
+      return UNSUPPORTED_STRUCTURAL;
+    case 'already-target':
+      return 'that block is already the requested type.';
+    case 'missing-level':
+      return 'a heading target needs a level (1–6).';
+    case 'invalid-level':
+      return 'that heading level is invalid.';
+    case 'invalid-edit':
+      return 'the edit instruction is malformed.';
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+function structuralMintRefusalText(reason: StructuralMintRefusal): string {
+  switch (reason) {
+    case 'unsupported-shape':
+      return UNSUPPORTED_STRUCTURAL;
+    case 'overlapping-structural':
+      return 'it overlaps an existing structural change; resolve that one first.';
+    // The comment being asked FROM is tolerated (Option-B carveout), so never name "a
+    // comment" flatly — that points the reader at the very comment they're using. Name the
+    // real blockers: an unresolved tracked suggestion, or a SECOND comment on the block.
+    case 'annotated-footprint':
+      return 'that block still has an unresolved suggestion or another comment on it — resolve those first.';
+    case 'origin-comment-partial':
+      return 'the originating comment doesn’t fully cover that block.';
+    case 'invalid-structural-state':
+      return 'the document has an unresolved structural change; resolve it first.';
+    case 'native-no-op':
+      return 'the conversion would make no change.';
+    // The split pieces are model-supplied, so this is a model-facing message: the pieces
+    // must reflow the paragraph's own text (its exact words, split only at whitespace).
+    case 'split-source-mismatch':
+      return 'the split pieces don’t match that paragraph’s text — they must be its exact words, split at the spaces.';
+    case 'list-source-mismatch':
+      return 'the list items don’t match that paragraph’s text — they must be its exact words, divided at the spaces.';
+    // System faults, NOT the model's instruction: in 6b the changeId/author/timestamp/
+    // origin are all injected by the orchestrator (allocateReservedId, the AI author,
+    // now(), the comment/chat origin) and the op is planner-validated before the mint,
+    // so a mint-level invalid-metadata can only be bad injected metadata; target-not-found
+    // is a coordinate/translation fault on an already-located block. Both stay blameless.
+    case 'invalid-metadata':
+    case 'target-not-found':
+    case 'id-unavailable':
+    case 'self-check-failed':
+      return SYSTEM_FAULT;
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+function structuralReasonText(outcome: StructuralDispatchOutcome): string | null {
+  switch (outcome.status) {
+    case 'minted':
+      return null; // success is silent
+    case 'batch-conflict':
+      return outcome.reason === 'structural-overlap'
+        ? STRUCTURAL_OVERLAP
+        : TEXT_STRUCTURAL_CONFLICT;
+    case 'id-allocation-failed':
+    case 'metadata-provider-failed':
+      return SYSTEM_FAULT;
+    case 'plan-refused':
+      return structuralPlanReasonText(outcome.reason);
+    case 'mint-refused':
+      return structuralMintRefusalText(outcome.reason);
+    default:
+      return 'it couldn’t be applied.';
+  }
+}
+
+/** The reason line for one outcome, or null when it succeeded (silent). */
+function noticeReason(outcome: BatchOutcome): string | null {
+  if (outcome.kind === 'inline') {
+    if ('result' in outcome) {
+      return outcome.result.status === 'applied' ? null : editResultReason(outcome.result);
+    }
+    return outcome.reason === 'structural-priority'
+      ? STRUCTURAL_PRIORITY
+      : TEXT_STRUCTURAL_CONFLICT;
+  }
+  if (outcome.kind === 'invalid') {
+    return 'it asks for both a text/formatting change and a structural change; request just one.';
+  }
+  if (outcome.kind === 'unavailable') {
+    return 'the document was not ready.'; // mirrors the inline document-unavailable wording
+  }
+  return structuralReasonText(outcome);
+}
+
+/** Whether one batch entry actually produced a reviewable suggestion. */
+export function batchOutcomeApplied(outcome: BatchOutcome): boolean {
+  if (outcome.kind === 'inline') {
+    return 'result' in outcome && outcome.result.status === 'applied';
+  }
+  return outcome.kind === 'structural' && outcome.status === 'minted';
+}
+
+interface RefusalGroup {
+  reason: string;
+  labels: string[];
+}
+
+export function formatBatchResultNotice(
+  results: BatchResultEntry[],
+  entries: readonly unknown[],
+): string {
+  const groups = new Map<string, RefusalGroup>();
+  let appliedCount = 0;
+  for (const { batchIndex, outcome } of results) {
+    if (batchOutcomeApplied(outcome)) {
+      appliedCount += 1;
+      continue;
+    }
+    const reason = noticeReason(outcome);
+    if (!reason) continue;
+    const existing = groups.get(reason);
+    const label = editFindLabel(entries[batchIndex]);
+    if (existing) existing.labels.push(label);
+    else groups.set(reason, { reason, labels: [label] });
+  }
+  const lines = [...groups.values()].map(({ reason, labels }) =>
+    labels.length === 1 ? `• “${labels[0]}” — ${reason}` : `• ${labels.length} changes — ${reason}`,
+  );
+  if (lines.length === 0) return '';
+  const refusedCount = [...groups.values()].reduce(
+    (total, group) => total + group.labels.length,
+    0,
+  );
+  let heading = 'Nothing was applied:';
+  if (appliedCount > 0) {
+    heading =
+      refusedCount === 1
+        ? 'Some changes were applied, but 1 change wasn’t:'
+        : `Some changes were applied, but ${refusedCount} changes weren’t:`;
+  }
+  return `(${heading}\n${lines.join('\n')})`;
+}
+
+/**
+ * Final user-visible text for a reply that carried an edit batch. Any refusal replaces
+ * optimistic model prose with outcome-derived wording; otherwise the streamed prose (or
+ * summary fallback) is preserved. This is shared by margin replies and document chat.
+ */
+export function reconcileBatchReplyText(
+  visibleText: string,
+  summary: unknown,
+  results: BatchResultEntry[],
+  entries: readonly unknown[],
+): string {
+  const notice = formatBatchResultNotice(results, entries);
+  if (notice) return notice;
+  if (visibleText.trim() !== '') return visibleText;
+  return typeof summary === 'string' ? summary : '';
+}
