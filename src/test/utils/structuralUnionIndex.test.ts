@@ -178,6 +178,26 @@ describe('analyzeStructuralUnions', () => {
       ],
       code: 'non-adjacent',
     },
+    {
+      name: 'a gap WITHIN the delete run',
+      content: [
+        paragraph('a', { changeId: 'c1', op: 'delete' }),
+        paragraph('mid'),
+        paragraph('b', { changeId: 'c1', op: 'delete' }),
+        paragraph('a b', { changeId: 'c1', op: 'insert' }),
+      ],
+      code: 'non-adjacent',
+    },
+    {
+      name: 'a gap WITHIN the insert run',
+      content: [
+        paragraph('a b', { changeId: 'c1', op: 'delete' }),
+        paragraph('a', { changeId: 'c1', op: 'insert' }),
+        paragraph('mid'),
+        paragraph('b', { changeId: 'c1', op: 'insert' }),
+      ],
+      code: 'non-adjacent',
+    },
   ])('refuses $name', ({ content, code }) => {
     const editor = makeEditor(content);
     const index = analyzeStructuralUnions(editor.state.doc);

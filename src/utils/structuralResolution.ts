@@ -68,45 +68,103 @@ function commentMarkInstances(doc: PMNode, commentId: string): CommentMarkInstan
   return instances;
 }
 
+interface CleanCtx {
+  union: IndexedStructuralUnion;
+  deleteFrom: number;
+  deleteTo: number;
+  originCommentId: string | undefined;
+}
+
+interface CleanScan {
+  clean: boolean;
+  originInDeleteBranch: boolean;
+  originOutsideUnion: boolean;
+  originMark: Mark | null;
+}
+
+/** Fold one comment mark into the scan: mark-consistent, and contained-or-disjoint. */
+function inspectCommentMark(
+  mark: Mark,
+  pos: number,
+  nodeTo: number,
+  isInline: boolean,
+  ctx: CleanCtx,
+  scan: CleanScan,
+): void {
+  const { union, deleteFrom, deleteTo, originCommentId } = ctx;
+  const isOrigin = originCommentId !== undefined && mark.attrs.commentId === originCommentId;
+  if (isOrigin) {
+    // Every origin fragment must be mark-identical (kind, resolved, …), matching the mint
+    // boundary — a corrupted mix (note vs claude, resolved vs unresolved) cannot resolve.
+    if (scan.originMark === null) scan.originMark = mark;
+    else if (!scan.originMark.eq(mark)) scan.clean = false;
+  }
+  const inUnion = isInline && pos >= union.from && nodeTo <= union.to;
+  if (inUnion) {
+    // A comment in the union must be the origin, wholly in the delete branch.
+    if (!isOrigin || pos < deleteFrom || nodeTo > deleteTo) scan.clean = false;
+    else scan.originInDeleteBranch = true;
+  } else if (isOrigin) {
+    scan.originOutsideUnion = true;
+  }
+}
+
+/** Fold one node's marks into the cleanliness scan (see {@link unionIsClean}). */
+function inspectUnionNode(node: PMNode, pos: number, ctx: CleanCtx, scan: CleanScan): void {
+  const nodeTo = pos + node.nodeSize;
+  for (const mark of node.marks) {
+    const name = mark.type.name;
+    if (TRACKED_MARK_NAMES.has(name)) {
+      // A tracked mark overlapping the union is dirty; outside it is irrelevant.
+      if (pos < ctx.union.to && ctx.union.from < nodeTo) scan.clean = false;
+    } else if (name === 'comment') {
+      inspectCommentMark(mark, pos, nodeTo, node.isInline, ctx, scan);
+    }
+    if (!scan.clean) return;
+  }
+}
+
 /**
- * The union's live shape matches the mint invariant: no tracked marks anywhere in
- * it, and any comment is the sole origin comment sitting wholly inside the delete
- * branch (the proposed branch is clean per the carveout).
+ * The union's live shape matches the mint invariant: no tracked mark anywhere in it,
+ * no foreign comment in it, and the origin comment is EITHER wholly inside the delete
+ * branch (rides the dropped branch on accept) OR wholly outside the union (disjoint,
+ * unset on accept) — never straddling. The delete branch is the first delete root's
+ * start through the last's end; because the delete run is contiguous, that single span
+ * covers a merge's two source blocks, so an origin inside A, inside B, or spanning A→B
+ * all read as delete-branch.
+ *
+ * The walk is whole-document, not just the union envelope: a PARTIAL origin that
+ * continues from the delete branch into an outside paragraph would otherwise pass the
+ * envelope scan, and the resolver would then strip its outside mark and collapse the
+ * union — mangling a comment it cannot cleanly resolve. Refuse that. Inspects EVERY
+ * node's marks (text, hard breaks, inline atoms, malformed block-node marks).
  */
 function unionIsClean(
   doc: PMNode,
   union: IndexedStructuralUnion,
   originCommentId: string | undefined,
 ): boolean {
-  // The whole source branch: first delete root's start through the last's end. Because
-  // the delete run is contiguous, this single span covers a merge's two source blocks,
-  // so an origin comment inside A, inside B, or spanning A→B all read as delete-branch.
-  const deleteFrom = union.deleteRoots[0].pos;
-  const deleteTo = union.deleteRoots[union.deleteRoots.length - 1].to;
-  let clean = true;
-  // Inspect EVERY node's marks (text, hard breaks, inline atoms, and even a
-  // malformed block-node mark), not text nodes alone.
-  doc.nodesBetween(union.from, union.to, (node, pos) => {
-    if (!clean) return false;
-    for (const mark of node.marks) {
-      const name = mark.type.name;
-      if (TRACKED_MARK_NAMES.has(name)) {
-        clean = false;
-        return false;
-      }
-      if (name === 'comment') {
-        const isOrigin = originCommentId !== undefined && mark.attrs.commentId === originCommentId;
-        const insideDeleteBranch =
-          node.isInline && pos >= deleteFrom && pos + node.nodeSize <= deleteTo;
-        if (!isOrigin || !insideDeleteBranch) {
-          clean = false;
-          return false;
-        }
-      }
-    }
-    return true;
+  const ctx: CleanCtx = {
+    union,
+    deleteFrom: union.deleteRoots[0].pos,
+    deleteTo: union.deleteRoots[union.deleteRoots.length - 1].to,
+    originCommentId,
+  };
+  const scan: CleanScan = {
+    clean: true,
+    originInDeleteBranch: false,
+    originOutsideUnion: false,
+    originMark: null,
+  };
+  doc.descendants((node, pos) => {
+    if (!scan.clean) return false;
+    inspectUnionNode(node, pos, ctx, scan);
+    return scan.clean;
   });
-  return clean;
+  // A partial origin — instances in the delete branch AND outside the union — cannot be
+  // cleanly resolved (a wholly-disjoint origin, only outside, stays allowed).
+  if (scan.originInDeleteBranch && scan.originOutsideUnion) return false;
+  return scan.clean;
 }
 
 type OriginAcceptOutcome =

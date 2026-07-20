@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { Editor, type Content, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import type { EditorState } from '@tiptap/pm/state';
@@ -11,7 +11,11 @@ import {
   TrackedDelete,
   TrackedFormat,
 } from '../../extensions/TrackChanges';
-import { StructuralRecordStore } from '../../extensions/StructuralRecordStore';
+import {
+  StructuralRecordStore,
+  addStructuralRecord,
+  type CanonicalRecord,
+} from '../../extensions/StructuralRecordStore';
 import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../../extensions/trackChangesMeta';
 import { resolveStructuralUnion } from '../../utils/structuralResolution';
 import { getStructuralChanges } from '../../utils/structuralChanges';
@@ -20,7 +24,7 @@ import type { StructuralOp } from '../../types';
 
 let editor: Editor;
 
-function makeEditor(content: string): Editor {
+function makeEditor(content: Content): Editor {
   const el = document.createElement('div');
   document.body.appendChild(el);
   return new Editor({
@@ -121,6 +125,144 @@ describe('resolveStructuralUnion — collapse', () => {
     expect(resolveStructuralUnion(state, 'nope', 'accept')).toEqual({
       ok: false,
       reason: 'not-resolvable',
+    });
+  });
+});
+
+describe('V2 N→M consumers (hand-built merge/split unions — the mint cannot make them yet)', () => {
+  const MERGE = { kind: 'mergeParagraphs' } as const;
+  const SPLIT = { kind: 'splitParagraph' } as const;
+
+  const para = (
+    text: string,
+    blockTrack?: { changeId: string; op: 'delete' | 'insert' },
+  ): JSONContent => ({
+    type: 'paragraph',
+    ...(blockTrack ? { attrs: { blockTrack } } : {}),
+    ...(text ? { content: [{ type: 'text', text }] } : {}),
+  });
+
+  function unionEditor(children: JSONContent[], record: CanonicalRecord): Editor {
+    editor?.destroy();
+    editor = makeEditor({ type: 'doc', content: children });
+    editor.view.dispatch(addStructuralRecord(editor.state.tr, record));
+    return editor;
+  }
+
+  const topOps = (state: EditorState): Array<string | null> => {
+    const ops: Array<string | null> = [];
+    state.doc.forEach((n) => ops.push((n.attrs.blockTrack?.op as string) ?? null));
+    return ops;
+  };
+
+  // doc positions: para nodeSize = text length + 2.
+  // [A del]0..3 [B del]3..6 [A B ins]6..11 [tail]11..
+  const mergeChildren = () => [
+    para('A', { changeId: 'm1', op: 'delete' }),
+    para('B', { changeId: 'm1', op: 'delete' }),
+    para('A B', { changeId: 'm1', op: 'insert' }),
+    para('tail'),
+  ];
+  // [alpha beta del]0..12 [alpha ins]12..19 [beta ins]19..25 [tail]25..
+  const splitChildren = () => [
+    para('alpha beta', { changeId: 's1', op: 'delete' }),
+    para('alpha', { changeId: 's1', op: 'insert' }),
+    para('beta', { changeId: 's1', op: 'insert' }),
+    para('tail'),
+  ];
+
+  it('geometry: merge source spans BOTH deletes, proposed the one insert', () => {
+    const ed = unionEditor(mergeChildren(), { changeId: 'm1', op: MERGE, ...META });
+    const changes = getStructuralChanges(ed.state);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      changeId: 'm1',
+      source: { from: 0, to: 6 },
+      proposed: { from: 6, to: 11 },
+    });
+  });
+
+  it('geometry: split source is the one delete, proposed spans BOTH inserts', () => {
+    const ed = unionEditor(splitChildren(), { changeId: 's1', op: SPLIT, ...META });
+    const changes = getStructuralChanges(ed.state);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      changeId: 's1',
+      source: { from: 0, to: 12 },
+      proposed: { from: 12, to: 25 },
+    });
+  });
+
+  it('merge Reject keeps BOTH source paragraphs; one Undo restores the whole union', () => {
+    const ed = unionEditor(mergeChildren(), { changeId: 'm1', op: MERGE, ...META });
+    expect(ed.commands.rejectStructuralChange('m1')).toBe(true);
+    expect(getStructuralChanges(ed.state)).toEqual([]);
+    expect(ed.state.doc.child(0).textContent).toBe('A');
+    expect(ed.state.doc.child(1).textContent).toBe('B'); // NOT truncated to the first delete
+    expect(ed.state.doc.child(0).attrs.blockTrack).toBeNull();
+    ed.commands.undo();
+    expect(topOps(ed.state)).toEqual(['delete', 'delete', 'insert', null]); // union back in one step
+  });
+
+  it('split Accept keeps BOTH proposed paragraphs; one Undo restores the whole union', () => {
+    const ed = unionEditor(splitChildren(), { changeId: 's1', op: SPLIT, ...META });
+    expect(ed.commands.acceptStructuralChange('s1')).toBe(true);
+    expect(getStructuralChanges(ed.state)).toEqual([]);
+    expect(ed.state.doc.child(0).textContent).toBe('alpha');
+    expect(ed.state.doc.child(1).textContent).toBe('beta'); // NOT truncated to the first insert
+    ed.commands.undo();
+    expect(topOps(ed.state)).toEqual(['delete', 'insert', 'insert', null]);
+  });
+
+  // [lead]0..6 [A del]6..9 [B del]9..12 [A B ins]12..17 [tail]17.. ; union = A,B,insert.
+  const mergeWithLead = () => [
+    para('lead'),
+    para('A', { changeId: 'm1', op: 'delete' }),
+    para('B', { changeId: 'm1', op: 'delete' }),
+    para('A B', { changeId: 'm1', op: 'insert' }),
+    para('tail'),
+  ];
+  const mergeLeadRecord: CanonicalRecord = {
+    changeId: 'm1',
+    op: MERGE,
+    originCommentId: 'o1',
+    ...META,
+  };
+
+  it('origin comment: contained across A→B resolves, wholly-disjoint (lead) resolves', () => {
+    // Contained: comment on A.text[7,8) and B.text[10,11), both in the delete branch.
+    let s = withComment(unionEditor(mergeWithLead(), mergeLeadRecord).state, 7, 11, 'o1');
+    expect(resolveStructuralUnion(s, 'm1', 'accept').ok).toBe(true);
+    // Disjoint: comment only on the lead paragraph, wholly outside the union.
+    s = withComment(unionEditor(mergeWithLead(), mergeLeadRecord).state, 1, 5, 'o1');
+    expect(resolveStructuralUnion(s, 'm1', 'accept').ok).toBe(true);
+  });
+
+  it('origin comment: a PARTIAL origin (lead + A + B) refuses union-not-clean', () => {
+    // Spans lead.text (outside the union) through B.text (delete branch) — partial.
+    const s = withComment(unionEditor(mergeWithLead(), mergeLeadRecord).state, 1, 11, 'o1');
+    expect(resolveStructuralUnion(s, 'm1', 'accept')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
+    });
+  });
+
+  it('origin comment: mark-inconsistent fragments (claude vs note) refuse even if contained', () => {
+    const ed = unionEditor(mergeWithLead(), mergeLeadRecord);
+    const claude = ed.state.schema.marks.comment.create({
+      commentId: 'o1',
+      resolved: false,
+      kind: 'claude',
+    });
+    const note = ed.state.schema.marks.comment.create({
+      commentId: 'o1',
+      resolved: false,
+      kind: 'note',
+    });
+    const s = ed.state.apply(ed.state.tr.addMark(7, 8, claude).addMark(10, 11, note));
+    expect(resolveStructuralUnion(s, 'm1', 'accept')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
     });
   });
 });

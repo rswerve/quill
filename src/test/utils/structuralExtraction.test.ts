@@ -122,6 +122,68 @@ describe('extractStructuralRecords', () => {
     expect(topOps(rebuilt)).toEqual(topOps(reviewDoc));
   });
 
+  it('round-trips a MERGE (2 sources → 1) persisting BOTH source anchors', () => {
+    const source = docFrom([paragraph('A'), paragraph('B'), paragraph('tail')]);
+    const op = { kind: 'mergeParagraphs' } as const;
+    const meta = new Map<string, StructuralRecordMetadata>([
+      ['m1', { op, author: 'a', createdAt: '2026-01-01T00:00:00Z' }],
+    ]);
+    const records: StructuralSuggestionRecord[] = [
+      {
+        changeId: 'm1',
+        author: 'a',
+        createdAt: '2026-01-01T00:00:00Z',
+        op,
+        anchor: { parentPath: [], childIndex: 0, childCount: 2 },
+        sourceFingerprint: fingerprintRange(source, 0, 2),
+        proposed: [paragraph('A B')],
+      },
+    ];
+    const reviewDoc = reconstructBlockUnions(source, records, serialize).doc;
+    expect(topOps(reviewDoc)).toEqual(['delete', 'delete', 'insert', null]);
+    expect(topTexts(reviewDoc)).toEqual(['A', 'B', 'A B', 'tail']);
+
+    const extracted = extractStructuralRecords(reviewDoc, meta, serialize);
+    expect(extracted).toHaveLength(1);
+    // The delete branch is BOTH source paragraphs — a first-root truncation would give 1.
+    expect(extracted[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 2 });
+    expect(extracted[0].proposed).toHaveLength(1);
+    const rebuilt = reconstructBlockUnions(source, extracted, serialize).doc;
+    expect(topTexts(rebuilt)).toEqual(topTexts(reviewDoc));
+    expect(topOps(rebuilt)).toEqual(topOps(reviewDoc));
+  });
+
+  it('round-trips a SPLIT (1 source → 2) persisting BOTH proposed blocks', () => {
+    const source = docFrom([paragraph('alpha beta'), paragraph('tail')]);
+    const op = { kind: 'splitParagraph' } as const;
+    const meta = new Map<string, StructuralRecordMetadata>([
+      ['s1', { op, author: 'a', createdAt: '2026-01-01T00:00:00Z' }],
+    ]);
+    const records: StructuralSuggestionRecord[] = [
+      {
+        changeId: 's1',
+        author: 'a',
+        createdAt: '2026-01-01T00:00:00Z',
+        op,
+        anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+        sourceFingerprint: fingerprintRange(source, 0, 1),
+        proposed: [paragraph('alpha'), paragraph('beta')],
+      },
+    ];
+    const reviewDoc = reconstructBlockUnions(source, records, serialize).doc;
+    // A first-proposed-only truncation would drop the second inserted block.
+    expect(topOps(reviewDoc)).toEqual(['delete', 'insert', 'insert', null]);
+    expect(topTexts(reviewDoc)).toEqual(['alpha beta', 'alpha', 'beta', 'tail']);
+
+    const extracted = extractStructuralRecords(reviewDoc, meta, serialize);
+    expect(extracted).toHaveLength(1);
+    expect(extracted[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
+    expect(extracted[0].proposed).toHaveLength(2);
+    const rebuilt = reconstructBlockUnions(source, extracted, serialize).doc;
+    expect(topTexts(rebuilt)).toEqual(topTexts(reviewDoc));
+    expect(topOps(rebuilt)).toEqual(topOps(reviewDoc));
+  });
+
   it('skips a change with no matching metadata and an incomplete union', () => {
     // A union missing its insert branch, and a complete one lacking metadata.
     const reviewDoc = docFrom([
