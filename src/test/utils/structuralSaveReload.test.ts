@@ -12,6 +12,8 @@ import {
 } from '../../extensions/StructuralRecordStore';
 import { buildStructuralSavePayload } from '../../utils/structuralSavePayload';
 import { rebaseForDegradedRecovery } from '../../utils/canonicalPersistence';
+import { parseMarkdownToDoc } from '../../utils/markdownDoc';
+import { projectBlockUnions } from '../../utils/blockUnionProjection';
 import {
   reconstructStructuralIntoEditor,
   reconstructStructuralFromRecords,
@@ -20,13 +22,15 @@ import type { StructuralReviewEnvelope } from '../../types';
 
 const editors: Editor[] = [];
 
-function makeEditor(content: string): Editor {
+function makeEditor(content: string | object): Editor {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const editor = new Editor({
     element: el,
     extensions: [
-      StarterKit,
+      // Production disables the trailing-node plugin; mirror that here so a reconstructed
+      // canonical source is not perturbed by a harness-only appended paragraph.
+      StarterKit.configure({ trailingNode: false }),
       BlockTrack,
       StructuralRecordStore,
       Markdown.configure({ html: false, tightLists: true }),
@@ -99,6 +103,48 @@ function mintListToParagraph(editor: Editor, changeId: string, flattened: string
   editor.view.dispatch(tr);
 }
 
+/** Build a K-paragraph→one-paragraph merge union starting at a top-level child index. */
+function mintMergeParagraphs(editor: Editor, changeId: string, startIndex: number, count: number) {
+  const { state } = editor;
+  const sources = [];
+  const positions: number[] = [];
+  let pos = 0;
+  for (let i = 0; i < startIndex; i += 1) pos += state.doc.child(i).nodeSize;
+  for (let i = startIndex; i < startIndex + count; i += 1) {
+    const source = state.doc.child(i);
+    sources.push(source);
+    positions.push(pos);
+    pos += source.nodeSize;
+  }
+  const flattened = sources.map((source) => source.textContent).join(' ');
+  const tr = state.tr;
+  tr.insert(
+    pos,
+    state.schema.nodes.paragraph.create(
+      { blockTrack: { changeId, op: 'insert' } },
+      flattened ? state.schema.text(flattened) : undefined,
+    ),
+  );
+  sources.forEach((source, index) => {
+    tr.setNodeMarkup(positions[index], undefined, {
+      ...source.attrs,
+      blockTrack: { changeId, op: 'delete' },
+    });
+  });
+  addStructuralRecord(tr, {
+    changeId,
+    op: { kind: 'mergeParagraphs' },
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  editor.view.dispatch(tr);
+}
+
+const paragraphJSON = (text: string) => ({
+  type: 'paragraph',
+  ...(text ? { content: [{ type: 'text', text }] } : {}),
+});
+
 describe('degraded-recovery rebase — list sources', () => {
   it('save payload of a list-source union succeeds (the on-disk path is fine)', () => {
     const editor = makeEditor('- one\n- two\n- three');
@@ -127,6 +173,71 @@ describe('degraded-recovery rebase — list sources', () => {
     expect(payload.ok).toBe(true);
     if (!payload.ok) return;
     expect(rebaseForDegradedRecovery(editor, payload.content, payload.structural).ok).toBe(true);
+  });
+});
+
+describe('degraded-recovery rebase — K-paragraph merge sources', () => {
+  it('rebases childIndex + all K source roots through normalization and reconstructs exactly', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        paragraphJSON(''),
+        paragraphJSON('one  here'),
+        paragraphJSON('two'),
+        paragraphJSON('three'),
+        paragraphJSON('tail'),
+      ],
+    });
+    mintMergeParagraphs(editor, 'merge-k', 1, 3);
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) return;
+    expect(payload.structural[0].anchor).toEqual({
+      parentPath: [],
+      childIndex: 1,
+      childCount: 3,
+    });
+
+    const rebased = rebaseForDegradedRecovery(editor, payload.content, payload.structural);
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records[0].anchor).toEqual({
+      parentPath: [],
+      childIndex: 0,
+      childCount: 3,
+    });
+
+    const canonicalSource = parseMarkdownToDoc(editor, payload.content);
+    expect(canonicalSource.child(0).textContent).toBe('one here');
+    const recovered = makeEditor(canonicalSource.toJSON());
+    const reconstruction = reconstructStructuralFromRecords(recovered, rebased.records);
+    expect(reconstruction.quarantined).toEqual([]);
+    expect(reconstruction.restored.map((record) => record.changeId)).toEqual(['merge-k']);
+    expect(projectBlockUnions(recovered.state.doc, 'source').doc.toJSON()).toEqual(
+      canonicalSource.toJSON(),
+    );
+    const accepted = projectBlockUnions(recovered.state.doc, 'accepted').doc;
+    expect(accepted.child(0).textContent).toBe('one  here two three');
+    expect(accepted.child(1).textContent).toBe('tail');
+  });
+
+  it('fails closed when canonical Markdown removes an empty paragraph inside the K-source run', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        paragraphJSON('one'),
+        paragraphJSON(''),
+        paragraphJSON('three'),
+        paragraphJSON('tail'),
+      ],
+    });
+    mintMergeParagraphs(editor, 'merge-empty', 0, 3);
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) return;
+    expect(payload.structural[0].anchor.childCount).toBe(3);
+
+    expect(rebaseForDegradedRecovery(editor, payload.content, payload.structural).ok).toBe(false);
   });
 });
 
