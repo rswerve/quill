@@ -65,6 +65,20 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('multi-item list');
   });
 
+  it('names the real blocker for an annotated block — not the comment being asked from', () => {
+    // QA case: converting a block that still carries a pending inline suggestion is refused.
+    // The notice must point at the unresolved suggestion (and any OTHER comment), never at
+    // the origin comment the user is asking from — which the carveout tolerates.
+    const results = [
+      entry(0, { kind: 'structural', status: 'mint-refused', reason: 'annotated-footprint' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'Make this a checklist' }]);
+    expect(notice).toContain('unresolved suggestion');
+    expect(notice).toContain('another comment');
+    // Must not read as "that block carries a comment" — that implicates the origin comment.
+    expect(notice).not.toContain('carries a comment');
+  });
+
   it('reports system/provider faults blamelessly, never blaming the instruction', () => {
     // In 6b the id/author/timestamp/origin and the target coordinates are ALL injected by
     // the orchestrator — Claude supplies none of them — so these four are internal faults.

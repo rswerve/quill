@@ -56,8 +56,11 @@ function structuralMintRefusalText(reason: StructuralMintRefusal): string {
       return UNSUPPORTED_STRUCTURAL;
     case 'overlapping-structural':
       return 'it overlaps an existing structural change; resolve that one first.';
+    // The comment being asked FROM is tolerated (Option-B carveout), so never name "a
+    // comment" flatly — that points the reader at the very comment they're using. Name the
+    // real blockers: an unresolved tracked suggestion, or a SECOND comment on the block.
     case 'annotated-footprint':
-      return 'that block carries a comment or pending change; resolve it first.';
+      return 'that block still has an unresolved suggestion or another comment on it — resolve those first.';
     case 'origin-comment-partial':
       return 'the originating comment doesn’t fully cover that block.';
     case 'invalid-structural-state':
