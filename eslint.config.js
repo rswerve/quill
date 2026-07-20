@@ -78,6 +78,14 @@ export default tseslint.config(
   {
     // .claude/ holds agent worktrees — full repo mirrors whose nested paths
     // dodge the root-relative patterns above and false-fail the lint.
-    ignores: ['dist/', 'src-tauri/', 'node_modules/', '.claude/'],
+    ignores: [
+      'dist/',
+      'src-tauri/',
+      'node_modules/',
+      '.claude/',
+      'coverage/',
+      'playwright-report/',
+      'test-results/',
+    ],
   },
 );

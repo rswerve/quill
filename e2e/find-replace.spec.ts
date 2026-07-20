@@ -5,7 +5,7 @@
  * ordinary editor commands, so in suggesting mode it produces tracked
  * changes like any hand-typed edit.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page, Locator } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
 import { activeEditor } from './helpers/memoryTauri';

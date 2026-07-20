@@ -1,5 +1,5 @@
 /** End-to-end coverage for Quill's consolidated create/edit link card. */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page, Locator } from '@playwright/test';
 import { activeEditor } from './helpers/memoryTauri';
 

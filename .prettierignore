@@ -2,3 +2,6 @@ dist/
 src-tauri/
 node_modules/
 *.lock
+coverage/
+playwright-report/
+test-results/

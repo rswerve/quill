@@ -6,7 +6,7 @@
  * mounts. The mock plays scripted ChunkEvents and `window.__quillTestSession`
  * seeds a fake binding so the anchored Ask-Claude path runs without a SessionPicker.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
 import { ipcFixtures } from './helpers/ipcFixtures';

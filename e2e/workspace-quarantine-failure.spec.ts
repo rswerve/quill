@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { setupMemoryTauri } from './helpers/memoryTauri';
 
 const INVALID_WORKSPACE = '{ original invalid workspace bytes';

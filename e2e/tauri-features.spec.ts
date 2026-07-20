@@ -9,7 +9,7 @@
  * dispatches through that shim, and event-bus listen()/emit() are simulated
  * by the same dispatcher (Tauri's listen() itself goes through invoke()).
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { ipcFixtures } from './helpers/ipcFixtures';
 import { activeEditor } from './helpers/memoryTauri';

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './fixtures';
 import { activeEditor } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<Locator> {
