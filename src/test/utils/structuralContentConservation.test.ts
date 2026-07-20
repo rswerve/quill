@@ -4,7 +4,11 @@ import { MarkdownImage } from '../../extensions/MarkdownImage';
 import { CommentMark } from '../../extensions/Comment';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { structuralContentConserved } from '../../utils/structuralContentConservation';
+import {
+  structuralContentConserved,
+  locateSplitSeams,
+  mergeParagraphContent,
+} from '../../utils/structuralContentConservation';
 import type { StructuralOp } from '../../types';
 
 /**
@@ -178,5 +182,57 @@ describe('structuralContentConserved — split', () => {
         [p([t('alpha')]), p([]), p([t('beta')])],
       ),
     ).toBe(false);
+  });
+});
+
+describe('locateSplitSeams — construction offsets', () => {
+  it('locates whitespace-seam ranges for a plain paragraph (incl. multi-space seam)', () => {
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha', 'beta'])).toEqual([
+      { from: 0, to: 5 },
+      { from: 6, to: 10 },
+    ]);
+    expect(locateSplitSeams(p([t('a b  c')]).content, ['a', 'b', 'c'])).toEqual([
+      { from: 0, to: 1 },
+      { from: 2, to: 3 },
+      { from: 5, to: 6 },
+    ]);
+  });
+
+  it('rides an inline atom with its abutting text run (an atom is never a seam)', () => {
+    // content: "ab" | image | " cd" → text "ab cd", image at content offset 2.
+    const content = p([t('ab'), img('x.png'), t(' cd')]).content;
+    // Slicing "ab" | "cd": the image rides in the first piece [0,3); the space seam is dropped.
+    expect(locateSplitSeams(content, ['ab', 'cd'])).toEqual([
+      { from: 0, to: 3 },
+      { from: 4, to: 6 },
+    ]);
+  });
+
+  it('refuses a non-whitespace seam, leftover, altered text, and <2 or empty parts', () => {
+    expect(locateSplitSeams(p([t('alphabeta')]).content, ['alpha', 'beta'])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha'])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha', ''])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha', 'gamma'])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta gamma')]).content, ['alpha', 'beta'])).toBeNull();
+  });
+
+  it('sliced pieces reconstruct the source under content conservation (marks preserved)', () => {
+    const source = p([t('alpha', bold), t(' beta')]);
+    const ranges = locateSplitSeams(source.content, ['alpha', 'beta']);
+    expect(ranges).not.toBeNull();
+    if (!ranges) return;
+    const para = editor.schema.nodes.paragraph;
+    const pieces = ranges.map((r) => para.create(null, source.content.cut(r.from, r.to)));
+    expect(structuralContentConserved({ kind: 'splitParagraph' }, [source], pieces)).toBe(true);
+  });
+});
+
+describe('mergeParagraphContent — construction', () => {
+  it('joins source contents with one space and conserves', () => {
+    const a = p([t('A.')]);
+    const b = p([t('B')]);
+    const merged = editor.schema.nodes.paragraph.create(null, mergeParagraphContent([a, b]));
+    expect(merged.textContent).toBe('A. B');
+    expect(structuralContentConserved({ kind: 'mergeParagraphs' }, [a, b], [merged])).toBe(true);
   });
 });

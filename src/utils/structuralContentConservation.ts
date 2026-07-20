@@ -158,3 +158,72 @@ export function structuralContentConserved(
       );
   }
 }
+
+// ---- Construction helpers (used by the V2 mint; share the seam policy above) ----
+
+/**
+ * The merged inline content of several source blocks — each block's content in order,
+ * separated by exactly one plain-text space (the merge seam). Built via `paragraph.create`
+ * so adjacent same-mark text joins the same way the conservation token stream expects, so a
+ * mint that constructs the merge with this always passes `structuralContentConserved`.
+ */
+export function mergeParagraphContent(sources: readonly PMNode[]): Fragment {
+  if (sources.length === 0) return Fragment.empty;
+  const schema = sources[0].type.schema;
+  const nodes: PMNode[] = [];
+  sources.forEach((block, i) => {
+    if (i > 0) nodes.push(schema.text(' '));
+    block.content.forEach((child) => nodes.push(child));
+  });
+  return schema.nodes.paragraph.create(null, nodes).content;
+}
+
+/**
+ * The content-offset ranges to slice a paragraph's content into, one per part, where the
+ * parts are the paragraph's text re-bounded at whitespace-run seams. An inline atom rides
+ * with the text run it abuts (it carries no char, so it can't itself be a seam). Returns
+ * null when the parts don't cleanly reflow the content — a non-whitespace seam, altered
+ * text, leftover content, fewer than two parts, or an empty part — so the mint refuses.
+ * Shares the whitespace-run seam policy with `structuralContentConserved`.
+ */
+export function locateSplitSeams(
+  content: Fragment,
+  parts: readonly string[],
+): { from: number; to: number }[] | null {
+  if (parts.length < 2 || parts.some((part) => part.length === 0)) return null;
+  // Map each plaintext char index to its content offset; an inline atom occupies an offset
+  // but contributes no char (so it can only ride inside a part, never sit on a seam).
+  const offsets: number[] = [];
+  let text = '';
+  let offset = 0;
+  content.forEach((node) => {
+    if (node.isText) {
+      const s = node.text ?? '';
+      for (let k = 0; k < s.length; k += 1) {
+        offsets.push(offset + k);
+        text += s[k];
+      }
+      offset += node.nodeSize;
+    } else {
+      offset += node.nodeSize; // inline atom: no char
+    }
+  });
+  offsets.push(offset); // end-of-content offset
+
+  const ranges: { from: number; to: number }[] = [];
+  let cursor = 0;
+  for (let pi = 0; pi < parts.length; pi += 1) {
+    const part = parts[pi];
+    if (text.slice(cursor, cursor + part.length) !== part) return null;
+    ranges.push({ from: offsets[cursor], to: offsets[cursor + part.length] });
+    cursor += part.length;
+    if (pi < parts.length - 1) {
+      let ws = 0;
+      while (cursor + ws < text.length && isWhitespace(text[cursor + ws])) ws += 1;
+      if (ws === 0) return null; // a seam must be a nonempty whitespace run
+      cursor += ws;
+    }
+  }
+  if (cursor !== text.length) return null; // leftover content
+  return ranges;
+}
