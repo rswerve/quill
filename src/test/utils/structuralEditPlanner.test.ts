@@ -312,6 +312,10 @@ describe('planStructuralEdits — V2 split', () => {
 
   it.each([
     { label: 'both to and split', structural: { to: 'paragraph', split: ['a', 'b'] } },
+    {
+      label: 'a present split KEY (undefined value) alongside to',
+      structural: { to: 'paragraph', split: undefined },
+    },
     { label: 'neither to nor split', structural: {} },
     { label: 'split not an array', structural: { split: 'a b' } },
     { label: 'fewer than two pieces', structural: { split: ['a'] } },

@@ -199,8 +199,10 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
     return 'invalid-edit';
   }
   const structural = edit.structural as Record<string, unknown>;
-  const hasSplit = structural.split !== undefined;
-  const hasTo = structural.to !== undefined;
+  // XOR by KEY PRESENCE, not value: {to, split: undefined} declares BOTH keys and is malformed,
+  // matching the batch classifier's hasOwn contract.
+  const hasSplit = Object.prototype.hasOwnProperty.call(structural, 'split');
+  const hasTo = Object.prototype.hasOwnProperty.call(structural, 'to');
   if (hasSplit === hasTo) return 'invalid-edit'; // exactly one of split / to
   if (hasSplit) {
     if (!isValidSplitParts(structural.split) || structural.level !== undefined) {
@@ -264,7 +266,7 @@ export function planStructuralEdits(
     const structural = edit.structural as Record<string, unknown>;
     let op: OpDerivation;
     let splitParts: string[] | undefined;
-    if (structural.split !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(structural, 'split')) {
       // Split: V2 splits a PARAGRAPH into paragraphs; any other source type is unsupported.
       op = located.node.type.name === 'paragraph' ? { kind: 'splitParagraph' } : 'unsupported-op';
       splitParts = structural.split as string[]; // shape-validated by shapeRefusal
