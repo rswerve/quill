@@ -33,8 +33,14 @@ function changesFromIndex(
       ...(record.originChatMessageId ? { originChatMessageId: record.originChatMessageId } : {}),
       from: union.from,
       to: union.to,
-      source: { from: union.deleteRoot.pos, to: union.deleteRoot.to },
-      proposed: { from: union.insertRoot.pos, to: union.insertRoot.to },
+      source: {
+        from: union.deleteRoots[0].pos,
+        to: union.deleteRoots[union.deleteRoots.length - 1].to,
+      },
+      proposed: {
+        from: union.insertRoots[0].pos,
+        to: union.insertRoots[union.insertRoots.length - 1].to,
+      },
     });
   }
   return changes.sort((a, b) => a.from - b.from || a.changeId.localeCompare(b.changeId));

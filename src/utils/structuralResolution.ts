@@ -78,8 +78,11 @@ function unionIsClean(
   union: IndexedStructuralUnion,
   originCommentId: string | undefined,
 ): boolean {
-  const deleteFrom = union.deleteRoot.pos;
-  const deleteTo = union.deleteRoot.to;
+  // The whole source branch: first delete root's start through the last's end. Because
+  // the delete run is contiguous, this single span covers a merge's two source blocks,
+  // so an origin comment inside A, inside B, or spanning A→B all read as delete-branch.
+  const deleteFrom = union.deleteRoots[0].pos;
+  const deleteTo = union.deleteRoots[union.deleteRoots.length - 1].to;
   let clean = true;
   // Inspect EVERY node's marks (text, hard breaks, inline atoms, and even a
   // malformed block-node mark), not text nodes alone.
@@ -175,13 +178,18 @@ export function resolveStructuralUnion(
     resolvedComment = outcome.resolvedComment;
   }
 
-  const keepRoot = action === 'accept' ? union.insertRoot : union.deleteRoot;
-  const survivor = keepRoot.node.type.create(
-    { ...keepRoot.node.attrs, blockTrack: null },
-    keepRoot.node.content,
-    keepRoot.node.marks,
+  // Keep every root of the surviving branch (accept → all inserts, reject → all
+  // deletes), identity cleared, and replace the whole envelope in ONE step so Undo
+  // restores the union atomically. A split keeps M inserts; a merge keeps one.
+  const keepRoots = action === 'accept' ? union.insertRoots : union.deleteRoots;
+  const survivors = keepRoots.map((root) =>
+    root.node.type.create(
+      { ...root.node.attrs, blockTrack: null },
+      root.node.content,
+      root.node.marks,
+    ),
   );
-  tr.replaceWith(union.from, union.to, survivor);
+  tr.replaceWith(union.from, union.to, survivors);
   tr.setMeta(SKIP_TRACKING_META, true);
   tr.setMeta(STRUCTURAL_BYPASS_META, {
     kind: 'resolve',

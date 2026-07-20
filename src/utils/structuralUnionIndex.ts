@@ -37,15 +37,24 @@ export interface IndexedStructuralRoot {
   readonly op: BlockTrackAttr['op'];
 }
 
-/** One exact V1 live union: one source root immediately followed by one proposal root. */
+/**
+ * One live union: a contiguous run of source (delete) roots immediately followed by
+ * a contiguous run of proposal (insert) roots, all sharing one changeId. V1 ops are
+ * one delete + one insert; V2 merge is K deletes + one insert and split is one
+ * delete + M inserts. The per-op counts are enforced by `structuralOpShapeValid`,
+ * never here — this level is op-agnostic topology.
+ */
 export interface IndexedStructuralUnion {
   readonly changeId: string;
-  readonly deleteRoot: IndexedStructuralRoot;
-  readonly insertRoot: IndexedStructuralRoot;
+  /** The source branch, in document order (length === sourceChildCount, ≥1). */
+  readonly deleteRoots: readonly IndexedStructuralRoot[];
+  /** The proposed branch, in document order, immediately after the delete run (≥1). */
+  readonly insertRoots: readonly IndexedStructuralRoot[];
   readonly parentPath: readonly number[];
-  /** Index of the delete root after insert branches are removed from its parent. */
+  /** Index of the FIRST delete root after insert branches are removed from its parent. */
   readonly sourceChildIndex: number;
-  readonly sourceChildCount: 1;
+  /** Number of source blocks in the delete branch (=== deleteRoots.length). */
+  readonly sourceChildCount: number;
   readonly from: number;
   readonly to: number;
 }
@@ -194,45 +203,67 @@ function addIssue(
   issues.push({ changeId, code, positions: roots.map((root) => root.pos) });
 }
 
+function byChildIndex(a: CollectedRoot, b: CollectedRoot): number {
+  return a.childIndex - b.childIndex;
+}
+
+/** True when the roots (already sorted) occupy consecutive child indices. */
+function contiguousRun(roots: readonly CollectedRoot[]): boolean {
+  for (let i = 1; i < roots.length; i += 1) {
+    if (roots[i].childIndex !== roots[i - 1].childIndex + 1) return false;
+  }
+  return true;
+}
+
 function candidateFor(
   changeId: string,
   roots: readonly CollectedRoot[],
   issues: StructuralUnionIssue[],
 ): IndexedStructuralUnion | null {
-  const deletes = roots.filter((root) => root.op === 'delete');
-  const inserts = roots.filter((root) => root.op === 'insert');
-  if (roots.length !== 2 || deletes.length !== 1 || inserts.length !== 1) {
+  const deletes = roots.filter((root) => root.op === 'delete').sort(byChildIndex);
+  const inserts = roots.filter((root) => root.op === 'insert').sort(byChildIndex);
+  // A union is one-or-more source (delete) roots immediately followed by one-or-more
+  // proposal (insert) roots (V1: 1+1; V2 merge: K+1; V2 split: 1+M). This level is
+  // op-agnostic — the per-op counts are enforced downstream by structuralOpShapeValid.
+  if (deletes.length === 0 || inserts.length === 0) {
     addIssue(issues, changeId, 'branch-count', roots);
     return null;
   }
 
-  const deleteRoot = deletes[0];
-  const insertRoot = inserts[0];
-  if (parentKey(deleteRoot.parentPath) !== parentKey(insertRoot.parentPath)) {
+  const parentPath = deletes[0].parentPath;
+  const sameParent = roots.every((root) => parentKey(root.parentPath) === parentKey(parentPath));
+  if (!sameParent) {
     addIssue(issues, changeId, 'different-parent', roots);
     return null;
   }
-  // V1 persistence anchors are top-level. Keeping this explicit prevents a
+  // V1/V2 persistence anchors are top-level. Keeping this explicit prevents a
   // nested pair from looking complete even though extraction/reload cannot save it.
-  if (deleteRoot.parentPath.length !== 0) {
+  if (parentPath.length !== 0) {
     addIssue(issues, changeId, 'unsupported-parent', roots);
   }
-  if (deleteRoot.childIndex >= insertRoot.childIndex) {
-    addIssue(issues, changeId, 'branch-order', roots);
+  const lastDelete = deletes[deletes.length - 1];
+  const firstInsert = inserts[0];
+  // Each branch must be internally contiguous (no gap within the delete or insert run).
+  if (!contiguousRun(deletes) || !contiguousRun(inserts)) {
+    addIssue(issues, changeId, 'non-adjacent', roots);
   }
-  if (insertRoot.childIndex !== deleteRoot.childIndex + 1) {
+  if (firstInsert.childIndex <= lastDelete.childIndex) {
+    // An insert sits at or before a delete — interleaved or reversed.
+    addIssue(issues, changeId, 'branch-order', roots);
+  } else if (firstInsert.childIndex !== lastDelete.childIndex + 1) {
+    // The insert run does not immediately follow the delete run.
     addIssue(issues, changeId, 'non-adjacent', roots);
   }
 
   return {
     changeId,
-    deleteRoot,
-    insertRoot,
-    parentPath: deleteRoot.parentPath,
-    sourceChildIndex: rootSourceIndex(deleteRoot),
-    sourceChildCount: 1,
-    from: Math.min(deleteRoot.pos, insertRoot.pos),
-    to: Math.max(deleteRoot.to, insertRoot.to),
+    deleteRoots: deletes,
+    insertRoots: inserts,
+    parentPath,
+    sourceChildIndex: rootSourceIndex(deletes[0]),
+    sourceChildCount: deletes.length,
+    from: Math.min(...roots.map((root) => root.pos)),
+    to: Math.max(...roots.map((root) => root.to)),
   };
 }
 
@@ -369,11 +400,17 @@ export function analyzeStructuralUnions(
         missingMetadataIds.add(changeId);
         continue;
       }
-      if (!structuralOpShapeValid(record.op, [union.deleteRoot.node], [union.insertRoot.node])) {
+      if (
+        !structuralOpShapeValid(
+          record.op,
+          union.deleteRoots.map((root) => root.node),
+          union.insertRoots.map((root) => root.node),
+        )
+      ) {
         allIssues.push({
           changeId,
           code: 'operation-shape',
-          positions: [union.deleteRoot.pos, union.insertRoot.pos],
+          positions: [union.deleteRoots[0].pos, union.insertRoots[0].pos],
         });
         continue;
       }

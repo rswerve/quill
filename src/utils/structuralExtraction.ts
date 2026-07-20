@@ -65,7 +65,7 @@ export function extractStructuralRecordsFromIndex(
   for (const [changeId, union] of index.persistable) {
     const meta = metadata.get(changeId);
     if (!meta) continue;
-    const deleteNodes = [union.deleteRoot.node];
+    const deleteNodes = union.deleteRoots.map((root) => root.node);
     records.push({
       changeId,
       author: meta.author,
@@ -79,7 +79,7 @@ export function extractStructuralRecordsFromIndex(
         childCount: union.sourceChildCount,
       },
       sourceFingerprint: structuralFingerprint(Fragment.fromArray(deleteNodes), serialize),
-      proposed: [stripReviewMetadata(union.insertRoot.node.toJSON())],
+      proposed: union.insertRoots.map((root) => stripReviewMetadata(root.node.toJSON())),
     });
   }
   return records;

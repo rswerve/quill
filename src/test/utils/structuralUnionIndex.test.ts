@@ -112,8 +112,8 @@ describe('analyzeStructuralUnions', () => {
     expect([...index.topologyValid]).toHaveLength(1);
     expect(union?.sourceChildIndex).toBe(1);
     expect(union?.sourceChildCount).toBe(1);
-    expect(union?.deleteRoot.node.type.name).toBe('heading');
-    expect(union?.insertRoot.node.type.name).toBe('paragraph');
+    expect(union?.deleteRoots[0].node.type.name).toBe('heading');
+    expect(union?.insertRoots[0].node.type.name).toBe('paragraph');
     editor.destroy();
   });
 
@@ -145,13 +145,21 @@ describe('analyzeStructuralUnions', () => {
       code: 'branch-count',
     },
     {
-      name: 'duplicate delete branches',
+      name: 'an insert branch with no delete',
       content: [
-        heading('x', { changeId: 'c1', op: 'delete' }),
-        heading('x', { changeId: 'c1', op: 'delete' }),
         paragraph('x', { changeId: 'c1', op: 'insert' }),
+        paragraph('y', { changeId: 'c1', op: 'insert' }),
       ],
       code: 'branch-count',
+    },
+    {
+      name: 'interleaved delete/insert/delete',
+      content: [
+        paragraph('a', { changeId: 'c1', op: 'delete' }),
+        paragraph('b', { changeId: 'c1', op: 'insert' }),
+        paragraph('c', { changeId: 'c1', op: 'delete' }),
+      ],
+      code: 'branch-order',
     },
     {
       name: 'insert before delete',
@@ -176,6 +184,35 @@ describe('analyzeStructuralUnions', () => {
     expect(index.allIdentityIds.has('c1')).toBe(true);
     expect(index.topologyValid.has('c1')).toBe(false);
     expect(index.issues.map((issue) => issue.code)).toContain(code);
+    editor.destroy();
+  });
+
+  it('accepts a V2 merge topology (K delete roots immediately followed by one insert)', () => {
+    const editor = makeEditor([
+      paragraph('A', { changeId: 'm1', op: 'delete' }),
+      paragraph('B', { changeId: 'm1', op: 'delete' }),
+      paragraph('A B', { changeId: 'm1', op: 'insert' }),
+    ]);
+    const union = analyzeStructuralUnions(editor.state.doc).topologyValid.get('m1');
+    expect(union).toBeDefined();
+    expect(union?.deleteRoots).toHaveLength(2);
+    expect(union?.insertRoots).toHaveLength(1);
+    expect(union?.sourceChildCount).toBe(2);
+    expect(union?.sourceChildIndex).toBe(0);
+    editor.destroy();
+  });
+
+  it('accepts a V2 split topology (one delete root immediately followed by M inserts)', () => {
+    const editor = makeEditor([
+      paragraph('alpha beta', { changeId: 's1', op: 'delete' }),
+      paragraph('alpha', { changeId: 's1', op: 'insert' }),
+      paragraph('beta', { changeId: 's1', op: 'insert' }),
+    ]);
+    const union = analyzeStructuralUnions(editor.state.doc).topologyValid.get('s1');
+    expect(union).toBeDefined();
+    expect(union?.deleteRoots).toHaveLength(1);
+    expect(union?.insertRoots).toHaveLength(2);
+    expect(union?.sourceChildCount).toBe(1);
     editor.destroy();
   });
 
