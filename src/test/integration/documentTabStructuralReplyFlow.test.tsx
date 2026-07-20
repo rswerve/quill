@@ -431,6 +431,81 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
   });
 
+  it('prioritizes a multi-item list over same-block unbolding and reports the partial outcome honestly', async () => {
+    const source = '**First sentence.** Second sentence. Third sentence.';
+    const items = ['First sentence.', 'Second sentence.', 'Third sentence.'];
+    const mounted = await mountReplyTab(undefined, source);
+    const editor = mounted.getHandle().getEditor()!;
+    const paragraph = editor.state.doc.child(0);
+
+    // This is Maz's exact interaction shape: one comment asks for formatting AND a
+    // sentence-per-item list on the same paragraph.
+    await askClaudeOn(
+      mounted,
+      1,
+      paragraph.nodeSize - 1,
+      'unbold the first sentence and turn this into a list item for each sentence',
+    );
+    await waitFor(() => expect(mock.dispatchers.size).toBe(1));
+
+    streamEdits(mock.latestToken(), [
+      { find: 'First sentence.', format: { bold: false } },
+      { find: 'Second sentence.', structural: { to: 'bulletList', items } },
+    ]);
+
+    await waitFor(() => expect(retainedRecords(editor.state).size).toBe(1));
+    const [changeId, record] = [...retainedRecords(editor.state).entries()][0];
+    expect(record.op).toEqual({ kind: 'paragraphToList', listType: 'bulletList' });
+    expect(getTrackedChanges(editor)).toHaveLength(0); // the colliding unbold did not mint
+
+    const proposed = blockTrackNode(editor.state.doc, changeId, 'insert')!;
+    expect(proposed.type.name).toBe('bulletList');
+    expect(proposed.childCount).toBe(3);
+    expect([...Array(3)].map((_, index) => proposed.child(index).textContent)).toEqual(items);
+    expect(
+      proposed
+        .child(0)
+        .child(0)
+        .firstChild?.marks.some((mark) => mark.type.name === 'bold'),
+    ).toBe(true); // structural won; the formatting was not silently composed
+
+    await waitFor(() => {
+      const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
+      const reply = aiReplyOf(comment);
+      expect(reply?.suggestionIds).toEqual([changeId]);
+      expect(reply?.text).toContain('Some changes were applied, but 1 change wasn’t');
+      expect(reply?.text).toContain('block restructuring took priority');
+      expect(reply?.text).not.toContain('Done.');
+    });
+
+    const card = await waitFor(() => {
+      const el = mounted.container.querySelector(
+        `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(card.textContent).toContain('Bulleted list');
+    act(() => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Accept' }));
+    });
+
+    await waitFor(() =>
+      expect(mounted.container.querySelector(`[data-card-id="${changeId}"]`)).toBeNull(),
+    );
+    const accepted = editor.state.doc.child(0);
+    expect(accepted.type.name).toBe('bulletList');
+    expect(accepted.childCount).toBe(3);
+    expect([...Array(3)].map((_, index) => accepted.child(index).textContent)).toEqual(items);
+    expect(
+      accepted
+        .child(0)
+        .child(0)
+        .firstChild?.marks.some((mark) => mark.type.name === 'bold'),
+    ).toBe(true);
+    expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
+  });
+
   it('mints and ACCEPTS a paragraph SPLIT end to end (the V2 construction path)', async () => {
     const mounted = await mountReplyTab();
     const editor = mounted.getHandle().getEditor()!;

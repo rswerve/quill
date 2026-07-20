@@ -76,6 +76,8 @@ function structuralMintRefusalText(reason: StructuralMintRefusal): string {
     // must reflow the paragraph's own text (its exact words, split only at whitespace).
     case 'split-source-mismatch':
       return 'the split pieces don’t match that paragraph’s text — they must be its exact words, split at the spaces.';
+    case 'list-source-mismatch':
+      return 'the list items don’t match that paragraph’s text — they must be its exact words, divided at the spaces.';
     // System faults, NOT the model's instruction: in 6b the changeId/author/timestamp/
     // origin are all injected by the orchestrator (allocateReservedId, the AI author,
     // now(), the comment/chat origin) and the op is planner-validated before the mint,

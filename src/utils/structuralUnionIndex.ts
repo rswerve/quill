@@ -284,8 +284,8 @@ function expectedItemType(listType: StructuralListType): string {
  * (`bulletList`/`orderedList` → `listItem`, `taskList` → `taskItem`) wrapping EXACTLY one
  * paragraph — no nesting, no composite/blockquote item children, and no cross-kind wrapper
  * (a forged `bulletList > taskItem` from an untrusted sidecar must fail closed). This is the
- * source shape a multi-item list→paragraph flattens by joining the items' text; anything else
- * fails closed. Single-item is the `isSingleItemList` special case.
+ * flat shape used on either side of list↔paragraph conversion; anything else fails closed.
+ * Single-item is the `isSingleItemList` special case.
  */
 export function isFlatParagraphList(node: PMNode, listType: StructuralListType): boolean {
   if (node.type.name !== listType || node.childCount < 1) return false;
@@ -348,7 +348,7 @@ export function structuralOpShapeValid(
       return (
         oneToOne(source, proposed) &&
         source[0].type.name === 'paragraph' &&
-        isSingleItemList(proposed[0], op.listType)
+        isFlatParagraphList(proposed[0], op.listType)
       );
     case 'splitParagraph':
       return (

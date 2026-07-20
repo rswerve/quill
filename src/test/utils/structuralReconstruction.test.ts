@@ -208,6 +208,27 @@ describe('reconstructBlockUnions', () => {
     expect(doc.child(1).textContent).toBe('one two three');
   });
 
+  it('reconstructs an honest paragraph→multi-item list and quarantines a last-item tamper', () => {
+    const source = docFrom([paragraph('one two three')]);
+    const base = {
+      changeId: 'c1',
+      op: { kind: 'paragraphToList' as const, listType: 'bulletList' as const },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+    };
+    const honest = record({ ...base, proposed: [bulletList(['one', 'two', 'three'])] });
+    const restored = reconstructBlockUnions(source, [honest], serialize);
+    expect(restored.quarantined).toEqual([]);
+    expect(topOps(restored.doc)).toEqual(['delete', 'insert']);
+    expect(restored.doc.child(1).type.name).toBe('bulletList');
+    expect(restored.doc.child(1).childCount).toBe(3);
+
+    const tampered = record({ ...base, proposed: [bulletList(['one', 'two', 'EVIL'])] });
+    const refused = reconstructBlockUnions(source, [tampered], serialize);
+    expect(refused.quarantined).toEqual([tampered]);
+    expect(refused.doc.toJSON()).toEqual(source.toJSON());
+  });
+
   it('quarantines overlapping anchors without applying either', () => {
     const source = docFrom([heading('Title'), paragraph('x')]);
     const fp = fingerprintRange(source, 0, 1);
@@ -498,7 +519,7 @@ describe('reconstructBlockUnions hardening', () => {
     expect(q(paraSrc, { kind: 'paragraphToList', listType: 'bulletList' }, orderedList)).toBe(1); // listType mismatch
     expect(
       q(twoItemSrc, { kind: 'listToParagraph', listType: 'bulletList' }, [paragraph('x')]),
-    ).toBe(1); // not single-item
+    ).toBe(1); // shape is valid, but the proposal drops the list's content
     expect(q(headingSrc, { kind: 'headingToParagraph', level: 1 }, [paragraph('Title')])).toBe(0); // valid op reconstructs
   });
 

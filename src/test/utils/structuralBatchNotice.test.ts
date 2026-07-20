@@ -80,6 +80,16 @@ describe('formatBatchResultNotice', () => {
     expect(notice).not.toContain('internal error'); // model-facing, not a blameless system fault
   });
 
+  it('names a list-source-mismatch as an exact-items problem, not an internal fault', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'mint-refused', reason: 'list-source-mismatch' }),
+    ];
+    const notice = formatBatchResultNotice(results, [{ find: 'one two' }]);
+    expect(notice).toContain('the list items don’t match');
+    expect(notice).toContain('exact words');
+    expect(notice).not.toContain('internal error');
+  });
+
   it('names the real blocker for an annotated block — not the comment being asked from', () => {
     // QA case: converting a block that still carries a pending inline suggestion is refused.
     // The notice must point at the unresolved suggestion (and any OTHER comment), never at

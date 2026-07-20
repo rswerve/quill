@@ -53,6 +53,8 @@ export interface PlannedStructuralEdit {
   editIndex: number;
   /** For `splitParagraph`: the piece texts to thread to the mint request (validated). */
   splitParts?: readonly string[];
+  /** For a multi-item `paragraphToList`: exact item texts to thread to the mint. */
+  listItems?: readonly string[];
   /** For `mergeParagraphs`: the number of adjacent source blocks the find spans (≥2). */
   mergeCount?: number;
 }
@@ -234,10 +236,10 @@ function deriveOp(
 }
 
 /**
- * A valid split-piece list: ≥2 entries, each a nonempty AND already-trimmed string. Indexed
+ * A valid reflow-piece list: ≥2 entries, each a nonempty AND already-trimmed string. Indexed
  * iteration (NOT .every, which skips sparse holes) so a sparse array fails as malformed.
  */
-function isValidSplitParts(value: unknown): value is string[] {
+function isValidReflowParts(value: unknown): value is string[] {
   if (!Array.isArray(value) || value.length < 2) return false;
   for (let i = 0; i < value.length; i += 1) {
     const part = value[i];
@@ -248,8 +250,8 @@ function isValidSplitParts(value: unknown): value is string[] {
 
 /**
  * Validate the edit's shape; returns a refusal reason, or null when well-formed. The
- * `structural` object carries EXACTLY ONE of `to` (retype) or `split` (split into pieces) —
- * both or neither is malformed; a `level` is only legal with `to: 'heading'`.
+ * `structural` object carries exactly one operation key (`to`, `split`, or `merge`). `items`
+ * is a modifier only for a list `to`; `level` is only legal with `to: 'heading'`.
  */
 function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   if (
@@ -268,21 +270,25 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   const hasSplit = Object.prototype.hasOwnProperty.call(structural, 'split');
   const hasTo = Object.prototype.hasOwnProperty.call(structural, 'to');
   const hasMerge = Object.prototype.hasOwnProperty.call(structural, 'merge');
+  const hasItems = Object.prototype.hasOwnProperty.call(structural, 'items');
   if ((hasSplit ? 1 : 0) + (hasTo ? 1 : 0) + (hasMerge ? 1 : 0) !== 1) return 'invalid-edit';
   // `level` is also checked by KEY PRESENCE: a declared level key on split, merge, or a
   // non-heading target is contradictory even when its value is undefined.
   const hasLevel = Object.prototype.hasOwnProperty.call(structural, 'level');
   if (hasMerge) {
     // Merge is a bare `true`; a level key (or any non-true value) is contradictory.
-    if (structural.merge !== true || hasLevel) return 'invalid-edit';
+    if (structural.merge !== true || hasLevel || hasItems) return 'invalid-edit';
     return null;
   }
   if (hasSplit) {
-    if (!isValidSplitParts(structural.split) || hasLevel) return 'invalid-edit';
+    if (!isValidReflowParts(structural.split) || hasLevel || hasItems) return 'invalid-edit';
     return null;
   }
   const { to, level } = structural;
   if (typeof to !== 'string' || !VALID_TARGETS.has(to)) return 'invalid-edit';
+  if (hasItems && (!isListType(to) || !isValidReflowParts(structural.items))) {
+    return 'invalid-edit';
+  }
   if (to === 'heading') {
     if (level === undefined) return 'missing-level';
     if (!isHeadingLevel(level)) return 'invalid-level';
@@ -356,16 +362,25 @@ export function planStructuralEdits(
     const structural = edit.structural as Record<string, unknown>;
     let op: OpDerivation;
     let splitParts: string[] | undefined;
+    let listItems: string[] | undefined;
     if (Object.prototype.hasOwnProperty.call(structural, 'split')) {
       // Split: V2 splits a PARAGRAPH into paragraphs; any other source type is unsupported.
       op = located.node.type.name === 'paragraph' ? { kind: 'splitParagraph' } : 'unsupported-op';
       splitParts = structural.split as string[]; // shape-validated by shapeRefusal
     } else {
-      op = deriveOp(
-        located.node,
-        structural.to as string,
-        structural.level as HeadingLevel | undefined,
-      );
+      if (Object.prototype.hasOwnProperty.call(structural, 'items')) {
+        listItems = structural.items as string[];
+      }
+      // `items` re-bounds ONE paragraph. On an existing list (even the requested kind),
+      // reporting already-target would be misleading because no repartition happened.
+      op =
+        listItems && located.node.type.name !== 'paragraph'
+          ? 'unsupported-op'
+          : deriveOp(
+              located.node,
+              structural.to as string,
+              structural.level as HeadingLevel | undefined,
+            );
     }
     if (op === 'unsupported-op' || op === 'already-target') {
       results.push({ edit, status: refusalStatus(op), reason: op });
@@ -380,6 +395,7 @@ export function planStructuralEdits(
       sourceTarget: { from, to },
       editIndex,
       ...(splitParts ? { splitParts } : {}),
+      ...(listItems ? { listItems } : {}),
     });
     results.push({ edit, status: 'planned' });
   });

@@ -376,9 +376,9 @@ function dispatchStructuralMints(
       author: config.authorID,
       createdAt,
       origin: config.origin,
-      // splitParagraph carries its (planner-validated) parts, mergeParagraphs its block count;
-      // every other op carries neither.
+      // Construction locators are planner-validated and threaded only to their matching op.
       ...(candidate.placed.splitParts ? { splitParts: candidate.placed.splitParts } : {}),
+      ...(candidate.placed.listItems ? { listItems: candidate.placed.listItems } : {}),
       ...(candidate.placed.mergeCount ? { mergeCount: candidate.placed.mergeCount } : {}),
     });
     if (mint.ok) {

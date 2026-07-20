@@ -103,6 +103,31 @@ function mintListToParagraph(editor: Editor, changeId: string, flattened: string
   editor.view.dispatch(tr);
 }
 
+/** Build a paragraph→multi-item bullet-list union for persistence/recovery coverage. */
+function mintParagraphToList(editor: Editor, changeId: string, itemTexts: string[]) {
+  const { state } = editor;
+  const source = state.doc.child(0);
+  const itemType = state.schema.nodes.listItem;
+  const paragraphType = state.schema.nodes.paragraph;
+  const proposed = state.schema.nodes.bulletList.create(
+    { blockTrack: { changeId, op: 'insert' } },
+    itemTexts.map((text) =>
+      itemType.create(null, paragraphType.create(null, state.schema.text(text))),
+    ),
+  );
+  const tr = state.tr.insert(source.nodeSize, proposed).setNodeMarkup(0, undefined, {
+    ...source.attrs,
+    blockTrack: { changeId, op: 'delete' },
+  });
+  addStructuralRecord(tr, {
+    changeId,
+    op: { kind: 'paragraphToList', listType: 'bulletList' },
+    author: 'claude',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  editor.view.dispatch(tr);
+}
+
 /** Build a K-paragraph→one-paragraph merge union starting at a top-level child index. */
 function mintMergeParagraphs(editor: Editor, changeId: string, startIndex: number, count: number) {
   const { state } = editor;
@@ -173,6 +198,34 @@ describe('degraded-recovery rebase — list sources', () => {
     expect(payload.ok).toBe(true);
     if (!payload.ok) return;
     expect(rebaseForDegradedRecovery(editor, payload.content, payload.structural).ok).toBe(true);
+  });
+});
+
+describe('degraded-recovery rebase — paragraph→multi-item list', () => {
+  it('rebases the paragraph source and restores every proposed item', () => {
+    const editor = makeEditor('one  two three');
+    mintParagraphToList(editor, 'p2l-multi', ['one', 'two', 'three']);
+    const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) return;
+
+    const rebased = rebaseForDegradedRecovery(editor, payload.content, payload.structural);
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
+
+    const canonicalSource = parseMarkdownToDoc(editor, payload.content);
+    const recovered = makeEditor(canonicalSource.toJSON());
+    const reconstruction = reconstructStructuralFromRecords(recovered, rebased.records);
+    expect(reconstruction.quarantined).toEqual([]);
+    const accepted = projectBlockUnions(recovered.state.doc, 'accepted').doc;
+    expect(accepted.child(0).type.name).toBe('bulletList');
+    expect(accepted.child(0).childCount).toBe(3);
+    expect([...Array(3)].map((_, index) => accepted.child(0).child(index).textContent)).toEqual([
+      'one',
+      'two',
+      'three',
+    ]);
   });
 });
 

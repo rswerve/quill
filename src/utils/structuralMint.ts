@@ -71,17 +71,23 @@ export interface StructuralMintRequest {
   origin?: StructuralMintOrigin;
   /**
    * `splitParagraph` REQUIRES this (the resulting piece texts, ≥2, each trimmed + nonempty) and
-   * FORBIDS `mergeCount`; every other op FORBIDS it. Enforced at runtime by
-   * {@link partsAndCountRefusal} BEFORE any document-dependent step — the request is built from
+   * FORBIDS `mergeCount`/`listItems`; every other op FORBIDS it. Enforced at runtime by
+   * {@link constructionArgsRefusal} BEFORE any document-dependent step — the request is built from
    * untrusted classification, and every caller (the batch, tests) supplies a runtime `op`, so a
    * compile-time discriminated union would only force value-defeating casts, not real safety.
    * The compiler slices the LIVE source content at whitespace seams matching the parts.
    */
   splitParts?: readonly string[];
   /**
+   * Optional only for `paragraphToList`: ≥2 exact, trimmed pieces of the live paragraph
+   * content, each becoming one flat list item. Strings locate whitespace seams; the compiler
+   * slices real PM content so marks and atoms are never rebuilt from model text.
+   */
+  listItems?: readonly string[];
+  /**
    * `mergeParagraphs` REQUIRES this (the number of adjacent source paragraphs to merge, an
-   * integer ≥2) and FORBIDS `splitParts`; every other op FORBIDS it. Same runtime-validated
-   * boundary as `splitParts`. The count is coordinate-independent, so it survives the batch's
+   * integer ≥2) and FORBIDS `splitParts`/`listItems`; every other op FORBIDS it. Same
+   * runtime-validated boundary as the other construction locators. The count survives the batch's
    * source→live target translation; the compiler gathers exactly this many top-level blocks.
    */
   mergeCount?: number;
@@ -98,6 +104,7 @@ export type StructuralMintRefusal =
   | 'origin-comment-partial'
   | 'native-no-op'
   | 'split-source-mismatch'
+  | 'list-source-mismatch'
   | 'self-check-failed';
 
 export type StructuralMintResult =
@@ -440,7 +447,7 @@ export function onlyTopLevelRangeChanged(
  * string. Indexed iteration (NOT .every, which skips sparse holes) so a sparse array such as
  * `Array(2)` fails here as invalid-metadata instead of throwing later in the locator.
  */
-function isValidSplitParts(value: unknown): value is readonly string[] {
+function isValidReflowParts(value: unknown): value is readonly string[] {
   if (!Array.isArray(value) || value.length < 2) return false;
   for (let i = 0; i < value.length; i += 1) {
     const part = value[i];
@@ -455,28 +462,61 @@ function isValidMergeCount(value: unknown): value is number {
 }
 
 /**
- * Discriminated request validation: `splitParagraph` REQUIRES valid `splitParts` and FORBIDS
- * `mergeCount`; `mergeParagraphs` REQUIRES a valid `mergeCount` and FORBIDS `splitParts`; every
- * other op FORBIDS both. The forbidding side is checked by KEY PRESENCE on the request — a
+ * Request-shape validation: split REQUIRES `splitParts`, merge REQUIRES `mergeCount`, and a
+ * paragraph→list MAY carry `listItems`; each construction locator is forbidden everywhere
+ * else. The forbidding side is checked by KEY PRESENCE on the request — a
  * DECLARED key counts even when its value is `undefined`, matching the planner's presence-based
  * XOR — so a stray `mergeCount: undefined` on a retype can't slip through. Returns the refusal,
  * or null.
  */
-function partsAndCountRefusal(
+function constructionArgsRefusal(
   op: StructuralOp,
   request: StructuralMintRequest,
 ): StructuralMintRefusal | null {
   const hasParts = Object.prototype.hasOwnProperty.call(request, 'splitParts');
   const hasCount = Object.prototype.hasOwnProperty.call(request, 'mergeCount');
+  const hasItems = Object.prototype.hasOwnProperty.call(request, 'listItems');
   if (op.kind === 'splitParagraph') {
-    if (hasCount || !isValidSplitParts(request.splitParts)) return 'invalid-metadata';
+    if (hasCount || hasItems || !isValidReflowParts(request.splitParts)) {
+      return 'invalid-metadata';
+    }
     return null;
   }
   if (op.kind === 'mergeParagraphs') {
-    if (hasParts || !isValidMergeCount(request.mergeCount)) return 'invalid-metadata';
+    if (hasParts || hasItems || !isValidMergeCount(request.mergeCount)) {
+      return 'invalid-metadata';
+    }
     return null;
   }
-  return hasParts || hasCount ? 'invalid-metadata' : null;
+  if (op.kind === 'paragraphToList') {
+    if (hasParts || hasCount) return 'invalid-metadata';
+    if (hasItems && !isValidReflowParts(request.listItems)) return 'invalid-metadata';
+    return null;
+  }
+  return hasParts || hasCount || hasItems ? 'invalid-metadata' : null;
+}
+
+function captureMultiItemList(
+  state: EditorState,
+  op: Extract<StructuralOp, { kind: 'paragraphToList' }>,
+  source: PMNode,
+  listItems: readonly string[],
+): CaptureResult {
+  const listType = state.schema.nodes[op.listType];
+  const itemType = state.schema.nodes[op.listType === 'taskList' ? 'taskItem' : 'listItem'];
+  const paragraph = state.schema.nodes.paragraph;
+  if (!listType || !itemType || !paragraph) return { refuse: 'unsupported-shape' };
+  const ranges = locateSplitSeams(source.content, listItems);
+  if (!ranges) return { refuse: 'list-source-mismatch' };
+  const itemNodes = ranges.map((range) => {
+    const itemParagraph = paragraph.create(
+      { ...source.attrs, blockTrack: null },
+      source.content.cut(range.from, range.to),
+    );
+    const attrs = op.listType === 'taskList' ? { checked: false, blockTrack: null } : null;
+    return itemType.create(attrs, itemParagraph);
+  });
+  return { nodes: [listType.create(null, itemNodes)] };
 }
 
 /**
@@ -509,19 +549,15 @@ function commonBlockAttrs(paragraphs: readonly PMNode[]): Record<string, unknown
 type CaptureResult = { nodes: PMNode[] } | { refuse: StructuralMintRefusal };
 
 /**
- * The clean (identity-free) proposed block(s) a conversion produces. V1 retype/list ops
- * capture a native command's single converted child (and reject a command that disturbed
- * a neighbour). `splitParagraph` recomputes the pieces from the LIVE source content: it
- * slices at whitespace seams matching `request.splitParts`. `mergeParagraphs` joins the K
- * source paragraphs' content with one space (`mergeParagraphContent`, the split inverse).
- * Construction ops carry the source's shared non-identity attrs and the real fragments.
+ * Constructed (not native-command) proposals. Each branch uses the LIVE source fragments;
+ * model-supplied strings only locate whitespace seams and never rebuild document content.
  */
-function captureProposedNodes(
+function captureConstructedNodes(
   state: EditorState,
   op: StructuralOp,
   target: TargetRange,
   request: StructuralMintRequest,
-): CaptureResult {
+): CaptureResult | null {
   const paragraph = state.schema.nodes.paragraph;
   if (op.kind === 'splitParagraph') {
     if (!paragraph) return { refuse: 'unsupported-shape' };
@@ -535,6 +571,9 @@ function captureProposedNodes(
       ),
     );
     return { nodes };
+  }
+  if (op.kind === 'paragraphToList' && request.listItems) {
+    return captureMultiItemList(state, op, target.roots[0].node, request.listItems);
   }
   if (op.kind === 'listToParagraph') {
     if (!paragraph) return { refuse: 'unsupported-shape' };
@@ -560,6 +599,22 @@ function captureProposedNodes(
     if (attrs === null) return { refuse: 'unsupported-shape' };
     return { nodes: [paragraph.create(attrs, mergeParagraphContent(sources))] };
   }
+  return null;
+}
+
+/**
+ * The clean (identity-free) proposed block(s) a conversion produces. Construction ops use
+ * the shared fragment-slicing path above. Remaining V1 retype/list ops capture a native
+ * command's single converted child and reject a command that disturbed a neighbour.
+ */
+function captureProposedNodes(
+  state: EditorState,
+  op: StructuralOp,
+  target: TargetRange,
+  request: StructuralMintRequest,
+): CaptureResult {
+  const constructed = captureConstructedNodes(state, op, target, request);
+  if (constructed) return constructed;
   const command = nativeCommandFor(state.schema, op);
   if (!command || !target.contentSelection) return { refuse: 'unsupported-shape' };
   const captured = captureNativeConversion(state, command, target.contentSelection, target.index);
@@ -625,13 +680,13 @@ export function compileStructuralMint(
 
   // 4. The op is a well-formed structural operation and its payload is valid for its kind,
   //    validated BEFORE any document-dependent step so a malformed payload (e.g. a sparse
-  //    splitParts, or a fractional/<2 mergeCount) is always classified invalid-metadata, never
+  //    split/list parts, or a fractional/<2 mergeCount) is always classified invalid-metadata, never
   //    target-not-found. isStructuralOp runs first so a runtime-invalid op (e.g. a HeadingLevel
-  //    of 99) is refused. splitParts/mergeCount are discriminated: split requires parts + forbids
-  //    count, merge requires count + forbids parts, every other op forbids both.
+  //    of 99) is refused. Every construction locator is required/optional only for its own op
+  //    and forbidden by key presence everywhere else.
   if (!isStructuralOp(op)) return refuse('unsupported-shape');
-  const partsRefusal = partsAndCountRefusal(op, request);
-  if (partsRefusal) return refuse(partsRefusal);
+  const constructionRefusal = constructionArgsRefusal(op, request);
+  if (constructionRefusal) return refuse(constructionRefusal);
 
   // 5. The target resolves to the source block(s) — one for retype/list/split, `mergeCount`
   //    adjacent blocks for a merge — and their shape is a source the op can convert.
@@ -661,8 +716,8 @@ export function compileStructuralMint(
   const annotations = classifyFootprintAnnotations(state.doc, target, originCommentId);
   if (annotations.status === 'refuse') return refuse(annotations.reason);
 
-  // 8. Produce the clean proposed block(s): a V1 retype/list captures the native command's
-  //    converted child; splitParagraph slices the live content at seams from splitParts.
+  // 8. Produce clean proposed block(s): native conversion for V1 retypes/single-item wrapping;
+  //    live-fragment construction for split, merge, flatten, and paragraph→multi-item list.
   const capture = captureProposedNodes(state, op, target, request);
   if ('refuse' in capture) return refuse(capture.refuse);
   const proposedNodes = capture.nodes;

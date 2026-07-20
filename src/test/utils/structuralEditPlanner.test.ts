@@ -137,6 +137,48 @@ describe('planStructuralEdits', () => {
     expect(placed[0].op).toEqual({ kind: 'paragraphToList', listType: 'bulletList' });
   });
 
+  it.each(['bulletList', 'orderedList', 'taskList'] as const)(
+    'plans paragraph → %s with multiple items and threads every item unchanged',
+    (to) => {
+      const items = ['First sentence.', 'Second sentence.', 'Third sentence.'];
+      const { placed, results } = planStructuralEdits(docOf([para(items.join(' '))]), [
+        edit('Second sentence.', { to, items }),
+      ]);
+      expect(results[0].status).toBe('planned');
+      expect(placed[0].op).toEqual({ kind: 'paragraphToList', listType: to });
+      expect(placed[0].listItems).toEqual(items);
+    },
+  );
+
+  it.each([
+    { label: 'items on a paragraph target', structural: { to: 'paragraph', items: ['a', 'b'] } },
+    {
+      label: 'items on a heading target',
+      structural: { to: 'heading', level: 2, items: ['a', 'b'] },
+    },
+    { label: 'items plus split', structural: { split: ['a', 'b'], items: ['a', 'b'] } },
+    { label: 'items plus merge', structural: { merge: true, items: ['a', 'b'] } },
+    { label: 'a present undefined items key', structural: { to: 'bulletList', items: undefined } },
+    { label: 'a sparse items array', structural: { to: 'bulletList', items: Array(2) } },
+    { label: 'fewer than two items', structural: { to: 'bulletList', items: ['a'] } },
+    { label: 'a whitespace-only item', structural: { to: 'bulletList', items: ['a', '  '] } },
+    { label: 'an untrimmed item', structural: { to: 'bulletList', items: ['a ', 'b'] } },
+  ])('refuses malformed multi-item list syntax ($label)', ({ structural }) => {
+    const { placed, results } = planStructuralEdits(docOf([para('a b')]), [
+      edit('a b', structural),
+    ]);
+    expect(placed).toEqual([]);
+    expect(results[0]).toMatchObject({ status: 'malformed', reason: 'invalid-edit' });
+  });
+
+  it('refuses items against an existing list rather than misreporting already-target', () => {
+    const { placed, results } = planStructuralEdits(docOf([bullet('one two')]), [
+      edit('one two', { to: 'bulletList', items: ['one', 'two'] }),
+    ]);
+    expect(placed).toEqual([]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  });
+
   it('plans a single-item list → paragraph (V1b), deriving the source list type', () => {
     const { placed, results } = planStructuralEdits(docOf([bullet('item')]), [
       edit('item', { to: 'paragraph' }),

@@ -1034,6 +1034,173 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
   });
 });
 
+describe('compileStructuralMint — paragraph → multi-item list', () => {
+  const listReq = (
+    listType: 'bulletList' | 'orderedList' | 'taskList',
+    listItems: readonly string[] | undefined,
+  ) =>
+    req({
+      op: { kind: 'paragraphToList', listType },
+      targetPos: posInBlock(0),
+      listItems,
+    });
+
+  it.each([
+    ['bulletList', 'listItem'],
+    ['orderedList', 'listItem'],
+    ['taskList', 'taskItem'],
+  ] as const)('mints a paragraph into every %s item', (listType, itemType) => {
+    editor = makeEditor('<p>one two three</p>');
+    const r = expectOk(
+      compileStructuralMint(editor.state, listReq(listType, ['one', 'two', 'three'])),
+    );
+    editor.view.dispatch(r.tr);
+
+    const doc = editor.state.doc;
+    expect(doc.childCount).toBe(2); // source paragraph + one proposed list root
+    expect(doc.child(0).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'delete' });
+    const proposed = doc.child(1);
+    expect(proposed.type.name).toBe(listType);
+    expect(proposed.attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(proposed.childCount).toBe(3);
+    expect([...Array(proposed.childCount)].map((_, i) => proposed.child(i).type.name)).toEqual([
+      itemType,
+      itemType,
+      itemType,
+    ]);
+    expect([...Array(proposed.childCount)].map((_, i) => proposed.child(i).textContent)).toEqual([
+      'one',
+      'two',
+      'three',
+    ]);
+    if (listType === 'taskList') {
+      expect([...Array(3)].every((_, i) => proposed.child(i).attrs.checked === false)).toBe(true);
+    }
+    expect(projectBlockUnions(doc, 'source').doc.child(0).textContent).toBe('one two three');
+    expect(projectBlockUnions(doc, 'accepted').doc.child(0).childCount).toBe(3);
+  });
+
+  it('preserves real marked content and a hard break inside the correct item', () => {
+    editor = makeEditor(
+      '<p><strong>one</strong> <a href="https://example.com">two</a><br>three</p>',
+    );
+    const r = expectOk(
+      compileStructuralMint(editor.state, listReq('bulletList', ['one', 'twothree'])),
+    );
+    const proposed = editor.state.apply(r.tr).doc.child(1);
+    const firstParagraph = proposed.child(0).child(0);
+    const secondParagraph = proposed.child(1).child(0);
+    expect(firstParagraph.firstChild?.marks.some((mark) => mark.type.name === 'bold')).toBe(true);
+    expect(secondParagraph.firstChild?.marks.some((mark) => mark.type.name === 'link')).toBe(true);
+    let hardBreaks = 0;
+    secondParagraph.descendants((node) => {
+      if (node.type.name === 'hardBreak') hardBreaks += 1;
+    });
+    expect(hardBreaks).toBe(1);
+  });
+
+  it.each([
+    { label: 'a declared undefined value', listItems: undefined },
+    { label: 'fewer than two items', listItems: ['one'] },
+    { label: 'a whitespace-only item', listItems: ['one', '  '] },
+    { label: 'an untrimmed item', listItems: ['one ', 'two'] },
+    { label: 'a sparse item array', listItems: Array(2) as unknown as string[] },
+  ])('refuses malformed listItems ($label) as invalid-metadata', ({ listItems }) => {
+    editor = makeEditor('<p>one two</p>');
+    expect(compileStructuralMint(editor.state, listReq('bulletList', listItems))).toEqual({
+      ok: false,
+      reason: 'invalid-metadata',
+    });
+  });
+
+  it('validates listItems before resolving the target', () => {
+    editor = makeEditor('<p>one two</p>');
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'paragraphToList', listType: 'bulletList' },
+          targetPos: 0,
+          listItems: Array(2) as unknown as string[],
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
+  it.each([
+    { label: 'altered text', content: '<p>one two</p>', listItems: ['one', 'EVIL'] },
+    { label: 'no whitespace seam', content: '<p>onetwo</p>', listItems: ['one', 'two'] },
+    {
+      label: 'a hard break as the seam',
+      content: '<p>one<br>two</p>',
+      listItems: ['one', 'two'],
+    },
+  ])('refuses items that do not reflow the live paragraph ($label)', ({ content, listItems }) => {
+    editor = makeEditor(content);
+    expect(compileStructuralMint(editor.state, listReq('bulletList', listItems))).toEqual({
+      ok: false,
+      reason: 'list-source-mismatch',
+    });
+  });
+
+  it('forbids listItems on every non-paragraphToList op by key presence', () => {
+    editor = makeEditor('<h1>one two</h1>');
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'headingToParagraph', level: 1 },
+          targetPos: posInBlock(0),
+          listItems: undefined,
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
+  it('keeps a seam-spanning origin comment only on the source paragraph', () => {
+    editor = makeEditor('<p>one two three</p>');
+    editor.chain().setTextSelection({ from: 1, to: 14 }).setComment('cm1').run();
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'paragraphToList', listType: 'bulletList' },
+          targetPos: posInBlock(0),
+          listItems: ['one', 'two', 'three'],
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    const state = editor.state.apply(r.tr);
+    expect(blockHasComment(state.doc.child(0), 'cm1')).toBe(true);
+    expect(blockHasComment(state.doc.child(1), 'cm1')).toBe(false);
+    expect(retainedRecords(state).get('c1')?.originCommentId).toBe('cm1');
+  });
+
+  it('refuses a foreign comment anywhere in the source paragraph', () => {
+    editor = makeEditor('<p>one two three</p>');
+    editor.chain().setTextSelection({ from: 5, to: 8 }).setComment('foreign').run();
+    expect(
+      compileStructuralMint(editor.state, listReq('bulletList', ['one', 'two', 'three'])),
+    ).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+
+  it('is atomic across Undo and Redo', () => {
+    editor = makeEditor('<p>one two three</p>');
+    const r = expectOk(
+      compileStructuralMint(editor.state, listReq('orderedList', ['one', 'two', 'three'])),
+    );
+    editor.view.dispatch(r.tr);
+    expect(editor.state.doc.child(1).childCount).toBe(3);
+    editor.commands.undo();
+    expect(editor.state.doc.childCount).toBe(1);
+    expect(editor.state.doc.child(0).textContent).toBe('one two three');
+    editor.commands.redo();
+    expect(editor.state.doc.child(1).type.name).toBe('orderedList');
+    expect(editor.state.doc.child(1).childCount).toBe(3);
+  });
+});
+
 describe('compileStructuralMint — V2 splitParagraph', () => {
   const splitReq = (splitParts: readonly string[] | undefined) =>
     req({ op: { kind: 'splitParagraph' }, targetPos: posInBlock(0), splitParts });

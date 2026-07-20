@@ -381,6 +381,8 @@ export type StructuralEditTarget = 'paragraph' | 'heading' | StructuralListType;
  * One structural edit Claude proposes, located by the plaintext `find` and DIRECTIONAL
  * (the engine derives the {@link StructuralOp}). Exactly one shape per edit:
  *  - RETYPE: convert the `find` block to `to` (a paragraph, a heading of `level`, or a list).
+ *    A paragraph→list edit may add `items` (≥2) to partition its own text into multiple
+ *    flat list items; omit `items` for the existing single-item conversion.
  *  - SPLIT: split the `find` PARAGRAPH into the `split` pieces (≥2), each a new paragraph;
  *    the pieces must be the paragraph's own text re-bounded at whitespace (a pure reflow).
  *  - MERGE: `merge: true` with a `find` that SPANS ≥2 adjacent paragraphs joins them into
@@ -395,6 +397,8 @@ export interface QuillStructuralEdit {
         to: StructuralEditTarget;
         /** Required for `to: 'heading'`; must be absent otherwise (else invalid-level). */
         level?: HeadingLevel;
+        /** Only for a list target: ≥2 exact text pieces that become separate flat items. */
+        items?: string[];
       }
     | { split: string[] }
     | { merge: true };

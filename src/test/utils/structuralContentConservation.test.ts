@@ -127,6 +127,26 @@ describe('structuralContentConserved — list ↔ paragraph', () => {
     );
     expect(structuralContentConserved(L2P, [list([[t('one')]])], [p([t('two')])])).toBe(false);
   });
+
+  it('conserves a paragraph re-bounded into every proposed list item', () => {
+    const P2L: StructuralOp = { kind: 'paragraphToList', listType: 'bulletList' };
+    const source = p([t('one', bold), t(' two'), hb, t('three')]);
+    const proposed = list([[t('one', bold)], [t('two'), hb, t('three')]]);
+
+    expect(structuralContentConserved(P2L, [source], [proposed])).toBe(true);
+  });
+
+  it('quarantines a tamper in the last item and any invented empty item', () => {
+    const P2L: StructuralOp = { kind: 'paragraphToList', listType: 'bulletList' };
+    const source = p([t('one two three')]);
+
+    expect(
+      structuralContentConserved(P2L, [source], [list([[t('one')], [t('two')], [t('EVIL')]])]),
+    ).toBe(false);
+    expect(
+      structuralContentConserved(P2L, [source], [list([[t('one')], [], [t('two three')]])]),
+    ).toBe(false);
+  });
 });
 
 describe('structuralContentConserved — merge', () => {

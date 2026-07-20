@@ -114,6 +114,10 @@ function hasMeaningfulContent(node: PMNode): boolean {
   return fragmentTokens(node.content).some((token) => token.kind !== 'sep');
 }
 
+function fragmentHasMeaningfulContent(fragment: Fragment): boolean {
+  return fragmentTokens(fragment).some((token) => token.kind !== 'sep');
+}
+
 /** The single paragraph content of a single-item list (shape pre-validated). */
 function listItemParagraphContent(list: PMNode): Fragment {
   return list.child(0).child(0).content;
@@ -144,11 +148,14 @@ export function structuralContentConserved(
       // Every item's content, joined at one separator per seam, must equal the flattened
       // paragraph — so a tamper in ANY item (not just the first) is caught.
       return tokensEqual(joinedStream(listItemContents(source[0])), streamOf(proposed[0].content));
-    case 'paragraphToList':
-      return tokensEqual(
-        streamOf(source[0].content),
-        streamOf(listItemParagraphContent(proposed[0])),
-      );
+    case 'paragraphToList': {
+      const proposedItems =
+        proposed[0].childCount === 1
+          ? [listItemParagraphContent(proposed[0])]
+          : listItemContents(proposed[0]);
+      if (!proposedItems.every(fragmentHasMeaningfulContent)) return false;
+      return tokensEqual(streamOf(source[0].content), joinedStream(proposedItems));
+    }
     case 'mergeParagraphs':
       return tokensEqual(
         joinedStream(source.map((node) => node.content)),

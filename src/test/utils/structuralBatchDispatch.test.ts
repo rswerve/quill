@@ -247,6 +247,39 @@ describe('structuralBatchDispatch', () => {
     expect(inserted.child(0).marks.some((mark) => mark.type.name === 'bold')).toBe(true);
   });
 
+  it('threads multi-item list parts while structural priority skips same-block formatting', () => {
+    const editor = makeEditor('**First sentence.** Second sentence. Third sentence.');
+    const items = ['First sentence.', 'Second sentence.', 'Third sentence.'];
+    const out = structuralBatchDispatch(
+      [
+        { find: 'First sentence.', format: { bold: false } },
+        { find: 'Second sentence.', structural: { to: 'bulletList', items } },
+      ],
+      baseDeps(editor),
+    );
+
+    expect(out.results[0].outcome).toEqual({
+      kind: 'inline',
+      status: 'batch-conflict',
+      reason: 'structural-priority',
+    });
+    expect(out.results[1].outcome).toMatchObject({ kind: 'structural', status: 'minted' });
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+    expect(out.suggestionIds).toHaveLength(1);
+
+    const proposed = editor.state.doc.child(1);
+    expect(proposed.type.name).toBe('bulletList');
+    expect(proposed.childCount).toBe(3);
+    expect([...Array(3)].map((_, index) => proposed.child(index).textContent)).toEqual(items);
+    // The skipped formatting was not silently folded into the structural proposal.
+    expect(
+      proposed
+        .child(0)
+        .child(0)
+        .firstChild?.marks.some((mark) => mark.type.name === 'bold'),
+    ).toBe(true);
+  });
+
   it('mints two disjoint structural edits, both as unions (back-to-front stays valid)', () => {
     const editor = makeEditor('# First\n\nSecond para\n\n# Third');
     const out = structuralBatchDispatch(

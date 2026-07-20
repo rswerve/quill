@@ -159,6 +159,14 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('"structural":{"to":"paragraph"}');
     expect(prompt).toContain('"structural":{"to":"heading","level":2}');
     expect(prompt).toContain('"structural":{"to":"bulletList"}'); // the list-conversion example
+    expect(prompt).toContain(
+      '"structural":{"to":"bulletList","items":["First sentence.","Second sentence."]}',
+    );
+    expect(prompt).toContain('turn ONE paragraph into MULTIPLE list items');
+    expect(prompt).toContain(
+      '"items" is allowed ONLY with "bulletList", "orderedList", or "taskList"',
+    );
+    expect(prompt).toContain('cannot appear with "level", "split", or "merge"');
     expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
     expect(prompt).toContain('REQUIRES a "level"');
     expect(prompt).toContain('carries NEITHER "replace" NOR "format"');

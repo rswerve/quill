@@ -121,6 +121,21 @@ describe('structuralOpShapeValid — per-op shape (V1 one-to-one, V2 N→M)', ()
       structuralOpShapeValid({ kind: 'listToParagraph', listType: 'bulletList' }, [list], [p0]),
     ).toBe(true);
   });
+
+  it('paragraphToList accepts every flat proposed item, not only the first', () => {
+    const multiEditor = makeEditor([bulletList([item('one'), item('two'), item('three')])]);
+    const multi = multiEditor.state.doc.child(0);
+    const op = { kind: 'paragraphToList' as const, listType: 'bulletList' as const };
+
+    expect(structuralOpShapeValid(op, [p0], [multi])).toBe(true);
+    // A non-flat LAST item must fail too; checking only child(0) would miss it.
+    const malformedLast = multi.type.create(null, [
+      multi.child(0),
+      multi.child(1).type.create(null, [p0, p1]),
+    ]);
+    expect(structuralOpShapeValid(op, [p0], [malformedLast])).toBe(false);
+    multiEditor.destroy();
+  });
 });
 
 describe('analyzeStructuralUnions', () => {
