@@ -171,6 +171,43 @@ describe('reconstructBlockUnions', () => {
     expect(doc.child(0).attrs.blockTrack).toBeNull();
   });
 
+  it('quarantines a tampered multi-item list→paragraph proposal that drops an item', () => {
+    // The 3-item list's fingerprint matches, but the persisted proposal is "one two" — the
+    // LAST item's content is gone. validateRecord re-runs content conservation at the
+    // RECONSTRUCTION boundary (not just at mint), so the tamper quarantines rather than
+    // silently accepting a card that would drop "three" on Accept. Pins the all-item
+    // conservation defense against an untrusted sidecar.
+    const source = docFrom([bulletList(['one', 'two', 'three'])]);
+    const tampered = record({
+      changeId: 'c1',
+      op: { kind: 'listToParagraph', listType: 'bulletList' },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('one two')], // "three" dropped
+    });
+    const { doc, quarantined } = reconstructBlockUnions(source, [tampered], serialize);
+    expect(quarantined).toHaveLength(1);
+    expect(doc.childCount).toBe(1); // no union built
+    expect(doc.child(0).type.name).toBe('bulletList');
+    expect(doc.child(0).attrs.blockTrack).toBeNull();
+  });
+
+  it('reconstructs the SAME list→paragraph when the proposal conserves every item (control)', () => {
+    const source = docFrom([bulletList(['one', 'two', 'three'])]);
+    const honest = record({
+      changeId: 'c1',
+      op: { kind: 'listToParagraph', listType: 'bulletList' },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(source, 0, 1),
+      proposed: [paragraph('one two three')],
+    });
+    const { doc, quarantined } = reconstructBlockUnions(source, [honest], serialize);
+    expect(quarantined).toEqual([]);
+    expect(topOps(doc)).toEqual(['delete', 'insert']);
+    expect(doc.child(1).type.name).toBe('paragraph');
+    expect(doc.child(1).textContent).toBe('one two three');
+  });
+
   it('quarantines overlapping anchors without applying either', () => {
     const source = docFrom([heading('Title'), paragraph('x')]);
     const fp = fingerprintRange(source, 0, 1);

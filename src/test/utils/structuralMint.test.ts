@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { Editor, Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { EditorState } from '@tiptap/pm/state';
@@ -804,8 +804,9 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     editor.view.dispatch(r.tr);
     const flattened = editor.state.doc.child(1); // the inserted paragraph
     expect(flattened.type.name).toBe('paragraph');
-    // Byte-for-byte content equality (marks + hard break) — the construction join-of-one
-    // matches what the old native liftListItem produced, so V1b behavior is unchanged.
+    // CONTENT equality (marks + hard break preserved) — the construction join-of-one yields
+    // the same inline content the item held. This asserts `content.eq` only; it is NOT a full
+    // node/attr comparison and does NOT compare against the old native liftListItem.
     expect(flattened.content.eq(sourceItemPara.content)).toBe(true);
   });
 
@@ -1221,6 +1222,77 @@ describe('compileStructuralMint — V2 splitParagraph', () => {
     expect(doc.child(2).textContent).toBe('keep'); // between-sibling untouched
     expect(doc.child(2).attrs.blockTrack).toBeNull();
     expect(doc.child(0).attrs.blockTrack?.changeId).toBe('u1'); // disjoint union intact
+  });
+});
+
+describe('compileStructuralMint — commonBlockAttrs style preservation (test-only paragraph attr)', () => {
+  // Quill paragraphs carry only `blockTrack` in production, so commonBlockAttrs' refusal is
+  // unreachable there (defense-in-depth). This adds a TEST-ONLY global paragraph attr to PIN
+  // the logic: a uniformly-styled flat list PROPAGATES the shared attr to the flattened
+  // paragraph, and a list whose items DISAGREE refuses (no silent style drop).
+  const TestAlign = Extension.create({
+    name: 'testAlign',
+    addGlobalAttributes() {
+      return [
+        {
+          types: ['paragraph'],
+          attributes: {
+            testAlign: {
+              default: null,
+              parseHTML: (el: HTMLElement) => el.getAttribute('data-test-align'),
+              renderHTML: (attrs: Record<string, unknown>) =>
+                attrs.testAlign ? { 'data-test-align': attrs.testAlign as string } : {},
+            },
+          },
+        },
+      ];
+    },
+  });
+
+  function makeAlignEditor(content: string): Editor {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    return new Editor({
+      element: el,
+      extensions: [
+        StarterKit.configure({ trailingNode: false }),
+        TaskList,
+        TaskItem,
+        BlockTrack,
+        StructuralRecordStore,
+        CommentMark,
+        TrackedInsert,
+        TrackedDelete,
+        TrackedFormat,
+        TestAlign,
+      ],
+      content,
+    });
+  }
+
+  const alignReq = (targetPos: number) =>
+    req({ op: { kind: 'listToParagraph', listType: 'bulletList' }, targetPos });
+
+  it('propagates a SHARED item block attr onto the flattened paragraph', () => {
+    editor = makeAlignEditor(
+      '<ul><li><p data-test-align="center">one</p></li><li><p data-test-align="center">two</p></li></ul>',
+    );
+    expect(editor.state.doc.child(0).child(0).child(0).attrs.testAlign).toBe('center'); // parsed
+    const r = expectOk(compileStructuralMint(editor.state, alignReq(posInBlock(0) + 3)));
+    editor.view.dispatch(r.tr);
+    const flattened = editor.state.doc.child(1);
+    expect(flattened.type.name).toBe('paragraph');
+    expect(flattened.attrs.testAlign).toBe('center'); // the shared style survives the flatten
+  });
+
+  it('refuses a list whose items DISAGREE on a block attr (no silent style drop)', () => {
+    editor = makeAlignEditor(
+      '<ul><li><p data-test-align="center">one</p></li><li><p data-test-align="right">two</p></li></ul>',
+    );
+    expect(compileStructuralMint(editor.state, alignReq(posInBlock(0) + 3))).toEqual({
+      ok: false,
+      reason: 'unsupported-shape',
+    });
   });
 });
 
