@@ -178,21 +178,8 @@ export function mergeParagraphContent(sources: readonly PMNode[]): Fragment {
   return schema.nodes.paragraph.create(null, nodes).content;
 }
 
-/**
- * The content-offset ranges to slice a paragraph's content into, one per part, where the
- * parts are the paragraph's text re-bounded at whitespace-run seams. An inline atom rides
- * with the text run it abuts (it carries no char, so it can't itself be a seam). Returns
- * null when the parts don't cleanly reflow the content — a non-whitespace seam, altered
- * text, leftover content, fewer than two parts, or an empty part — so the mint refuses.
- * Shares the whitespace-run seam policy with `structuralContentConserved`.
- */
-export function locateSplitSeams(
-  content: Fragment,
-  parts: readonly string[],
-): { from: number; to: number }[] | null {
-  if (parts.length < 2 || parts.some((part) => part.length === 0)) return null;
-  // Map each plaintext char index to its content offset; an inline atom occupies an offset
-  // but contributes no char (so it can only ride inside a part, never sit on a seam).
+/** Plaintext of inline content + a map from each char index to its content offset (atoms carry no char). */
+function plaintextWithOffsets(content: Fragment): { text: string; offsets: number[] } {
   const offsets: number[] = [];
   let text = '';
   let offset = 0;
@@ -208,22 +195,80 @@ export function locateSplitSeams(
       offset += node.nodeSize; // inline atom: no char
     }
   });
-  offsets.push(offset); // end-of-content offset
+  offsets.push(offset); // end-of-content sentinel
+  return { text, offsets };
+}
 
-  const ranges: { from: number; to: number }[] = [];
+/**
+ * Anchored left-to-right match of `parts` against the plaintext: skip leading whitespace,
+ * match each part verbatim at the cursor, consume a nonempty whitespace run between parts,
+ * and require the tail all-whitespace (full non-whitespace coverage). Returns each part's
+ * [start,end) text-index range, or null if a part isn't found, a seam is missing, or
+ * non-whitespace content is left over.
+ */
+function anchoredParse(
+  text: string,
+  parts: readonly string[],
+): { textStart: number[]; textEnd: number[] } | null {
   let cursor = 0;
+  while (cursor < text.length && isWhitespace(text[cursor])) cursor += 1;
+  const textStart: number[] = [];
+  const textEnd: number[] = [];
   for (let pi = 0; pi < parts.length; pi += 1) {
     const part = parts[pi];
     if (text.slice(cursor, cursor + part.length) !== part) return null;
-    ranges.push({ from: offsets[cursor], to: offsets[cursor + part.length] });
+    textStart.push(cursor);
+    textEnd.push(cursor + part.length);
     cursor += part.length;
     if (pi < parts.length - 1) {
-      let ws = 0;
-      while (cursor + ws < text.length && isWhitespace(text[cursor + ws])) ws += 1;
-      if (ws === 0) return null; // a seam must be a nonempty whitespace run
-      cursor += ws;
+      let w = 0;
+      while (cursor + w < text.length && isWhitespace(text[cursor + w])) w += 1;
+      if (w === 0) return null; // a seam must be a nonempty whitespace run
+      cursor += w;
     }
   }
-  if (cursor !== text.length) return null; // leftover content
-  return ranges;
+  for (let k = cursor; k < text.length; k += 1) if (!isWhitespace(text[k])) return null;
+  return { textStart, textEnd };
+}
+
+/**
+ * The content-offset ranges to slice a paragraph's content into, one per part, where the
+ * parts are the paragraph's text re-bounded at whitespace-run seams. Parsed left-to-right,
+ * anchored: leading whitespace rides piece 0 (`from` = content start), trailing whitespace
+ * rides the last piece (`to` = content end), and only the nonempty inter-part whitespace
+ * runs are consumed. An inline atom (image, hard break, …) may live INSIDE a part but a
+ * seam must be PURE whitespace text — an atom in a seam's omitted interval would be silently
+ * dropped, so it fails closed. Returns null on: fewer than two parts, a whitespace-only
+ * part, altered text (a part not found at the cursor), a non-whitespace or atom-bearing
+ * seam, or non-whitespace content left over after the last part. Shares the whitespace-run
+ * seam policy with `structuralContentConserved`.
+ */
+export function locateSplitSeams(
+  content: Fragment,
+  parts: readonly string[],
+): { from: number; to: number }[] | null {
+  // ≥2 parts, each nonempty AND already trimmed — outer whitespace belongs to the outer
+  // pieces, so whitespace at a part boundary would make seam ownership ambiguous.
+  if (parts.length < 2 || parts.some((part) => part.length === 0 || part !== part.trim())) {
+    return null;
+  }
+
+  const { text, offsets } = plaintextWithOffsets(content);
+  const parsed = anchoredParse(text, parts);
+  if (!parsed) return null;
+  const { textStart, textEnd } = parsed;
+
+  // Each inter-part seam's omitted PM interval must be PURE whitespace text: its content span
+  // must equal its whitespace-char count. A larger span means an atom sits in the seam and
+  // would be dropped — fail closed (it must belong to a part).
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const seamChars = textStart[i + 1] - textEnd[i];
+    const seamSpan = offsets[textStart[i + 1]] - offsets[textEnd[i]];
+    if (seamSpan !== seamChars) return null;
+  }
+
+  return parts.map((_, pi) => ({
+    from: pi === 0 ? 0 : offsets[textStart[pi]],
+    to: pi === parts.length - 1 ? content.size : offsets[textEnd[pi]],
+  }));
 }

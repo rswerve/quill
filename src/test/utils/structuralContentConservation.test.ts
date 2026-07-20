@@ -198,14 +198,29 @@ describe('locateSplitSeams — construction offsets', () => {
     ]);
   });
 
-  it('rides an inline atom with its abutting text run (an atom is never a seam)', () => {
-    // content: "ab" | image | " cd" → text "ab cd", image at content offset 2.
-    const content = p([t('ab'), img('x.png'), t(' cd')]).content;
-    // Slicing "ab" | "cd": the image rides in the first piece [0,3); the space seam is dropped.
-    expect(locateSplitSeams(content, ['ab', 'cd'])).toEqual([
+  it('pins the three atom-vs-seam orientations', () => {
+    // ab<img> cd — atom before the seam whitespace → rides the left piece, succeeds.
+    expect(locateSplitSeams(p([t('ab'), img('i'), t(' cd')]).content, ['ab', 'cd'])).toEqual([
       { from: 0, to: 3 },
       { from: 4, to: 6 },
     ]);
+    // ab <img>cd — atom sits in the omitted seam gap → refuse (it would be dropped).
+    expect(locateSplitSeams(p([t('ab '), img('i'), t('cd')]).content, ['ab', 'cd'])).toBeNull();
+    // ab <img> cd — atom splits the whitespace run → refuse.
+    expect(locateSplitSeams(p([t('ab '), img('i'), t(' cd')]).content, ['ab', 'cd'])).toBeNull();
+  });
+
+  it('preserves leading/trailing source whitespace in the outer pieces', () => {
+    expect(locateSplitSeams(p([t(' hi there ')]).content, ['hi', 'there'])).toEqual([
+      { from: 0, to: 3 }, // " hi"
+      { from: 4, to: 10 }, // "there "
+    ]);
+  });
+
+  it('rejects a part with boundary whitespace (ambiguous seam ownership)', () => {
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha ', 'beta'])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['alpha', ' beta'])).toBeNull();
+    expect(locateSplitSeams(p([t('alpha beta')]).content, ['  ', 'beta'])).toBeNull();
   });
 
   it('refuses a non-whitespace seam, leftover, altered text, and <2 or empty parts', () => {
