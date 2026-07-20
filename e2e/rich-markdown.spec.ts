@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { activeEditor, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 const DOC_PATH = '/docs/rich.md';

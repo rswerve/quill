@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { activeEditor, setupMemoryTauri } from './helpers/memoryTauri';
 
 const EXISTING_SESSION = {

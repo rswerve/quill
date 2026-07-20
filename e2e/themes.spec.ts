@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { activeEditor } from './helpers/memoryTauri';
 
 const THEME_IDS = ['paper', 'gruvbox'] as const;

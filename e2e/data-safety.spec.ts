@@ -8,7 +8,7 @@
  * Real Tauri isn't running; each test installs a minimal IPC shim at
  * window.__TAURI_INTERNALS__ (same pattern as tauri-features.spec.ts).
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { activeEditor, closeSessionPickerIfOpen } from './helpers/memoryTauri';
 

@@ -1,10 +1,50 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
+import { applicationSourcePath, isApplicationSource } from './scripts/coveragePaths.mjs';
 
 // Dedicated worktrees may be tested while Maz is driving another build on
 // Quill's default port. Keep CI/local defaults unchanged while allowing an
 // isolated server so a suite can never silently exercise the wrong checkout.
 const e2ePort = Number(process.env.QUILL_E2E_PORT ?? 1420);
 const e2eUrl = `http://localhost:${e2ePort}`;
+const projectRoot = import.meta.dirname;
+const collectCoverage = process.env.E2E_COVERAGE === '1';
+
+const reporters: ReporterDescription[] = process.env.CI
+  ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+  : [['list']];
+
+if (collectCoverage) {
+  reporters.push([
+    'monocart-reporter',
+    {
+      name: 'Quill end-to-end tests',
+      outputFile: 'coverage/e2e/tests/index.html',
+      coverage: {
+        name: 'Quill Playwright coverage',
+        outputDir: 'coverage/e2e',
+        reports: [
+          ['raw', { outputDir: 'raw' }],
+          ['v8-json', { outputFile: 'coverage-report.json' }],
+          ['json', { file: 'coverage-final.json' }],
+          ['lcovonly', { file: 'lcov.info' }],
+          ['html', { subdir: 'html' }],
+          ['console-summary'],
+        ],
+        entryFilter: (entry: { url?: string }) => {
+          if (!entry.url) return false;
+          try {
+            const pathname = new URL(entry.url).pathname;
+            return pathname.startsWith('/src/') && isApplicationSource(pathname);
+          } catch {
+            return false;
+          }
+        },
+        sourcePath: (sourcePath: string, info: { distFile?: string }) =>
+          applicationSourcePath(sourcePath, info, projectRoot),
+      },
+    },
+  ]);
+}
 
 /**
  * Playwright drives the app through the Vite dev server (the same bundle the
@@ -25,9 +65,7 @@ export default defineConfig({
   // run on any flaky result in CI (this is exactly what hid the Cmd+Shift+S
   // strike collision behind workspace-persistence.spec.ts:185).
   failOnFlakyTests: !!process.env.CI,
-  reporter: process.env.CI
-    ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
-    : 'list',
+  reporter: reporters,
   use: {
     baseURL: e2eUrl,
     trace: 'on-first-retry',

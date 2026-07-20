@@ -5,7 +5,7 @@
  * has unit coverage; this pins the open -> external change -> banner -> Overwrite
  * flow through the real app.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import {
   activeEditor,
   closeSessionPickerIfOpen,

@@ -7,7 +7,7 @@
  * Known-broken tests use `test.fixme(...)` so the suite is green on first
  * pass. Goal mode should convert each `.fixme` to a passing `test(...)`.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page, Locator } from '@playwright/test';
 import {
   expectEditorHtml,

@@ -4,7 +4,7 @@
  * clean document is never written. The scheduler/coordinator seam is unit-covered; this
  * pins the enabled behavior through the real app + the atomic-write IPC.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import {
   activeEditor,
   closeSessionPickerIfOpen,
