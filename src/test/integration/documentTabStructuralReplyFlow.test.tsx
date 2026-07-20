@@ -430,4 +430,58 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     expect(taskList.textContent).toBe('Body text');
     expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
   });
+
+  it('mints and ACCEPTS a paragraph SPLIT end to end (the V2 construction path)', async () => {
+    const mounted = await mountReplyTab();
+    const editor = mounted.getHandle().getEditor()!;
+    // "Body text" is a paragraph; comment on it and ask Claude to split it in two.
+    await askClaudeOn(mounted, 13, 22, 'split this into two sentences');
+    await waitFor(() => expect(mock.dispatchers.size).toBe(1));
+
+    streamEdits(mock.latestToken(), [
+      { find: 'Body text', structural: { split: ['Body', 'text'] } },
+    ]);
+
+    await waitFor(() => expect(retainedRecords(editor.state).size).toBe(1));
+    const [changeId, record] = [...retainedRecords(editor.state).entries()][0];
+    expect(record.op).toEqual({ kind: 'splitParagraph' });
+
+    // The proposed branch is TWO inserted paragraphs "Body" and "text" (1→M union).
+    const inserts: PMNode[] = [];
+    editor.state.doc.descendants((node) => {
+      const blockTrack = node.attrs?.blockTrack as { changeId?: string; op?: string } | undefined;
+      if (blockTrack?.changeId === changeId && blockTrack.op === 'insert') inserts.push(node);
+    });
+    expect(inserts.map((n) => n.textContent)).toEqual(['Body', 'text']);
+
+    await waitFor(() => {
+      const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
+      expect(aiReplyOf(comment)?.suggestionIds).toEqual([changeId]);
+    });
+
+    // The structural card appears, labelled "Split paragraph".
+    const card = await waitFor(() => {
+      const el = mounted.container.querySelector(
+        `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(card.textContent).toContain('Split paragraph');
+
+    // Accept via the real card button.
+    act(() => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Accept' }));
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector(`[data-card-id="${changeId}"]`)).toBeNull();
+    });
+    const doc = editor.state.doc;
+    expect(unionChangeIds(doc).size).toBe(0);
+    const texts: string[] = [];
+    doc.forEach((node) => texts.push(node.textContent));
+    expect(texts).toEqual(['Title Here', 'Body', 'text']); // heading + the two split paragraphs
+    expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
+  });
 });
