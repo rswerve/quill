@@ -79,6 +79,7 @@ class MockClaude {
 function makeOpts(mock: MockClaude) {
   const startAIReply = vi.fn((_commentId: string) => 'r0');
   const appendAIReplyChunk = vi.fn();
+  const setAIReplyText = vi.fn();
   const setAIReplyModel = vi.fn();
   const finishAIReply = vi.fn();
   const failAIReply = vi.fn();
@@ -106,6 +107,7 @@ function makeOpts(mock: MockClaude) {
     opts: {
       startAIReply,
       appendAIReplyChunk,
+      setAIReplyText,
       setAIReplyModel,
       finishAIReply,
       failAIReply,
@@ -128,6 +130,7 @@ function makeOpts(mock: MockClaude) {
     spies: {
       startAIReply,
       appendAIReplyChunk,
+      setAIReplyText,
       setAIReplyModel,
       finishAIReply,
       failAIReply,
@@ -297,16 +300,15 @@ describe('useClaudeReply generation guard (retry vs. slow original)', () => {
       mock.emit('tok-1', { kind: 'done' });
     });
 
-    expect(spies.appendAIReplyChunk).toHaveBeenCalledWith(
+    expect(spies.setAIReplyText).toHaveBeenCalledWith(
       'c1',
       'r0',
       expect.stringContaining('“missing phrase” — this text isn’t in the document.'),
     );
-    // Singular heading — accurate for the one skipped edit.
-    expect(spies.appendAIReplyChunk).toHaveBeenCalledWith(
+    expect(spies.setAIReplyText).toHaveBeenCalledWith(
       'c1',
       'r0',
-      expect.stringContaining('1 change wasn’t applied:'),
+      expect.stringContaining('Nothing was applied:'),
     );
   });
 });

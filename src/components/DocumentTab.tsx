@@ -540,6 +540,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     deleteComment,
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyText,
     setAIReplyModel,
     setAIReplyEffort,
     finishAIReply,
@@ -810,6 +811,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   const claudeReply = useClaudeReply({
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyText,
     setAIReplyModel,
     setAIReplyEffort,
     onModelObserved: setLastKnownModel,

@@ -198,6 +198,8 @@ describe('useDocumentChat', () => {
     expect(result.current.messages[1].text).toContain(
       '“[same](https://one.example)” — more than one link has that label.',
     );
+    expect(result.current.messages[1].text).toContain('Nothing was applied:');
+    expect(result.current.messages[1].text).not.toContain('I tried.');
     expect(result.current.messages[1].text).not.toContain("text wasn't found, was already");
   });
 

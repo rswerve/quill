@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { formatBatchResultNotice } from '../../utils/structuralBatchNotice';
+import {
+  formatBatchResultNotice,
+  reconcileBatchReplyText,
+} from '../../utils/structuralBatchNotice';
 import type { BatchResultEntry } from '../../utils/structuralBatchDispatch';
 
 /**
@@ -40,7 +43,7 @@ describe('formatBatchResultNotice', () => {
     const notice = formatBatchResultNotice(results, [{ find: 'ghost' }]);
     expect(notice).toContain('“ghost”');
     expect(notice).toContain('this text isn’t in the document.');
-    expect(notice).toContain('1 change wasn’t applied:');
+    expect(notice).toContain('Nothing was applied:');
   });
 
   it('names the real boundary for an unsupported structural op (flat lists of any size ARE supported)', () => {
@@ -106,7 +109,8 @@ describe('formatBatchResultNotice', () => {
       { find: 'C' },
       { find: 'D' },
     ]);
-    expect(notice.match(/an internal error stopped it; try asking again\./g)).toHaveLength(4);
+    expect(notice.match(/an internal error stopped it; try asking again\./g)).toHaveLength(1);
+    expect(notice).toContain('4 changes —');
     expect(notice).not.toContain('malformed'); // invalid-metadata must NOT blame the instruction
     expect(notice).not.toContain('couldn’t be located'); // target-not-found must NOT either
   });
@@ -123,13 +127,14 @@ describe('formatBatchResultNotice', () => {
     expect(notice).toContain('the document was not ready.');
   });
 
-  it('uses one shared cross-axis wording for inline and structural cross-axis conflicts', () => {
+  it('deduplicates one shared cross-axis wording for inline and structural conflicts', () => {
     const results = [
       entry(0, { kind: 'inline', status: 'cross-axis-conflict' }),
       entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'A' }, { find: 'B' }]);
-    expect(notice.match(/ask for them one at a time/g)).toHaveLength(2);
+    expect(notice.match(/ask for them one at a time/g)).toHaveLength(1);
+    expect(notice).toContain('2 changes —');
   });
 
   it('emits one input-order block, quoting each find and skipping successes', () => {
@@ -150,11 +155,52 @@ describe('formatBatchResultNotice', () => {
       { find: 'foo' },
       { find: 'two' },
     ]);
-    expect(notice).toContain('2 changes weren’t applied:');
+    expect(notice).toContain('Some changes were applied, but 2 changes weren’t:');
     const fooIdx = notice.indexOf('“foo”');
     const twoIdx = notice.indexOf('“two”');
     expect(fooIdx).toBeGreaterThan(-1);
     expect(twoIdx).toBeGreaterThan(fooIdx); // input order preserved
     expect(notice).not.toContain('“zero”'); // the minted (successful) entry is silent
+    expect(notice).toContain('Some changes were applied, but 2 changes weren’t:');
+  });
+
+  it('replaces optimistic prose when nothing applied', () => {
+    const results = [
+      entry(0, { kind: 'structural', status: 'cross-axis-conflict' }),
+      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+    ];
+    const text = reconcileBatchReplyText(
+      'Converted both paragraphs successfully.',
+      'Converted both paragraphs.',
+      results,
+      [{ find: 'A' }, { find: 'B' }],
+    );
+    expect(text).toContain('Nothing was applied:');
+    expect(text).toContain('2 changes —');
+    expect(text).not.toContain('successfully');
+  });
+
+  it('replaces an overclaim with a truthful partial-apply summary', () => {
+    const results = [
+      entry(0, {
+        kind: 'inline',
+        result: { edit: { find: 'A', format: { bold: false } }, status: 'applied' },
+      }),
+      entry(1, { kind: 'structural', status: 'cross-axis-conflict' }),
+    ];
+    const text = reconcileBatchReplyText(
+      'Unbolded and converted everything.',
+      'Unbolded and converted everything.',
+      results,
+      [{ find: 'A' }, { find: 'A' }],
+    );
+    expect(text).toContain('Some changes were applied, but 1 change wasn’t:');
+    expect(text).not.toContain('converted everything');
+  });
+
+  it('preserves prose, or the summary fallback, when all edits applied', () => {
+    const results = [entry(0, { kind: 'structural', status: 'minted', changeId: 'x' })];
+    expect(reconcileBatchReplyText('Done.', 'Summary', results, [{ find: 'A' }])).toBe('Done.');
+    expect(reconcileBatchReplyText('', 'Summary', results, [{ find: 'A' }])).toBe('Summary');
   });
 });

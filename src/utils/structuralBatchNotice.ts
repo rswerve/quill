@@ -122,17 +122,68 @@ function noticeReason(outcome: BatchOutcome): string | null {
   return structuralReasonText(outcome);
 }
 
+/** Whether one batch entry actually produced a reviewable suggestion. */
+export function batchOutcomeApplied(outcome: BatchOutcome): boolean {
+  if (outcome.kind === 'inline') {
+    return 'result' in outcome && outcome.result.status === 'applied';
+  }
+  return outcome.kind === 'structural' && outcome.status === 'minted';
+}
+
+interface RefusalGroup {
+  reason: string;
+  labels: string[];
+}
+
 export function formatBatchResultNotice(
   results: BatchResultEntry[],
   entries: readonly unknown[],
 ): string {
-  const lines: string[] = [];
+  const groups = new Map<string, RefusalGroup>();
+  let appliedCount = 0;
   for (const { batchIndex, outcome } of results) {
+    if (batchOutcomeApplied(outcome)) {
+      appliedCount += 1;
+      continue;
+    }
     const reason = noticeReason(outcome);
-    if (reason) lines.push(`• “${editFindLabel(entries[batchIndex])}” — ${reason}`);
+    if (!reason) continue;
+    const existing = groups.get(reason);
+    const label = editFindLabel(entries[batchIndex]);
+    if (existing) existing.labels.push(label);
+    else groups.set(reason, { reason, labels: [label] });
   }
+  const lines = [...groups.values()].map(({ reason, labels }) =>
+    labels.length === 1 ? `• “${labels[0]}” — ${reason}` : `• ${labels.length} changes — ${reason}`,
+  );
   if (lines.length === 0) return '';
-  const heading =
-    lines.length === 1 ? '1 change wasn’t applied:' : `${lines.length} changes weren’t applied:`;
+  const refusedCount = [...groups.values()].reduce(
+    (total, group) => total + group.labels.length,
+    0,
+  );
+  let heading = 'Nothing was applied:';
+  if (appliedCount > 0) {
+    heading =
+      refusedCount === 1
+        ? 'Some changes were applied, but 1 change wasn’t:'
+        : `Some changes were applied, but ${refusedCount} changes weren’t:`;
+  }
   return `(${heading}\n${lines.join('\n')})`;
+}
+
+/**
+ * Final user-visible text for a reply that carried an edit batch. Any refusal replaces
+ * optimistic model prose with outcome-derived wording; otherwise the streamed prose (or
+ * summary fallback) is preserved. This is shared by margin replies and document chat.
+ */
+export function reconcileBatchReplyText(
+  visibleText: string,
+  summary: unknown,
+  results: BatchResultEntry[],
+  entries: readonly unknown[],
+): string {
+  const notice = formatBatchResultNotice(results, entries);
+  if (notice) return notice;
+  if (visibleText.trim() !== '') return visibleText;
+  return typeof summary === 'string' ? summary : '';
 }

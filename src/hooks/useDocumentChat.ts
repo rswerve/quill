@@ -18,7 +18,7 @@ import {
 } from './useClaudeReply';
 import { useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
-import { formatBatchResultNotice } from '../utils/structuralBatchNotice';
+import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
 import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { stripTransientChatState } from '../utils/chatThread';
 
@@ -225,21 +225,22 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
                   }
                 }
 
-                let appended = '';
+                let finalText: string | null = null;
                 let suggestionIds: string[] = [];
                 if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-                  if (visibleText.trim() === '' && parsed.summary) appended = parsed.summary;
                   const result = opts.applyTrackedEdits(parsed.edits, assistantId);
                   suggestionIds = result.suggestionIds ?? [];
-                  const skippedNotice = formatBatchResultNotice(result.results, parsed.edits);
-                  if (skippedNotice) {
-                    appended += `${appended ? '\n\n' : ''}${skippedNotice}`;
-                  }
+                  finalText = reconcileBatchReplyText(
+                    visibleText,
+                    parsed.summary,
+                    result.results,
+                    parsed.edits,
+                  );
                 }
                 setMessages((current) =>
                   updateMessage(current, assistantId, (message) => ({
                     ...message,
-                    text: message.text + appended,
+                    text: finalText ?? message.text,
                     pending: false,
                     ...(suggestionIds.length > 0 ? { suggestionIds } : {}),
                   })),

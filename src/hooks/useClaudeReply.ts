@@ -13,7 +13,7 @@ import type {
 } from '../types';
 import { clip } from '../utils/format';
 import { stripTrailingNewlines } from '../utils/trackedEdits';
-import { formatBatchResultNotice } from '../utils/structuralBatchNotice';
+import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
 import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
@@ -29,6 +29,7 @@ export interface RangeTexts {
 interface UseClaudeReplyOptions {
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
+  setAIReplyText: (commentId: string, replyId: string, text: string) => void;
   setAIReplyModel?: (commentId: string, replyId: string, model: string) => void;
   setAIReplyEffort?: (commentId: string, replyId: string, effort: string) => void;
   onModelObserved?: (model: string) => void;
@@ -439,10 +440,6 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
           }
 
           if (parsed && Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-            // The prose we already streamed; if it was empty, surface the summary.
-            if (visibleText.trim() === '' && parsed.summary) {
-              opts.appendAIReplyChunk(comment.id, replyId, parsed.summary);
-            }
             // Edits are document-scale: the highlight frames the request but
             // does not fence where changes may land.
             const { results, suggestionIds = [] } = opts.applyTrackedEdits(
@@ -454,10 +451,11 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
             if (suggestionIds.length > 0) {
               opts.linkAIReplySuggestions(comment.id, replyId, suggestionIds);
             }
-            const skippedNotice = formatBatchResultNotice(results, parsed.edits);
-            if (skippedNotice) {
-              opts.appendAIReplyChunk(comment.id, replyId, `\n\n${skippedNotice}`);
-            }
+            opts.setAIReplyText(
+              comment.id,
+              replyId,
+              reconcileBatchReplyText(visibleText, parsed.summary, results, parsed.edits),
+            );
           }
         };
 

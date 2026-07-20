@@ -18,6 +18,7 @@ interface UseCommentsReturn {
   deleteComment: (commentId: string) => void;
   startAIReply: (commentId: string) => string;
   appendAIReplyChunk: (commentId: string, replyId: string, chunk: string) => void;
+  setAIReplyText: (commentId: string, replyId: string, text: string) => void;
   setAIReplyModel: (commentId: string, replyId: string, model: string) => void;
   setAIReplyEffort: (commentId: string, replyId: string, effort: string) => void;
   finishAIReply: (commentId: string, replyId: string) => void;
@@ -120,6 +121,21 @@ export function useComments(): UseCommentsReturn {
               ),
             }
           : c,
+      ),
+    );
+  }, []);
+
+  const setAIReplyText = useCallback((commentId: string, replyId: string, text: string) => {
+    setComments((prev) =>
+      prev.map((comment) =>
+        comment.id === commentId
+          ? {
+              ...comment,
+              replies: comment.replies.map((reply) =>
+                reply.id === replyId ? { ...reply, text } : reply,
+              ),
+            }
+          : comment,
       ),
     );
   }, []);
@@ -272,6 +288,7 @@ export function useComments(): UseCommentsReturn {
     deleteComment,
     startAIReply,
     appendAIReplyChunk,
+    setAIReplyText,
     setAIReplyModel,
     setAIReplyEffort,
     finishAIReply,
