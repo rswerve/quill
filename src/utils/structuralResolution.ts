@@ -92,15 +92,22 @@ function inspectCommentMark(
   scan: CleanScan,
 ): void {
   const { union, deleteFrom, deleteTo, originCommentId } = ctx;
+  const geomInUnion = pos >= union.from && nodeTo <= union.to;
   const isOrigin = originCommentId !== undefined && mark.attrs.commentId === originCommentId;
+  // A comment mark can only live on inline content. A non-inline ORIGIN mark is a forged
+  // origin → fail globally; a non-inline FOREIGN comment matters only inside the union
+  // (matching the old envelope scan). Only inline instances classify as contained/disjoint.
+  if (!isInline) {
+    if (isOrigin || geomInUnion) scan.clean = false;
+    return;
+  }
   if (isOrigin) {
     // Every origin fragment must be mark-identical (kind, resolved, …), matching the mint
     // boundary — a corrupted mix (note vs claude, resolved vs unresolved) cannot resolve.
     if (scan.originMark === null) scan.originMark = mark;
     else if (!scan.originMark.eq(mark)) scan.clean = false;
   }
-  const inUnion = isInline && pos >= union.from && nodeTo <= union.to;
-  if (inUnion) {
+  if (geomInUnion) {
     // A comment in the union must be the origin, wholly in the delete branch.
     if (!isOrigin || pos < deleteFrom || nodeTo > deleteTo) scan.clean = false;
     else scan.originInDeleteBranch = true;

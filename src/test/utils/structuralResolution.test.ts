@@ -1,7 +1,7 @@
 import { Editor, type Content, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
-import type { EditorState } from '@tiptap/pm/state';
+import { EditorState } from '@tiptap/pm/state';
 import { describe, it, expect, afterEach } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import { CommentMark } from '../../extensions/Comment';
@@ -264,6 +264,47 @@ describe('V2 N→M consumers (hand-built merge/split unions — the mint cannot 
       ok: false,
       reason: 'union-not-clean',
     });
+  });
+
+  it('origin comment forged onto a union BLOCK node (non-inline) refuses union-not-clean', () => {
+    // nodeFromJSON bypasses the editor's sanitization, the way a tampered docJSON would,
+    // so a comment mark ends up directly on the delete BLOCK node (isInline === false).
+    const base = unionEditor([para('x')], { changeId: 'm1', op: MERGE, ...META });
+    const schema = base.state.schema;
+    const commentMark = schema.marks.comment.create({
+      commentId: 'o1',
+      resolved: false,
+      kind: 'claude',
+    });
+    const doc = schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { blockTrack: { changeId: 'm1', op: 'delete' } },
+          marks: [commentMark.toJSON()],
+          content: [{ type: 'text', text: 'A' }],
+        },
+        para('B', { changeId: 'm1', op: 'delete' }),
+        para('A B', { changeId: 'm1', op: 'insert' }),
+      ],
+    });
+    const state = EditorState.create({ schema, doc, plugins: base.state.plugins });
+    const seeded = state.apply(
+      addStructuralRecord(state.tr, { changeId: 'm1', op: MERGE, originCommentId: 'o1', ...META }),
+    );
+    expect(resolveStructuralUnion(seeded, 'm1', 'accept')).toEqual({
+      ok: false,
+      reason: 'union-not-clean',
+    });
+  });
+
+  it('positive control: a tracked mark WHOLLY OUTSIDE the union does not block resolution', () => {
+    const ed = unionEditor(mergeChildren(), { changeId: 'm1', op: MERGE, ...META });
+    // tail text is [12,16), outside the union [0,11); a tracked mark there must not block.
+    const tracked = ed.state.schema.marks.tracked_insert.create({});
+    const state = ed.state.apply(ed.state.tr.addMark(12, 16, tracked));
+    expect(resolveStructuralUnion(state, 'm1', 'accept').ok).toBe(true);
   });
 });
 
