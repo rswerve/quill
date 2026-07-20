@@ -436,6 +436,11 @@ function splitPartsRefusal(op: StructuralOp, splitParts: unknown): StructuralMin
  * flattened paragraph, so a uniformly-aligned list keeps its alignment. A single item
  * trivially agrees → its own styling, matching V1b's native lift. Compared by canonical JSON;
  * paragraph attrs are primitives, so key order is stable within one schema.
+ *
+ * HONESTY: in the CURRENT Quill schema a paragraph carries only the identity `blockTrack`
+ * (no alignment/style attr extension), so every item's stripped attrs are `{}` and the null
+ * (refuse) branch is UNREACHABLE — this is DEFENSE-IN-DEPTH for a future block-attr addition
+ * (e.g. TextAlign), not a currently-pinned path. Stated plainly rather than claimed as tested.
  */
 function commonBlockAttrs(paragraphs: readonly PMNode[]): Record<string, unknown> | null {
   const styleOf = (node: PMNode): Record<string, unknown> => {
