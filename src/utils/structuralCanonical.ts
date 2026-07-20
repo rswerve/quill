@@ -1,4 +1,4 @@
-import { Fragment, type Node as PMNode } from '@tiptap/pm/model';
+import { Fragment, Mark, type Node as PMNode } from '@tiptap/pm/model';
 import type { StructuralSuggestionRecord } from '../types';
 import { structuralSkeletonEq } from './canonicalDocument';
 import { partitionStructuralRecords } from './structuralRecordValidation';
@@ -81,6 +81,127 @@ function rangeAtContentBoundaries(doc: PMNode, from: number, to: number): TopLev
   return resolveTopLevelRange(doc, startIndex, endIndex - startIndex + 1);
 }
 
+/**
+ * The first-to-last real content carried by a structural source range. Unlike
+ * `contentFrom`/`contentTo`, these positions are visible to `buildAnchorMapper`
+ * even when the top-level root is a non-textblock container such as a list.
+ */
+function contentWitness(range: TopLevelRange): { from: number; to: number } | null {
+  let first: number | null = null;
+  let last: number | null = null;
+  let rootFrom = range.outerFrom;
+  for (const root of range.nodes) {
+    root.descendants((node, pos) => {
+      if (node.isText || node.isLeaf) {
+        const absolute = rootFrom + 1 + pos;
+        if (first === null) first = absolute;
+        last = absolute + node.nodeSize;
+      }
+    });
+    rootFrom += root.nodeSize;
+  }
+  return first === null || last === null ? null : { from: first, to: last };
+}
+
+/** Locate the top-level range whose block containers enclose a mapped witness. */
+function rangeContainingWitness(doc: PMNode, from: number, to: number): TopLevelRange | null {
+  if (from > to) return null;
+  let pos = 0;
+  let startIndex = -1;
+  let endIndex = -1;
+  for (let i = 0; i < doc.childCount; i += 1) {
+    const child = doc.child(i);
+    const contentFrom = pos + 1;
+    const contentTo = pos + child.nodeSize - 1;
+    if (startIndex < 0 && contentFrom <= from && from <= contentTo) startIndex = i;
+    if (contentFrom <= to && to <= contentTo) endIndex = i;
+    pos += child.nodeSize;
+  }
+  if (startIndex < 0 || endIndex < startIndex) return null;
+  return resolveTopLevelRange(doc, startIndex, endIndex - startIndex + 1);
+}
+
+const IGNORED_CONTAINER_ATTRS = new Set(['blockTrack', 'tight']);
+
+function semanticContainerAttrs(node: PMNode): string {
+  const attrs: Record<string, unknown> = {};
+  for (const key of Object.keys(node.attrs).sort()) {
+    if (!IGNORED_CONTAINER_ATTRS.has(key)) attrs[key] = node.attrs[key];
+  }
+  return JSON.stringify(attrs);
+}
+
+/**
+ * Compare only the block-container tree. Inline identity is already proven by
+ * mapping the complete content witness; this second check prevents that content
+ * from being rebound into a different/merged list or item hierarchy.
+ */
+function blockContainerHierarchyEq(left: PMNode, right: PMNode): boolean {
+  if (
+    left.type.name !== right.type.name ||
+    semanticContainerAttrs(left) !== semanticContainerAttrs(right) ||
+    !Mark.sameSet(left.marks, right.marks)
+  ) {
+    return false;
+  }
+  const leftBlocks: PMNode[] = [];
+  const rightBlocks: PMNode[] = [];
+  left.forEach((child) => {
+    if (child.isBlock) leftBlocks.push(child);
+  });
+  right.forEach((child) => {
+    if (child.isBlock) rightBlocks.push(child);
+  });
+  return (
+    leftBlocks.length === rightBlocks.length &&
+    leftBlocks.every((child, index) => blockContainerHierarchyEq(child, rightBlocks[index]))
+  );
+}
+
+function rangeContainerHierarchyEq(left: TopLevelRange, right: TopLevelRange): boolean {
+  return (
+    left.nodes.length === right.nodes.length &&
+    left.nodes.every((node, index) => blockContainerHierarchyEq(node, right.nodes[index]))
+  );
+}
+
+/**
+ * Map a source range to its canonical top-level roots. Exact wrapper boundaries
+ * remain authoritative. Lists need the fallback because the generic mapper has
+ * cells for their text/leaf descendants, not for the list wrapper's content edge.
+ */
+function mapCanonicalRange(
+  liveRange: TopLevelRange,
+  canonicalSourceDoc: PMNode,
+  mapper: ReturnType<typeof buildAnchorMapper>,
+): { range: TopLevelRange | null; exactMapped: boolean } {
+  const exact = mapper.map(liveRange.contentFrom, liveRange.contentTo);
+  if (exact) {
+    const exactRange = rangeAtContentBoundaries(canonicalSourceDoc, exact.from, exact.to);
+    if (exactRange) return { range: exactRange, exactMapped: true };
+  }
+
+  // Textblock roots already expose their exact content boundaries to the generic
+  // mapper. The fallback is deliberately narrower: it exists for structural
+  // containers (currently list roots) whose wrapper boundary has no anchor cell.
+  if (liveRange.nodes.every((node) => node.isTextblock)) {
+    return { range: null, exactMapped: exact !== null };
+  }
+  const witness = contentWitness(liveRange);
+  if (!witness) return { range: null, exactMapped: exact !== null };
+  const mappedWitness = mapper.map(witness.from, witness.to);
+  if (!mappedWitness) return { range: null, exactMapped: exact !== null };
+  const containing = rangeContainingWitness(
+    canonicalSourceDoc,
+    mappedWitness.from,
+    mappedWitness.to,
+  );
+  return {
+    range: containing && rangeContainerHierarchyEq(liveRange, containing) ? containing : null,
+    exactMapped: exact !== null,
+  };
+}
+
 function idsAreExact(
   expectedRecords: readonly StructuralSuggestionRecord[],
   restoredRecords: readonly StructuralSuggestionRecord[],
@@ -104,9 +225,12 @@ function idsAreExact(
  * new fingerprint is insufficient: childIndex/childCount must be mapped too.
  *
  * The live source and canonical source are aligned by the same deterministic,
- * provenance-aware mapper used by inline canonical capture. Each structural
- * anchor must map to exact top-level block-content boundaries; a disappearing,
- * merged, split, or semantically changed source root fails closed.
+ * provenance-aware mapper used by inline canonical capture. Textblock anchors
+ * must map to exact top-level content boundaries. A non-textblock container whose
+ * wrapper boundary has no mapper cell may instead relocate through its complete
+ * descendant-content witness, but only when the enclosing block hierarchy is
+ * identical. A disappearing, merged, split, or semantically changed source root
+ * therefore still fails closed.
  */
 export function rebaseStructuralRecordsToCanonicalSource(
   liveReviewDoc: PMNode,
@@ -155,18 +279,14 @@ export function rebaseStructuralRecordsToCanonicalSource(
     ) {
       return { ok: false, error: `structural source fingerprint mismatch for ${record.changeId}` };
     }
-    const mapped = mapper.map(liveRange.contentFrom, liveRange.contentTo);
-    if (!mapped) {
-      return {
-        ok: false,
-        error: `structural source did not survive canonicalization for ${record.changeId}`,
-      };
-    }
-    const canonicalRange = rangeAtContentBoundaries(canonicalSourceDoc, mapped.from, mapped.to);
+    const mappedRange = mapCanonicalRange(liveRange, canonicalSourceDoc, mapper);
+    const canonicalRange = mappedRange.range;
     if (!canonicalRange) {
       return {
         ok: false,
-        error: `structural source no longer aligns to blocks for ${record.changeId}`,
+        error: mappedRange.exactMapped
+          ? `structural source no longer aligns to blocks for ${record.changeId}`
+          : `structural source did not survive canonicalization for ${record.changeId}`,
       };
     }
     rebased.push({

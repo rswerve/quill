@@ -27,7 +27,7 @@ import {
 } from '../../utils/structuralCanonical';
 import type { MarkdownSerialize } from '../../utils/structuralFingerprint';
 import { buildStructuralSavePayload } from '../../utils/structuralSavePayload';
-import type { Comment, StructuralSuggestionRecord } from '../../types';
+import type { Comment, StructuralListType, StructuralSuggestionRecord } from '../../types';
 
 const editors: Editor[] = [];
 let editor: Editor;
@@ -106,6 +106,36 @@ function mintHeadingToParagraph(value: Editor, index: number, changeId = 'c1'): 
   value.view.dispatch(tr);
 }
 
+function mintListToParagraph(
+  value: Editor,
+  index: number,
+  listType: StructuralListType,
+  changeId = 'list-change',
+): void {
+  const source = value.state.doc.child(index);
+  const pos = topLevelPos(value.state.doc, index);
+  const pieces: string[] = [];
+  source.forEach((item) => pieces.push(item.child(0).textContent));
+  const flattened = pieces.join(' ');
+  const proposed = value.schema.nodes.paragraph.create(
+    { blockTrack: { changeId, op: 'insert' } },
+    flattened ? value.schema.text(flattened) : undefined,
+  );
+  const tr = value.state.tr;
+  tr.setNodeMarkup(pos, undefined, {
+    ...source.attrs,
+    blockTrack: { changeId, op: 'delete' },
+  });
+  tr.insert(pos + source.nodeSize, proposed);
+  addStructuralRecord(tr, {
+    changeId,
+    op: { kind: 'listToParagraph', listType },
+    author: 'claude',
+    createdAt: '2026-07-18T00:00:00.000Z',
+  });
+  value.view.dispatch(tr);
+}
+
 function payload(value: Editor) {
   const result = buildStructuralSavePayload(value, markdown(value));
   if (!result.ok) throw new Error(result.error);
@@ -131,6 +161,25 @@ const bulletList = (items: string[]) => ({
   type: 'bulletList',
   content: items.map((text) => ({
     type: 'listItem',
+    content: [paragraph(text)],
+  })),
+});
+
+const orderedList = (items: string[]) => ({
+  type: 'orderedList',
+  attrs: { start: 1, tight: true },
+  content: items.map((text) => ({
+    type: 'listItem',
+    content: [paragraph(text)],
+  })),
+});
+
+const taskList = (items: { text: string; checked: boolean }[]) => ({
+  type: 'taskList',
+  attrs: { tight: true },
+  content: items.map(({ text, checked }) => ({
+    type: 'taskItem',
+    attrs: { checked },
     content: [paragraph(text)],
   })),
 });
@@ -186,6 +235,193 @@ describe('rebaseStructuralRecordsToCanonicalSource', () => {
     expect(rebased.ok).toBe(true);
     if (!rebased.ok) return;
     expect(rebased.records[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
+  });
+
+  it('rebases a list source by its complete descendant witness through whitespace normalization', () => {
+    const live = makeEditor({
+      type: 'doc',
+      content: [bulletList(['one  here', 'two', 'three'])],
+    });
+    mintListToParagraph(live, 0, 'bulletList');
+    const raw = payload(live);
+    const canonicalSource = parseMarkdownToDoc(live, raw.content);
+    expect(canonicalSource.textContent).toBe('one heretwothree');
+
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      canonicalSource,
+      raw.structural,
+      serialize,
+    );
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
+
+    const review = buildCanonicalStructuralReview(canonicalSource, rebased.records, serialize);
+    expect(review.ok).toBe(true);
+    if (!review.ok) return;
+    expect(projectBlockUnions(review.doc, 'source').doc.eq(canonicalSource)).toBe(true);
+    // The sidecar proposal remains lossless while the source Markdown is normalized.
+    expect(review.doc.child(1).textContent).toBe('one  here two three');
+  });
+
+  it('rebases a list childIndex after an earlier empty block disappears', () => {
+    const live = makeEditor({
+      type: 'doc',
+      content: [paragraph(''), bulletList(['one', 'two']), paragraph('after')],
+    });
+    mintListToParagraph(live, 1, 'bulletList');
+    const raw = payload(live);
+    expect(raw.structural[0].anchor.childIndex).toBe(1);
+    const canonicalSource = parseMarkdownToDoc(live, raw.content);
+    expect(canonicalSource.child(0).type.name).toBe('bulletList');
+
+    const rebased = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      canonicalSource,
+      raw.structural,
+      serialize,
+    );
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
+  });
+
+  it('allows cosmetic list tightness to normalize while preserving the container hierarchy', () => {
+    const live = makeEditor({ type: 'doc', content: [bulletList(['one', 'two'])] });
+    mintListToParagraph(live, 0, 'bulletList');
+    const raw = payload(live);
+    const liveTight = live.state.doc.child(0).attrs.tight;
+    const canonicalSource = directDoc([
+      { ...bulletList(['one', 'two']), attrs: { tight: liveTight !== true } },
+    ]);
+    expect(canonicalSource.child(0).attrs.tight).not.toBe(liveTight);
+
+    expect(
+      rebaseStructuralRecordsToCanonicalSource(
+        live.state.doc,
+        canonicalSource,
+        raw.structural,
+        serialize,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('fails closed when later list-item content diverges', () => {
+    const live = makeEditor({ type: 'doc', content: [bulletList(['one', 'two', 'three'])] });
+    mintListToParagraph(live, 0, 'bulletList');
+    const raw = payload(live);
+    const changed = directDoc([bulletList(['one', 'two', 'EVIL'])]);
+
+    expect(
+      rebaseStructuralRecordsToCanonicalSource(live.state.doc, changed, raw.structural, serialize)
+        .ok,
+    ).toBe(false);
+  });
+
+  it('fails closed when canonicalization changes list kind or task checked state', () => {
+    const bullet = makeEditor({ type: 'doc', content: [bulletList(['one', 'two'])] });
+    mintListToParagraph(bullet, 0, 'bulletList');
+    const bulletRaw = payload(bullet);
+    expect(
+      rebaseStructuralRecordsToCanonicalSource(
+        bullet.state.doc,
+        directDoc([orderedList(['one', 'two'])]),
+        bulletRaw.structural,
+        serialize,
+      ).ok,
+    ).toBe(false);
+
+    const task = makeEditor({
+      type: 'doc',
+      content: [
+        taskList([
+          { text: 'one', checked: true },
+          { text: 'two', checked: false },
+        ]),
+      ],
+    });
+    mintListToParagraph(task, 0, 'taskList');
+    const taskRaw = payload(task);
+    expect(
+      rebaseStructuralRecordsToCanonicalSource(
+        task.state.doc,
+        directDoc([
+          taskList([
+            { text: 'one', checked: false },
+            { text: 'two', checked: false },
+          ]),
+        ]),
+        taskRaw.structural,
+        serialize,
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('fails closed when a list source has no text or leaf witness', () => {
+    const live = makeEditor({ type: 'doc', content: [bulletList([''])] });
+    mintListToParagraph(live, 0, 'bulletList');
+    const raw = payload(live);
+    expect(
+      rebaseStructuralRecordsToCanonicalSource(
+        live.state.doc,
+        directDoc([bulletList([''])]),
+        raw.structural,
+        serialize,
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('fails closed before witness relocation for a non-flat list source', () => {
+    const changeId = 'non-flat';
+    const live = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          attrs: { blockTrack: { changeId, op: 'delete' } },
+          content: [
+            {
+              type: 'listItem',
+              content: [paragraph('one'), paragraph('nested sibling')],
+            },
+          ],
+        },
+        {
+          ...paragraph('one nested sibling'),
+          attrs: { blockTrack: { changeId, op: 'insert' } },
+        },
+      ],
+    });
+    const malformedShape: StructuralSuggestionRecord = {
+      changeId,
+      op: { kind: 'listToParagraph', listType: 'bulletList' },
+      author: 'claude',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: 'irrelevant: shape must fail first',
+      proposed: [paragraph('one nested sibling')],
+    };
+    const result = rebaseStructuralRecordsToCanonicalSource(
+      live.state.doc,
+      directDoc([
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [paragraph('one'), paragraph('nested sibling')],
+            },
+          ],
+        },
+      ]),
+      [malformedShape],
+      serialize,
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: 'structural records do not match the live unions',
+    });
   });
 
   it('fails closed when the source root changed semantic type', () => {

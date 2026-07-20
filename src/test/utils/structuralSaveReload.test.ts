@@ -99,17 +99,7 @@ function mintListToParagraph(editor: Editor, changeId: string, flattened: string
   editor.view.dispatch(tr);
 }
 
-describe('degraded-recovery rebase — list-SOURCE known limitation', () => {
-  // KNOWN LIMITATION (pre-existing since V1b single-item list→paragraph; tracked for a fix):
-  // the degraded crash-recovery rebase relocates a union's SOURCE range through the
-  // per-character anchor mapper, which only has cells at textblock/text/leaf granularity. A
-  // list SOURCE's content boundaries sit at the list-WRAPPER level, which the mapper can't map,
-  // so `rebaseForDegradedRecovery` fails closed ("did not survive canonicalization"). Normal
-  // save, reload-from-sidecar, and LOSSLESS crash recovery all work for a list→paragraph union;
-  // ONLY the DEGRADED (whitespace-normalized) crash-recovery bundle of a still-PENDING
-  // list-source union is affected — getWorkspaceSnapshot then keeps the last good snapshot.
-  // Paragraph/heading SOURCES (split, retype, paragraph→list) are unaffected. These tests PIN
-  // the current behavior; a future fix should flip both `.toBe(false)` to `.toBe(true)`.
+describe('degraded-recovery rebase — list sources', () => {
   it('save payload of a list-source union succeeds (the on-disk path is fine)', () => {
     const editor = makeEditor('- one\n- two\n- three');
     mintListToParagraph(editor, 'c1', 'one two three');
@@ -117,23 +107,26 @@ describe('degraded-recovery rebase — list-SOURCE known limitation', () => {
     expect(payload.ok).toBe(true);
   });
 
-  it('degraded-recovery rebase of a list-source union currently fails closed (KNOWN LIMITATION)', () => {
+  it('rebases a pending multi-item list source for degraded recovery', () => {
     const editor = makeEditor('- one\n- two\n- three');
     mintListToParagraph(editor, 'c1', 'one two three');
     const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
     expect(payload.ok).toBe(true);
     if (!payload.ok) return;
     const rebased = rebaseForDegradedRecovery(editor, payload.content, payload.structural);
-    expect(rebased.ok).toBe(false); // KNOWN LIMITATION — flip to true when the rebase is fixed
+    expect(rebased.ok).toBe(true);
+    if (!rebased.ok) return;
+    expect(rebased.records).toHaveLength(1);
+    expect(rebased.records[0].anchor).toEqual({ parentPath: [], childIndex: 0, childCount: 1 });
   });
 
-  it('a single-item list source hits the SAME limitation (pre-existing, not a V2 regression)', () => {
+  it('rebases a pending single-item list source for degraded recovery', () => {
     const editor = makeEditor('- only');
     mintListToParagraph(editor, 'c1', 'only');
     const payload = buildStructuralSavePayload(editor, getMarkdown(editor));
     expect(payload.ok).toBe(true);
     if (!payload.ok) return;
-    expect(rebaseForDegradedRecovery(editor, payload.content, payload.structural).ok).toBe(false);
+    expect(rebaseForDegradedRecovery(editor, payload.content, payload.structural).ok).toBe(true);
   });
 });
 
