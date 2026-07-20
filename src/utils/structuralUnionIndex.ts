@@ -274,22 +274,26 @@ export function isSingleItemList(node: PMNode, listType: StructuralListType): bo
   return item.childCount === 1 && item.child(0).type.name === 'paragraph';
 }
 
-/** The list-item node types V2 flattens: ordered/bullet use `listItem`, task lists `taskItem`. */
-const FLAT_ITEM_TYPES = new Set<string>(['listItem', 'taskItem']);
+/** The item node type each list kind MUST wrap: task lists use `taskItem`, the rest `listItem`. */
+function expectedItemType(listType: StructuralListType): string {
+  return listType === 'taskList' ? 'taskItem' : 'listItem';
+}
 
 /**
- * A FLAT list of the given kind: one-or-more items, each a real list item (`listItem` /
- * `taskItem`) wrapping EXACTLY one paragraph — no nesting, no composite/blockquote item
- * children. This is the source shape a multi-item list→paragraph flattens by joining the
- * items' text; a nested/composite list fails closed (a later phase). Single-item is the
- * `isSingleItemList` special case.
+ * A FLAT list of the given kind: one-or-more items, each the list's MATCHING item type
+ * (`bulletList`/`orderedList` → `listItem`, `taskList` → `taskItem`) wrapping EXACTLY one
+ * paragraph — no nesting, no composite/blockquote item children, and no cross-kind wrapper
+ * (a forged `bulletList > taskItem` from an untrusted sidecar must fail closed). This is the
+ * source shape a multi-item list→paragraph flattens by joining the items' text; anything else
+ * fails closed. Single-item is the `isSingleItemList` special case.
  */
 export function isFlatParagraphList(node: PMNode, listType: StructuralListType): boolean {
   if (node.type.name !== listType || node.childCount < 1) return false;
+  const itemType = expectedItemType(listType);
   for (let i = 0; i < node.childCount; i += 1) {
     const item = node.child(i);
     if (
-      !FLAT_ITEM_TYPES.has(item.type.name) ||
+      item.type.name !== itemType ||
       item.childCount !== 1 ||
       item.child(0).type.name !== 'paragraph'
     ) {

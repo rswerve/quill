@@ -1,9 +1,11 @@
-import { Editor, Extension, type JSONContent } from '@tiptap/core';
+import { Editor, Extension, type Extensions, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { describe, expect, it } from 'vitest';
 import { BlockTrack } from '../../extensions/BlockTrack';
 import {
   analyzeStructuralUnions,
+  isFlatParagraphList,
   structuralOpShapeValid,
   type StructuralUnionIssueCode,
 } from '../../utils/structuralUnionIndex';
@@ -32,7 +34,7 @@ const bulletList = (items: JSONContent[], blockTrack?: unknown): JSONContent => 
   content: items,
 });
 
-function makeEditor(content: JSONContent[], extra: Extension[] = []): Editor {
+function makeEditor(content: JSONContent[], extra: Extensions = []): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
   return new Editor({
@@ -53,6 +55,34 @@ function codesFor(editor: Editor, changeId: string): Set<StructuralUnionIssueCod
       .map((issue) => issue.code),
   );
 }
+
+describe('isFlatParagraphList — matching-wrapper enforcement', () => {
+  // A list root must wrap its MATCHING item type (bullet/ordered → listItem, task → taskItem).
+  // `NodeType.create` skips content-model validation, so a forged cross-kind wrapper (as an
+  // untrusted sidecar could carry through reconstruction) is constructible — it must fail closed.
+  const schema = makeEditor([paragraph('x')], [TaskList, TaskItem]).schema;
+  const para = () => schema.nodes.paragraph.create(null, schema.text('x'));
+  const listItemNode = () => schema.nodes.listItem.create(null, para());
+  const taskItemNode = () => schema.nodes.taskItem.create(null, para());
+
+  it('accepts a matching wrapper (bulletList › listItem, taskList › taskItem)', () => {
+    expect(
+      isFlatParagraphList(schema.nodes.bulletList.create(null, listItemNode()), 'bulletList'),
+    ).toBe(true);
+    expect(
+      isFlatParagraphList(schema.nodes.taskList.create(null, taskItemNode()), 'taskList'),
+    ).toBe(true);
+  });
+
+  it('refuses a forged cross-kind wrapper (bulletList › taskItem, taskList › listItem)', () => {
+    expect(
+      isFlatParagraphList(schema.nodes.bulletList.create(null, taskItemNode()), 'bulletList'),
+    ).toBe(false);
+    expect(
+      isFlatParagraphList(schema.nodes.taskList.create(null, listItemNode()), 'taskList'),
+    ).toBe(false);
+  });
+});
 
 describe('structuralOpShapeValid — per-op shape (V1 one-to-one, V2 N→M)', () => {
   const doc = makeEditor([paragraph('a'), paragraph('b'), heading('H'), bulletList([item('x')])])
