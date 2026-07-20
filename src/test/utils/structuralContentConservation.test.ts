@@ -1,5 +1,6 @@
 import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { MarkdownImage } from '../../extensions/MarkdownImage';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { structuralContentConserved } from '../../utils/structuralContentConservation';
@@ -17,7 +18,7 @@ let editor: Editor;
 beforeEach(() => {
   const el = document.createElement('div');
   document.body.appendChild(el);
-  editor = new Editor({ element: el, extensions: [StarterKit], content: '' });
+  editor = new Editor({ element: el, extensions: [StarterKit, MarkdownImage], content: '' });
 });
 afterEach(() => editor.destroy());
 
@@ -39,6 +40,7 @@ const t = (text: string, marks?: JSONContent['marks']): JSONContent => ({
   ...(marks ? { marks } : {}),
 });
 const hb: JSONContent = { type: 'hardBreak' };
+const img = (src: string): JSONContent => ({ type: 'image', attrs: { src } });
 const bold = [{ type: 'bold' }];
 const link = (href: string) => [{ type: 'link', attrs: { href } }];
 
@@ -77,6 +79,24 @@ describe('structuralContentConserved — retype', () => {
     expect(structuralContentConserved(H2P, [h([t('a'), hb, t('b')])], [p([t('a'), t('b')])])).toBe(
       false,
     );
+  });
+
+  it('pins inline-atom identity: same image conserved, a changed src quarantined', () => {
+    expect(
+      structuralContentConserved(
+        H2P,
+        [h([t('a '), img('pic.png')])],
+        [p([t('a '), img('pic.png')])],
+      ),
+    ).toBe(true);
+    // A changed atom attribute (image src) must quarantine — pins the atom node.eq check.
+    expect(
+      structuralContentConserved(
+        H2P,
+        [h([t('a '), img('pic.png')])],
+        [p([t('a '), img('evil.png')])],
+      ),
+    ).toBe(false);
   });
 });
 
