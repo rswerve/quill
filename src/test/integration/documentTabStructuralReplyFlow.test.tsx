@@ -510,6 +510,11 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     expect(insert?.type.name).toBe('paragraph');
     expect(insert?.textContent).toBe('one two three');
 
+    await waitFor(() => {
+      const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
+      expect(aiReplyOf(comment)?.suggestionIds).toEqual([changeId]);
+    });
+
     const card = await waitFor(() => {
       const el = mounted.container.querySelector(
         `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
@@ -528,18 +533,10 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     });
     const doc = editor.state.doc;
     expect(unionChangeIds(doc).size).toBe(0);
-    // The list collapsed to a single flattened paragraph.
+    // The list collapsed to a single flattened paragraph, and the origin comment resolved.
     expect(doc.child(0).type.name).toBe('paragraph');
     expect(doc.child(0).textContent).toBe('one two three');
     expect(topLevelOfType(doc, 'bulletList')).toBeNull();
-    // The origin comment resolved on accept: its mark is gone from the document. (The
-    // workspace-snapshot `resolved` flag is asserted in the split/taskList mounted tests; a
-    // list-SOURCE pending union currently nulls getWorkspaceSnapshot — see the degraded-recovery
-    // KNOWN LIMITATION pinned in structuralSaveReload.test.ts — so here we read the doc marks.)
-    let anyCommentMark = false;
-    doc.descendants((node) => {
-      if (node.marks.some((mark) => mark.type.name === 'comment')) anyCommentMark = true;
-    });
-    expect(anyCommentMark).toBe(false);
+    expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
   });
 });
