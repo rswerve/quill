@@ -1,4 +1,4 @@
-import type { Mark, Node as PMNode, Schema } from '@tiptap/pm/model';
+import type { Mark, MarkType, Node as PMNode, Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection, type Command, type Transaction } from '@tiptap/pm/state';
 import { Transform } from '@tiptap/pm/transform';
 import { setBlockType } from '@tiptap/pm/commands';
@@ -17,6 +17,7 @@ import {
   type StructuralUnionMetadata,
 } from './structuralUnionIndex';
 import { getTrackedChanges } from '../extensions/TrackChanges';
+import { locateSplitSeams, structuralContentConserved } from './structuralContentConservation';
 import { projectBlockUnions } from './blockUnionProjection';
 import { lockedChangeIds } from './structuralFootprints';
 import { isReviewMarkName } from './canonicalDocument';
@@ -66,6 +67,13 @@ export interface StructuralMintRequest {
   /** ISO 8601 timestamp string; validated for parseability, never generated. */
   createdAt: string;
   origin?: StructuralMintOrigin;
+  /**
+   * V2 `splitParagraph` ONLY: the resulting piece texts (≥2, each trimmed + nonempty). The
+   * compiler slices the LIVE source content at whitespace seams matching these — it never
+   * accepts caller-built nodes, so the reflow is always recomputed from live content.
+   * Forbidden on every other op.
+   */
+  splitParts?: readonly string[];
 }
 
 export type StructuralMintRefusal =
@@ -78,6 +86,7 @@ export type StructuralMintRefusal =
   | 'annotated-footprint'
   | 'origin-comment-partial'
   | 'native-no-op'
+  | 'split-source-mismatch'
   | 'self-check-failed';
 
 export type StructuralMintResult =
@@ -193,9 +202,9 @@ function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
       // Single-item only in V1b (multi-item lists are a later phase); a multi-item source
       // also fails onlyChildChanged after the lift, but this refuses it up front.
       return isSingleItemList(block, op.listType);
-    // V2-2/V2-3: split/merge match against a multi-block footprint, not one block;
-    // refuse here until the dedicated capture path exists.
     case 'splitParagraph':
+      return block.type.name === 'paragraph';
+    // V2-3: merge matches against an adjacent pair, not one block; refuse until then.
     case 'mergeParagraphs':
       return false;
   }
@@ -363,37 +372,112 @@ function captureNativeConversion(
   return { afterDoc: capturedTr.doc, proposed: capturedTr.doc.child(target.index) };
 }
 
-/** True when `after` differs from `before` only at the given top-level child index. */
-function onlyChildChanged(before: PMNode, after: PMNode, index: number): boolean {
-  if (before.childCount !== after.childCount) return false;
-  for (let i = 0; i < before.childCount; i += 1) {
-    if (i !== index && !before.child(i).eq(after.child(i))) return false;
+/**
+ * True when `after` differs from `before` only within the top-level range
+ * `[index, index+sourceCount)`, which becomes `[index, index+proposedCount)`. The
+ * N→M generalization of the 1→1 `onlyChildChanged`: the prefix and the suffix
+ * siblings must be identical, so a conversion can't silently disturb a neighbour.
+ */
+function onlyTopLevelRangeChanged(
+  before: PMNode,
+  after: PMNode,
+  index: number,
+  sourceCount: number,
+  proposedCount: number,
+): boolean {
+  if (before.childCount - sourceCount !== after.childCount - proposedCount) return false;
+  for (let i = 0; i < index; i += 1) {
+    if (!before.child(i).eq(after.child(i))) return false;
+  }
+  for (let k = 0; index + sourceCount + k < before.childCount; k += 1) {
+    if (!before.child(index + sourceCount + k).eq(after.child(index + proposedCount + k))) {
+      return false;
+    }
   }
   return true;
 }
 
+/** A part list is valid for a split request: ≥2 entries, each nonempty and already trimmed. */
+function isValidSplitParts(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    value.every((part) => typeof part === 'string' && part.length > 0 && part === part.trim())
+  );
+}
+
 /**
- * The document the accepted projection must equal: the native conversion, with
- * the origin comment removed from the converted target's content only when the
- * carveout stripped it from the proposed branch. A structural oracle, NOT a
- * comment-record resolution — real resolution is the later Accept side effect,
- * which also removes a disjoint origin's mark elsewhere (projection alone will not).
+ * Discriminated request validation: `splitParagraph` REQUIRES valid `splitParts`; every
+ * other op FORBIDS it. Returns the refusal reason, or null when the shape is legal.
  */
-function buildAcceptedOracle(
-  schema: Schema,
-  afterDoc: PMNode,
+function splitPartsRefusal(op: StructuralOp, splitParts: unknown): StructuralMintRefusal | null {
+  if (op.kind === 'splitParagraph') {
+    return isValidSplitParts(splitParts) ? null : 'invalid-metadata';
+  }
+  return splitParts === undefined ? null : 'invalid-metadata';
+}
+
+type CaptureResult = { nodes: PMNode[] } | { refuse: StructuralMintRefusal };
+
+/**
+ * The clean (identity-free) proposed block(s) a conversion produces. V1 retype/list ops
+ * capture a native command's single converted child (and reject a command that disturbed
+ * a neighbour). `splitParagraph` recomputes the pieces from the LIVE source content: it
+ * slices at whitespace seams matching `request.splitParts` (never caller-built nodes), each
+ * piece a paragraph carrying the source's non-identity attrs and the real sliced fragment.
+ */
+function captureProposedNodes(
+  state: EditorState,
+  op: StructuralOp,
   target: TargetBlock,
+  request: StructuralMintRequest,
+): CaptureResult {
+  if (op.kind === 'splitParagraph') {
+    const paragraph = state.schema.nodes.paragraph;
+    if (!paragraph) return { refuse: 'unsupported-shape' };
+    const ranges = locateSplitSeams(target.node.content, request.splitParts ?? []);
+    if (!ranges) return { refuse: 'split-source-mismatch' };
+    const nodes = ranges.map((range) =>
+      paragraph.create(
+        { ...target.node.attrs, blockTrack: null },
+        target.node.content.cut(range.from, range.to),
+      ),
+    );
+    return { nodes };
+  }
+  const command = nativeCommandFor(state.schema, op);
+  if (!command) return { refuse: 'unsupported-shape' };
+  const captured = captureNativeConversion(state, command, target);
+  if (!captured) return { refuse: 'native-no-op' };
+  // The native command must have touched only the target's own top-level child (e.g.
+  // wrapInList must not have merged an adjacent list) — checked against the native afterDoc.
+  if (!onlyTopLevelRangeChanged(state.doc, captured.afterDoc, target.index, 1, 1)) {
+    return { refuse: 'unsupported-shape' };
+  }
+  return { nodes: [captured.proposed] };
+}
+
+/**
+ * The document the accepted projection must equal: the source range `[from,to)` replaced by
+ * the proposed block(s), with the origin comment stripped from the inserted content when the
+ * carveout kept it only on the (dropped) source branch. A structural oracle, NOT a
+ * comment-record resolution — real Accept also removes a disjoint origin's mark elsewhere.
+ * Built independently of the union transaction, so comparing the two is a real cross-check.
+ */
+function buildAcceptedDoc(
+  doc: PMNode,
+  from: number,
+  to: number,
+  proposedNodes: readonly PMNode[],
   originContained: boolean,
+  commentType: MarkType | undefined,
 ): PMNode {
-  const commentType = schema.marks.comment;
-  if (!originContained || !commentType) return afterDoc;
-  // The converted target starts at `target.from` (onlyChildChanged guarantees the earlier
-  // children are unchanged), but its SIZE changes under list wrapping/lifting — so its
-  // content range must use the converted child's actual nodeSize, not the source extent.
-  // (For heading↔paragraph this equals [target.from + 1, target.to - 1].)
-  const convertedSize = afterDoc.child(target.index).nodeSize;
-  const transform = new Transform(afterDoc);
-  transform.removeMark(target.from + 1, target.from + convertedSize - 1, commentType);
+  const transform = new Transform(doc);
+  transform.replaceWith(from, to, proposedNodes as PMNode[]);
+  if (originContained && commentType) {
+    const size = proposedNodes.reduce((sum, node) => sum + node.nodeSize, 0);
+    transform.removeMark(from + 1, from + size - 1, commentType);
+  }
   return transform.doc;
 }
 
@@ -428,13 +512,13 @@ export function compileStructuralMint(
   const target = resolveTopLevelBlock(state.doc, targetPos);
   if (!target) return refuse('target-not-found');
 
-  // 5. The op is a well-formed structural operation expressible in V1a on this
-  //    block type. isStructuralOp runs first so a runtime-invalid op (e.g. a
-  //    HeadingLevel of 99, which opSourceMatches/structuralOpShapeValid would
-  //    otherwise mint into an unsaveable record) is refused before any capture.
+  // 5. The op is a well-formed structural operation on this block type. isStructuralOp runs
+  //    first so a runtime-invalid op (e.g. a HeadingLevel of 99) is refused before any
+  //    capture. splitParts is discriminated: required for split, forbidden on every other op.
   if (!isStructuralOp(op)) return refuse('unsupported-shape');
-  const command = nativeCommandFor(state.schema, op);
-  if (!command || !opSourceMatches(op, target.node)) return refuse('unsupported-shape');
+  if (!opSourceMatches(op, target.node)) return refuse('unsupported-shape');
+  const partsRefusal = splitPartsRefusal(op, request.splitParts);
+  if (partsRefusal) return refuse(partsRefusal);
 
   // 6. The target does not overlap an existing union.
   if (
@@ -451,38 +535,38 @@ export function compileStructuralMint(
   const annotations = classifyFootprintAnnotations(state.doc, target, originCommentId);
   if (annotations.status === 'refuse') return refuse(annotations.reason);
 
-  // 8. Capture the native conversion against a detached state.
-  const captured = captureNativeConversion(state, command, target);
-  if (!captured) return refuse('native-no-op');
-  const { afterDoc, proposed } = captured;
+  // 8. Produce the clean proposed block(s): a V1 retype/list captures the native command's
+  //    converted child; splitParagraph slices the live content at seams from splitParts.
+  const capture = captureProposedNodes(state, op, target, request);
+  if ('refuse' in capture) return refuse(capture.refuse);
+  const proposedNodes = capture.nodes;
 
-  // 8b. The native command changed only the target top-level child.
-  if (!onlyChildChanged(state.doc, afterDoc, target.index)) return refuse('unsupported-shape');
+  // 8c. The source/proposed pair is a shape the op could have minted AND a PURE reflow
+  //     (content preserved, only re-bounded) — the mint-time content-conservation net.
+  if (!structuralOpShapeValid(op, [target.node], proposedNodes)) return refuse('unsupported-shape');
+  if (!structuralContentConserved(op, [target.node], proposedNodes)) {
+    return refuse('self-check-failed');
+  }
 
-  // 8c. The source/proposed pair is a shape the declared op could have minted.
-  if (!structuralOpShapeValid(op, [target.node], [proposed])) return refuse('unsupported-shape');
-
-  // 9. Build the union transaction, mirroring reconstruction's applyRecords:
-  //    insert the flagged proposal immediately after the source (keeping the
-  //    source node — and any cursor inside it — in place), then flag the source
-  //    for deletion, and add the canonical record — all in one undoable
-  //    transaction. Inserting after the unchanged source, rather than replacing
-  //    the whole span, keeps a live selection inside the source branch.
+  // 9. Build the union transaction, mirroring reconstruction's applyRecords: insert the
+  //    flagged proposal(s) immediately after the source (keeping the source node — and any
+  //    cursor inside it — in place), then flag the source for deletion, and add the canonical
+  //    record — all in one undoable transaction.
+  const commentType = state.schema.marks.comment;
   const tr = state.tr;
-  const flaggedProposed = proposed.type.create(
-    { ...proposed.attrs, blockTrack: { changeId, op: 'insert' } },
-    proposed.content,
-    proposed.marks,
+  const flaggedProposed = proposedNodes.map((node) =>
+    node.type.create(
+      { ...node.attrs, blockTrack: { changeId, op: 'insert' } },
+      node.content,
+      node.marks,
+    ),
   );
   tr.insert(target.to, flaggedProposed);
-  // Option-B: strip the origin comment from the proposed (insert) branch's content
-  // only, so it stays one contiguous anchor on the retained source (delete) branch.
-  // Safe after the foreign-mark gate — the origin comment is the only comment here.
-  if (annotations.status === 'contained') {
-    const commentType = state.schema.marks.comment;
-    if (commentType) {
-      tr.removeMark(target.to + 1, target.to + flaggedProposed.nodeSize - 1, commentType);
-    }
+  // Option-B: strip the origin comment from every inserted (proposed) root's content, so it
+  // stays one contiguous anchor on the retained source (delete) branch.
+  if (annotations.status === 'contained' && commentType) {
+    const proposedSize = flaggedProposed.reduce((sum, node) => sum + node.nodeSize, 0);
+    tr.removeMark(target.to + 1, target.to + proposedSize - 1, commentType);
   }
   tr.setNodeMarkup(target.from, undefined, {
     ...target.node.attrs,
@@ -500,22 +584,26 @@ export function compileStructuralMint(
   tr.setMeta(SKIP_TRACKING_META, true);
   tr.setMeta(STRUCTURAL_BYPASS_META, { kind: 'mint', changeId } satisfies StructuralBypass);
 
-  // 10. Self-validate the built union: it must be persistable (topology + declared
-  //     op agree), its source projection must equal the pre-mint source projection,
-  //     and its accepted projection must equal the native command's result. The
-  //     projections compare against the OTHER document's like projection so any
-  //     disjoint existing unions cancel out identically on both sides.
+  // 10. Self-validate: the union is persistable; the accepted oracle (the source range
+  //     replaced by the proposal) disturbs only that one top-level range (prefix/suffix
+  //     parity — the N→M generalization of the old onlyChildChanged); the built union's
+  //     source projection equals the pre-mint source; and its accepted projection equals the
+  //     accepted oracle, which is built independently of `tr` so the comparison is a real
+  //     cross-check, not self-referential.
   const analyzerMeta = new Map<string, StructuralUnionMetadata>(retainedRecords(state));
   analyzerMeta.set(changeId, { op });
   const union = analyzeStructuralUnions(tr.doc, analyzerMeta).persistable.get(changeId);
-  const acceptedOracle = buildAcceptedOracle(
-    state.schema,
-    afterDoc,
-    target,
+  const acceptedOracle = buildAcceptedDoc(
+    state.doc,
+    target.from,
+    target.to,
+    proposedNodes,
     annotations.status === 'contained',
+    commentType,
   );
   if (
     !union ||
+    !onlyTopLevelRangeChanged(state.doc, acceptedOracle, target.index, 1, proposedNodes.length) ||
     !projectBlockUnions(tr.doc, 'source').doc.eq(projectBlockUnions(state.doc, 'source').doc) ||
     !projectBlockUnions(tr.doc, 'accepted').doc.eq(
       projectBlockUnions(acceptedOracle, 'accepted').doc,

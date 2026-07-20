@@ -920,3 +920,107 @@ describe('compileStructuralMint — V1b list ↔ paragraph', () => {
     expect(r).toEqual({ ok: false, reason: 'target-not-found' });
   });
 });
+
+describe('compileStructuralMint — V2 splitParagraph', () => {
+  const splitReq = (splitParts: readonly string[] | undefined) =>
+    req({ op: { kind: 'splitParagraph' }, targetPos: posInBlock(0), splitParts });
+
+  it('mints a 1→M union: source flagged delete, each piece flagged insert, record persisted', () => {
+    editor = makeEditor('<p>alpha beta gamma</p>');
+    const r = expectOk(compileStructuralMint(editor.state, splitReq(['alpha', 'beta', 'gamma'])));
+    const state = editor.state.apply(r.tr);
+    const doc = state.doc;
+    expect(doc.childCount).toBe(4); // original(delete) + 3 pieces(insert)
+    expect(doc.child(0).attrs.blockTrack).toMatchObject({ op: 'delete' });
+    expect(doc.child(0).textContent).toBe('alpha beta gamma');
+    expect([1, 2, 3].map((i) => doc.child(i).textContent)).toEqual(['alpha', 'beta', 'gamma']);
+    expect([1, 2, 3].every((i) => doc.child(i).attrs.blockTrack?.op === 'insert')).toBe(true);
+    expect(retainedRecords(state).get('c1')?.op).toEqual({ kind: 'splitParagraph' });
+    // source projection == pre-mint single paragraph; accepted projection == the 3 pieces.
+    expect(projectBlockUnions(doc, 'source').doc.childCount).toBe(1);
+    expect(projectBlockUnions(doc, 'source').doc.child(0).textContent).toBe('alpha beta gamma');
+    expect(projectBlockUnions(doc, 'accepted').doc.childCount).toBe(3);
+  });
+
+  it('preserves a mark that spans only one piece', () => {
+    editor = makeEditor('<p><strong>alpha</strong> beta</p>');
+    const r = expectOk(compileStructuralMint(editor.state, splitReq(['alpha', 'beta'])));
+    const doc = editor.state.apply(r.tr).doc;
+    expect(doc.child(1).firstChild?.marks.some((m) => m.type.name === 'bold')).toBe(true);
+    expect(doc.child(2).firstChild?.marks.some((m) => m.type.name === 'bold')).toBe(false);
+  });
+
+  it.each([
+    { label: 'fewer than two parts', splitParts: ['alpha'] },
+    { label: 'a whitespace-only part', splitParts: ['alpha', '  '] },
+    { label: 'an untrimmed part', splitParts: ['alpha ', 'beta'] },
+    { label: 'missing parts', splitParts: undefined },
+  ])('refuses malformed splitParts ($label) as invalid-metadata', ({ splitParts }) => {
+    editor = makeEditor('<p>alpha beta</p>');
+    expect(compileStructuralMint(editor.state, splitReq(splitParts))).toEqual({
+      ok: false,
+      reason: 'invalid-metadata',
+    });
+  });
+
+  it.each([
+    { label: 'altered text', content: '<p>alpha beta</p>', splitParts: ['alpha', 'gamma'] },
+    { label: 'no whitespace seam', content: '<p>alphabeta</p>', splitParts: ['alpha', 'beta'] },
+    {
+      label: 'a hard break as the seam',
+      content: '<p>alpha<br>beta</p>',
+      splitParts: ['alpha', 'beta'],
+    },
+  ])('refuses parts that do not reflow the live content ($label)', ({ content, splitParts }) => {
+    editor = makeEditor(content);
+    expect(compileStructuralMint(editor.state, splitReq(splitParts))).toEqual({
+      ok: false,
+      reason: 'split-source-mismatch',
+    });
+  });
+
+  it('forbids splitParts on a non-split op (invalid-metadata)', () => {
+    editor = makeEditor('<h1>Title</h1>');
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'headingToParagraph', level: 1 },
+          targetPos: posInBlock(0),
+          splitParts: ['a', 'b'],
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
+  it('carries a contained origin comment (spanning the seam) on the delete branch only', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    const end = editor.state.doc.child(0).nodeSize - 1;
+    editor.chain().setTextSelection({ from: 1, to: end }).setComment('cm1').run();
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'splitParagraph' },
+          targetPos: posInBlock(0),
+          splitParts: ['alpha', 'beta'],
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    const state = editor.state.apply(r.tr);
+    expect(blockHasComment(state.doc.child(0), 'cm1')).toBe(true); // delete branch keeps it
+    expect(blockHasComment(state.doc.child(1), 'cm1')).toBe(false); // pieces stripped
+    expect(blockHasComment(state.doc.child(2), 'cm1')).toBe(false);
+    expect(retainedRecords(state).get('c1')?.originCommentId).toBe('cm1');
+  });
+
+  it('refuses a foreign annotation in the footprint (annotated-footprint)', () => {
+    editor = makeEditor('<p>alpha beta</p>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).setComment('foreign').run();
+    expect(compileStructuralMint(editor.state, splitReq(['alpha', 'beta']))).toEqual({
+      ok: false,
+      reason: 'annotated-footprint',
+    });
+  });
+});
