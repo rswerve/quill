@@ -86,7 +86,7 @@ async function selectCommentSlice(page: import('@playwright/test').Page, from: n
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      (mark.closest('.ProseMirror') as HTMLElement | null)?.focus();
+      (mark.closest('.ProseMirror[contenteditable="true"]') as HTMLElement | null)?.focus();
       document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
     },
     { from, to },

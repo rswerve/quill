@@ -34,7 +34,7 @@ async function enableSuggesting(page: Page) {
 // the hard break without selecting whole paragraph boundaries.
 async function selectAcrossBreak(page: Page) {
   await page.evaluate(() => {
-    const paragraph = document.querySelector('.ProseMirror p');
+    const paragraph = document.querySelector('.ProseMirror[contenteditable="true"] p');
     if (!paragraph) throw new Error('no paragraph');
     const oneNode = paragraph.childNodes[0]; // text "one"
     const twoNode = paragraph.childNodes[2]; // text "two" (childNodes[1] is <br>)
@@ -108,7 +108,7 @@ async function seedSingleLine(page: Page) {
 // under headless keyboard nav is not what this UI test is about.
 async function breakState(page: Page): Promise<{ breaks: number; text: string }> {
   return page.evaluate(() => {
-    const pm = document.querySelector('.ProseMirror');
+    const pm = document.querySelector('.ProseMirror[contenteditable="true"]');
     if (!pm) throw new Error('no editor');
     return {
       breaks: pm.querySelectorAll('br:not(.ProseMirror-trailingBreak)').length,

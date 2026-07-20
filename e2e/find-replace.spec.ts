@@ -8,10 +8,11 @@
 import { test, expect } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
+import { activeEditor } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
-  const editor = page.locator('.ProseMirror');
+  const editor = activeEditor(page);
   await editor.waitFor({ timeout: 5000 });
   await editor.click();
   await expect(editor).toBeFocused();
@@ -48,7 +49,7 @@ test.describe('Find & replace', () => {
     await openFindBar(page);
     await page.locator('.find-bar-input').first().fill('the');
 
-    await expect(page.locator('.ProseMirror .find-match')).toHaveCount(2);
+    await expect(activeEditor(page).locator('.find-match')).toHaveCount(2);
     await expect(page.locator('.find-bar-count')).toHaveText('1 of 2');
   });
 
@@ -152,9 +153,9 @@ test.describe('Find & replace', () => {
     await editor.pressSequentially('find me find me');
     await openFindBar(page);
     await page.locator('.find-bar-input').first().fill('find');
-    await expect(page.locator('.ProseMirror .find-match')).toHaveCount(2);
+    await expect(activeEditor(page).locator('.find-match')).toHaveCount(2);
 
     await page.keyboard.press('Escape');
-    await expect(page.locator('.ProseMirror .find-match')).toHaveCount(0);
+    await expect(activeEditor(page).locator('.find-match')).toHaveCount(0);
   });
 });
