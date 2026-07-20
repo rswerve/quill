@@ -6,6 +6,7 @@ import { structuralFingerprint } from './structuralFingerprint';
 import { BLOCK_TRACK_TYPES } from '../extensions/BlockTrack';
 import { isReviewMarkName } from './canonicalDocument';
 import { structuralOpShapeValid } from './structuralUnionIndex';
+import { structuralContentConserved } from './structuralContentConservation';
 import { partitionStructuralRecords } from './structuralRecordValidation';
 
 const TRACKABLE = new Set<string>(BLOCK_TRACK_TYPES);
@@ -145,6 +146,12 @@ function validateRecord(
   // The source/proposed roots must be a shape the declared op could have minted.
   const sourceNodes = range.blockPositions.map((pos) => sourceDoc.nodeAt(pos) as PMNode);
   if (!structuralOpShapeValid(record.op, sourceNodes, proposed)) return null;
+
+  // Beyond shape: the proposed must PRESERVE the source's semantic inline content under the
+  // op's pure-reflow seam policy (whitespace-normalized, marks/atoms load-bearing). This
+  // quarantines a shape-valid but tampered/corrupted proposed that replaces content —
+  // otherwise a card labelled e.g. "Merge paragraphs" could secretly swap content on accept.
+  if (!structuralContentConserved(record.op, sourceNodes, proposed)) return null;
 
   // The proposed fragment must be valid as exact siblings at the parent/index,
   // so `tr.insert` never wraps or restructures it (e.g. a bare listItem).

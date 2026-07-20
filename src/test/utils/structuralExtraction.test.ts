@@ -184,6 +184,37 @@ describe('extractStructuralRecords', () => {
     expect(topOps(rebuilt)).toEqual(topOps(reviewDoc));
   });
 
+  it('quarantines a shape-valid but content-REPLACING merge/split at reconstruction', () => {
+    const source = docFrom([paragraph('A'), paragraph('B'), paragraph('tail')]);
+    const tamperedMerge: StructuralSuggestionRecord = {
+      changeId: 'm1',
+      author: 'a',
+      createdAt: '2026-01-01T00:00:00Z',
+      op: { kind: 'mergeParagraphs' },
+      anchor: { parentPath: [], childIndex: 0, childCount: 2 },
+      sourceFingerprint: fingerprintRange(source, 0, 2),
+      proposed: [paragraph('REPLACED')], // 1 paragraph = shape-valid, but not a reflow of A + B
+    };
+    const merge = reconstructBlockUnions(source, [tamperedMerge], serialize);
+    expect(merge.restored).toEqual([]);
+    expect(merge.quarantined).toEqual([tamperedMerge]);
+    expect(topOps(merge.doc)).toEqual([null, null, null]); // fail-safe: clean source, no union
+
+    const splitSource = docFrom([paragraph('alpha beta'), paragraph('tail')]);
+    const tamperedSplit: StructuralSuggestionRecord = {
+      changeId: 's1',
+      author: 'a',
+      createdAt: '2026-01-01T00:00:00Z',
+      op: { kind: 'splitParagraph' },
+      anchor: { parentPath: [], childIndex: 0, childCount: 1 },
+      sourceFingerprint: fingerprintRange(splitSource, 0, 1),
+      proposed: [paragraph('EVIL'), paragraph('PAYLOAD')],
+    };
+    const split = reconstructBlockUnions(splitSource, [tamperedSplit], serialize);
+    expect(split.restored).toEqual([]);
+    expect(split.quarantined).toEqual([tamperedSplit]);
+  });
+
   it('skips a change with no matching metadata and an incomplete union', () => {
     // A union missing its insert branch, and a complete one lacking metadata.
     const reviewDoc = docFrom([
