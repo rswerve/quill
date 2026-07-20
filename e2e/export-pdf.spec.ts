@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page, Locator } from '@playwright/test';
 import { expectEditorHtml, expectSelectionText } from './helpers/deterministicWaits';
 import { activeEditor, activeTabHost } from './helpers/memoryTauri';

@@ -3,7 +3,7 @@
  * the independent flat list and its gutter navigation. No annotation card may
  * extend the document's own scroll range.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
 import { activeEditor } from './helpers/memoryTauri';

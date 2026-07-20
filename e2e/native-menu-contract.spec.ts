@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 import { activeEditor, setupMemoryTauri } from './helpers/memoryTauri';
 
 const OPEN_PATH = '/docs/native-open.md';

@@ -25,8 +25,14 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ['**/src-tauri/**'],
+      // 3. keep backend and generated test artifacts from hot-reloading the
+      // desktop app (coverage emits thousands of HTML files after a run).
+      ignored: [
+        '**/src-tauri/**',
+        '**/coverage/**',
+        '**/playwright-report/**',
+        '**/test-results/**',
+      ],
     },
   },
 }));

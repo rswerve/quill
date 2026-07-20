@@ -23,7 +23,12 @@ export default defineConfig({
       ],
     },
     watch: {
-      ignored: ['**/src-tauri/**'],
+      ignored: [
+        '**/src-tauri/**',
+        '**/coverage/**',
+        '**/playwright-report/**',
+        '**/test-results/**',
+      ],
     },
   },
 });

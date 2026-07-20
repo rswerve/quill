@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 import { activeTabHost, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
 
 const DOC_PATH = '/tmp/comment-history.md';

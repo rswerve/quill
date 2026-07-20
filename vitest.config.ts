@@ -11,10 +11,10 @@ export default defineConfig({
     // specs and are excluded by this include allowlist.
     include: ['src/test/**/*.test.{ts,tsx}'],
     coverage: {
-      provider: 'v8',
-      reporter: ['text', 'lcov'],
+      provider: 'custom',
+      customProviderModule: 'vitest-monocart-coverage',
       include: ['src/**/*.ts', 'src/**/*.tsx'],
-      exclude: ['src/main.tsx', 'src/vite-env.d.ts'],
+      exclude: ['src/main.tsx', 'src/vite-env.d.ts', 'src/test/**', 'src/types/**'],
     },
   },
 });
