@@ -75,6 +75,9 @@ const structuralEdit = (
 
 const textEdit = (find: string, replace: string): QuillEdit => ({ find, replace });
 
+/** A merge edit: a find SPANNING the adjacent paragraphs to combine (single \n at each break). */
+const mergeEdit = (find: string): QuillStructuralEdit => ({ find, structural: { merge: true } });
+
 /** A deterministic id source `${prefix}-1`, `${prefix}-2`, … (fresh per call). */
 function seqIds(prefix: string): () => string {
   let n = 0;
@@ -385,6 +388,56 @@ describe('structuralBatchDispatch', () => {
     expect(ids.has('mint-2')).toBe(true);
     expect(ids.has('mint-1')).toBe(false); // the failed candidate's id was NOT reused
     expect(out.suggestionIds).toEqual(['mint-2']);
+  });
+});
+
+describe('structuralBatchDispatch — V2 merge', () => {
+  it('lands a two-paragraph merge as a K→1 union', () => {
+    const editor = makeEditor('First para\n\nSecond para');
+    const out = structuralBatchDispatch([mergeEdit('First para\nSecond para')], baseDeps(editor));
+    expect(out.results[0].outcome).toMatchObject({
+      kind: 'structural',
+      status: 'minted',
+      changeId: 'mint-1',
+    });
+    expect(insertBranchText(editor.state.doc, 'mint-1')).toBe('First para Second para');
+    expect(retainedRecords(editor.state).get('mint-1')?.op).toEqual({ kind: 'mergeParagraphs' });
+    expect(out.suggestionIds).toEqual(['mint-1']);
+  });
+
+  it('an inline edit touching only the MIDDLE block of a merge conflicts (both rejected)', () => {
+    const editor = makeEditor('One\n\nTwo\n\nThree');
+    const out = structuralBatchDispatch(
+      [mergeEdit('One\nTwo\nThree'), textEdit('Two', 'TWO')],
+      baseDeps(editor),
+    );
+    expect(out.results[0].outcome).toMatchObject({
+      kind: 'structural',
+      status: 'cross-axis-conflict',
+    });
+    expect(out.results[1].outcome).toMatchObject({ kind: 'inline', status: 'cross-axis-conflict' });
+    // Nothing minted; the document is byte-identical.
+    expect(unionChangeIds(editor.state.doc).size).toBe(0);
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+  });
+
+  it('lands two disjoint merges together (back-to-front dispatch keeps positions valid)', () => {
+    const editor = makeEditor('A one\n\nA two\n\nGap\n\nB one\n\nB two');
+    const out = structuralBatchDispatch(
+      [mergeEdit('A one\nA two'), mergeEdit('B one\nB two')],
+      baseDeps(editor),
+    );
+    expect(out.results[0].outcome).toMatchObject({ status: 'minted' });
+    expect(out.results[1].outcome).toMatchObject({ status: 'minted' });
+    expect(out.suggestionIds).toHaveLength(2);
+    const inserts: string[] = [];
+    editor.state.doc.descendants((node) => {
+      const blockTrack = node.attrs?.blockTrack as { op?: string } | undefined;
+      if (blockTrack?.op === 'insert') inserts.push(node.textContent);
+    });
+    expect(inserts.sort()).toEqual(['A one A two', 'B one B two']);
+    // The untouched middle paragraph survives between the two unions.
+    expect(unionChangeIds(editor.state.doc).size).toBe(2);
   });
 });
 

@@ -162,16 +162,19 @@ describe('buildPrompt document-scale edit protocol', () => {
     expect(prompt).toContain('UNIQUELY IDENTIFIES ONE block');
     expect(prompt).toContain('REQUIRES a "level"');
     expect(prompt).toContain('carries NEITHER "replace" NOR "format"');
-    // Block-type changes span heading↔paragraph AND flat list↔paragraph, plus splitting.
+    // Block-type changes span heading↔paragraph AND flat list↔paragraph, plus split + merge.
     expect(prompt).toContain('splitting a paragraph into paragraphs');
     // Matching text in ONE item flattens the WHOLE list — the model must know one find suffices.
     expect(prompt).toContain('flattens the WHOLE list');
     // The split grammar: "split" (2+ pieces) instead of "to", pieces from the paragraph's text.
     expect(prompt).toContain('"structural":{"split":["First point.","Second point."]}');
-    expect(prompt).toContain('EXACTLY ONE of "to" or "split"');
-    // Honest scope: nested/multi-block list items, list-kind changes, and merging remain unavailable.
+    // The merge grammar: {"merge":true} with a find SPANNING the paragraphs to combine.
+    expect(prompt).toContain('"structural":{"merge":true}');
+    expect(prompt).toContain('EXACTLY ONE of "to", "split", or "merge"');
+    // Honest scope: nested/multi-block list items, list-kind changes, cross-block merge unavailable.
     expect(prompt).toContain('nested or hold more than one block');
     expect(prompt).toContain("changing a list's kind");
+    expect(prompt).toContain('merging across a heading or list');
     expect(prompt).toContain('are NOT available yet');
   });
 

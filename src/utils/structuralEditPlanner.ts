@@ -11,9 +11,11 @@ import { locateEditTextMatches } from './editTextProjection';
  * round-trip validation before cross-axis conflict detection and mint dispatch.
  * This module never touches live coordinates and never dispatches.
  *
- * This executes heading↔paragraph and FLAT-list↔paragraph (any item count, each item
- * one paragraph); a nested/composite-item list, a list-type change, or a heading-level
- * change is planned as a typed `unsupported-op`, so those proposals are refused honestly.
+ * This executes heading↔paragraph, FLAT-list↔paragraph (any item count, each item one
+ * paragraph), splitting a paragraph (`{split:[…]}`), and merging adjacent paragraphs
+ * (`{merge:true}` with a find that SPANS the run). A nested/composite-item list, a list-type
+ * change, a heading-level change, or a merge run containing a non-paragraph is planned as a
+ * typed `unsupported-op`, so those proposals are refused honestly.
  */
 
 export type StructuralPlanStatus =
@@ -44,13 +46,15 @@ export interface StructuralPlanResult {
 /** A located, executable structural edit — positions in the planned doc's coords. */
 export interface PlannedStructuralEdit {
   op: StructuralOp;
-  /** A position strictly inside the target top-level textblock. */
+  /** A position strictly inside the FIRST target top-level block. */
   sourceTargetPos: number;
-  /** The target block's node range [from, to). */
+  /** The target block(s) node range [from, to) — spans K blocks for a merge. */
   sourceTarget: { from: number; to: number };
   editIndex: number;
   /** For `splitParagraph`: the piece texts to thread to the mint request (validated). */
   splitParts?: readonly string[];
+  /** For `mergeParagraphs`: the number of adjacent source blocks the find spans (≥2). */
+  mergeCount?: number;
 }
 
 const VALID_TARGETS = new Set(['paragraph', 'heading', 'bulletList', 'orderedList', 'taskList']);
@@ -104,6 +108,66 @@ function locateBlock(
   if (blocks.size === 0) return 'text-not-found';
   if (blocks.size > 1) return 'ambiguous-target';
   return [...blocks.values()][0];
+}
+
+/** The top-level block whose content range contains `pos`, with its index and node range. */
+function topLevelBlockAt(
+  doc: ProseMirrorNode,
+  pos: number,
+): { node: ProseMirrorNode; index: number; from: number; to: number } | null {
+  let found: { node: ProseMirrorNode; index: number; from: number; to: number } | null = null;
+  doc.forEach((node, offset, index) => {
+    if (found) return;
+    const contentFrom = offset + 1;
+    const contentTo = offset + node.nodeSize - 1;
+    if (pos >= contentFrom && pos <= contentTo) {
+      found = { node, index, from: offset, to: offset + node.nodeSize };
+    }
+  });
+  return found;
+}
+
+/**
+ * Locate the contiguous run of top-level blocks a MERGE find spans. The find deliberately
+ * CROSSES ≥1 block boundary (that crossing is the merge signal, the opposite of `locateBlock`'s
+ * cross-block refusal). Every match must resolve to the SAME complete top-level range: a match
+ * resolving to a different range — or to a single block — makes the whole request `ambiguous`
+ * rather than silently choosing a valid-looking merge. The resolved run must be ≥2 blocks, all
+ * NON-EMPTY paragraphs (an empty paragraph can't be authorized by a cross-block quote and
+ * canonical Markdown may drop it, so the union could not reload) → otherwise `unsupported-op`.
+ */
+function locateBlockRun(
+  doc: ProseMirrorNode,
+  find: string,
+):
+  | { nodes: ProseMirrorNode[]; from: number; to: number; startIndex: number }
+  | 'text-not-found'
+  | 'ambiguous-target'
+  | 'unsupported-op' {
+  const matches = locateEditTextMatches(doc, 0, doc.content.size, find);
+  if (matches.length === 0) return 'text-not-found';
+  const runs = new Map<string, { startIndex: number; endIndex: number }>();
+  for (const match of matches) {
+    const start = topLevelBlockAt(doc, match.from);
+    const end = topLevelBlockAt(doc, Math.max(match.from, match.to - 1));
+    if (!start || !end) return 'text-not-found';
+    runs.set(`${start.index}:${end.index}`, { startIndex: start.index, endIndex: end.index });
+  }
+  if (runs.size > 1) return 'ambiguous-target';
+  const { startIndex, endIndex } = [...runs.values()][0];
+  const nodes: ProseMirrorNode[] = [];
+  for (let i = startIndex; i <= endIndex; i += 1) nodes.push(doc.child(i));
+  if (
+    nodes.length < 2 ||
+    !nodes.every((node) => node.type.name === 'paragraph' && node.content.size > 0)
+  ) {
+    return 'unsupported-op';
+  }
+  let from = 0;
+  for (let i = 0; i < startIndex; i += 1) from += doc.child(i).nodeSize;
+  let to = from;
+  for (let i = startIndex; i <= endIndex; i += 1) to += doc.child(i).nodeSize;
+  return { nodes, from, to, startIndex };
 }
 
 type OpDerivation = StructuralOp | 'unsupported-op' | 'already-target';
@@ -200,13 +264,19 @@ function shapeRefusal(edit: QuillStructuralEdit): StructuralPlanReason | null {
   }
   const structural = edit.structural as Record<string, unknown>;
   // XOR by KEY PRESENCE, not value: {to, split: undefined} declares BOTH keys and is malformed,
-  // matching the batch classifier's hasOwn contract.
+  // matching the batch classifier's hasOwn contract. Exactly one of to / split / merge.
   const hasSplit = Object.prototype.hasOwnProperty.call(structural, 'split');
   const hasTo = Object.prototype.hasOwnProperty.call(structural, 'to');
-  if (hasSplit === hasTo) return 'invalid-edit'; // exactly one of split / to
-  // `level` is also checked by KEY PRESENCE: a declared level key on split or a non-heading
-  // target is contradictory even when its value is undefined.
+  const hasMerge = Object.prototype.hasOwnProperty.call(structural, 'merge');
+  if ((hasSplit ? 1 : 0) + (hasTo ? 1 : 0) + (hasMerge ? 1 : 0) !== 1) return 'invalid-edit';
+  // `level` is also checked by KEY PRESENCE: a declared level key on split, merge, or a
+  // non-heading target is contradictory even when its value is undefined.
   const hasLevel = Object.prototype.hasOwnProperty.call(structural, 'level');
+  if (hasMerge) {
+    // Merge is a bare `true`; a level key (or any non-true value) is contradictory.
+    if (structural.merge !== true || hasLevel) return 'invalid-edit';
+    return null;
+  }
   if (hasSplit) {
     if (!isValidSplitParts(structural.split) || hasLevel) return 'invalid-edit';
     return null;
@@ -255,6 +325,25 @@ export function planStructuralEdits(
     const shape = shapeRefusal(edit);
     if (shape) {
       results.push({ edit, status: refusalStatus(shape), reason: shape });
+      return;
+    }
+
+    const structuralShape = edit.structural as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(structuralShape, 'merge')) {
+      // MERGE: the find SPANS a contiguous run of ≥2 adjacent non-empty paragraphs.
+      const run = locateBlockRun(doc, edit.find);
+      if (typeof run === 'string') {
+        results.push({ edit, status: refusalStatus(run), reason: run });
+        return;
+      }
+      placed.push({
+        op: { kind: 'mergeParagraphs' },
+        sourceTargetPos: run.from + 1, // strictly inside the FIRST source block
+        sourceTarget: { from: run.from, to: run.to },
+        editIndex,
+        mergeCount: run.nodes.length,
+      });
+      results.push({ edit, status: 'planned' });
       return;
     }
 

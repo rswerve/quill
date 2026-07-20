@@ -1225,6 +1225,203 @@ describe('compileStructuralMint — V2 splitParagraph', () => {
   });
 });
 
+describe('compileStructuralMint — V2 mergeParagraphs', () => {
+  const mergeReq = (targetPos: number, mergeCount: number) =>
+    req({ op: { kind: 'mergeParagraphs' }, targetPos, mergeCount });
+
+  it('mints a K→1 union: every source flagged delete, one merged paragraph flagged insert', () => {
+    editor = makeEditor('<p>alpha</p><p>beta</p><p>gamma</p>');
+    const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 3)));
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.childCount).toBe(4); // 3 deletes + 1 insert
+    expect([0, 1, 2].map((i) => doc.child(i).attrs.blockTrack?.op)).toEqual([
+      'delete',
+      'delete',
+      'delete',
+    ]);
+    expect([0, 1, 2].map((i) => doc.child(i).textContent)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(doc.child(3).attrs.blockTrack).toEqual({ changeId: 'c1', op: 'insert' });
+    expect(doc.child(3).textContent).toBe('alpha beta gamma');
+    const accepted = projectBlockUnions(doc, 'accepted').doc;
+    expect(accepted.childCount).toBe(1);
+    expect(accepted.child(0).textContent).toBe('alpha beta gamma');
+    expect(projectBlockUnions(doc, 'source').doc.childCount).toBe(3);
+  });
+
+  it('merges the MINIMUM two adjacent paragraphs', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)));
+    editor.view.dispatch(r.tr);
+    expect(editor.state.doc.child(2).textContent).toBe('one two');
+  });
+
+  it('preserves marks and a hard break across the merge seams', () => {
+    editor = makeEditor('<p>a <strong>bold</strong></p><p>c<br>d</p>');
+    const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)));
+    editor.view.dispatch(r.tr);
+    const merged = editor.state.doc.child(2);
+    let hasBold = false;
+    let hasBreak = false;
+    merged.descendants((node) => {
+      if (node.isText && node.marks.some((mark) => mark.type.name === 'bold')) hasBold = true;
+      if (node.type.name === 'hardBreak') hasBreak = true;
+    });
+    expect(hasBold).toBe(true);
+    expect(hasBreak).toBe(true);
+  });
+
+  it('flags EVERY source root (no first/last-root truncation) — a 4-block merge', () => {
+    editor = makeEditor('<p>a</p><p>b</p><p>c</p><p>d</p>');
+    const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 4)));
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(doc.childCount).toBe(5);
+    expect([0, 1, 2, 3].map((i) => doc.child(i).attrs.blockTrack?.op)).toEqual([
+      'delete',
+      'delete',
+      'delete',
+      'delete',
+    ]);
+    expect(doc.child(4).textContent).toBe('a b c d');
+  });
+
+  it('refuses a merge with an EMPTY source paragraph (unsupported-shape)', () => {
+    editor = makeEditor('<p>x</p>');
+    const doc = editor.schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'one' }] },
+        { type: 'paragraph' },
+      ],
+    });
+    const state = EditorState.create({ schema: editor.schema, doc, plugins: editor.state.plugins });
+    expect(compileStructuralMint(state, mergeReq(1, 2))).toEqual({
+      ok: false,
+      reason: 'unsupported-shape',
+    });
+  });
+
+  it('refuses a foreign review mark in a MIDDLE source block (annotated-footprint)', () => {
+    editor = makeEditor('<p>one</p><p>two</p><p>three</p>');
+    const twoStart = posInBlock(1);
+    editor
+      .chain()
+      .setTextSelection({ from: twoStart, to: twoStart + 3 })
+      .setComment('foreign')
+      .run();
+    expect(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 3))).toEqual({
+      ok: false,
+      reason: 'annotated-footprint',
+    });
+  });
+
+  it('refuses when a source block already carries a union (overlapping-structural)', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    // Pre-flag the second paragraph with an existing blockTrack identity.
+    const tr = editor.state.tr.setNodeMarkup(posInBlock(1) - 1, undefined, {
+      ...editor.state.doc.child(1).attrs,
+      blockTrack: { changeId: 'existing', op: 'delete' },
+    });
+    tr.setMeta(SKIP_TRACKING_META, true);
+    editor.view.dispatch(tr);
+    expect(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)).ok).toBe(false);
+  });
+
+  it.each([
+    ['missing mergeCount', undefined],
+    ['fractional mergeCount', 2.5],
+    ['mergeCount below 2', 1],
+  ])('refuses %s as invalid-metadata', (_label, mergeCount) => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'mergeParagraphs' },
+          targetPos: posInBlock(0),
+          mergeCount: mergeCount as number,
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
+  it('refuses splitParts alongside mergeCount (invalid-metadata)', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'mergeParagraphs' },
+          targetPos: posInBlock(0),
+          mergeCount: 2,
+          splitParts: ['a', 'b'],
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'invalid-metadata' });
+  });
+
+  it('is one undo step: Undo restores the K paragraphs, Redo restores the merge union', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    const r = expectOk(compileStructuralMint(editor.state, mergeReq(posInBlock(0), 2)));
+    editor.view.dispatch(r.tr);
+    expect(editor.state.doc.childCount).toBe(3);
+    editor.commands.undo();
+    expect(editor.state.doc.childCount).toBe(2);
+    expect(editor.state.doc.child(0).attrs.blockTrack).toBeNull();
+    editor.commands.redo();
+    expect(editor.state.doc.childCount).toBe(3);
+    expect(activeRecords(editor.state).map((rec) => rec.changeId)).toEqual(['c1']);
+  });
+
+  it('tolerates an origin comment contained in ONE source block (Option-B carveout)', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    const oneStart = posInBlock(0);
+    editor
+      .chain()
+      .setTextSelection({ from: oneStart, to: oneStart + 3 })
+      .setComment('cm1')
+      .run();
+    const r = expectOk(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'mergeParagraphs' },
+          targetPos: posInBlock(0),
+          mergeCount: 2,
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    );
+    editor.view.dispatch(r.tr);
+    const doc = editor.state.doc;
+    expect(blockHasComment(doc.child(0), 'cm1')).toBe(true); // kept on the delete branch
+    expect(blockHasComment(doc.child(2), 'cm1')).toBe(false); // stripped from the merged proposal
+    expect(activeRecords(editor.state)[0].originCommentId).toBe('cm1');
+  });
+
+  it('refuses an origin comment SPANNING two source blocks (non-contiguous footprint)', () => {
+    editor = makeEditor('<p>one</p><p>two</p>');
+    // A comment covering "one" and "two" leaves a gap at the paragraph boundary.
+    editor
+      .chain()
+      .setTextSelection({ from: posInBlock(0), to: posInBlock(1) + 3 })
+      .setComment('cm1')
+      .run();
+    expect(
+      compileStructuralMint(
+        editor.state,
+        req({
+          op: { kind: 'mergeParagraphs' },
+          targetPos: posInBlock(0),
+          mergeCount: 2,
+          origin: { kind: 'comment', id: 'cm1' },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: 'annotated-footprint' });
+  });
+});
+
 describe('compileStructuralMint — commonBlockAttrs style preservation (test-only paragraph attr)', () => {
   // Quill paragraphs carry only `blockTrack` in production, so commonBlockAttrs' refusal is
   // unreachable there (defense-in-depth). This adds a TEST-ONLY global paragraph attr to PIN

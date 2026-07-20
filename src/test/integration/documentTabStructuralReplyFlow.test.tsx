@@ -539,4 +539,59 @@ describe('DocumentTab — Claude proposes a structural change through the real r
     expect(topLevelOfType(doc, 'bulletList')).toBeNull();
     expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
   });
+
+  it('mints and ACCEPTS a two-paragraph MERGE end to end (the K→1 construction)', async () => {
+    // Two paragraphs loaded from the file; comment on the first and ask Claude to merge them.
+    const mounted = await mountReplyTab(undefined, 'First para.\n\nSecond para.');
+    const editor = mounted.getHandle().getEditor()!;
+    expect(editor.state.doc.childCount).toBe(2);
+    let firstFrom = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (firstFrom < 0 && node.isText && node.text?.startsWith('First')) firstFrom = pos;
+    });
+    expect(firstFrom).toBeGreaterThan(0);
+    await askClaudeOn(mounted, firstFrom, firstFrom + 5, 'merge these two paragraphs');
+    await waitFor(() => expect(mock.dispatchers.size).toBe(1));
+
+    // The merge find SPANS both paragraphs (single \n at the break).
+    streamEdits(mock.latestToken(), [
+      { find: 'First para.\nSecond para.', structural: { merge: true } },
+    ]);
+
+    await waitFor(() => expect(retainedRecords(editor.state).size).toBe(1));
+    const [changeId, record] = [...retainedRecords(editor.state).entries()][0];
+    expect(record.op).toEqual({ kind: 'mergeParagraphs' });
+
+    // The union is TWO source paragraphs flagged delete + ONE merged paragraph flagged insert.
+    const insert = blockTrackNode(editor.state.doc, changeId, 'insert');
+    expect(insert?.type.name).toBe('paragraph');
+    expect(insert?.textContent).toBe('First para. Second para.');
+
+    await waitFor(() => {
+      const comment = mounted.getHandle().getWorkspaceSnapshot()!.comments[0];
+      expect(aiReplyOf(comment)?.suggestionIds).toEqual([changeId]);
+    });
+
+    const card = await waitFor(() => {
+      const el = mounted.container.querySelector(
+        `[data-card-id="${changeId}"][data-suggestion-kind="structural"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(card.textContent).toContain('Merge paragraphs');
+
+    act(() => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Accept' }));
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector(`[data-card-id="${changeId}"]`)).toBeNull();
+    });
+    const doc = editor.state.doc;
+    expect(unionChangeIds(doc).size).toBe(0);
+    expect(doc.childCount).toBe(1); // the two paragraphs collapsed to one
+    expect(doc.child(0).textContent).toBe('First para. Second para.');
+    expect(mounted.getHandle().getWorkspaceSnapshot()!.comments[0].resolved).toBe(true);
+  });
 });

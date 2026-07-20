@@ -303,8 +303,10 @@ function dispatchStructuralMints(
       author: config.authorID,
       createdAt,
       origin: config.origin,
-      // splitParagraph carries its (planner-validated) parts; every other op carries none.
+      // splitParagraph carries its (planner-validated) parts, mergeParagraphs its block count;
+      // every other op carries neither.
       ...(candidate.placed.splitParts ? { splitParts: candidate.placed.splitParts } : {}),
+      ...(candidate.placed.mergeCount ? { mergeCount: candidate.placed.mergeCount } : {}),
     });
     if (mint.ok) {
       editor.view.dispatch(mint.tr);

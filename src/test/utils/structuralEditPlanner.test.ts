@@ -350,10 +350,60 @@ describe('planStructuralEdits — V2 split', () => {
       label: 'a present level KEY (undefined value) alongside split',
       structural: { split: ['a', 'b'], level: undefined },
     },
+    { label: 'to and merge together', structural: { to: 'paragraph', merge: true } },
+    { label: 'split and merge together', structural: { split: ['a', 'b'], merge: true } },
+    {
+      label: 'a present merge KEY alongside to',
+      structural: { to: 'paragraph', merge: undefined },
+    },
+    { label: 'merge with a non-true value', structural: { merge: false } },
+    { label: 'a level alongside merge', structural: { merge: true, level: 2 } },
   ])('refuses a malformed structural shape ($label) as invalid-edit', ({ structural }) => {
     const doc = docOf([para('a b')]);
     const { placed, results } = planStructuralEdits(doc, [edit('a b', structural)]);
     expect(placed).toHaveLength(0);
     expect(results[0].reason).toBe('invalid-edit');
+  });
+});
+
+describe('planStructuralEdits — V2 merge', () => {
+  it('plans mergeParagraphs from a find spanning two adjacent paragraphs, threading the count', () => {
+    const { placed, results } = planStructuralEdits(docOf([para('one'), para('two')]), [
+      edit('one\ntwo', { merge: true }),
+    ]);
+    expect(results[0].status).toBe('planned');
+    expect(placed[0].op).toEqual({ kind: 'mergeParagraphs' });
+    expect(placed[0].mergeCount).toBe(2);
+    // sourceTarget spans BOTH blocks (from block 0 start to block 1 end).
+    expect(placed[0].sourceTarget.from).toBe(0);
+  });
+
+  it('plans a three-paragraph merge, count 3', () => {
+    const { placed } = planStructuralEdits(docOf([para('a'), para('b'), para('c')]), [
+      edit('a\nb\nc', { merge: true }),
+    ]);
+    expect(placed[0].mergeCount).toBe(3);
+  });
+
+  it('refuses a merge whose run includes a NON-paragraph (heading) as unsupported-op', () => {
+    const { results } = planStructuralEdits(docOf([para('one'), heading(1, 'H'), para('two')]), [
+      edit('one\nH\ntwo', { merge: true }),
+    ]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  });
+
+  it('refuses a merge find that stays within a SINGLE block (needs ≥2 — unsupported-op)', () => {
+    const { results } = planStructuralEdits(docOf([para('one two'), para('other')]), [
+      edit('one two', { merge: true }),
+    ]);
+    expect(results[0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-op' });
+  });
+
+  it('refuses a merge find that resolves to TWO distinct runs as ambiguous', () => {
+    const { results } = planStructuralEdits(
+      docOf([para('x'), para('y'), para('z'), para('x'), para('y')]),
+      [edit('x\ny', { merge: true })],
+    );
+    expect(results[0]).toMatchObject({ status: 'ambiguous', reason: 'ambiguous-target' });
   });
 });

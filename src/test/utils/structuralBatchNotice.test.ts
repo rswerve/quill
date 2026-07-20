@@ -48,7 +48,8 @@ describe('formatBatchResultNotice', () => {
       entry(0, { kind: 'structural', status: 'plan-refused', reason: 'unsupported-op' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'Change a list kind' }]);
-    expect(notice).toContain('splitting a paragraph are supported');
+    // Merge is now in the supported set; splitting + merging adjacent paragraphs both listed.
+    expect(notice).toContain('merging adjacent paragraphs are supported');
     // Nested/multi-block items are the real unsupported list shape now, not multi-item lists.
     expect(notice).toContain('nest or hold more than one block');
     expect(notice).not.toContain('multi-item list');
@@ -63,7 +64,7 @@ describe('formatBatchResultNotice', () => {
       entry(0, { kind: 'structural', status: 'mint-refused', reason: 'unsupported-shape' }),
     ];
     const notice = formatBatchResultNotice(results, [{ find: 'x' }]);
-    expect(notice).toContain('splitting a paragraph are supported');
+    expect(notice).toContain('merging adjacent paragraphs are supported');
     expect(notice).toContain('nest or hold more than one block');
   });
 

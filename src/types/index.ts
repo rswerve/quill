@@ -383,6 +383,8 @@ export type StructuralEditTarget = 'paragraph' | 'heading' | StructuralListType;
  *  - RETYPE: convert the `find` block to `to` (a paragraph, a heading of `level`, or a list).
  *  - SPLIT: split the `find` PARAGRAPH into the `split` pieces (≥2), each a new paragraph;
  *    the pieces must be the paragraph's own text re-bounded at whitespace (a pure reflow).
+ *  - MERGE: `merge: true` with a `find` that SPANS ≥2 adjacent paragraphs joins them into
+ *    one paragraph (the mirror of split); the spanned run must be contiguous paragraphs.
  * Lands as a reviewable block union, never applied directly. Parsed from the same
  * quill-edits block as text/format edits but planned + dispatched on a separate path.
  */
@@ -394,7 +396,8 @@ export interface QuillStructuralEdit {
         /** Required for `to: 'heading'`; must be absent otherwise (else invalid-level). */
         level?: HeadingLevel;
       }
-    | { split: string[] };
+    | { split: string[] }
+    | { merge: true };
 }
 
 /** One edit inside a quill-edits block: a text replacement XOR a format op. */

@@ -33,29 +33,26 @@ import {
 } from '../extensions/trackChangesMeta';
 
 /**
- * Deterministic compiler for a single block-type structural mint: heading ↔ paragraph,
- * flat list → paragraph (any item count, bulleted / numbered / task), and paragraph →
- * single-item list. It is side-effect-free: it reads an {@link EditorState}
- * and returns a {@link Transaction} it never dispatches, so it is safe to run
- * speculatively (e.g. inside a future batch planner) and to unit-test without a
- * live view. All identity and provenance is caller-supplied and immutable — the
+ * Deterministic compiler for a block-type structural mint: heading ↔ paragraph, flat list ↔
+ * paragraph (any item count, bulleted / numbered / task), paragraph split (1 → M), and
+ * paragraph merge (K → 1). It is side-effect-free: it reads an {@link EditorState} and returns
+ * a {@link Transaction} it never dispatches, so it is safe to run speculatively and to unit-test
+ * without a live view. All identity and provenance is caller-supplied and immutable — the
  * compiler never generates a change id, timestamp, or author.
  *
- * The produced transaction is the block-scale mirror of an inline replacement:
- * the source block is flagged `blockTrack: {changeId, op:'delete'}` and the
- * native-command result is inserted after it flagged `{changeId, op:'insert'}`,
- * with the canonical metadata record added in the same transaction. This is the
- * exact union shape `reconstructBlockUnions` rebuilds on load, so a mint round-
- * trips through save/reload unchanged. The transaction carries
- * {@link SKIP_TRACKING_META} (the union rides node attributes, not inline marks)
- * and a `{kind:'mint'}` {@link STRUCTURAL_BYPASS_META} so the freeze guard can
- * recognize it as authorized.
+ * The produced transaction is the block-scale mirror of an inline replacement: EVERY source
+ * root is flagged `blockTrack: {changeId, op:'delete'}` and the proposal(s) are inserted after
+ * the last source root flagged `{changeId, op:'insert'}`, with the canonical metadata record
+ * added in the same transaction — a union of K deletes + M inserts (1+1 retype, 1+M split,
+ * K+1 merge). This is the exact union shape `reconstructBlockUnions` rebuilds on load, so a mint
+ * round-trips through save/reload unchanged. The transaction carries {@link SKIP_TRACKING_META}
+ * (the union rides node attributes, not inline marks) and a `{kind:'mint'}`
+ * {@link STRUCTURAL_BYPASS_META} so the freeze guard can recognize it as authorized.
  *
- * V2 flattens a FLAT list of any item count — each item exactly one paragraph — into one
- * paragraph by joining the items' content (`isFlatParagraphList`); a nested/composite list
- * refuses (`unsupported-shape`, a later phase). The origin-comment carveout (mint slice 1b)
- * relaxes the annotation-free rule for the single origin comment; every other review mark in
- * the captured subtree refuses.
+ * The source root(s) resolve to a {@link TargetRange} — one block for retype/list/split, K
+ * adjacent paragraphs for a merge (the `mergeCount` request field). The origin-comment carveout
+ * (mint slice 1b) relaxes the annotation-free rule for ONE fully-contained origin comment; every
+ * other review mark anywhere in the footprint (any source root) refuses.
  */
 
 /** Caller-supplied provenance; discriminated so both origins cannot be set at once. */
@@ -63,7 +60,7 @@ export type StructuralMintOrigin = { kind: 'comment' | 'chat'; id: string };
 
 export interface StructuralMintRequest {
   op: StructuralOp;
-  /** A document position strictly inside the single target top-level textblock. */
+  /** A document position strictly inside the FIRST target top-level block. */
   targetPos: number;
   /** Immutable identity; must pass {@link canMintChangeId}. */
   changeId: string;
@@ -73,14 +70,21 @@ export interface StructuralMintRequest {
   createdAt: string;
   origin?: StructuralMintOrigin;
   /**
-   * `splitParagraph` REQUIRES this (the resulting piece texts, ≥2, each trimmed + nonempty);
-   * every other op FORBIDS it. Enforced at runtime by {@link splitPartsRefusal} BEFORE any
-   * document-dependent step — the request is built from untrusted classification, and every
-   * caller (the batch, tests) supplies a runtime `op`, so a compile-time discriminated union
-   * would only force value-defeating casts, not real safety. The compiler slices the LIVE
-   * source content at whitespace seams matching the parts — never caller-built nodes.
+   * `splitParagraph` REQUIRES this (the resulting piece texts, ≥2, each trimmed + nonempty) and
+   * FORBIDS `mergeCount`; every other op FORBIDS it. Enforced at runtime by
+   * {@link partsAndCountRefusal} BEFORE any document-dependent step — the request is built from
+   * untrusted classification, and every caller (the batch, tests) supplies a runtime `op`, so a
+   * compile-time discriminated union would only force value-defeating casts, not real safety.
+   * The compiler slices the LIVE source content at whitespace seams matching the parts.
    */
   splitParts?: readonly string[];
+  /**
+   * `mergeParagraphs` REQUIRES this (the number of adjacent source paragraphs to merge, an
+   * integer ≥2) and FORBIDS `splitParts`; every other op FORBIDS it. Same runtime-validated
+   * boundary as `splitParts`. The count is coordinate-independent, so it survives the batch's
+   * source→live target translation; the compiler gathers exactly this many top-level blocks.
+   */
+  mergeCount?: number;
 }
 
 export type StructuralMintRefusal =
@@ -104,18 +108,28 @@ function refuse(reason: StructuralMintRefusal): StructuralMintResult {
   return { ok: false, reason };
 }
 
-interface TargetBlock {
+interface TargetRoot {
   node: PMNode;
   from: number;
   to: number;
+}
+
+/**
+ * The source block(s) a mint operates on: ONE root for retype/list/split, K adjacent roots
+ * for a merge (the N→M generalization of the old single TargetBlock). `contentSelection` — the
+ * INLINE range a native 1→1 command selects (a textblock's own content, or a list's first
+ * nested textblock, since ProseMirror warns when a TextSelection endpoint is not inline) — is
+ * present ONLY for single-root ops; merge and split build their proposal directly, never via a
+ * native command.
+ */
+interface TargetRange {
+  roots: TargetRoot[];
+  /** Outer bounds: roots[0].from … roots[last].to. */
+  from: number;
+  to: number;
+  /** Top-level index of the FIRST root. */
   index: number;
-  /**
-   * The INLINE range a native conversion command selects. For a textblock it is the
-   * block's own content; for a list it is the FIRST nested textblock's content — an
-   * explicit inline range, because ProseMirror warns when a TextSelection endpoint is
-   * not an inline position (a list's own boundaries are not).
-   */
-  contentSelection: { from: number; to: number };
+  contentSelection?: { from: number; to: number };
 }
 
 const LIST_TYPES = new Set(['bulletList', 'orderedList', 'taskList']);
@@ -139,32 +153,48 @@ function firstTextblockContentRange(
 }
 
 /**
- * Resolve a position to the top-level block (depth 1) strictly containing it — generalized
- * from V1a's textblock-only resolution to also accept a list container, so list↔paragraph
- * conversions can target a top-level list. A boundary position (depth 0) or a block type
- * outside V1's scope (e.g. a blockquote) resolves to null.
+ * Resolve a position to a top-level target RANGE of `count` adjacent blocks starting at the
+ * block strictly containing `pos`. `count === 1` is the single-block case (retype / list ↔
+ * paragraph / split), keeping the native `contentSelection` (a list container is accepted, so a
+ * caret at depth 3 inside a list item resolves to its top-level list). `count > 1` (merge)
+ * gathers that many consecutive top-level blocks and omits contentSelection (construction path).
+ * A non-integer/boundary position, a non-integer/<1 count, a run that overruns the document, or
+ * a single block type outside scope (e.g. a blockquote) resolves to null.
  */
-function resolveTopLevelBlock(doc: PMNode, pos: number): TargetBlock | null {
-  // Guard the resolve boundary: a non-integer (NaN, fractional) `pos` slips past a
-  // bare range check but throws in `doc.resolve`, so reject it as target-not-found.
+function resolveTargetRange(doc: PMNode, pos: number, count: number): TargetRange | null {
+  // Guard the resolve boundary: a non-integer (NaN, fractional) `pos` slips past a bare range
+  // check but throws in `doc.resolve`, so reject it as target-not-found.
   if (!Number.isInteger(pos) || pos <= 0 || pos >= doc.content.size) return null;
+  if (!Number.isInteger(count) || count < 1) return null;
   const $pos = doc.resolve(pos);
-  // Only a boundary position (depth 0, between top-level blocks) is rejected. A position
-  // at ANY depth inside a block — a heading's text (depth 1) or a list item's paragraph
-  // text (depth 3) — resolves to its depth-1 ancestor, so a real caret inside a list works.
   if ($pos.depth < 1) return null;
-  const node = $pos.node(1);
+  const firstIndex = $pos.index(0);
+  if (firstIndex + count > doc.childCount) return null;
   const from = $pos.before(1);
-  const to = $pos.after(1);
-  const base = { node, from, to, index: $pos.index(0) };
-  if (node.isTextblock) {
-    return { ...base, contentSelection: { from: from + 1, to: to - 1 } };
+
+  if (count === 1) {
+    const node = $pos.node(1);
+    const to = $pos.after(1);
+    const base: TargetRange = { roots: [{ node, from, to }], from, to, index: firstIndex };
+    if (node.isTextblock) {
+      return { ...base, contentSelection: { from: from + 1, to: to - 1 } };
+    }
+    if (LIST_TYPES.has(node.type.name)) {
+      const contentSelection = firstTextblockContentRange(from, node);
+      return contentSelection ? { ...base, contentSelection } : null;
+    }
+    return null;
   }
-  if (LIST_TYPES.has(node.type.name)) {
-    const contentSelection = firstTextblockContentRange(from, node);
-    return contentSelection ? { ...base, contentSelection } : null;
+
+  // Merge: gather `count` consecutive top-level blocks; no native contentSelection.
+  const roots: TargetRoot[] = [];
+  let offset = from;
+  for (let i = firstIndex; i < firstIndex + count; i += 1) {
+    const child = doc.child(i);
+    roots.push({ node: child, from: offset, to: offset + child.nodeSize });
+    offset += child.nodeSize;
   }
-  return null;
+  return { roots, from, to: offset, index: firstIndex };
 }
 
 /**
@@ -188,32 +218,32 @@ function nativeCommandFor(schema: Schema, op: StructuralOp): Command | null {
       const itemType = schema.nodes[op.listType === 'taskList' ? 'taskItem' : 'listItem'];
       return itemType ? liftListItem(itemType) : null;
     }
-    // V2-2/V2-3 give split/merge a dedicated multi-block capture path (not a single
-    // in-place command). Until then the mint refuses them cleanly (null → refuse).
+    // split/merge build their proposal directly in captureProposedNodes (a construction
+    // path), never via a native in-place command — so they never reach nativeCommandFor.
     case 'splitParagraph':
     case 'mergeParagraphs':
       return null;
   }
 }
 
-/** True when the op's declared source type matches the target block. */
-function opSourceMatches(op: StructuralOp, block: PMNode): boolean {
+/** True when the op's declared source shape matches the resolved target root(s). */
+function opSourceMatches(op: StructuralOp, roots: readonly TargetRoot[]): boolean {
+  const single = roots.length === 1 ? roots[0].node : null;
   switch (op.kind) {
     case 'headingToParagraph':
-      return block.type.name === 'heading' && block.attrs.level === op.level;
+      return single !== null && single.type.name === 'heading' && single.attrs.level === op.level;
     case 'paragraphToHeading':
-      return block.type.name === 'paragraph';
     case 'paragraphToList':
-      return block.type.name === 'paragraph';
+    case 'splitParagraph':
+      return single !== null && single.type.name === 'paragraph';
     case 'listToParagraph':
       // A FLAT list of the kind (any item count, each item one paragraph) — V2 flattens a
       // multi-item list by joining its items; a nested/composite list refuses (later phase).
-      return isFlatParagraphList(block, op.listType);
-    case 'splitParagraph':
-      return block.type.name === 'paragraph';
-    // V2-3: merge matches against an adjacent pair, not one block; refuse until then.
+      return single !== null && isFlatParagraphList(single, op.listType);
     case 'mergeParagraphs':
-      return false;
+      // K adjacent paragraphs (≥2). The exact count came from the request's mergeCount, so
+      // resolveTargetRange already gathered exactly that many roots; every one must be a paragraph.
+      return roots.length >= 2 && roots.every((root) => root.node.type.name === 'paragraph');
   }
 }
 
@@ -270,7 +300,7 @@ type FootprintAnnotations =
 
 function classifyFootprintAnnotations(
   doc: PMNode,
-  target: TargetBlock,
+  target: TargetRange,
   originCommentId: string | null,
 ): FootprintAnnotations {
   const originSpans: Array<{ from: number; to: number }> = [];
@@ -358,15 +388,12 @@ function subtreeHasBlockTrack(root: PMNode): boolean {
 function captureNativeConversion(
   state: EditorState,
   command: Command,
-  target: TargetBlock,
+  contentSelection: { from: number; to: number },
+  index: number,
 ): { afterDoc: PMNode; proposed: PMNode } | null {
   const captureState = EditorState.create({
     doc: state.doc,
-    selection: TextSelection.create(
-      state.doc,
-      target.contentSelection.from,
-      target.contentSelection.to,
-    ),
+    selection: TextSelection.create(state.doc, contentSelection.from, contentSelection.to),
   });
   let captured: Transaction | null = null;
   const applied = command(captureState, (tr) => {
@@ -376,7 +403,7 @@ function captureNativeConversion(
   const capturedTr: Transaction = captured;
   if (!capturedTr.docChanged) return null;
   // A block-type conversion keeps the target's top-level index stable.
-  return { afterDoc: capturedTr.doc, proposed: capturedTr.doc.child(target.index) };
+  return { afterDoc: capturedTr.doc, proposed: capturedTr.doc.child(index) };
 }
 
 /**
@@ -418,15 +445,31 @@ function isValidSplitParts(value: unknown): value is readonly string[] {
   return true;
 }
 
+/** A valid merge count: an integer ≥2 (at least two adjacent paragraphs to combine). */
+function isValidMergeCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 2;
+}
+
 /**
- * Discriminated request validation: `splitParagraph` REQUIRES valid `splitParts`; every
- * other op FORBIDS it. Returns the refusal reason, or null when the shape is legal.
+ * Discriminated request validation: `splitParagraph` REQUIRES valid `splitParts` and FORBIDS
+ * `mergeCount`; `mergeParagraphs` REQUIRES a valid `mergeCount` and FORBIDS `splitParts`; every
+ * other op FORBIDS both. Checked by PRESENCE (an `undefined` value still counts as "declared"
+ * for the forbidding ops, so a stray key can't slip through). Returns the refusal, or null.
  */
-function splitPartsRefusal(op: StructuralOp, splitParts: unknown): StructuralMintRefusal | null {
+function partsAndCountRefusal(
+  op: StructuralOp,
+  splitParts: unknown,
+  mergeCount: unknown,
+): StructuralMintRefusal | null {
   if (op.kind === 'splitParagraph') {
-    return isValidSplitParts(splitParts) ? null : 'invalid-metadata';
+    if (mergeCount !== undefined || !isValidSplitParts(splitParts)) return 'invalid-metadata';
+    return null;
   }
-  return splitParts === undefined ? null : 'invalid-metadata';
+  if (op.kind === 'mergeParagraphs') {
+    if (splitParts !== undefined || !isValidMergeCount(mergeCount)) return 'invalid-metadata';
+    return null;
+  }
+  return splitParts === undefined && mergeCount === undefined ? null : 'invalid-metadata';
 }
 
 /**
@@ -462,45 +505,57 @@ type CaptureResult = { nodes: PMNode[] } | { refuse: StructuralMintRefusal };
  * The clean (identity-free) proposed block(s) a conversion produces. V1 retype/list ops
  * capture a native command's single converted child (and reject a command that disturbed
  * a neighbour). `splitParagraph` recomputes the pieces from the LIVE source content: it
- * slices at whitespace seams matching `request.splitParts` (never caller-built nodes), each
- * piece a paragraph carrying the source's non-identity attrs and the real sliced fragment.
+ * slices at whitespace seams matching `request.splitParts`. `mergeParagraphs` joins the K
+ * source paragraphs' content with one space (`mergeParagraphContent`, the split inverse).
+ * Construction ops carry the source's shared non-identity attrs and the real fragments.
  */
 function captureProposedNodes(
   state: EditorState,
   op: StructuralOp,
-  target: TargetBlock,
+  target: TargetRange,
   request: StructuralMintRequest,
 ): CaptureResult {
+  const paragraph = state.schema.nodes.paragraph;
   if (op.kind === 'splitParagraph') {
-    const paragraph = state.schema.nodes.paragraph;
     if (!paragraph) return { refuse: 'unsupported-shape' };
-    const ranges = locateSplitSeams(target.node.content, request.splitParts ?? []);
+    const source = target.roots[0].node;
+    const ranges = locateSplitSeams(source.content, request.splitParts ?? []);
     if (!ranges) return { refuse: 'split-source-mismatch' };
     const nodes = ranges.map((range) =>
       paragraph.create(
-        { ...target.node.attrs, blockTrack: null },
-        target.node.content.cut(range.from, range.to),
+        { ...source.attrs, blockTrack: null },
+        source.content.cut(range.from, range.to),
       ),
     );
     return { nodes };
   }
   if (op.kind === 'listToParagraph') {
-    const paragraph = state.schema.nodes.paragraph;
     if (!paragraph) return { refuse: 'unsupported-shape' };
     // Flatten a flat list into ONE paragraph: the items' paragraph contents joined by a
     // single space. A single-item list joins one item → identical to V1b's native lift.
     const itemParagraphs: PMNode[] = [];
-    target.node.forEach((item) => itemParagraphs.push(item.child(0)));
-    // Preserve the items' shared block styling. A list whose items disagree on their
-    // non-identity paragraph attrs (e.g. mixed alignment) has no single flattened answer —
-    // choosing or dropping one silently would still pass content conservation, so refuse.
+    target.roots[0].node.forEach((item) => itemParagraphs.push(item.child(0)));
+    // Preserve the items' shared block styling. Items that disagree on their non-identity
+    // paragraph attrs have no single flattened answer — refuse rather than pick/drop one.
     const attrs = commonBlockAttrs(itemParagraphs);
     if (attrs === null) return { refuse: 'unsupported-shape' };
     return { nodes: [paragraph.create(attrs, mergeParagraphContent(itemParagraphs))] };
   }
+  if (op.kind === 'mergeParagraphs') {
+    if (!paragraph) return { refuse: 'unsupported-shape' };
+    const sources = target.roots.map((root) => root.node);
+    // Every source paragraph must carry real content: an empty block can't be authorized by a
+    // cross-block quote, and canonical Markdown may drop it, so the K-source union could not
+    // reload. (The planner refuses this too; defense-in-depth at the mint boundary.)
+    if (sources.some((node) => node.content.size === 0)) return { refuse: 'unsupported-shape' };
+    // Same shared-styling rule as the list flatten: disagreeing paragraph attrs refuse.
+    const attrs = commonBlockAttrs(sources);
+    if (attrs === null) return { refuse: 'unsupported-shape' };
+    return { nodes: [paragraph.create(attrs, mergeParagraphContent(sources))] };
+  }
   const command = nativeCommandFor(state.schema, op);
-  if (!command) return { refuse: 'unsupported-shape' };
-  const captured = captureNativeConversion(state, command, target);
+  if (!command || !target.contentSelection) return { refuse: 'unsupported-shape' };
+  const captured = captureNativeConversion(state, command, target.contentSelection, target.index);
   if (!captured) return { refuse: 'native-no-op' };
   // The native command must have touched only the target's own top-level child (e.g.
   // wrapInList must not have merged an adjacent list) — checked against the native afterDoc.
@@ -562,23 +617,25 @@ export function compileStructuralMint(
   }
 
   // 4. The op is a well-formed structural operation and its payload is valid for its kind,
-  //    validated BEFORE any document-dependent step so a malformed payload (e.g. a sparse or
-  //    non-string splitParts) is always classified invalid-metadata, never target-not-found.
-  //    isStructuralOp runs first so a runtime-invalid op (e.g. a HeadingLevel of 99) is refused.
-  //    splitParts is discriminated: required for split, forbidden on every other op.
+  //    validated BEFORE any document-dependent step so a malformed payload (e.g. a sparse
+  //    splitParts, or a fractional/<2 mergeCount) is always classified invalid-metadata, never
+  //    target-not-found. isStructuralOp runs first so a runtime-invalid op (e.g. a HeadingLevel
+  //    of 99) is refused. splitParts/mergeCount are discriminated: split requires parts + forbids
+  //    count, merge requires count + forbids parts, every other op forbids both.
   if (!isStructuralOp(op)) return refuse('unsupported-shape');
-  const partsRefusal = splitPartsRefusal(op, request.splitParts);
+  const partsRefusal = partsAndCountRefusal(op, request.splitParts, request.mergeCount);
   if (partsRefusal) return refuse(partsRefusal);
 
-  // 5. The target is strictly inside a single top-level textblock, and its type is a source
-  //    the op can convert.
-  const target = resolveTopLevelBlock(state.doc, targetPos);
+  // 5. The target resolves to the source block(s) — one for retype/list/split, `mergeCount`
+  //    adjacent blocks for a merge — and their shape is a source the op can convert.
+  const target = resolveTargetRange(state.doc, targetPos, request.mergeCount ?? 1);
   if (!target) return refuse('target-not-found');
-  if (!opSourceMatches(op, target.node)) return refuse('unsupported-shape');
+  if (!opSourceMatches(op, target.roots)) return refuse('unsupported-shape');
 
-  // 6. The target does not overlap an existing union.
+  // 6. No source root overlaps an existing union (subtree scan of every root, plus the
+  //    locked-range check over the whole [from, to) footprint).
   if (
-    subtreeHasBlockTrack(target.node) ||
+    target.roots.some((root) => subtreeHasBlockTrack(root.node)) ||
     lockedChangeIds(state.doc, target.from, target.to).size > 0
   ) {
     return refuse('overlapping-structural');
@@ -598,12 +655,13 @@ export function compileStructuralMint(
   const proposedNodes = capture.nodes;
 
   // 8c. Shape validation is load-bearing. The content-conservation check is DEFENSE-IN-DEPTH,
-  //     not mutation-pinned: split pieces are slices of the source and V1 native commands
-  //     preserve content, so a PURE reflow always holds via the construction path — it can only
-  //     fail on a FUTURE construction change that adds/loses content, which no current test can
-  //     trigger (stated honestly rather than claimed as covered).
-  if (!structuralOpShapeValid(op, [target.node], proposedNodes)) return refuse('unsupported-shape');
-  if (!structuralContentConserved(op, [target.node], proposedNodes)) {
+  //     not mutation-pinned: split pieces are slices of the source, merge joins the sources,
+  //     and V1 native commands preserve content, so a PURE reflow always holds via the
+  //     construction path — it can only fail on a FUTURE construction change that adds/loses
+  //     content, which no current test can trigger (stated honestly rather than claimed).
+  const sourceNodes = target.roots.map((root) => root.node);
+  if (!structuralOpShapeValid(op, sourceNodes, proposedNodes)) return refuse('unsupported-shape');
+  if (!structuralContentConserved(op, sourceNodes, proposedNodes)) {
     return refuse('self-check-failed');
   }
 
@@ -627,10 +685,14 @@ export function compileStructuralMint(
     const proposedSize = flaggedProposed.reduce((sum, node) => sum + node.nodeSize, 0);
     tr.removeMark(target.to + 1, target.to + proposedSize - 1, commentType);
   }
-  tr.setNodeMarkup(target.from, undefined, {
-    ...target.node.attrs,
-    blockTrack: { changeId, op: 'delete' },
-  });
+  // Flag EVERY source root for deletion. The proposal was inserted AFTER the last root (at
+  // target.to), so each root's own start position is unchanged and can be marked up directly.
+  for (const root of target.roots) {
+    tr.setNodeMarkup(root.from, undefined, {
+      ...root.node.attrs,
+      blockTrack: { changeId, op: 'delete' },
+    });
+  }
   const record: CanonicalRecord = {
     changeId,
     op,
@@ -662,7 +724,13 @@ export function compileStructuralMint(
   );
   if (
     !union ||
-    !onlyTopLevelRangeChanged(state.doc, acceptedOracle, target.index, 1, proposedNodes.length) ||
+    !onlyTopLevelRangeChanged(
+      state.doc,
+      acceptedOracle,
+      target.index,
+      target.roots.length,
+      proposedNodes.length,
+    ) ||
     !projectBlockUnions(tr.doc, 'source').doc.eq(projectBlockUnions(state.doc, 'source').doc) ||
     !projectBlockUnions(tr.doc, 'accepted').doc.eq(
       projectBlockUnions(acceptedOracle, 'accepted').doc,

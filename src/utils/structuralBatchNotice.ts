@@ -20,10 +20,10 @@ const CROSS_AXIS =
   'it changes a block that another edit in this batch is restructuring; ask for them one at a time.';
 
 // The supported set is heading↔paragraph, list↔paragraph (a flat list of any item count),
-// and splitting a paragraph. The requested op alone can't reveal which unsupported case was
-// asked for, so the message names the whole boundary.
+// splitting a paragraph, and merging adjacent paragraphs. The requested op alone can't reveal
+// which unsupported case was asked for, so the message names the whole boundary.
 const UNSUPPORTED_STRUCTURAL =
-  'that structural change isn’t available yet — heading↔paragraph, list↔paragraph, and splitting a paragraph are supported, but a list whose items nest or hold more than one block, a list-kind change (bulleted↔numbered↔checklist), a heading-level change, and merging blocks aren’t.';
+  'that structural change isn’t available yet — heading↔paragraph, list↔paragraph, splitting a paragraph, and merging adjacent paragraphs are supported, but a list whose items nest or hold more than one block, a list-kind change (bulleted↔numbered↔checklist), a heading-level change, and merging across a heading or list aren’t.';
 
 // System/provider faults are NOT the model's fault: keep the wording blameless and quiet.
 const SYSTEM_FAULT = 'an internal error stopped it; try asking again.';
