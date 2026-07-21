@@ -25,7 +25,8 @@
     "test:watch": "vitest",
     "test:coverage:unit": "vitest run --coverage --maxWorkers=1",
     "test:coverage:e2e": "E2E_COVERAGE=1 playwright test",
-    "coverage:merge": "node --test scripts/coveragePaths.test.mjs && node scripts/mergeCoverage.mjs",
+    "coverage:merge": "node --test scripts/coveragePaths.test.mjs scripts/coverageRegression.test.mjs && node scripts/mergeCoverage.mjs",
+    "coverage:check": "node scripts/checkCoverageRegression.mjs",
     "test:coverage": "npm run test:coverage:unit && npm run test:coverage:e2e && npm run coverage:merge"
   },
   "lint-staged": {

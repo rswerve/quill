@@ -26,6 +26,10 @@ cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 
 A husky pre-commit hook runs lint-staged and the unit tests automatically.
+CI additionally merges Vitest and Playwright coverage and compares it with the
+last successful `main` build. A material regression in overall line,
+statement, branch, or function coverage fails the PR; `App.tsx` and
+`Topbar.tsx` line coverage are also protected independently.
 
 ## Guidelines
 

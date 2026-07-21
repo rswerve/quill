@@ -84,6 +84,9 @@ jobs:
     name: Combined coverage
     needs: [frontend, e2e]
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - uses: actions/checkout@v5
@@ -112,15 +115,63 @@ jobs:
       - name: Merge coverage
         run: npm run coverage:merge
 
+      - name: Find baseline coverage run
+        id: baseline
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const baselineSha = context.eventName === 'pull_request'
+              ? context.payload.pull_request.base.sha
+              : context.payload.before;
+            if (!baselineSha || /^0+$/.test(baselineSha)) {
+              core.setFailed('Coverage regression gate has no baseline commit');
+              return;
+            }
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'ci.yml',
+              head_sha: baselineSha,
+              status: 'success',
+              per_page: 20,
+            });
+            const run = response.data.workflow_runs.find(candidate => candidate.event === 'push');
+            if (!run) {
+              core.setFailed(`No successful main CI run found for baseline ${baselineSha}`);
+              return;
+            }
+            core.setOutput('sha', baselineSha);
+            core.setOutput('run-id', String(run.id));
+
+      - name: Download baseline coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: combined-coverage
+          path: coverage/baseline
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.baseline.outputs.run-id }}
+
+      - name: Check for coverage regressions
+        env:
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: npm run coverage:check
+
       - name: Publish coverage summary
-        run: cat coverage/combined/coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
+        if: always()
+        run: |
+          cat coverage/combined/coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f coverage/combined/coverage-regression.md ]]; then
+            cat coverage/combined/coverage-regression.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload combined coverage
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: combined-coverage
           path: coverage/combined/
-          retention-days: 7
+          retention-days: 90
 
   rust:
     name: Rust (Tauri backend)
