@@ -22,6 +22,10 @@ coverage
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 
+# Local agent operating files; keep internal deployment details out of both repos so their trees stay identical
+/AGENTS.md
+/docs/deployment.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
