@@ -60,6 +60,23 @@ The combined report is uploaded as a CI artifact and its summary is written to
 the GitHub Actions job summary. Separate unit and Playwright columns remain
 visible so the contribution from each suite is auditable.
 
+The combined job also acts as a coverage ratchet. For a pull request it
+downloads the successful coverage artifact for the PR's base commit; for a
+push to `main` it uses the pre-push commit. It compares exact covered/total
+ratios for lines, statements, branches, and functions, plus dedicated line
+checks for `App.tsx` and `Topbar.tsx`. A missing baseline, malformed report, or
+material decrease fails the job. Successful combined artifacts are retained
+for 90 days so subsequent changes have an auditable baseline.
+
+Two identical CI runs exposed one timing-dependent executed range in
+`CommentLayer`: one line, statement, and branch could differ depending on
+whether a flash timer was replaced before teardown. The ratchet therefore
+allows a one-covered-item variance for those three overall metrics only when
+their source denominator is identical. A changed denominator receives no
+allowance, function coverage is exact, and the two shell-file line checks are
+exact. This keeps the gate sensitive to source growth and shell regressions
+without making unchanged commits flaky.
+
 The Vitest coverage command deliberately uses one worker. Coverage processing
 can keep a resource-constrained CI runner's main process busy long enough for
 parallel workers to hit Vitest's fixed 60-second `onTaskUpdate` RPC watchdog,
@@ -86,4 +103,5 @@ The full local gate produced:
 
 The absolute percentages will move as source and tests change. The durable
 contract is that browser execution is collected, cross-run paths coalesce, and
-the combined covered counts never fall below either input.
+the combined covered counts never fall below either input or materially below
+the last successful `main` baseline.
