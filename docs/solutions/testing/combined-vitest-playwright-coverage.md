@@ -60,22 +60,22 @@ The combined report is uploaded as a CI artifact and its summary is written to
 the GitHub Actions job summary. Separate unit and Playwright columns remain
 visible so the contribution from each suite is auditable.
 
-The combined job also acts as a coverage ratchet. For a pull request it
-downloads the successful coverage artifact for the PR's base commit; for a
-push to `main` it uses the pre-push commit. It compares exact covered/total
-ratios for lines, statements, branches, and functions, plus dedicated line
-checks for `App.tsx` and `Topbar.tsx`. A missing baseline, malformed report, or
-material decrease fails the job. Successful combined artifacts are retained
-for 90 days so subsequent changes have an auditable baseline.
+The combined job also acts as a coverage ratchet. It downloads the artifact
+from the latest successful `main` run and compares exact covered/total ratios
+for lines, statements, branches, and functions, plus dedicated line checks for
+`App.tsx` and `Topbar.tsx`. A missing baseline, malformed report, or material
+decrease fails the job. Using the latest green run lets a fix recover even if a
+bad `main` run exists; successful combined artifacts are retained for 90 days
+so subsequent changes have an auditable baseline.
 
-Two identical CI runs exposed one timing-dependent executed range in
-`CommentLayer`: one line, statement, and branch could differ depending on
-whether a flash timer was replaced before teardown. The ratchet therefore
-allows a one-covered-item variance for those three overall metrics only when
-their source denominator is identical. A changed denominator receives no
-allowance, function coverage is exact, and the two shell-file line checks are
-exact. This keeps the gate sensitive to source growth and shell regressions
-without making unchanged commits flaky.
+Three identical-code CI runs exposed timing-dependent executed ranges in
+`CommentLayer`: up to two lines and one statement/branch differed as animation
+and measurement effects completed around test teardown. The ratchet allows
+only those measured `CommentLayer` variances, and only when all source paths
+and denominators are identical and no other file loses coverage. A source
+change receives no allowance, function coverage is exact, and the two
+shell-file line checks are exact. This keeps the gate sensitive to source
+growth and unrelated regressions without making unchanged commits flaky.
 
 The Vitest coverage command deliberately uses one worker. Coverage processing
 can keep a resource-constrained CI runner's main process busy long enough for

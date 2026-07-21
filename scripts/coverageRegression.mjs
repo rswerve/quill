@@ -1,16 +1,19 @@
 const OVERALL_METRICS = ['lines', 'statements', 'branches', 'functions'];
 
-// Chromium coverage can vary by one executed range when an animation/timer
-// callback wins or loses a race at test teardown. Two CI runs of the identical
-// tree demonstrated that behavior for lines, statements, and branches. Permit
-// that one-count jitter only when the denominator is identical; source changes
-// (and function coverage) receive no allowance.
-const SAME_DENOMINATOR_JITTER = {
-  lines: 1,
+// Chromium coverage can vary when CommentLayer animation/measurement effects
+// win or lose a race at test teardown. Three CI runs of the identical tree
+// demonstrated a maximum two-line and one-statement/branch swing, always in
+// that file. The allowance below applies only when every denominator is
+// unchanged and no other file loses coverage; source changes and unrelated
+// regressions receive no allowance.
+const COMMENT_LAYER_JITTER = {
+  lines: 2,
   statements: 1,
   branches: 1,
   functions: 0,
 };
+
+const COMMENT_LAYER_PATH = 'src/components/CommentLayer.tsx';
 
 const CRITICAL_LINE_FILES = ['src/App.tsx', 'src/components/Topbar.tsx'];
 
@@ -18,14 +21,14 @@ function normalizedSourcePath(sourcePath) {
   return sourcePath.replaceAll('\\', '/');
 }
 
-function requireMetric(summary, metric, scope) {
+function requireMetric(summary, metric, scope, allowEmpty = false) {
   const value = summary?.[metric];
   if (
     !value ||
     !Number.isInteger(value.covered) ||
     !Number.isInteger(value.total) ||
     value.covered < 0 ||
-    value.total <= 0 ||
+    value.total < (allowEmpty ? 0 : 1) ||
     value.covered > value.total
   ) {
     throw new Error(`${scope} has no valid ${metric} coverage counts`);
@@ -43,6 +46,55 @@ function findFile(report, relativePath, reportName) {
     );
   }
   return matches[0];
+}
+
+function filesByPath(report, reportName) {
+  const entries = (report.files ?? []).map((file) => [
+    normalizedSourcePath(file.sourcePath ?? '').replace(/^.*(?=src\/)/, ''),
+    file,
+  ]);
+  const result = new Map(entries);
+  if (result.size !== entries.length) {
+    throw new Error(`${reportName} contains duplicate normalized source paths`);
+  }
+  return result;
+}
+
+function commentLayerJitterAllowance(baselineReport, currentReport, metric) {
+  const maximum = COMMENT_LAYER_JITTER[metric];
+  if (maximum === 0) return 0;
+
+  const baselineOverall = requireMetric(
+    baselineReport.summary,
+    metric,
+    'Baseline overall coverage',
+  );
+  const currentOverall = requireMetric(currentReport.summary, metric, 'Current overall coverage');
+  if (baselineOverall.total !== currentOverall.total) return 0;
+
+  const baselineFiles = filesByPath(baselineReport, 'Baseline report');
+  const currentFiles = filesByPath(currentReport, 'Current report');
+  if (
+    baselineFiles.size !== currentFiles.size ||
+    [...baselineFiles.keys()].some((sourcePath) => !currentFiles.has(sourcePath))
+  ) {
+    return 0;
+  }
+
+  for (const [sourcePath, baselineFile] of baselineFiles) {
+    const currentFile = currentFiles.get(sourcePath);
+    const baseline = requireMetric(baselineFile.summary, metric, `Baseline ${sourcePath}`, true);
+    const current = requireMetric(currentFile.summary, metric, `Current ${sourcePath}`, true);
+    if (baseline.total !== current.total) return 0;
+    const loss = baseline.covered - current.covered;
+    if (sourcePath === COMMENT_LAYER_PATH) {
+      if (loss > maximum) return 0;
+    } else if (loss > 0) {
+      return 0;
+    }
+  }
+
+  return maximum;
 }
 
 function ratio({ covered, total }) {
@@ -67,8 +119,7 @@ export function checkCoverageRegression(baselineReport, currentReport) {
   const rows = OVERALL_METRICS.map((metric) => {
     const baseline = requireMetric(baselineReport.summary, metric, 'Baseline overall coverage');
     const current = requireMetric(currentReport.summary, metric, 'Current overall coverage');
-    const allowedCoveredLoss =
-      baseline.total === current.total ? SAME_DENOMINATOR_JITTER[metric] : 0;
+    const allowedCoveredLoss = commentLayerJitterAllowance(baselineReport, currentReport, metric);
     return rowFor('Overall', metric, baseline, current, allowedCoveredLoss);
   });
 
@@ -95,7 +146,10 @@ function percentage({ covered, total }) {
 
 export function formatCoverageRegressionMarkdown(result, baselineSha = 'unknown') {
   const rows = result.rows.map((row) => {
-    const jitter = row.allowedCoveredLoss === 0 ? 'none' : `${row.allowedCoveredLoss} count`;
+    const jitter =
+      row.allowedCoveredLoss === 0
+        ? 'none'
+        : `${row.allowedCoveredLoss} count${row.allowedCoveredLoss === 1 ? '' : 's'}`;
     const change = `${row.changePercentagePoints >= 0 ? '+' : ''}${row.changePercentagePoints.toFixed(4)} pp`;
     return `| ${row.scope} | ${row.metric} | ${percentage(row.baseline)} | ${percentage(row.current)} | ${change} | ${jitter} | ${row.ok ? 'PASS' : 'FAIL'} |`;
   });
