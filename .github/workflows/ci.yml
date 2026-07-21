@@ -120,28 +120,22 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const baselineSha = context.eventName === 'pull_request'
-              ? context.payload.pull_request.base.sha
-              : context.payload.before;
-            if (!baselineSha || /^0+$/.test(baselineSha)) {
-              core.setFailed('Coverage regression gate has no baseline commit');
-              return;
-            }
             const { owner, repo } = context.repo;
             const response = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
               workflow_id: 'ci.yml',
-              head_sha: baselineSha,
+              branch: 'main',
+              event: 'push',
               status: 'success',
               per_page: 20,
             });
-            const run = response.data.workflow_runs.find(candidate => candidate.event === 'push');
+            const run = response.data.workflow_runs[0];
             if (!run) {
-              core.setFailed(`No successful main CI run found for baseline ${baselineSha}`);
+              core.setFailed('No successful main CI run found for the coverage baseline');
               return;
             }
-            core.setOutput('sha', baselineSha);
+            core.setOutput('sha', run.head_sha);
             core.setOutput('run-id', String(run.id));
 
       - name: Download baseline coverage
