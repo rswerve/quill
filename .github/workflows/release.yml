@@ -1,9 +1,9 @@
 name: Release
 
-# Builds macOS installers when a version tag is pushed
-# (e.g. `git tag v0.1.0 && git push origin v0.1.0`) and attaches them to a
-# DRAFT GitHub Release. A maintainer reviews the draft, fills in the notes
-# (see docs/release-notes/), and publishes it manually.
+# Dormant, manually dispatched workflow retained for a future Developer ID release
+# process. The live distribution path is a local universal build, a full bundle-level
+# ad-hoc signature, and manual publication to Google Drive. This workflow's unsigned,
+# per-architecture GitHub Release artifacts are not what Quill ships today.
 #
 # Releases are macOS-only for now: the @claude integration (Claude CLI
 # discovery and session lookup) is Unix-path-based and untested elsewhere,
@@ -15,9 +15,7 @@ name: Release
 # macOS Sequoia). This is documented in the README and the user guide.
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
