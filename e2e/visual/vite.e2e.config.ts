@@ -10,6 +10,7 @@ const projectRoot = path.resolve(import.meta.dirname, '../..');
  * node_modules directory, which lives outside Vite's default filesystem
  * allowlist. Serving the resolved dependency directory keeps the bundled
  * fonts identical locally and in CI without relaxing the production config.
+ *
  */
 export default defineConfig({
   root: projectRoot,
