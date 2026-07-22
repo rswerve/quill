@@ -42,8 +42,67 @@ jobs:
           path: coverage/unit/
           retention-days: 7
 
-  e2e:
+  # The two Playwright projects run as separate jobs so the 340 behavioural
+  # tests get a fast Linux runner while only the 48 pixel-comparison tests pay
+  # for macOS. They previously ran sequentially in one macOS job: 466.7s of
+  # chromium followed by 84.7s of visual.
+  #
+  # This job keeps the name "End-to-end (Playwright)" because that string is a
+  # required status check on the protected branch. Renaming it would leave every
+  # PR waiting forever on a check that no longer reports.
+  e2e-chromium:
     name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Playwright defaults to half the available cores, which on the old 3-core
+      # macOS runner silently resolved to a single worker. The count here is the
+      # measured knee on this runner, not a default.
+      # @macos-shortcuts is excluded here: those tests assert macOS text-editing
+      # chords (Alt+Backspace, Cmd+Backspace) that mean something different, or
+      # nothing at all, on Linux. They run in the macOS job instead.
+      - name: Run Playwright tests
+        env:
+          E2E_COVERAGE_DIR: coverage/e2e-chromium
+        run: >-
+          npm run test:coverage:e2e --
+          --project=chromium --workers=4 --grep-invert "@macos-shortcuts"
+
+      - name: Upload end-to-end coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-chromium-coverage
+          path: coverage/e2e-chromium/
+          retention-days: 7
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-chromium
+          path: playwright-report/
+          retention-days: 7
+
+  # Stays on macOS: the 56 screenshot baselines are compared with no pixel
+  # threshold, so they are bound to the platform that rendered them — and macOS
+  # is the only platform Quill ships on.
+  e2e-visual:
+    name: End-to-end (Visual)
     runs-on: macos-latest
     timeout-minutes: 15
 
@@ -63,32 +122,71 @@ jobs:
         run: npx playwright install chromium
 
       - name: Run Playwright tests
-        run: npm run test:coverage:e2e
+        env:
+          E2E_COVERAGE_DIR: coverage/e2e-visual
+        run: npm run test:coverage:e2e -- --project=visual
 
-      - name: Upload end-to-end coverage
+      # The handful of macOS-chord tests the Linux job cannot run. Separate
+      # invocation and coverage directory so their coverage still reaches the
+      # merge instead of being lost with the tests.
+      - name: Run macOS-only shortcut tests
+        env:
+          E2E_COVERAGE_DIR: coverage/e2e-macos-shortcuts
+        run: >-
+          npm run test:coverage:e2e --
+          --project=chromium --grep "@macos-shortcuts"
+
+      - name: Upload visual coverage
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-coverage
-          path: coverage/e2e/
+          name: e2e-visual-coverage
+          path: coverage/e2e-visual/
+          retention-days: 7
+
+      - name: Upload macOS shortcut coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-macos-shortcuts-coverage
+          path: coverage/e2e-macos-shortcuts/
           retention-days: 7
 
       - name: Upload report on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-visual
           path: playwright-report/
           retention-days: 7
 
   coverage:
     name: Combined coverage
-    needs: [frontend, e2e]
+    # Depends on both Playwright jobs: the merge needs every browser coverage
+    # source, and a missing one would quietly lower the numbers the regression
+    # gate is measured against.
+    needs: [frontend, e2e-chromium, e2e-visual]
+    # Runs even when a dependency fails, so the guard step below can fail this
+    # job deliberately. A job SKIPPED because its dependency failed is reported
+    # to branch protection as a success, so without this a red visual job would
+    # leave "Combined coverage" green and the pull request mergeable.
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
 
     steps:
+      - name: Require every upstream job to have succeeded
+        if: >-
+          needs.frontend.result != 'success' ||
+          needs.e2e-chromium.result != 'success' ||
+          needs.e2e-visual.result != 'success'
+        run: |
+          echo "frontend:     ${{ needs.frontend.result }}"
+          echo "e2e-chromium: ${{ needs.e2e-chromium.result }}"
+          echo "e2e-visual:   ${{ needs.e2e-visual.result }}"
+          echo "::error::An upstream job did not succeed; failing the required coverage check."
+          exit 1
+
       - uses: actions/checkout@v5
 
       - name: Set up Node.js
@@ -106,13 +204,30 @@ jobs:
           name: unit-coverage
           path: coverage/unit
 
-      - name: Download end-to-end coverage
+      - name: Download chromium coverage
         uses: actions/download-artifact@v4
         with:
-          name: e2e-coverage
-          path: coverage/e2e
+          name: e2e-chromium-coverage
+          path: coverage/e2e-chromium
 
+      - name: Download visual coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-visual-coverage
+          path: coverage/e2e-visual
+
+      - name: Download macOS shortcut coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-macos-shortcuts-coverage
+          path: coverage/e2e-macos-shortcuts
+
+      # Declared explicitly so a coverage source that silently fails to arrive
+      # fails the merge, instead of quietly grading the regression gate against
+      # less evidence than it should have.
       - name: Merge coverage
+        env:
+          COVERAGE_EXPECTED_SOURCES: unit,e2e-chromium,e2e-visual,e2e-macos-shortcuts
         run: npm run coverage:merge
 
       - name: Find baseline coverage run
