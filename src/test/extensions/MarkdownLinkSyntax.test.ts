@@ -8,6 +8,7 @@ import {
   TrackedFormat,
   TrackedInsert,
 } from '../../extensions/TrackChanges';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 const exactMarkdownLink = '[text and](https://www.thenalink.com)';
 let editor: Editor | null = null;
@@ -50,7 +51,7 @@ function createEditor(suggesting = false) {
   editor = new Editor({
     extensions: [
       MarkdownLinkSyntax,
-      StarterKit.configure({ trailingNode: false, link: { openOnClick: false } }),
+      StarterKit.configure({ trailingNode: false, link: LINK_OPTIONS }),
       TrackedInsert,
       TrackedDelete,
       TrackedFormat,

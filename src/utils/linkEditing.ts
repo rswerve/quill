@@ -59,6 +59,30 @@ const SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
 /** Link options shared by the editor and the Markdown round-trip guarantees. */
 export const LINK_OPTIONS = { openOnClick: false, isAllowedUri: isAllowedLinkUri };
 
+/** `example.com`, `sub.example.co.uk` — a bare host we should send to https. */
+const HOST_LIKE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i;
+
+/** A file Quill itself can open, so a bare `docs/GUIDE.md` is a path, not a host. */
+const DOCUMENT_SUFFIX = /\.(md|markdown)$/i;
+
+/**
+ * Decide whether a scheme-less string is a relative path or a bare domain.
+ *
+ * The two are genuinely ambiguous — `docs/GUIDE.md` and `example.com/a` have
+ * the same shape — so we judge by the first segment. `docs` is not a hostname;
+ * `example.com` is. Without this, every relative link a user types or pastes
+ * became `https://docs/GUIDE.md`, corrupting exactly the targets the loader
+ * was fixed to preserve.
+ */
+function looksRelative(url: string): boolean {
+  const [first] = url.split(/[/?#]/);
+  if (url.includes('/')) return !HOST_LIKE.test(first);
+  // No slash: `GUIDE.md` is a sibling document, `README` is a path with no
+  // extension at all, but `example.com` is still a domain.
+  if (DOCUMENT_SUFFIX.test(url)) return true;
+  return !url.includes('.');
+}
+
 /**
  * Make a typed URL usable as an href. Safe explicit schemes and relative
  * references pass through; bare domains receive https://; unsafe schemes fail.
@@ -71,6 +95,7 @@ export function normalizeHref(raw: string): string {
   if (schemeMatch) {
     return ALLOWED_LINK_SCHEMES.includes(schemeMatch[1].toLowerCase()) ? url : '';
   }
+  if (looksRelative(url)) return url;
   return `https://${url}`;
 }
 

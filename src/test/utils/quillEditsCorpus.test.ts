@@ -25,6 +25,7 @@ import { applyTrackedEditsToEditor } from '../../utils/applyTrackedEdits';
 import { rangeText } from '../../utils/trackedEdits';
 import type { EditResultStatus, EditResultReason } from '../../utils/trackedEdits';
 import type { QuillEdit } from '../../types';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 /**
  * Production-payload replay corpus.
@@ -78,7 +79,7 @@ function makeProductionEditor(markdown: string) {
       MarkdownLinkSyntax,
       StarterKit.configure({
         trailingNode: false,
-        link: { openOnClick: false },
+        link: LINK_OPTIONS,
         code: false,
         underline: false,
       }),

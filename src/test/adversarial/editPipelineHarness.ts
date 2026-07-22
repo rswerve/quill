@@ -15,6 +15,7 @@ import { projectTrackedDocument } from '../../extensions/trackChangesProjection'
 import { applyTrackedEditsToEditor } from '../../utils/applyTrackedEdits';
 import type { ApplyTrackedEditsOutcome } from '../../utils/applyTrackedEdits';
 import type { EditScope, QuillEdit, TrackedEditOrigin } from '../../types';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 const mountedEditors: Editor[] = [];
 
@@ -27,7 +28,7 @@ export function makePipelineEditor(content: string | JSONContent): Editor {
     extensions: [
       StarterKit.configure({
         trailingNode: false,
-        link: { openOnClick: false },
+        link: LINK_OPTIONS,
         code: false,
         underline: false,
       }),
