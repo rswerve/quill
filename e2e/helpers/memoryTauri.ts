@@ -452,51 +452,247 @@ export async function openMemoryFile(page: Page) {
   await closeSessionPickerIfOpen(page);
 }
 
-export async function selectLastCharacters(page: Page, count: number) {
-  // Keyboard Shift+ArrowLeft events can be dropped while ProseMirror is
-  // reconciling focus, and the DOM selection can briefly report the requested
-  // width before the editor state catches up. Build the browser range directly
-  // instead, then give ProseMirror two animation frames to observe it before
-  // the caller types or presses Backspace.
-  await activeEditor(page).evaluate((root, requested) => {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    let current: Node | null;
-    while ((current = walker.nextNode())) nodes.push(current as Text);
+type SelectionRequest = { kind: 'text'; needle: string } | { kind: 'lastChars'; count: number };
 
-    const endNode = nodes.at(-1);
-    if (!endNode) throw new Error('selectLastCharacters: editor has no text');
+/**
+ * Set a ProseMirror selection directly and wait for it to reach the DOM.
+ *
+ * Both public helpers funnel through here so the position arithmetic exists
+ * once. Getting it wrong is easy and quiet: positions are not characters. An
+ * inline atom such as an image occupies a position and contributes no text, and
+ * a block boundary costs two positions but yields one newline — so any mapping
+ * that adds a string index to a block start is wrong the moment a document
+ * contains either.
+ */
+async function applyEditorSelection(page: Page, request: SelectionRequest) {
+  const range = await page.evaluate((req) => {
+    const editor = (window as unknown as { __quillEditor?: QuillEditorHandle }).__quillEditor;
+    if (!editor) throw new Error('editor selection: no editor handle on window');
 
-    let remaining = requested;
-    let startNode = endNode;
-    let startOffset = endNode.data.length;
-    for (let i = nodes.length - 1; i >= 0 && remaining > 0; i--) {
-      const node = nodes[i];
-      const consumed = Math.min(remaining, node.data.length);
-      startNode = node;
-      startOffset = node.data.length - consumed;
-      remaining -= consumed;
+    // A flat sequence of SELECTABLE TOKENS across the whole document. Each
+    // token carries the range it occupies, because a character and a block
+    // separator are not the same width: a character is one position, while the
+    // newline between two text blocks spans from the end of one block's text to
+    // the start of the next.
+    //
+    // Representing both uniformly is what makes the arithmetic survive the
+    // cases that have broken it repeatedly — inline atoms, trailing images,
+    // empty paragraphs, and counts that reach across a paragraph break.
+    const tokens: { from: number; to: number; char: string; separator: boolean }[] = [];
+    let previousTextEnd: number | null = null;
+    let previousReachedBlockEnd = false;
+    // Something between two runs of text that is not just the block break.
+    // A truly empty paragraph is transparent; anything with content is not.
+    let barrier = false;
+
+    editor.state.doc.descendants((block, blockPos) => {
+      if (!block.isTextblock) {
+        // A block-level atom such as a horizontal rule sits between the two
+        // runs of text; bridging across it would select it. Text nodes are
+        // themselves leaves, so exclude them explicitly — they reach here only
+        // if traversal descends into a block we already accounted for.
+        if (!block.isText && (block.isLeaf || block.isAtom)) barrier = true;
+        return;
+      }
+
+      const blockTokens: { from: number; to: number; char: string; separator: boolean }[] = [];
+      block.descendants((child, offset) => {
+        if (child.isText && typeof child.text === 'string') {
+          for (let i = 0; i < child.text.length; i += 1) {
+            const at = blockPos + 1 + offset + i;
+            blockTokens.push({ from: at, to: at + 1, char: child.text[i], separator: false });
+          }
+        }
+        return false;
+      });
+      // An empty paragraph contributes no selectable text and must not create a
+      // separator; anchoring to one is what made a trailing blank line swallow
+      // a character.
+      if (blockTokens.length === 0) {
+        // An empty paragraph contributes nothing and is transparent. A block
+        // holding only an image contributes no TEXT but is very much there.
+        if (block.content.size > 0) barrier = true;
+        return false;
+      }
+
+      // Bridge to the previous block ONLY when nothing sits between the two
+      // runs of text. If the previous block ended with an image, or this one
+      // starts with one, the gap is not a bare newline and selecting across it
+      // would silently swallow that atom.
+      const startsAtContentStart = blockTokens[0].from === blockPos + 1;
+      const endsAtContentEnd =
+        blockTokens[blockTokens.length - 1].to === blockPos + 1 + block.content.size;
+
+      if (previousTextEnd !== null && previousReachedBlockEnd && startsAtContentStart && !barrier) {
+        tokens.push({
+          from: previousTextEnd,
+          to: blockTokens[0].from,
+          char: '\n',
+          separator: true,
+        });
+      }
+      tokens.push(...blockTokens);
+      previousTextEnd = blockTokens[blockTokens.length - 1].to;
+      previousReachedBlockEnd = endsAtContentEnd;
+      barrier = false;
+      // Never descend into a block already accounted for: its text children are
+      // leaves and would otherwise be mistaken for intervening atoms.
+      return false;
+    });
+
+    // Two tokens are selectable as one range only if the first ends exactly
+    // where the second begins. Marks satisfy that; an inline atom does not,
+    // because it occupies positions while contributing no token.
+    const joins = (start: number, length: number) => {
+      for (let i = 1; i < length; i += 1) {
+        if (tokens[start + i].from !== tokens[start + i - 1].to) return false;
+      }
+      return true;
+    };
+
+    let found: { from: number; to: number } | null = null;
+
+    if (req.kind === 'text') {
+      const text = tokens.map((token) => token.char).join('');
+      let index = text.indexOf(req.needle);
+      while (index >= 0) {
+        // A needle must resolve inside ONE text block. The token stream is
+        // global so that a character count can span a paragraph break, but
+        // matching text across one would quietly change what this helper means.
+        const spansBlocks = tokens
+          .slice(index, index + req.needle.length)
+          .some((token) => token.separator);
+        if (!spansBlocks && joins(index, req.needle.length)) {
+          found = { from: tokens[index].from, to: tokens[index + req.needle.length - 1].to };
+          break;
+        }
+        index = text.indexOf(req.needle, index + 1);
+      }
+    } else {
+      if (tokens.length >= req.count) {
+        const start = tokens.length - req.count;
+        if (joins(start, req.count)) {
+          found = { from: tokens[start].from, to: tokens[tokens.length - 1].to };
+        }
+      }
     }
-    if (remaining > 0) {
-      throw new Error(`selectLastCharacters: document is shorter than ${requested} characters`);
-    }
 
-    (root as HTMLElement).focus({ preventScroll: true });
-    const range = document.createRange();
-    range.setStart(startNode, startOffset);
-    range.setEnd(endNode, endNode.data.length);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
-  }, count);
+    if (!found) return null;
+    editor.commands.focus();
+    editor.commands.setTextSelection(found);
+    return found;
+  }, request);
 
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-  );
-  const selected = await page.evaluate(() => window.getSelection()?.toString().length ?? 0);
-  if (selected !== count) {
-    throw new Error(`selectLastCharacters: selected ${selected} characters, expected ${count}`);
+  if (!range) return null;
+
+  // Wait for the flush against the range we ASKED for, checking BOTH models.
+  // Matching only the DOM would report success even if something moved the
+  // editor's own selection afterwards. The polled value is structured so a
+  // timeout prints the actual positions instead of just "false".
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const editor = (window as unknown as { __quillEditor?: QuillEditorHandle }).__quillEditor;
+        const selection = window.getSelection();
+        if (!editor || !selection || selection.rangeCount === 0) return { state: 'no-selection' };
+
+        const domRange = selection.getRangeAt(0);
+        const view = editor.view;
+        if (
+          !view.dom.contains(domRange.startContainer) ||
+          !view.dom.contains(domRange.endContainer)
+        ) {
+          return { state: 'outside-editor' };
+        }
+        try {
+          const pm = editor.state.selection;
+          return {
+            state: 'mapped',
+            pmFrom: pm.from,
+            pmTo: pm.to,
+            domFrom: view.posAtDOM(domRange.startContainer, domRange.startOffset),
+            domTo: view.posAtDOM(domRange.endContainer, domRange.endOffset),
+          };
+        } catch {
+          return { state: 'unmappable' };
+        }
+      }),
+    )
+    .toEqual({
+      state: 'mapped',
+      pmFrom: range.from,
+      pmTo: range.to,
+      domFrom: range.from,
+      domTo: range.to,
+    });
+
+  return range;
+}
+
+/**
+ * Select an exact run of text by setting ProseMirror's selection directly.
+ *
+ * For tests that need a particular selection to exist but are not testing how it
+ * came to exist. Driving that with a tight `Shift+Arrow` loop is what produced
+ * the production-bundle flakes: every key arrives and the DOM selection widens
+ * correctly, then an asynchronous reconciliation collapses it back to a caret
+ * partway through, and ProseMirror faithfully commits the partial range.
+ *
+ * Tests whose SUBJECT is keyboard selection must still drive real keys — see
+ * "keyboard selection extends through ProseMirror, one key at a time".
+ */
+export async function selectEditorText(page: Page, needle: string) {
+  if (needle.length === 0) throw new Error('selectEditorText: needle must not be empty');
+  const range = await applyEditorSelection(page, { kind: 'text', needle });
+  if (!range) {
+    throw new Error(
+      `selectEditorText: no text block contains ${JSON.stringify(needle)} as one ` +
+        'contiguous run (a needle spanning a block boundary or an inline image is not supported)',
+    );
   }
+}
+
+/**
+ * Select the last `count` characters, for tests that need a selection to exist
+ * but are not testing how it was made. See selectEditorText for why this does
+ * not drive keys.
+ */
+export async function selectLastCharacters(page: Page, count: number) {
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error(`selectLastCharacters: count must be a positive integer, got ${count}`);
+  }
+  const range = await applyEditorSelection(page, { kind: 'lastChars', count });
+  if (!range) {
+    throw new Error(
+      `selectLastCharacters: could not select ${count} contiguous characters at the end`,
+    );
+  }
+}
+
+interface PmNode {
+  isTextblock: boolean;
+  isText: boolean;
+  isLeaf: boolean;
+  isAtom: boolean;
+  text?: string;
+  content: { size: number };
+  descendants: (fn: (child: PmNode, offset: number) => boolean | void) => void;
+}
+
+interface QuillEditorHandle {
+  view: {
+    dom: HTMLElement;
+    posAtDOM: (node: Node, offset: number) => number;
+  };
+  state: {
+    selection: { from: number; to: number };
+    doc: {
+      descendants: (fn: (node: PmNode, pos: number) => boolean | void) => void;
+      textBetween: (from: number, to: number, blockSeparator?: string) => string;
+    };
+  };
+  commands: {
+    focus: () => void;
+    setTextSelection: (range: { from: number; to: number }) => void;
+  };
 }

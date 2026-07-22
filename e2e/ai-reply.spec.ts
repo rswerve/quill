@@ -10,7 +10,12 @@ import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
 import { ipcFixtures } from './helpers/ipcFixtures';
-import { activeEditor, openMemoryFile, setupMemoryTauri } from './helpers/memoryTauri';
+import {
+  activeEditor,
+  openMemoryFile,
+  selectEditorText,
+  setupMemoryTauri,
+} from './helpers/memoryTauri';
 
 type MockScriptStep =
   | { kind: 'model'; model: string }
@@ -495,11 +500,10 @@ test('AI reply: a transient error shows Retry (no Re-link) and retry succeeds in
 // anywhere in the document.
 async function addCommentOnPrefix(page: Page, anchor: string, count: number, replyText: string) {
   await page.keyboard.type(anchor);
-  await page.keyboard.press('Home'); // to line start (platform-agnostic; Cmd/Ctrl+Left differ across OSes)
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < count; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page, anchor.slice(0, count));
+  // Setup, not subject: this helper exists to frame a request, and the tight
+  // Shift+ArrowRight loop it used to run is what failed 9 times in 100 against
+  // a production bundle.
+  await selectEditorText(page, anchor.slice(0, count));
   await page.getByRole('button', { name: 'Add comment to selection' }).click();
   await page.locator('[data-card-id="comment-composer"] textarea').fill(replyText);
   await page.getByRole('button', { name: 'Ask Claude' }).click();
