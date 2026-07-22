@@ -18,6 +18,30 @@ export interface LinkTarget {
 const ALLOWED_LINK_SCHEMES = ['http', 'https', 'mailto', 'tel'];
 
 /**
+ * Whether a link mark may carry this href, replacing Tiptap's default check.
+ *
+ * Tiptap's built-in validator rejects a scheme-less relative path that contains
+ * a slash: its regex tests `[^a-z+.-:]`, where `.-:` is read as a character
+ * *range* (`.` through `:`) that silently covers `/`. So `GUIDE.md` passes but
+ * `docs/GUIDE.md` fails. A rejected href drops the mark at parse time, and the
+ * next Markdown write then emits bare text — silently deleting the link target
+ * from the user's file. Relative links to sibling documents are ordinary in
+ * Markdown, so accept any scheme-less reference and defer everything carrying
+ * an explicit scheme to the default allowlist, which still blocks `javascript:`
+ * and `data:`. A scheme-less href cannot express either.
+ */
+export function isAllowedLinkUri(
+  url: string,
+  ctx: { defaultValidate: (url: string) => boolean },
+): boolean {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return ctx.defaultValidate(url);
+  return true;
+}
+
+/** Link options shared by the editor and the Markdown round-trip guarantees. */
+export const LINK_OPTIONS = { openOnClick: false, isAllowedUri: isAllowedLinkUri };
+
+/**
  * Make a typed URL usable as an href. Safe explicit schemes and relative
  * references pass through; bare domains receive https://; unsafe schemes fail.
  */

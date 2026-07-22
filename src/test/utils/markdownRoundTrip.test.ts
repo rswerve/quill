@@ -5,15 +5,16 @@ import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { Markdown } from 'tiptap-markdown';
 import { describe, it, expect } from 'vitest';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 // Mirrors the Markdown-relevant extension set in components/Editor.tsx —
 // keep the two in sync, or these guarantees say nothing about the app.
-function roundTrip(md: string): string {
-  const editor = new Editor({
+function buildEditor(md: string): Editor {
+  return new Editor({
     extensions: [
       StarterKit.configure({
         trailingNode: false,
-        link: { openOnClick: false },
+        link: LINK_OPTIONS,
         underline: false,
       }),
       MarkdownImage,
@@ -27,11 +28,28 @@ function roundTrip(md: string): string {
     ],
     content: md,
   });
+}
+
+function roundTrip(md: string): string {
+  const editor = buildEditor(md);
   const out = (editor.storage as unknown as Record<string, { getMarkdown: () => string }>)[
     'markdown'
   ].getMarkdown();
   editor.destroy();
   return out;
+}
+
+/** Every href carried by a link mark after loading `md`. */
+function linkHrefs(md: string): string[] {
+  const editor = buildEditor(md);
+  const hrefs: string[] = [];
+  editor.state.doc.descendants((node) => {
+    for (const mark of node.marks) {
+      if (mark.type.name === 'link') hrefs.push(String(mark.attrs['href']));
+    }
+  });
+  editor.destroy();
+  return hrefs;
 }
 
 /** Load → serialize must preserve the construct, and serializing the result
@@ -85,6 +103,42 @@ describe('markdown round-trip fidelity', () => {
     expect(roundTrip('A [link](https://example.com) here.')).toBe(
       'A [link](https://example.com) here.',
     );
+  });
+
+  // Regression: Tiptap's default URI check rejects a scheme-less path
+  // containing a slash, which dropped the mark on load and then wrote the
+  // document back with the link target deleted. Quill's own README lost three
+  // links this way. Relative links to sibling documents are ordinary Markdown.
+  it.each([
+    ['bare relative', '[Guide](docs/GUIDE.md)'],
+    ['bare relative, nested', '[Note](docs/release-notes/v1.1.7.md)'],
+    ['dot-relative', '[Guide](./docs/GUIDE.md)'],
+    ['parent-relative', '[Guide](../docs/GUIDE.md)'],
+    ['root-relative', '[Guide](/docs/GUIDE.md)'],
+    ['sibling file', '[Guide](GUIDE.md)'],
+    ['anchor', '[Section](#troubleshooting)'],
+    ['relative with anchor', '[Section](docs/GUIDE.md#usage)'],
+  ])('preserves a %s link target', (_name, md) => {
+    expect(roundTrip(`See ${md} here.`)).toBe(`See ${md} here.`);
+  });
+
+  it.each([
+    ['javascript:', '[click](javascript:alert(1))'],
+    ['data:', '[click](data:text/html;base64,PHNjcmlwdD4=)'],
+    ['vbscript:', '[click](vbscript:msgbox)'],
+  ])('never builds a link mark for a %s href', (_scheme, md) => {
+    // Widening the validator to admit relative paths must not admit an
+    // executable scheme. The serialized text may still *mention* the scheme —
+    // it comes back with the brackets escaped, so it is inert prose — but no
+    // link mark may carry it, on load or on any later reopen of what we wrote.
+    expect(linkHrefs(md)).toEqual([]);
+    expect(linkHrefs(roundTrip(md))).toEqual([]);
+  });
+
+  it('carries a relative href onto the link mark itself', () => {
+    // The round-trip above passes even if the target is preserved as plain
+    // text, so assert the mark actually exists with the right href.
+    expect(linkHrefs('[Guide](docs/GUIDE.md)')).toEqual(['docs/GUIDE.md']);
   });
 
   it('core formatting round-trips exactly', () => {
