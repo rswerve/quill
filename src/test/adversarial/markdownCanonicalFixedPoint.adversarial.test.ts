@@ -16,6 +16,7 @@ import {
   TrackedInsert,
 } from '../../extensions/TrackChanges';
 import { parseMarkdownToDoc } from '../../utils/markdownDoc';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 /**
  * Change-2 integrity oracle: DocumentTab persists `serialize(canonDoc)`, while review
@@ -36,7 +37,7 @@ function makeEditor(): Editor {
       MarkdownLinkSyntax,
       StarterKit.configure({
         trailingNode: false,
-        link: { openOnClick: false },
+        link: LINK_OPTIONS,
         code: false,
         underline: false,
         strike: false,

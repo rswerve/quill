@@ -3,6 +3,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinkButton } from '../../components/Toolbar';
+import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 let editor: Editor | null = null;
 let editorElement: HTMLDivElement | null = null;
@@ -13,7 +14,7 @@ function makeEditor(content: string) {
   document.body.appendChild(element);
   editor = new Editor({
     element,
-    extensions: [StarterKit.configure({ link: { openOnClick: false } })],
+    extensions: [StarterKit.configure({ link: LINK_OPTIONS })],
     content,
   });
   vi.spyOn(editor.view, 'coordsAtPos').mockReturnValue({
