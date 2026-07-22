@@ -8,6 +8,9 @@ const e2ePort = Number(process.env.QUILL_E2E_PORT ?? 1420);
 const e2eUrl = `http://localhost:${e2ePort}`;
 const projectRoot = import.meta.dirname;
 const collectCoverage = process.env.E2E_COVERAGE === '1';
+// Each CI e2e job writes its own coverage directory so the merge step can take
+// both as inputs. Unset (local runs, single-job use) keeps the original path.
+const coverageDir = process.env.E2E_COVERAGE_DIR ?? 'coverage/e2e';
 
 const reporters: ReporterDescription[] = process.env.CI
   ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
@@ -18,10 +21,10 @@ if (collectCoverage) {
     'monocart-reporter',
     {
       name: 'Quill end-to-end tests',
-      outputFile: 'coverage/e2e/tests/index.html',
+      outputFile: `${coverageDir}/tests/index.html`,
       coverage: {
         name: 'Quill Playwright coverage',
-        outputDir: 'coverage/e2e',
+        outputDir: coverageDir,
         reports: [
           ['raw', { outputDir: 'raw' }],
           ['v8-json', { outputFile: 'coverage-report.json' }],
