@@ -119,11 +119,7 @@ export default defineConfig({
     // A production run must NEVER reuse: a dev server already listening on this
     // port would be silently accepted, and the run would report success against
     // the very thing it exists not to test.
-    reuseExistingServer: useProductionBuild
-      ? false
-      : process.env.QUILL_E2E_PORT
-        ? false
-        : !process.env.CI,
+    reuseExistingServer: !useProductionBuild && !process.env.QUILL_E2E_PORT && !process.env.CI,
     // The production command has to compile the whole app before it can serve
     // anything, and 30s is a comfortable dev-server startup but a tight budget
     // for a cold build on a 4-vCPU runner.
