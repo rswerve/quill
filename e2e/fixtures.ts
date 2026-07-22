@@ -6,6 +6,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { addCoverageReport } from 'monocart-reporter';
+import { isCollectableCoverageUrl } from '../scripts/coveragePaths.mjs';
 
 const collectCoverage = process.env.E2E_COVERAGE === '1';
 
@@ -68,14 +69,14 @@ export const test = base.extend<{ codeCoverage: void }>({
             }),
           )
         ).flat();
+        // Shared with the reporter's entryFilter. Keeping the rule in one place
+        // is load-bearing: when these were separate copies, widening the
+        // reporter's did nothing, because this filter had already discarded the
+        // built bundle's chunks and a production run recorded zero coverage
+        // while appearing to succeed.
         const applicationEntries = entries.filter((entry) => {
           try {
-            const pathname = new URL(entry.url).pathname;
-            return (
-              pathname.startsWith('/src/') &&
-              /\.tsx?$/.test(pathname) &&
-              pathname !== '/src/main.tsx'
-            );
+            return isCollectableCoverageUrl(new URL(entry.url).pathname);
           } catch {
             return false;
           }

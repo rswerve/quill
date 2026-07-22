@@ -1,0 +1,63 @@
+# Runs the end-to-end suite against a real built bundle, rather than the Vite
+# dev server every other lane uses. Nothing else tests what users actually
+# download: the bundle boots differently, and React runs in production mode,
+# where StrictMode's double-mounting and other development-only behaviour are
+# absent.
+#
+# DELIBERATELY A SEPARATE WORKFLOW, not a job inside ci.yml. The coverage
+# regression gate picks its baseline with `listWorkflowRuns({workflow_id:
+# 'ci.yml', status: 'success'})` — a whole-run status. A flake in this lane would
+# make that entire CI run unsuccessful, so the commit's perfectly good combined
+# coverage artifact would be skipped and later pull requests graded against an
+# older tree. Omitting the job from the coverage job's `needs:` is not enough to
+# prevent that; it has to be outside ci.yml entirely.
+#
+# Collects NO coverage. Bundling coarsens the sourcemap, and the resulting report
+# credits lines that never ran — measured at ~61-198 phantom covered lines
+# depending on minification, including the bodies of icon components no test
+# renders. Coverage stays on the dev-server lane, where one module maps to one
+# file.
+#
+# Not a required status check while it earns trust.
+name: E2E production bundle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e-production:
+    name: End-to-end (Production bundle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # The webServer builds and serves the bundle. @macos-shortcuts is excluded
+      # for the same reason as the Linux dev-server lane: those chords mean
+      # something different, or nothing, outside macOS.
+      - name: Run Playwright tests against the built bundle
+        run: npm run test:e2e:production -- --workers=4
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-production
+          path: playwright-report/
+          retention-days: 7

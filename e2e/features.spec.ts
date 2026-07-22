@@ -14,7 +14,12 @@ import {
   expectPageTitleToContain,
   expectSelectionText,
 } from './helpers/deterministicWaits';
-import { activeEditor, activeTabHost, selectLastCharacters } from './helpers/memoryTauri';
+import {
+  selectEditorText,
+  activeEditor,
+  activeTabHost,
+  selectLastCharacters,
+} from './helpers/memoryTauri';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -847,20 +852,14 @@ test('deleting a comment removes the card and the mark', async ({ page }) => {
 test('multiple comments stack without overlapping', async ({ page }) => {
   const { editor } = await setup(page);
   await page.keyboard.type('one two three');
-  // Comment on "one"
-  await page.keyboard.press('Home');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.up('Shift');
+  // The selections here are setup — this test is about how the two cards stack,
+  // not about how a selection is made. Tight Shift+Arrow loops are what produced
+  // the production-bundle flakes.
+  await selectEditorText(page, 'one');
   await addCommentViaPlusButton(page, 'A');
-  // Comment on "three"
   await editor.click();
   await expect(editor).toBeFocused();
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page, 'three');
+  await selectEditorText(page, 'three');
   await addCommentViaPlusButton(page, 'B');
 
   const cards = page.locator('[data-comment-card]');
@@ -1422,4 +1421,25 @@ test('Enter in suggesting mode leaves the current paragraph structurally unchang
 test('editor opts into spellcheck explicitly', async ({ page }) => {
   const { editor } = await setup(page);
   await expect(editor).toHaveAttribute('spellcheck', 'true');
+});
+
+// Setup-only selections now go straight to ProseMirror (selectLastCharacters),
+// which removed a whole class of race but would also have quietly retired our
+// only coverage of real key-driven selection. This test keeps that path honest:
+// it drives actual Shift+Arrow keys and gates on ProseMirror's committed state
+// after EACH one, so it cannot outrun the editor the way a tight loop does.
+test('keyboard selection extends through ProseMirror, one key at a time', async ({ page }) => {
+  const { editor } = await setup(page);
+  await editor.click();
+  await page.keyboard.type('alpha bravo');
+  await page.keyboard.press('End');
+
+  await page.keyboard.down('Shift');
+  for (const expected of ['o', 'vo', 'avo', 'ravo', 'bravo']) {
+    await page.keyboard.press('ArrowLeft');
+    await expectSelectionText(page, expected);
+  }
+  await page.keyboard.up('Shift');
+
+  await expectSelectionText(page, 'bravo');
 });

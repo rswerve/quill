@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 import type { Page, Locator } from '@playwright/test';
 import { expectEditorHtml, expectSelectionText } from './helpers/deterministicWaits';
-import { activeEditor } from './helpers/memoryTauri';
+import { activeEditor, selectEditorText } from './helpers/memoryTauri';
 
 async function setup(page: Page): Promise<{ editor: Locator }> {
   await page.goto('/');
@@ -174,13 +174,10 @@ test('rejecting a deletion removes the tracked mark and restores the text', asyn
   await enableSuggesting(page);
   await editor.click();
 
-  // Select the last word "me" only — avoids block-boundary issues from select-all + delete
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page);
+  // Select the last word "me" only — avoids block-boundary issues from
+  // select-all + delete. Set directly: the selection is setup for the Backspace
+  // under test, and the old two-arrow loop carried the same latent race.
+  await selectEditorText(page, 'me');
   await page.keyboard.press('Backspace');
 
   const rejectBtn = page.getByRole('button', { name: 'Reject', exact: true }).first();

@@ -1,5 +1,5 @@
 import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
-import { applicationSourcePath, isApplicationSource } from './scripts/coveragePaths.mjs';
+import { applicationSourcePath, isCollectableCoverageUrl } from './scripts/coveragePaths.mjs';
 
 // Dedicated worktrees may be tested while Maz is driving another build on
 // Quill's default port. Keep CI/local defaults unchanged while allowing an
@@ -8,6 +8,9 @@ const e2ePort = Number(process.env.QUILL_E2E_PORT ?? 1420);
 const e2eUrl = `http://localhost:${e2ePort}`;
 const projectRoot = import.meta.dirname;
 const collectCoverage = process.env.E2E_COVERAGE === '1';
+const useProductionBuild = process.env.E2E_PRODUCTION === '1';
+const e2eViteConfig = 'e2e/visual/vite.e2e.config.ts';
+const productionOutDir = 'dist-e2e';
 // Each CI e2e job writes its own coverage directory so the merge step can take
 // both as inputs. Unset (local runs, single-job use) keeps the original path.
 const coverageDir = process.env.E2E_COVERAGE_DIR ?? 'coverage/e2e';
@@ -33,11 +36,12 @@ if (collectCoverage) {
           ['html', { subdir: 'html' }],
           ['console-summary'],
         ],
+        // Shared with the fixture that captures these entries, so the two can
+        // never drift apart again.
         entryFilter: (entry: { url?: string }) => {
           if (!entry.url) return false;
           try {
-            const pathname = new URL(entry.url).pathname;
-            return pathname.startsWith('/src/') && isApplicationSource(pathname);
+            return isCollectableCoverageUrl(new URL(entry.url).pathname);
           } catch {
             return false;
           }
@@ -95,11 +99,32 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npx vite --config e2e/visual/vite.e2e.config.ts --port ${e2ePort}`,
+    // E2E_PRODUCTION=1 builds and serves a bundle instead of running the dev
+    // server, so the suite exercises something much closer to what ships — and
+    // stops paying ~188 module evaluations per page load.
+    // Built with the ROOT vite.config.ts — the same config `tauri build` uses —
+    // so this lane cannot drift from the artifact that ships. Only the output
+    // directory and sourcemaps are overridden, and neither changes runtime
+    // behaviour. Building through the test config instead would reintroduce
+    // exactly the divergence this lane exists to detect.
+    command: useProductionBuild
+      ? `npx vite build --outDir ${productionOutDir} --sourcemap && npx vite preview --outDir ${productionOutDir} --port ${e2ePort} --strictPort`
+      : `npx vite --config ${e2eViteConfig} --port ${e2ePort}`,
     url: e2eUrl,
     // An explicitly isolated worktree run must own its server. Default local
     // runs retain the convenient reuse behavior on Quill's canonical port.
-    reuseExistingServer: process.env.QUILL_E2E_PORT ? false : !process.env.CI,
-    timeout: 30_000,
+    //
+    // A production run must NEVER reuse: a dev server already listening on this
+    // port would be silently accepted, and the run would report success against
+    // the very thing it exists not to test.
+    reuseExistingServer: useProductionBuild
+      ? false
+      : process.env.QUILL_E2E_PORT
+        ? false
+        : !process.env.CI,
+    // The production command has to compile the whole app before it can serve
+    // anything, and 30s is a comfortable dev-server startup but a tight budget
+    // for a cold build on a 4-vCPU runner.
+    timeout: useProductionBuild ? 120_000 : 30_000,
   },
 });
