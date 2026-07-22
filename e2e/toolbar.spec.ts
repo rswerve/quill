@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 import { expectSelectionText } from './helpers/deterministicWaits';
-import { activeEditor } from './helpers/memoryTauri';
+import { activeEditor, selectEditorText } from './helpers/memoryTauri';
 
 async function setupEditor(page: Page) {
   await page.goto('/');
@@ -44,12 +44,9 @@ test('bold button with partial selection', async ({ page }) => {
   const editor = await setupEditor(page);
 
   await page.keyboard.type('hello world');
-  // Select "world" (last 5 chars)
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page, 'world');
+  // Setup, not subject — this test is about the Bold button, not about how a
+  // selection is made.
+  await selectEditorText(page, 'world');
 
   await page.locator('[title="Bold (Cmd+B)"]').click();
   await expect(editor.locator('strong')).toHaveText('world');
@@ -67,15 +64,11 @@ test('bold rail state distinguishes full, mixed, and plain selections', async ({
     bold.evaluate((element) => getComputedStyle(element).backgroundImage);
 
   await page.keyboard.type('bold plain');
-  await page.keyboard.press('Home');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.up('Shift');
-  // Wait for ProseMirror to own the selection before clicking. Without this the
-  // click can land while the editor is still at a collapsed caret, which sets a
-  // stored bold mark instead of bolding "bold" — and the aria-pressed assertion
-  // below then passes on a document where nothing was ever formatted.
-  await expectSelectionText(page, 'bold');
+  // Selections here are setup for the rail-state assertions, not the subject of
+  // the test. Set them directly: a tight Shift+Arrow loop lets an asynchronous
+  // reconciliation collapse the selection mid-sequence, and the Bold click then
+  // lands on a caret and sets a stored mark instead of formatting anything.
+  await selectEditorText(page, 'bold');
   await bold.click();
   // Full-bold selection → active: a solid accent wash, never a gradient. Move the
   // mouse off the button before reading — its hover fill (higher specificity than
@@ -84,17 +77,12 @@ test('bold rail state distinguishes full, mixed, and plain selections', async ({
   await page.mouse.move(600, 400);
   expect(await backgroundImage()).not.toContain('gradient');
 
-  await page.keyboard.press('ControlOrMeta+a');
-  await expectSelectionText(page, 'bold plain');
+  await selectEditorText(page, 'bold plain');
   // Part-bold selection → mixed: the diagonal gradient fill.
   await expect(bold).toHaveAttribute('aria-pressed', 'mixed');
   await page.mouse.move(600, 400);
   expect(await backgroundImage()).toContain('linear-gradient');
 
-  await page.keyboard.press('End');
-  await page.keyboard.down('Shift');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
-  await page.keyboard.up('Shift');
-  await expectSelectionText(page, 'plain');
+  await selectEditorText(page, 'plain');
   await expect(bold).toHaveAttribute('aria-pressed', 'false');
 });

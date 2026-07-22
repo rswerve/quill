@@ -80,6 +80,7 @@ export default tseslint.config(
     // dodge the root-relative patterns above and false-fail the lint.
     ignores: [
       'dist/',
+      'dist-e2e/',
       'src-tauri/',
       'node_modules/',
       '.claude/',
