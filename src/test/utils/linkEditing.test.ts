@@ -12,6 +12,7 @@ import {
   applyLinkTarget,
   captureLinkAtPosition,
   captureLinkTarget,
+  isAllowedLinkUri,
   isOpenableHref,
   removeLinkTarget,
 } from '../../utils/linkEditing';
@@ -148,5 +149,72 @@ describe('shared link editing', () => {
     expect(isOpenableHref('./sibling.md')).toBe(false);
     expect(isOpenableHref('#section')).toBe(false);
     expect(isOpenableHref('javascript:alert(1)')).toBe(false);
+  });
+});
+
+describe('isAllowedLinkUri', () => {
+  // The real allowlist Tiptap applies to anything carrying an explicit scheme.
+  const ALLOWED_SCHEMES = [
+    'http',
+    'https',
+    'ftp',
+    'ftps',
+    'mailto',
+    'tel',
+    'callto',
+    'sms',
+    'cid',
+    'xmpp',
+  ];
+  const defaultValidate = (url: string) =>
+    ALLOWED_SCHEMES.some((s) => url.trim().toLowerCase().startsWith(`${s}:`));
+  const allowed = (url: string) => isAllowedLinkUri(url, { defaultValidate });
+
+  it.each([
+    'docs/GUIDE.md',
+    'docs/release-notes/v1.1.7.md',
+    './docs/GUIDE.md',
+    '../docs/GUIDE.md',
+    '/docs/GUIDE.md',
+    'GUIDE.md',
+    '#anchor',
+    'docs/GUIDE.md#usage',
+    'a/b/c/d.md',
+    'my notes/draft one.md',
+  ])('admits the relative reference %s', (url) => {
+    expect(allowed(url)).toBe(true);
+  });
+
+  it.each(['https://example.com', 'mailto:a@b.com', 'tel:+15551234'])(
+    'defers the allowed scheme %s to the default validator',
+    (url) => {
+      expect(allowed(url)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['plain', 'javascript:alert(1)'],
+    ['uppercase', 'JavaScript:alert(1)'],
+    ['data url', 'data:text/html;base64,PHNjcmlwdD4='],
+    ['vbscript', 'vbscript:msgbox'],
+    ['file', 'file:///etc/passwd'],
+  ])('rejects the executable scheme (%s)', (_name, url) => {
+    expect(allowed(url)).toBe(false);
+  });
+
+  // Regression: the scheme test must ignore exactly the characters Tiptap
+  // ignores, or an obfuscated scheme reads as a relative path and skips the
+  // allowlist entirely while a browser still executes it.
+  it.each([
+    ['leading space', ' javascript:alert(1)'],
+    ['embedded newline', 'java\nscript:alert(1)'],
+    ['embedded tab', 'java\tscript:alert(1)'],
+    ['embedded NUL', 'java\u0000script:alert(1)'],
+    ['leading NUL', '\u0000javascript:alert(1)'],
+    ['non-breaking space', 'java\u00A0script:alert(1)'],
+    ['ideographic space', 'java\u3000script:alert(1)'],
+    ['en quad', 'java\u2000script:alert(1)'],
+  ])('rejects an obfuscated javascript scheme (%s)', (_name, url) => {
+    expect(allowed(url)).toBe(false);
   });
 });

@@ -34,9 +34,27 @@ export function isAllowedLinkUri(
   url: string,
   ctx: { defaultValidate: (url: string) => boolean },
 ): boolean {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return ctx.defaultValidate(url);
+  // Strip the same characters Tiptap strips before testing for a scheme.
+  // Without this, `java\nscript:alert(1)` or a leading space would fail the
+  // scheme test, be misread as a relative path, and skip the allowlist —
+  // while a browser, which ignores that whitespace, would still execute it.
+  const bare = url.replace(URI_IGNORED_WHITESPACE, '');
+  if (SCHEME_PREFIX.test(bare)) return ctx.defaultValidate(url);
   return true;
 }
+
+/**
+ * Matches Tiptap's own whitespace class: NUL-space plus the Unicode spaces.
+ * Matching control characters is the entire point here - they are what an
+ * attacker hides a scheme behind - so the usual "no control characters in a
+ * regular expression" rule is deliberately inverted.
+ */
+const URI_IGNORED_WHITESPACE =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g;
+
+/** A leading `scheme:` per RFC 3986. */
+const SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
 
 /** Link options shared by the editor and the Markdown round-trip guarantees. */
 export const LINK_OPTIONS = { openOnClick: false, isAllowedUri: isAllowedLinkUri };
