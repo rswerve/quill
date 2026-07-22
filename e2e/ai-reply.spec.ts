@@ -191,7 +191,9 @@ test('local note stays private and never starts an AI request', async ({ page })
   await expect(page.locator('[data-reply-role="ai"]')).toHaveCount(0);
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
   expect(
     await page.evaluate(() => (window as unknown as { __lastSpawnArgs?: unknown }).__lastSpawnArgs),

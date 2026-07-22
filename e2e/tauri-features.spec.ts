@@ -15,7 +15,11 @@ import { ipcFixtures } from './helpers/ipcFixtures';
 import { activeEditor } from './helpers/memoryTauri';
 import { expectPageTitleToContain, expectSelectionText } from './helpers/deterministicWaits';
 
-type InvokeHandler = (cmd: string, args: Record<string, unknown>) => unknown;
+type IpcCtx = {
+  fixtures?: Record<string, unknown>;
+  emit: (event: string, payload: unknown) => void;
+};
+type InvokeHandler = (cmd: string, args: Record<string, unknown>, ctx: IpcCtx) => unknown;
 
 async function setupWithIPC(
   page: Page,
@@ -196,11 +200,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
   page,
 }) => {
   // The handler must be self-contained — no closure variables.
-  const handler = (
-    cmd: string,
-    args: Record<string, unknown>,
-    ctx: { fixtures: { autoBindSession: Record<string, unknown> } },
-  ) => {
+  const handler = (cmd: string, args: Record<string, unknown>, ctx: IpcCtx) => {
     if (cmd === 'show_open_dialog') return '/tmp/stray.md';
     if (cmd === 'read_file') {
       const path = args.path as string;
@@ -208,7 +208,7 @@ test('auto-bind: stray .md with no sidecar links to the canonical IPC session', 
       return null; // .comments.json miss → typed absent
     }
     if (cmd === 'find_session_for_markdown') {
-      return ctx.fixtures.autoBindSession;
+      return ctx.fixtures?.autoBindSession;
     }
     return null;
   };

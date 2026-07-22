@@ -93,7 +93,9 @@ async function selectCommentSlice(page: import('@playwright/test').Page, from: n
   );
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
 }
 

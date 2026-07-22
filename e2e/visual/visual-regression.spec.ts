@@ -162,7 +162,9 @@ async function openVisualDocument(
   await expect(page.locator('[aria-label="Document location"]')).not.toHaveText('Untitled');
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
   // A session-linked fixture surfaces the (expected) session picker — which is
   // itself a role="dialog" — so dismiss it BEFORE the unexpected-dialog guard,
@@ -223,7 +225,9 @@ async function selectText(page: Page, needle: string, occurrence = 0): Promise<v
   );
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe(needle);
 }
