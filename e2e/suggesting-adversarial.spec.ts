@@ -47,7 +47,9 @@ async function selectText(editor: Locator, from: number, to: number): Promise<vo
     .page()
     .evaluate(
       () =>
-        new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
     );
 }
 

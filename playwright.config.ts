@@ -90,7 +90,9 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         viewport: { width: 1240, height: 800 },
         deviceScaleFactor: 1,
-        reducedMotion: 'reduce',
+        // reducedMotion isn't hoisted to top-level `use` in this Playwright
+        // version; it must go through contextOptions to actually take effect.
+        contextOptions: { reducedMotion: 'reduce' },
         locale: 'en-US',
         timezoneId: 'America/Chicago',
         colorScheme: 'light',
