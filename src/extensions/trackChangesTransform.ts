@@ -3,7 +3,6 @@ import { TextSelection } from '@tiptap/pm/state';
 import type { EditorState, Transaction } from '@tiptap/pm/state';
 import { AddMarkStep, Mapping, RemoveMarkStep, ReplaceStep } from '@tiptap/pm/transform';
 import type { Step } from '@tiptap/pm/transform';
-import { v4 as uuidv4 } from 'uuid';
 import { classifyDeletedRanges, classifyTrackingTransaction } from './trackChangesClassification';
 import type { ClassifiedTrackingStep, DeletedRangePlan } from './trackChangesClassification';
 import {
@@ -192,7 +191,7 @@ function chooseFormatIdentity(
   if (!identity) {
     const now = Date.now();
     identity = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       operation: 'format',
       authorID,
       status: 'pending',
@@ -364,7 +363,7 @@ function newChangeIdentity(
 ): ChangeIdentity {
   const now = Date.now();
   return {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     authorID,
     status: 'pending',
     createdAt: now,
