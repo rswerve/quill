@@ -37,14 +37,17 @@ async function proseMirrorSelection(page: Page): Promise<{ text: string; empty: 
     const editor = (window as unknown as { __quillEditor?: EditorLike }).__quillEditor;
     if (!editor?.state) return null;
     const { from, to, empty } = editor.state.selection;
-    return { text: editor.state.doc.textBetween(from, to), empty };
+    // '\n' between blocks, so a multi-block selection reads the way the DOM
+    // selection did. Without a separator ProseMirror runs blocks together, and
+    // the first test to select across paragraphs would get "endbegin".
+    return { text: editor.state.doc.textBetween(from, to, '\n'), empty };
   });
 }
 
 interface EditorLike {
   state: {
     selection: { from: number; to: number; empty: boolean };
-    doc: { textBetween: (from: number, to: number) => string };
+    doc: { textBetween: (from: number, to: number, blockSeparator?: string) => string };
   };
 }
 
