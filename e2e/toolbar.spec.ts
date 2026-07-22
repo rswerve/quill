@@ -71,6 +71,11 @@ test('bold rail state distinguishes full, mixed, and plain selections', async ({
   await page.keyboard.down('Shift');
   for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
   await page.keyboard.up('Shift');
+  // Wait for ProseMirror to own the selection before clicking. Without this the
+  // click can land while the editor is still at a collapsed caret, which sets a
+  // stored bold mark instead of bolding "bold" — and the aria-pressed assertion
+  // below then passes on a document where nothing was ever formatted.
+  await expectSelectionText(page, 'bold');
   await bold.click();
   // Full-bold selection → active: a solid accent wash, never a gradient. Move the
   // mouse off the button before reading — its hover fill (higher specificity than
@@ -80,6 +85,7 @@ test('bold rail state distinguishes full, mixed, and plain selections', async ({
   expect(await backgroundImage()).not.toContain('gradient');
 
   await page.keyboard.press('ControlOrMeta+a');
+  await expectSelectionText(page, 'bold plain');
   // Part-bold selection → mixed: the diagonal gradient fill.
   await expect(bold).toHaveAttribute('aria-pressed', 'mixed');
   await page.mouse.move(600, 400);
@@ -89,5 +95,6 @@ test('bold rail state distinguishes full, mixed, and plain selections', async ({
   await page.keyboard.down('Shift');
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft');
   await page.keyboard.up('Shift');
+  await expectSelectionText(page, 'plain');
   await expect(bold).toHaveAttribute('aria-pressed', 'false');
 });

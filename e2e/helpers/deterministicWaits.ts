@@ -17,16 +17,48 @@ export async function expectEditorHtml(
     .toEqual({ contains, excludes });
 }
 
+/**
+ * Read the selection ProseMirror has actually committed.
+ *
+ * NOT `window.getSelection()`. A key press commits the DOM selection first;
+ * ProseMirror syncs its own state afterwards, on `selectionchange`. Gating on
+ * the DOM therefore lets a test proceed during that gap and act on a selection
+ * the editor does not yet have — which is how a Bold click landed on a
+ * collapsed caret and set a stored mark instead of formatting text, while the
+ * assertion that followed passed anyway. The dev server was slow enough to hide
+ * this; a production bundle is not.
+ *
+ * Returns null when the handle is missing so callers fail loudly. Falling back
+ * to the DOM selection would reintroduce exactly the race this exists to close,
+ * and would do it invisibly.
+ */
+async function proseMirrorSelection(page: Page): Promise<{ text: string; empty: boolean } | null> {
+  return page.evaluate(() => {
+    const editor = (window as unknown as { __quillEditor?: EditorLike }).__quillEditor;
+    if (!editor?.state) return null;
+    const { from, to, empty } = editor.state.selection;
+    return { text: editor.state.doc.textBetween(from, to), empty };
+  });
+}
+
+interface EditorLike {
+  state: {
+    selection: { from: number; to: number; empty: boolean };
+    doc: { textBetween: (from: number, to: number) => string };
+  };
+}
+
 export async function expectSelectionText(page: Page, expected?: string) {
   if (expected !== undefined) {
     await expect
-      .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+      .poll(async () => (await proseMirrorSelection(page))?.text ?? '<no editor handle>')
       .toBe(expected);
     return;
   }
-  await expect
-    .poll(() => page.evaluate(() => window.getSelection()?.toString().length ?? 0))
-    .toBeGreaterThan(0);
+  // Without an expected value this can only assert "something is selected".
+  // Prefer passing the exact text: a partially-committed selection satisfies a
+  // non-empty check and the test then acts on the wrong range.
+  await expect.poll(async () => (await proseMirrorSelection(page))?.empty ?? true).toBe(false);
 }
 
 export async function expectPageTitleToContain(page: Page, expected: string) {

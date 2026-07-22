@@ -306,6 +306,27 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       if (editor) onReadyRef.current(editor);
     }, [editor]);
 
+    // Read-only handle on the active editor, for end-to-end tests and manual
+    // diagnostics. Tests must be able to wait on ProseMirror's OWN selection:
+    // the DOM selection commits first and ProseMirror syncs afterwards, so a
+    // test that gates on `window.getSelection()` can act during that gap and
+    // drive the editor from a stale selection. Reaching ProseMirror needs a
+    // reference, because neither Tiptap nor prosemirror-view leaves a usable
+    // back-reference on the DOM.
+    //
+    // Present in production builds on purpose: the suite is meant to be able to
+    // exercise the bundle users actually run. Exposing it costs nothing — the
+    // webview only ever loads local content under a strict CSP, so anything
+    // able to read this already has the whole page.
+    useEffect(() => {
+      if (!editor || !isActive) return;
+      const holder = window as unknown as { __quillEditor?: unknown };
+      holder.__quillEditor = editor;
+      return () => {
+        if (holder.__quillEditor === editor) delete holder.__quillEditor;
+      };
+    }, [editor, isActive]);
+
     // Sync suggesting mode / author with extension storage
     useEffect(() => {
       if (!editor) return;
