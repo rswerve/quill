@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import type { Editor } from '@tiptap/react';
 
 export async function expectEditorHtml(
   editor: Locator,
@@ -34,7 +35,7 @@ export async function expectEditorHtml(
  */
 async function proseMirrorSelection(page: Page): Promise<{ text: string; empty: boolean } | null> {
   return page.evaluate(() => {
-    const editor = (window as unknown as { __quillEditor?: EditorLike }).__quillEditor;
+    const editor = (window as unknown as { __quillEditor?: Editor }).__quillEditor;
     if (!editor?.state) return null;
     const { from, to, empty } = editor.state.selection;
     // '\n' between blocks, so a multi-block selection reads the way the DOM
@@ -42,13 +43,6 @@ async function proseMirrorSelection(page: Page): Promise<{ text: string; empty: 
     // the first test to select across paragraphs would get "endbegin".
     return { text: editor.state.doc.textBetween(from, to, '\n'), empty };
   });
-}
-
-interface EditorLike {
-  state: {
-    selection: { from: number; to: number; empty: boolean };
-    doc: { textBetween: (from: number, to: number, blockSeparator?: string) => string };
-  };
 }
 
 export async function expectSelectionText(page: Page, expected?: string) {

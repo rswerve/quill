@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, type Page } from '@playwright/test';
+import type { Editor } from '@tiptap/react';
 import { canonicalDocumentPath, dirname } from '../../src/utils/path';
 import { sidecarPath } from '../../src/utils/sidecarPath';
 import { REVIEW_ANCHOR_VERSION } from '../../src/utils/reviewAnchorMap';
@@ -399,7 +400,7 @@ export function activeTabHost(page: Page) {
   return page.locator('.document-tab-host:not([hidden])');
 }
 
-export const LIVE_EDITOR_SELECTOR = '.ProseMirror[contenteditable="true"]';
+const LIVE_EDITOR_SELECTOR = '.ProseMirror[contenteditable="true"]';
 
 export function activeEditor(page: Page) {
   return activeTabHost(page).locator(LIVE_EDITOR_SELECTOR);
@@ -468,7 +469,7 @@ type SelectionRequest = { kind: 'text'; needle: string } | { kind: 'lastChars'; 
  */
 async function applyEditorSelection(page: Page, request: SelectionRequest) {
   const range = await page.evaluate((req) => {
-    const editor = (window as unknown as { __quillEditor?: QuillEditorHandle }).__quillEditor;
+    const editor = (window as unknown as { __quillEditor?: Editor }).__quillEditor;
     if (!editor) throw new Error('editor selection: no editor handle on window');
 
     // A flat sequence of SELECTABLE TOKENS across the whole document. Each
@@ -594,7 +595,7 @@ async function applyEditorSelection(page: Page, request: SelectionRequest) {
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const editor = (window as unknown as { __quillEditor?: QuillEditorHandle }).__quillEditor;
+        const editor = (window as unknown as { __quillEditor?: Editor }).__quillEditor;
         const selection = window.getSelection();
         if (!editor || !selection || selection.rangeCount === 0) return { state: 'no-selection' };
 
@@ -669,32 +670,4 @@ export async function selectLastCharacters(page: Page, count: number) {
       `selectLastCharacters: could not select ${count} contiguous characters at the end`,
     );
   }
-}
-
-interface PmNode {
-  isTextblock: boolean;
-  isText: boolean;
-  isLeaf: boolean;
-  isAtom: boolean;
-  text?: string;
-  content: { size: number };
-  descendants: (fn: (child: PmNode, offset: number) => boolean | void) => void;
-}
-
-interface QuillEditorHandle {
-  view: {
-    dom: HTMLElement;
-    posAtDOM: (node: Node, offset: number) => number;
-  };
-  state: {
-    selection: { from: number; to: number };
-    doc: {
-      descendants: (fn: (node: PmNode, pos: number) => boolean | void) => void;
-      textBetween: (from: number, to: number, blockSeparator?: string) => string;
-    };
-  };
-  commands: {
-    focus: () => void;
-    setTextSelection: (range: { from: number; to: number }) => void;
-  };
 }
