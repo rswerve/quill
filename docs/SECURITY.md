@@ -66,20 +66,20 @@ The hardening below is organized around closing that gap.
 
 ## Trust boundaries and the data crossing them
 
-| Boundary         | Input                                           | Trust before                    | Trust after                                         |
-| ---------------- | ----------------------------------------------- | ------------------------------- | --------------------------------------------------- |
-| Webview render   | Link `href`, image `src` in the document        | Rendered as authored            | Scheme-allowlisted; remote `img` constrained by CSP |
-| IPC → filesystem | `read_file` / `write_file` / `delete_file` path | Any path the webview passed     | Extension-confined to documents Quill manages       |
-| OS → app         | `quill://open?file=…` target                    | Decoded and opened              | Canonicalized, must be an existing regular `.md`    |
-| Disk → state     | `.comments.json` sidecar, `draft.json`          | Spread into state largely as-is | Sanitized to a known-valid shape before use         |
-| App → process    | `claude` binary resolution                      | First matching string spawned   | Must resolve to a real file                         |
+| Boundary         | Input                                    | Trust before                    | Trust after                                         |
+| ---------------- | ---------------------------------------- | ------------------------------- | --------------------------------------------------- |
+| Webview render   | Link `href`, image `src` in the document | Rendered as authored            | Scheme-allowlisted; remote `img` constrained by CSP |
+| IPC → filesystem | Atomic file command path                 | Any path the webview passed     | Extension-confined to documents Quill manages       |
+| OS → app         | `quill://open?file=…` target             | Decoded and opened              | Canonicalized, must be an existing regular `.md`    |
+| Disk → state     | `.comments.json` sidecar, `draft.json`   | Spread into state largely as-is | Sanitized to a known-valid shape before use         |
+| App → process    | `claude` binary resolution               | First matching string spawned   | Must resolve to a real file                         |
 
 ## Hardening measures (all merged to `main`)
 
 ### 1. Filesystem commands are confined, and the deep link is validated (#57)
 
-The three file commands (`read_file`, `write_file`, `delete_file`) each call
-`ensure_allowed_path` before touching the disk. The backend legitimately serves
+The atomic file commands (`read_file_with_fingerprint`, `write_file_atomic`, and
+`delete_file_if_match`) each call `ensure_allowed_path` before touching the disk. The backend legitimately serves
 _user-chosen arbitrary paths_ (the native open/save dialog can land anywhere), so
 confinement is by **extension allowlist**, not directory — Quill only ever reads
 or writes files it manages:
@@ -96,9 +96,8 @@ fn ensure_allowed_path(path: &str) -> Result<(), String> {
 This means a compromised or buggy webview can't use these commands to read
 `~/.ssh/id_rsa` or write an executable into a launch directory — the command
 refuses anything that isn't a document or its sidecar. (Crash-recovery uses
-separate `write_draft` / `read_draft` / `delete_draft` commands scoped to the
-single app-data `draft.json`, so they aren't — and don't need to be — covered by
-this allowlist.)
+separate workspace commands scoped to the app-data recovery files, so they
+aren't — and don't need to be — covered by this allowlist.)
 
 The deep link gets a second, stricter check. `parse_quill_open` hands the decoded
 target to `validate_open_target`, which: requires an `.md` / `.markdown` suffix →
