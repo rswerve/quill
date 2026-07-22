@@ -447,7 +447,9 @@ export async function openMemoryFile(page: Page) {
   // and leave an invisible modal intercepting the next real interaction.
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
   await closeSessionPickerIfOpen(page);
 }

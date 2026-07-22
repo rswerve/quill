@@ -42,7 +42,9 @@ test('a clean saved document is never autosaved, even on blur', async ({ page })
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
   );
 
   expect(await writeCount(page, '/tmp/doc.md')).toBe(before);
