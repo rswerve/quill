@@ -51,7 +51,7 @@ jobs:
           E2E_COVERAGE: '1'
         run: |
           start=$(date +%s)
-          npx playwright test --project=chromium --workers=${{ matrix.workers }}
+          npx playwright test --project=chromium --workers=${{ matrix.workers }} --grep-invert "@macos-shortcuts"
           end=$(date +%s)
           echo "WORKERS=${{ matrix.workers }} SECONDS=$((end - start))"
           echo "### chromium @ ${{ matrix.workers }} workers: $((end - start))s" >> "$GITHUB_STEP_SUMMARY"

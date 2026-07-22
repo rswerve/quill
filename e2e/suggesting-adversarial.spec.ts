@@ -191,11 +191,20 @@ test.describe('Suggesting mode adversarial interactions', () => {
     await expectNoTracking(editor);
   });
 
+  // Tagged @macos-shortcuts because these chords are macOS text-editing
+  // bindings and the expectations encode macOS semantics: Alt+Backspace deletes
+  // the previous word, Cmd+Backspace deletes to the start of the line. On Linux
+  // the first is not a binding at all (nothing is deleted) and Ctrl+Backspace
+  // deletes a word rather than the line, so both expectations are wrong there.
+  // Quill ships only on macOS, so these run in the macOS CI job; the Linux job
+  // excludes this tag. See .github/workflows/ci.yml.
   for (const { shortcut, expected } of [
     { shortcut: 'Alt+Backspace', expected: 'alpha ' },
     { shortcut: 'ControlOrMeta+Backspace', expected: '' },
   ]) {
-    test(`${shortcut} creates a rejectable deletion with no lost text`, async ({ page }) => {
+    test(`${shortcut} creates a rejectable deletion with no lost text @macos-shortcuts`, async ({
+      page,
+    }) => {
       const editor = await setup(page, 'alpha bravo');
       await enableSuggesting(page);
       await editor.click();
