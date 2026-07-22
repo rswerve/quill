@@ -12,6 +12,7 @@ export default tseslint.config(
     plugins: {
       react: reactPlugin,
       'react-hooks': reactHooksPlugin,
+      sonarjs,
     },
     settings: {
       react: { version: 'detect' },
@@ -21,12 +22,6 @@ export default tseslint.config(
       ...reactHooksPlugin.configs.recommended.rules,
       'react/react-in-jsx-scope': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
-    },
-  },
-  {
-    files: ['src/**/*.{ts,tsx}'],
-    plugins: { sonarjs },
-    rules: {
       ...sonarjs.configs.recommended.rules,
       // `void promise()` is our deliberate fire-and-forget marker (it satisfies
       // no-floating-promises); the alternative is noisier `.catch(() => {})`.
