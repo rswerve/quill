@@ -18,6 +18,72 @@ export interface LinkTarget {
 const ALLOWED_LINK_SCHEMES = ['http', 'https', 'mailto', 'tel'];
 
 /**
+ * Whether a link mark may carry this href, replacing Tiptap's default check.
+ *
+ * Tiptap's built-in validator rejects a scheme-less relative path that contains
+ * a slash: its regex tests `[^a-z+.-:]`, where `.-:` is read as a character
+ * *range* (`.` through `:`) that silently covers `/`. So `GUIDE.md` passes but
+ * `docs/GUIDE.md` fails. A rejected href drops the mark at parse time, and the
+ * next Markdown write then emits bare text — silently deleting the link target
+ * from the user's file. Relative links to sibling documents are ordinary in
+ * Markdown, so accept any scheme-less reference and defer everything carrying
+ * an explicit scheme to the default allowlist, which still blocks `javascript:`
+ * and `data:`. A scheme-less href cannot express either.
+ */
+export function isAllowedLinkUri(
+  url: string,
+  ctx: { defaultValidate: (url: string) => boolean },
+): boolean {
+  // Strip the same characters Tiptap strips before testing for a scheme.
+  // Without this, `java\nscript:alert(1)` or a leading space would fail the
+  // scheme test, be misread as a relative path, and skip the allowlist —
+  // while a browser, which ignores that whitespace, would still execute it.
+  const bare = url.replace(URI_IGNORED_WHITESPACE, '');
+  if (SCHEME_PREFIX.test(bare)) return ctx.defaultValidate(url);
+  return true;
+}
+
+/**
+ * Matches Tiptap's own whitespace class: NUL-space plus the Unicode spaces.
+ * Matching control characters is the entire point here - they are what an
+ * attacker hides a scheme behind - so the usual "no control characters in a
+ * regular expression" rule is deliberately inverted.
+ */
+const URI_IGNORED_WHITESPACE =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g;
+
+/** A leading `scheme:` per RFC 3986. */
+const SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
+
+/** Link options shared by the editor and the Markdown round-trip guarantees. */
+export const LINK_OPTIONS = { openOnClick: false, isAllowedUri: isAllowedLinkUri };
+
+/** `example.com`, `sub.example.co.uk` — a bare host we should send to https. */
+const HOST_LIKE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i;
+
+/** A file Quill itself can open, so a bare `docs/GUIDE.md` is a path, not a host. */
+const DOCUMENT_SUFFIX = /\.(md|markdown)$/i;
+
+/**
+ * Decide whether a scheme-less string is a relative path or a bare domain.
+ *
+ * The two are genuinely ambiguous — `docs/GUIDE.md` and `example.com/a` have
+ * the same shape — so we judge by the first segment. `docs` is not a hostname;
+ * `example.com` is. Without this, every relative link a user types or pastes
+ * became `https://docs/GUIDE.md`, corrupting exactly the targets the loader
+ * was fixed to preserve.
+ */
+function looksRelative(url: string): boolean {
+  const [first] = url.split(/[/?#]/);
+  if (url.includes('/')) return !HOST_LIKE.test(first);
+  // No slash: `GUIDE.md` is a sibling document, `README` is a path with no
+  // extension at all, but `example.com` is still a domain.
+  if (DOCUMENT_SUFFIX.test(url)) return true;
+  return !url.includes('.');
+}
+
+/**
  * Make a typed URL usable as an href. Safe explicit schemes and relative
  * references pass through; bare domains receive https://; unsafe schemes fail.
  */
@@ -29,6 +95,7 @@ export function normalizeHref(raw: string): string {
   if (schemeMatch) {
     return ALLOWED_LINK_SCHEMES.includes(schemeMatch[1].toLowerCase()) ? url : '';
   }
+  if (looksRelative(url)) return url;
   return `https://${url}`;
 }
 

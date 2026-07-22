@@ -27,6 +27,7 @@ import {
   TrackChanges,
 } from '../extensions/TrackChanges';
 import { SKIP_TRACKING_META, STRUCTURAL_BYPASS_META } from '../extensions/trackChangesMeta';
+import { LINK_OPTIONS } from '../utils/linkEditing';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import type { Comment, JSONContent, Suggestion } from '../types';
 
@@ -174,7 +175,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           // StarterKit bundles Link and Underline in Tiptap v3. Configure Link
           // here rather than registering a duplicate, and disable Underline:
           // Markdown cannot preserve it, so Quill must not create the mark.
-          link: { openOnClick: false },
+          link: LINK_OPTIONS,
           code: false,
           underline: false,
           // Disable StarterKit's bundled Strike and re-add it below without its
