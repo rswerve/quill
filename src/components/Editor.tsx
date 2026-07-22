@@ -270,13 +270,27 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
       },
     });
 
-    // Capture the selection on toolbar mousedown (before the editor loses
-    // focus). An effect keyed on the editor instance — not onCreate — so the
-    // listener is removed and re-bound when useEditor recreates the editor
-    // (StrictMode's dev double-mount) instead of leaking one per instance.
+    // Publish the live editor instance, and capture the selection on toolbar
+    // mousedown (before the editor loses focus). An effect keyed on the editor
+    // instance — not onCreate — so the listener is removed and re-bound when
+    // useEditor recreates the editor (StrictMode's dev double-mount) instead of
+    // leaking one per instance.
+    //
+    // `window.__quillEditor` is a read-only handle for end-to-end tests and
+    // manual diagnostics. Tests must be able to wait on ProseMirror's OWN
+    // selection: the DOM selection commits first and ProseMirror syncs
+    // afterwards, so a test gating on `window.getSelection()` can act during
+    // that gap and drive the editor from a stale selection. Neither Tiptap nor
+    // prosemirror-view leaves a usable back-reference on the DOM, so a handle
+    // is the only exact route. It rides this effect rather than its own because
+    // the lifecycle is identical — same guard, same instance-identity teardown.
+    // Present in production builds on purpose: the suite is meant to exercise
+    // the bundle users actually run, and the webview only ever loads local
+    // content under a strict CSP.
     useEffect(() => {
       if (!editor || !isActive) return;
       toolbarSelectionStore.liveEditor = editor;
+      (window as unknown as { __quillEditor?: unknown }).__quillEditor = editor;
       const onMouseDown = (e: MouseEvent) => {
         const target = e.target as HTMLElement | null;
         if (target?.closest('[data-toolbar-button]')) {
@@ -291,6 +305,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         document.removeEventListener('mousedown', onMouseDown, true);
         if (toolbarSelectionStore.liveEditor === editor) {
           toolbarSelectionStore.liveEditor = null;
+          delete (window as unknown as { __quillEditor?: unknown }).__quillEditor;
         }
         if (toolbarSelectionStore.value?.editor === editor) {
           toolbarSelectionStore.value = null;
