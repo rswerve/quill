@@ -59,7 +59,13 @@ if (positional.length !== 1) {
 
 /* ---------- 1. Resolve and validate the target ---------- */
 
-const target = isAbsolute(positional[0]) ? positional[0] : resolve(process.cwd(), positional[0]);
+// A quoted "~/Documents/x.md" is never expanded by the shell, so accept the
+// tilde ourselves rather than failing with a baffling "no such file".
+const requested = positional[0].startsWith('~/')
+  ? join(homedir(), positional[0].slice(2))
+  : positional[0];
+
+const target = isAbsolute(requested) ? requested : resolve(process.cwd(), requested);
 
 if (!existsSync(target)) die(`no such file: ${target}`);
 if (!statSync(target).isFile()) die(`not a regular file: ${target}`);
