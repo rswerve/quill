@@ -354,6 +354,10 @@ export default function CommentLayer({
     }
 
     const scrollArea = currentEditor.view.dom.closest('.editor-scroll-area');
+    // A missing parent is possible only while the editor DOM is mounting or
+    // detaching, when there is no meaningful viewport to measure. Racing
+    // teardown to cover that defensive fallback made coverage nondeterministic.
+    /* v8 ignore next */
     const nextViewportHeight = scrollArea?.clientHeight ?? 0;
     setViewportHeight((previous) =>
       previous === nextViewportHeight ? previous : nextViewportHeight,
