@@ -73,7 +73,22 @@ test('accepts unchanged and improved coverage', () => {
   );
 });
 
-test('allows only the observed CommentLayer same-tree V8 jitter', () => {
+test('accepts deletion of covered code when the uncovered count stays flat', () => {
+  const result = checkCoverageRegression(completeReport(), completeReport({ lines: [899, 999] }));
+  assert.equal(result.rows.find((row) => row.metric === 'lines')?.ok, true);
+});
+
+test('accepts deletion of uncovered code', () => {
+  const result = checkCoverageRegression(completeReport(), completeReport({ lines: [900, 999] }));
+  assert.equal(result.rows.find((row) => row.metric === 'lines')?.ok, true);
+});
+
+test('rejects adding uncovered code', () => {
+  const result = checkCoverageRegression(completeReport(), completeReport({ lines: [900, 1001] }));
+  assert.equal(result.rows.find((row) => row.metric === 'lines')?.ok, false);
+});
+
+test('rejects CommentLayer coverage loss now that its async effects are awaited', () => {
   const current = completeReport({
     lines: [898, 1000],
     statements: [849, 1000],
@@ -82,26 +97,16 @@ test('allows only the observed CommentLayer same-tree V8 jitter', () => {
     commentStatements: [169, 200],
     commentBranches: [139, 200],
   });
-  assert.equal(checkCoverageRegression(completeReport(), current).ok, true);
-});
-
-test('rejects a material same-denominator decrease', () => {
-  const result = checkCoverageRegression(
-    completeReport(),
-    completeReport({ lines: [897, 1000], commentLines: [177, 200] }),
-  );
-  assert.equal(result.ok, false);
-  assert.equal(result.rows.find((row) => row.metric === 'lines')?.ok, false);
+  assert.equal(checkCoverageRegression(completeReport(), current).ok, false);
 });
 
 test('rejects an equal-sized loss outside CommentLayer', () => {
   const current = completeReport({ lines: [899, 1000], otherLines: [69, 80] });
   const result = checkCoverageRegression(completeReport(), current);
   assert.equal(result.ok, false);
-  assert.equal(result.rows.find((row) => row.metric === 'lines')?.allowedCoveredLoss, 0);
 });
 
-test('rejects any function coverage decrease', () => {
+test('rejects a CommentLayer function becoming uncovered', () => {
   const result = checkCoverageRegression(
     completeReport(),
     completeReport({ functions: [179, 200], commentFunctions: [34, 40] }),
@@ -110,10 +115,19 @@ test('rejects any function coverage decrease', () => {
   assert.equal(result.rows.find((row) => row.metric === 'functions')?.ok, false);
 });
 
-test('does not apply jitter when source changes the denominator', () => {
-  const result = checkCoverageRegression(completeReport(), completeReport({ lines: [900, 1001] }));
+test('rejects a function becoming uncovered outside CommentLayer', () => {
+  const current = completeReport({ functions: [179, 200] });
+  current.files[3].summary.functions = metric(17, 20);
+  const result = checkCoverageRegression(completeReport(), current);
   assert.equal(result.ok, false);
-  assert.equal(result.rows.find((row) => row.metric === 'lines')?.allowedCoveredLoss, 0);
+  assert.equal(result.rows.find((row) => row.metric === 'functions')?.ok, false);
+});
+
+test('rejects a line becoming uncovered outside CommentLayer', () => {
+  const current = completeReport({ lines: [899, 1000], otherLines: [69, 80] });
+  const result = checkCoverageRegression(completeReport(), current);
+  assert.equal(result.ok, false);
+  assert.equal(result.rows.find((row) => row.metric === 'lines')?.ok, false);
 });
 
 test('rejects line regressions in App and Topbar even when overall coverage is unchanged', () => {

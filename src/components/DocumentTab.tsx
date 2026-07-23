@@ -6,6 +6,7 @@ import {
   useRef,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
 } from 'react';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import QuillEditor from './Editor';
@@ -2380,7 +2381,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     });
   }, [filePath, isDirty, saveConflict, autosaveAttention, onMetaChange, tabId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isActive) return;
     onChromeChange(tabId, {
       editor,

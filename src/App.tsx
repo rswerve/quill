@@ -527,6 +527,9 @@ export default function App() {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
     if (tab?.initialFilePath && snapshot.filePath === null) return;
     chromeByTabRef.current.set(tabId, snapshot);
+    // DocumentTab reports chrome in an active-only layout effect, so a mismatch
+    // is defensive against a future caller violating that contract.
+    /* v8 ignore next */
     if (activeTabIdRef.current === tabId) setChrome(snapshot);
   }, []);
 
