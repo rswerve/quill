@@ -60,21 +60,6 @@ fn ensure_allowed_path(path: &str) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-fn read_file(path: String) -> Result<String, String> {
-    ensure_allowed_path(&path)?;
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String> {
-    ensure_allowed_path(&path)?;
-    if let Some(parent) = PathBuf::from(&path).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, content).map_err(|e| e.to_string())
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 enum ExpectedFileState {
@@ -467,25 +452,6 @@ fn delete_file_if_match(
 }
 
 #[tauri::command]
-fn delete_file(path: String) -> Result<(), String> {
-    ensure_allowed_path(&path)?;
-    if std::path::Path::new(&path).exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Hash arbitrary UTF-8 content with the SAME SHA-256 the atomic file trio uses, so the
-/// frontend can bind a workspace draft's embedded content to its review coordinates
-/// (its `reviewSourceHash`) without a second, parity-risky hash implementation. Unlike
-/// the `.md`, a draft's content is never written as its own file, so its hash cannot come
-/// from a `write_file_atomic` result — this exposes the same hasher directly.
-#[tauri::command]
-fn hash_content(content: String) -> String {
-    sha256_hex(content.as_bytes())
-}
-
-#[tauri::command]
 async fn show_open_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = app
         .dialog()
@@ -520,15 +486,8 @@ fn workspace_file_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), St
     Ok((dir.join("workspace.json"), dir.join("draft.json")))
 }
 
-/// Write-then-rename so a crash mid-write can't leave a truncated draft —
-/// the workspace exists precisely to survive crashes.
 fn write_workspace_at(path: &std::path::Path, content: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    write_file_atomic_at(path, content.as_bytes(), &ExpectedFileState::Any, || Ok(())).map(|_| ())
 }
 
 fn read_workspace_at(
@@ -716,6 +675,10 @@ mod tests {
         assert_eq!(temporary_files, Vec::<String>::new());
     }
 
+    fn parse_url(url: &str) -> tauri::Url {
+        tauri::Url::parse(url).unwrap()
+    }
+
     struct HomeEnvGuard(Option<OsString>);
 
     impl HomeEnvGuard {
@@ -750,35 +713,6 @@ mod tests {
         assert_eq!(recent_menu_label(""), "");
     }
 
-    #[test]
-    fn native_menu_rebuild_model_replaces_open_recent_in_order() {
-        let first =
-            recent_menu_entries(&["/tmp/First.md".to_string(), "/tmp/Second.md".to_string()]);
-        assert_eq!(
-            first,
-            [
-                RecentMenuEntry {
-                    id: "recent:/tmp/First.md".to_string(),
-                    label: "First.md".to_string(),
-                },
-                RecentMenuEntry {
-                    id: "recent:/tmp/Second.md".to_string(),
-                    label: "Second.md".to_string(),
-                },
-            ]
-        );
-
-        let rebuilt = recent_menu_entries(&["/tmp/Only.md".to_string()]);
-        assert_eq!(
-            rebuilt,
-            [RecentMenuEntry {
-                id: "recent:/tmp/Only.md".to_string(),
-                label: "Only.md".to_string(),
-            }]
-        );
-        assert!(!rebuilt.iter().any(|entry| entry.label == "First.md"));
-    }
-
     // --- workspace persistence ---
 
     #[test]
@@ -805,19 +739,7 @@ mod tests {
             read_workspace_at(&path, &legacy).unwrap(),
             Some("second".to_string())
         );
-        assert!(!path.with_extension("json.tmp").exists());
-    }
-
-    #[test]
-    fn failed_atomic_workspace_write_preserves_the_last_good_envelope() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("workspace.json");
-        let blocked_tmp = path.with_extension("json.tmp");
-        std::fs::write(&path, "last-good").unwrap();
-        std::fs::create_dir(&blocked_tmp).unwrap();
-
-        assert!(write_workspace_at(&path, "new-but-incomplete").is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "last-good");
+        assert_no_quill_temp_files(dir.path());
     }
 
     #[test]
@@ -900,19 +822,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(upsert_session_document_at(
-            &index_path,
-            "session-one",
-            Some(&document_path),
-            "2026-07-13T20:00:00Z",
-        )
-        .unwrap());
+        assert!(
+            upsert_session_document_at(&index_path, "session-one", Some(&document_path),).unwrap()
+        );
 
         let index = read_session_document_index_at(&index_path).unwrap();
         let summary = summarize_session(&session_path, 123, &index);
         assert_eq!(summary.document_name.as_deref(), Some("Project Notes.md"));
         assert_eq!(summary.session_id, "session-one");
-        assert!(!index_path.with_extension("json.tmp").exists());
+        assert_no_quill_temp_files(dir.path());
     }
 
     #[test]
@@ -924,26 +842,13 @@ mod tests {
         fs::write(&first, "first").unwrap();
         fs::write(&second, "second").unwrap();
 
-        upsert_session_document_at(
-            &index_path,
-            "shared-session",
-            Some(&first),
-            "2026-07-13T20:00:00Z",
-        )
-        .unwrap();
-        upsert_session_document_at(
-            &index_path,
-            "shared-session",
-            Some(&second),
-            "2026-07-13T20:01:00Z",
-        )
-        .unwrap();
+        upsert_session_document_at(&index_path, "shared-session", Some(&first)).unwrap();
+        upsert_session_document_at(&index_path, "shared-session", Some(&second)).unwrap();
 
         let index = read_session_document_index_at(&index_path).unwrap();
         let record = index.get("shared-session").unwrap();
         assert_eq!(record.doc_name, "Second.md");
         assert_eq!(record.doc_path, second.to_string_lossy());
-        assert_eq!(record.updated_at, "2026-07-13T20:01:00Z");
     }
 
     #[test]
@@ -964,49 +869,14 @@ mod tests {
     fn session_document_index_skips_unsaved_or_nonexistent_documents() {
         let dir = tempdir().unwrap();
         let index_path = dir.path().join("session-documents.json");
-        assert!(!upsert_session_document_at(
-            &index_path,
-            "untitled-session",
-            None,
-            "2026-07-13T20:00:00Z",
-        )
-        .unwrap());
+        assert!(!upsert_session_document_at(&index_path, "untitled-session", None,).unwrap());
         assert!(!upsert_session_document_at(
             &index_path,
             "missing-session",
             Some(&dir.path().join("Missing.md")),
-            "2026-07-13T20:00:00Z",
         )
         .unwrap());
         assert!(!index_path.exists());
-    }
-
-    // --- read_file ---
-
-    #[test]
-    fn read_file_returns_content() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.md");
-        fs::write(&path, "# Hello Quill").unwrap();
-
-        let result = read_file(path.to_str().unwrap().to_string());
-        assert_eq!(result.unwrap(), "# Hello Quill");
-    }
-
-    #[test]
-    fn read_file_returns_err_for_missing_file() {
-        let result = read_file("/tmp/quill_test_nonexistent_xyz_abc.md".to_string());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn read_file_returns_empty_string_for_empty_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("empty.md");
-        fs::write(&path, "").unwrap();
-
-        let result = read_file(path.to_str().unwrap().to_string());
-        assert_eq!(result.unwrap(), "");
     }
 
     // --- typed reads with fingerprints ---
@@ -1077,63 +947,6 @@ mod tests {
         assert!(error.contains("not valid UTF-8"));
     }
 
-    // --- write_file ---
-
-    #[test]
-    fn write_file_creates_file_with_content() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("output.md");
-
-        write_file(path.to_str().unwrap().to_string(), "# Written".to_string()).unwrap();
-
-        let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content, "# Written");
-    }
-
-    #[test]
-    fn write_file_creates_intermediate_directories() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("nested").join("deep").join("file.md");
-
-        write_file(
-            path.to_str().unwrap().to_string(),
-            "deep content".to_string(),
-        )
-        .unwrap();
-
-        assert!(path.exists());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "deep content");
-    }
-
-    #[test]
-    fn write_file_overwrites_existing_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("overwrite.md");
-        fs::write(&path, "old content").unwrap();
-
-        write_file(
-            path.to_str().unwrap().to_string(),
-            "new content".to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
-    }
-
-    #[test]
-    fn write_file_handles_unicode_content() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("unicode.md");
-
-        write_file(
-            path.to_str().unwrap().to_string(),
-            "# 日本語\nHello 🌍".to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "# 日本語\nHello 🌍");
-    }
-
     // --- atomic fingerprinted document writes ---
 
     #[test]
@@ -1200,18 +1013,6 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-    }
-
-    #[test]
-    fn hash_content_matches_the_file_hash_for_the_same_bytes() {
-        // The draft-binding hash MUST equal the atomic file hash of the same content,
-        // so a saved `.md` and an embedded draft of identical bytes bind identically.
-        let content = "# 日本語\nHello 🌍".to_string();
-        assert_eq!(
-            hash_content(content.clone()),
-            sha256_hex(content.as_bytes())
-        );
-        assert_eq!(hash_content(String::new()), sha256_hex(b""));
     }
 
     #[test]
@@ -1516,72 +1317,6 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"unchanged");
     }
 
-    #[test]
-    fn document_commands_round_trip_real_markdown_and_sidecar_files() {
-        let dir = tempdir().unwrap();
-        let document = dir.path().join("round-trip.md");
-        let sidecar = dir.path().join("round-trip.comments.json");
-
-        write_file(
-            document.to_string_lossy().into_owned(),
-            "# Round trip\n\nUnicode: 日本語 🌍".to_string(),
-        )
-        .unwrap();
-        write_file(
-            sidecar.to_string_lossy().into_owned(),
-            r#"{"version":2,"comments":[],"suggestions":[]}"#.to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            read_file(document.to_string_lossy().into_owned()).unwrap(),
-            "# Round trip\n\nUnicode: 日本語 🌍"
-        );
-        assert_eq!(
-            read_file(sidecar.to_string_lossy().into_owned()).unwrap(),
-            r#"{"version":2,"comments":[],"suggestions":[]}"#
-        );
-
-        delete_file(document.to_string_lossy().into_owned()).unwrap();
-        delete_file(sidecar.to_string_lossy().into_owned()).unwrap();
-        assert!(!document.exists());
-        assert!(!sidecar.exists());
-    }
-
-    // --- delete_file ---
-
-    #[test]
-    fn delete_file_removes_existing_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("to_delete.md");
-        fs::write(&path, "bye").unwrap();
-        assert!(path.exists());
-
-        delete_file(path.to_str().unwrap().to_string()).unwrap();
-
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn delete_file_is_ok_when_file_does_not_exist() {
-        let result = delete_file("/tmp/quill_test_never_existed_xyz_abc.md".to_string());
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn delete_file_does_not_affect_other_files_in_directory() {
-        let dir = tempdir().unwrap();
-        let path1 = dir.path().join("file1.md");
-        let path2 = dir.path().join("file2.md");
-        fs::write(&path1, "one").unwrap();
-        fs::write(&path2, "two").unwrap();
-
-        delete_file(path1.to_str().unwrap().to_string()).unwrap();
-
-        assert!(!path1.exists());
-        assert!(path2.exists());
-    }
-
     // --- conditional fingerprinted deletes ---
 
     #[test]
@@ -1879,9 +1614,7 @@ mod tests {
         symlink(&target, &link).unwrap();
 
         assert!(ensure_allowed_path(link.to_str().unwrap()).is_err());
-        assert!(read_file(link.to_string_lossy().into_owned()).is_err());
         assert!(read_file_with_fingerprint(link.to_string_lossy().into_owned()).is_err());
-        assert!(write_file(link.to_string_lossy().into_owned(), "overwrite".to_string()).is_err());
         assert!(write_file_atomic(
             link.to_string_lossy().into_owned(),
             "overwrite".to_string(),
@@ -1906,9 +1639,7 @@ mod tests {
         assert!(ensure_allowed_path(fifo.to_str().unwrap()).is_err());
         // This must return immediately instead of opening the FIFO and waiting
         // forever for a writer.
-        assert!(read_file(fifo.to_string_lossy().into_owned()).is_err());
         assert!(read_file_with_fingerprint(fifo.to_string_lossy().into_owned()).is_err());
-        assert!(write_file(fifo.to_string_lossy().into_owned(), "blocked".to_string()).is_err());
         assert!(write_file_atomic(
             fifo.to_string_lossy().into_owned(),
             "blocked".to_string(),
@@ -1924,10 +1655,7 @@ mod tests {
     #[test]
     fn confined_commands_refuse_disallowed_paths() {
         // The commands themselves enforce the policy, not just the helper.
-        assert!(read_file("/etc/passwd".to_string()).is_err());
         assert!(read_file_with_fingerprint("/etc/passwd".to_string()).is_err());
-        assert!(write_file("/tmp/evil.sh".to_string(), "x".to_string()).is_err());
-        assert!(delete_file("/tmp/evil.sh".to_string()).is_err());
         assert!(write_file_atomic(
             "/tmp/evil.sh".to_string(),
             "x".to_string(),
@@ -1945,7 +1673,7 @@ mod tests {
         let path = dir.path().join("doc.md");
         fs::write(&path, "# Doc").unwrap();
         let url = format!("quill://open?file={}", path.to_str().unwrap());
-        let result = parse_quill_open(&url);
+        let result = parse_quill_open(&parse_url(&url));
         // Canonicalized, so compare against the canonical form.
         let canonical = fs::canonicalize(&path).unwrap();
         assert_eq!(result, Some(canonical.to_string_lossy().into_owned()));
@@ -1969,7 +1697,7 @@ mod tests {
         let url = format!("quill://open?file={encoded}&source=fixture");
 
         assert_eq!(
-            parse_quill_open(&url),
+            parse_quill_open(&parse_url(&url)),
             Some(
                 fs::canonicalize(path)
                     .unwrap()
@@ -1982,14 +1710,14 @@ mod tests {
     #[test]
     fn deep_link_rejects_nonexistent_file() {
         let url = "quill://open?file=/tmp/quill_does_not_exist_xyz.md";
-        assert_eq!(parse_quill_open(url), None);
+        assert_eq!(parse_quill_open(&parse_url(url)), None);
     }
 
     #[test]
     fn deep_link_rejects_non_markdown_target() {
         // The classic attack: point the scheme at a sensitive file.
         let url = "quill://open?file=/etc/passwd";
-        assert_eq!(parse_quill_open(url), None);
+        assert_eq!(parse_quill_open(&parse_url(url)), None);
     }
 
     #[test]
@@ -1998,13 +1726,13 @@ mod tests {
         let bogus = dir.path().join("notes.md");
         fs::create_dir(&bogus).unwrap();
         let url = format!("quill://open?file={}", bogus.to_str().unwrap());
-        assert_eq!(parse_quill_open(&url), None);
+        assert_eq!(parse_quill_open(&parse_url(&url)), None);
     }
 
     #[test]
     fn deep_link_rejects_wrong_host() {
         let url = "quill://evil?file=/tmp/whatever.md";
-        assert_eq!(parse_quill_open(url), None);
+        assert_eq!(parse_quill_open(&parse_url(url)), None);
     }
 
     // --- classify_claude_outcome ---
@@ -2617,8 +2345,6 @@ struct SessionDocumentRecord {
     doc_name: String,
     #[serde(rename = "docPath")]
     doc_path: String,
-    #[serde(rename = "updatedAt")]
-    updated_at: String,
 }
 
 type SessionDocumentIndex = HashMap<String, SessionDocumentRecord>;
@@ -2648,20 +2374,14 @@ fn write_session_document_index_at(
     path: &Path,
     index: &SessionDocumentIndex,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
     let content = serde_json::to_string_pretty(index).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, content).map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    write_file_atomic_at(path, content.as_bytes(), &ExpectedFileState::Any, || Ok(())).map(|_| ())
 }
 
 fn upsert_session_document_at(
     index_path: &Path,
     session_id: &str,
     document_path: Option<&Path>,
-    updated_at: &str,
 ) -> Result<bool, String> {
     let Some(document_path) = document_path else {
         return Ok(false);
@@ -2685,7 +2405,6 @@ fn upsert_session_document_at(
         SessionDocumentRecord {
             doc_name: doc_name.to_string(),
             doc_path: document_path.to_string_lossy().into_owned(),
-            updated_at: updated_at.to_string(),
         },
     );
     write_session_document_index_at(index_path, &index)?;
@@ -2701,12 +2420,7 @@ fn record_session_document(
 ) -> Result<bool, String> {
     let _guard = lock_recover(&index_lock.0);
     let index_path = session_document_index_path(&app)?;
-    upsert_session_document_at(
-        &index_path,
-        &session_id,
-        doc_path.as_deref().map(Path::new),
-        &iso_now(),
-    )
+    upsert_session_document_at(&index_path, &session_id, doc_path.as_deref().map(Path::new))
 }
 
 #[derive(Serialize)]
@@ -3184,22 +2898,13 @@ fn read_claude_session_preview(jsonl_path: String) -> Result<SessionPreview, Str
         }
         if rec.rec_type.as_deref() == Some("assistant") {
             if let Some(msg) = &rec.message {
-                if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-                    let mut text = String::new();
-                    for block in content {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                            if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                                text.push_str(t);
-                            }
-                        }
-                    }
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        let mut chars = trimmed.chars();
-                        let snippet: String = chars.by_ref().take(400).collect();
-                        let suffix = if chars.next().is_some() { "…" } else { "" };
-                        assistant_texts.push(format!("{snippet}{suffix}"));
-                    }
+                let text = assistant_text(msg);
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    let mut chars = trimmed.chars();
+                    let snippet: String = chars.by_ref().take(400).collect();
+                    let suffix = if chars.next().is_some() { "…" } else { "" };
+                    assistant_texts.push(format!("{snippet}{suffix}"));
                 }
             }
         }
@@ -3290,16 +2995,12 @@ fn nvm_node_bin_dirs(home: &str) -> Vec<PathBuf> {
 /// explaining the search.
 fn resolve_claude_binary() -> Result<PathBuf, String> {
     // 1. Already on PATH?
-    if let Ok(output) = Command::new("which").arg("claude").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let candidate = PathBuf::from(&path);
-            // Only trust the result if it actually names an existing file — a
-            // stray line of output should never be handed to Command::new.
-            if !path.is_empty() && candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
+    if let Some(candidate) = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|directory| directory.join("claude"))
+            .find(|candidate| candidate.is_file())
+    }) {
+        return Ok(candidate);
     }
 
     // 2. Ask the interactive login shell (sources profile + rc → the user's
@@ -3369,8 +3070,8 @@ fn build_child_path(
     }
     // (b) login-shell PATH, then (c) inherited PATH, in order.
     for source in [login_shell_path, inherited_path].into_iter().flatten() {
-        for entry in source.split(':') {
-            push(entry.to_string());
+        for entry in std::env::split_paths(source) {
+            push(entry.to_string_lossy().into_owned());
         }
     }
     // (d) well-known fallbacks.
@@ -3879,7 +3580,7 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    if let Some(path) = parse_quill_open(url.as_str()) {
+                    if let Some(path) = parse_quill_open(&url) {
                         // Buffer for cold start (frontend not yet listening) and
                         // also emit for the warm-start case where it is.
                         if let Some(pending) = handle.try_state::<PendingDeepLink>() {
@@ -3899,13 +3600,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            read_file,
             read_file_with_fingerprint,
-            write_file,
             write_file_atomic,
-            delete_file,
             delete_file_if_match,
-            hash_content,
             show_open_dialog,
             show_save_dialog,
             show_folder_dialog,
@@ -3921,7 +3618,6 @@ pub fn run() {
             cancel_claude_resume,
             find_session_for_markdown,
             check_session_compacted,
-            handle_deep_link,
             take_pending_deep_link,
             has_native_menu,
             update_recent_menu,
@@ -3940,22 +3636,6 @@ fn recent_menu_label(path: &str) -> String {
         || path.to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct RecentMenuEntry {
-    id: String,
-    label: String,
-}
-
-fn recent_menu_entries(recent: &[String]) -> Vec<RecentMenuEntry> {
-    recent
-        .iter()
-        .map(|path| RecentMenuEntry {
-            id: format!("recent:{path}"),
-            label: recent_menu_label(path),
-        })
-        .collect()
 }
 
 /// Build the native application menu and route File-menu clicks to frontend
@@ -3993,11 +3673,11 @@ fn build_menu(app: &tauri::AppHandle, recent: &[String]) -> Result<(), Box<dyn s
     // the click handler can forward it), then Clear Menu — disabled when there
     // is nothing to clear, matching the macOS convention.
     let mut recent_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
-    for entry in recent_menu_entries(recent) {
+    for path in recent {
         recent_items.push(Box::new(MenuItem::with_id(
             app,
-            entry.id,
-            entry.label,
+            format!("recent:{path}"),
+            recent_menu_label(path),
             true,
             None::<&str>,
         )?));
@@ -4096,7 +3776,7 @@ fn update_recent_menu(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), S
     build_menu(&app, &paths).map_err(|e| e.to_string())
 }
 
-fn parse_quill_open(url: &str) -> Option<String> {
+fn parse_quill_open(url: &tauri::Url) -> Option<String> {
     // Expected form: quill://open?file=<urlencoded path>
     //
     // This is an OS-level entry point: any web page can fire `quill://open?...`,
@@ -4106,18 +3786,12 @@ fn parse_quill_open(url: &str) -> Option<String> {
     // symlink to one) is rejected so the deep link can only ever open a real
     // document the user already has on disk — not coax Quill into touching
     // arbitrary files.
-    let rest = url.strip_prefix("quill://")?;
-    let (host, query) = rest.split_once('?')?;
-    if host != "open" {
+    if url.scheme() != "quill" || url.host_str() != Some("open") {
         return None;
     }
-    for pair in query.split('&') {
-        if let Some(v) = pair.strip_prefix("file=") {
-            let decoded = percent_decode(v);
-            return validate_open_target(&decoded);
-        }
-    }
-    None
+    url.query_pairs()
+        .find(|(key, _)| key == "file")
+        .and_then(|(_, path)| validate_open_target(&path))
 }
 
 /// Accept a deep-link target only if it resolves to an existing regular
@@ -4139,37 +3813,6 @@ fn validate_open_target(path: &str) -> Option<String> {
         return None;
     }
     Some(canonical.to_string_lossy().into_owned())
-}
-
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push(
-                    u8::try_from(h * 16 + l).expect("two hexadecimal digits always fit in u8"),
-                );
-                i += 3;
-                continue;
-            }
-        }
-        if bytes[i] == b'+' {
-            out.push(b' ');
-        } else {
-            out.push(bytes[i]);
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-#[tauri::command]
-fn handle_deep_link(url: String) -> Result<Option<String>, String> {
-    Ok(parse_quill_open(&url))
 }
 
 /// Returns and clears any deep-link path buffered during a cold start. The

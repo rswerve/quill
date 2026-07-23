@@ -16,26 +16,19 @@
  */
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
+import type { Editor, JSONContent } from '@tiptap/react';
 import { activeEditor, selectEditorText, selectLastCharacters } from './helpers/memoryTauri';
 
-type Doc = { type: 'doc'; content: unknown[] };
+type Doc = JSONContent & { type: 'doc'; content: JSONContent[] };
 
-const para = (...content: unknown[]) => ({ type: 'paragraph', content });
-const textNode = (value: string, marks?: string[]) => ({
+const para = (...content: JSONContent[]): JSONContent => ({ type: 'paragraph', content });
+const textNode = (value: string, marks?: string[]): JSONContent => ({
   type: 'text',
   text: value,
   ...(marks ? { marks: marks.map((type) => ({ type })) } : {}),
 });
-const image = () => ({ type: 'image', attrs: { src: 'x.png' } });
-const doc = (...content: unknown[]): Doc => ({ type: 'doc', content });
-
-interface EditorProbe {
-  commands: { setContent: (content: Doc) => void };
-  state: {
-    selection: { from: number; to: number };
-    doc: { textBetween: (from: number, to: number, sep?: string) => string };
-  };
-}
+const image = (): JSONContent => ({ type: 'image', attrs: { src: 'x.png' } });
+const doc = (...content: JSONContent[]): Doc => ({ type: 'doc', content });
 
 /**
  * Documents are built as ProseMirror JSON. `setContent` parses a STRING as
@@ -43,7 +36,7 @@ interface EditorProbe {
  */
 async function load(page: Page, content: Doc) {
   await page.evaluate((json) => {
-    const probe = (window as unknown as { __quillEditor?: EditorProbe }).__quillEditor;
+    const probe = (window as unknown as { __quillEditor?: Editor }).__quillEditor;
     if (!probe) throw new Error('no editor handle');
     probe.commands.setContent(json);
   }, content);
@@ -51,7 +44,7 @@ async function load(page: Page, content: Doc) {
 
 async function selection(page: Page) {
   return page.evaluate(() => {
-    const probe = (window as unknown as { __quillEditor?: EditorProbe }).__quillEditor;
+    const probe = (window as unknown as { __quillEditor?: Editor }).__quillEditor;
     if (!probe) throw new Error('no editor handle');
     const { from, to } = probe.state.selection;
     return { from, to, selected: probe.state.doc.textBetween(from, to, '\n') };

@@ -30,6 +30,7 @@
 import console from 'node:console';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
+import { parseArgs } from 'node:util';
 import {
   existsSync,
   readFileSync,
@@ -46,10 +47,14 @@ function die(message) {
   process.exit(1);
 }
 
-const args = process.argv.slice(2);
-const flags = new Set(args.filter((a) => a.startsWith('--') && !a.startsWith('--session=')));
-const sessionFlag = args.find((a) => a.startsWith('--session='));
-const positional = args.filter((a) => !a.startsWith('--'));
+const { values, positionals: positional } = parseArgs({
+  options: {
+    relink: { type: 'boolean' },
+    session: { type: 'string' },
+    'print-only': { type: 'boolean' },
+  },
+  allowPositionals: true,
+});
 
 if (positional.length !== 1) {
   die(
@@ -82,7 +87,7 @@ if (!/\.(md|markdown)$/i.test(target)) {
  * modified file in that directory.
  */
 function detectSessionId() {
-  if (sessionFlag) return sessionFlag.slice('--session='.length);
+  if (values.session !== undefined) return values.session;
   if (process.env.QUILL_SESSION_ID) return process.env.QUILL_SESSION_ID;
 
   const projectDir = join(homedir(), '.claude', 'projects', process.cwd().replaceAll('/', '-'));
@@ -128,7 +133,7 @@ if (existsSync(sidecarPath)) {
 }
 
 const already = sidecar.aiSession?.sessionId;
-if (already && already !== sessionId && !flags.has('--relink')) {
+if (already && already !== sessionId && !values.relink) {
   die(
     `${target}\n  is already linked to a different session (${already}).\n` +
       '  Re-run with --relink to rebind it to this one.',
@@ -184,7 +189,7 @@ if (!unchanged && existsSync(workspace)) {
 
 const url = `quill://open?file=${encodeURIComponent(target)}`;
 
-if (!flags.has('--print-only')) {
+if (!values['print-only']) {
   try {
     execFileSync('open', [url], { stdio: 'ignore' });
   } catch {

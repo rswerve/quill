@@ -1,28 +1,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { parseArgs } from 'node:util';
 import {
   checkCoverageRegression,
   formatCoverageRegressionMarkdown,
 } from './coverageRegression.mjs';
-
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return fallback;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
-  return value;
-}
 
 function readReport(filePath, label) {
   if (!fs.existsSync(filePath)) throw new Error(`${label} is missing at ${filePath}`);
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-const baselinePath = option('--baseline', 'coverage/baseline/coverage-report.json');
-const currentPath = option('--current', 'coverage/combined/coverage-report.json');
-const outputPath = option('--output', 'coverage/combined/coverage-regression.md');
-const baselineSha = option('--baseline-sha', process.env.BASELINE_SHA ?? 'unknown');
+const { values } = parseArgs({
+  options: {
+    baseline: { type: 'string', default: 'coverage/baseline/coverage-report.json' },
+    current: { type: 'string', default: 'coverage/combined/coverage-report.json' },
+    output: { type: 'string', default: 'coverage/combined/coverage-regression.md' },
+    'baseline-sha': { type: 'string', default: process.env.BASELINE_SHA ?? 'unknown' },
+  },
+});
+const baselinePath = values.baseline;
+const currentPath = values.current;
+const outputPath = values.output;
+const baselineSha = values['baseline-sha'];
 
 try {
   const result = checkCoverageRegression(
