@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import type { Comment, Reply } from '../types';
 
 interface UseCommentsReturn {
@@ -43,7 +42,7 @@ export function useComments(): UseCommentsReturn {
       kind: Comment['kind'] = 'note',
     ): Comment => {
       const comment: Comment = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         anchorText,
         from,
         to,
@@ -61,7 +60,7 @@ export function useComments(): UseCommentsReturn {
 
   const addReply = useCallback((commentId: string, text: string, author: string) => {
     const reply: Reply = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       author,
       text,
       createdAt: new Date().toISOString(),
@@ -95,7 +94,7 @@ export function useComments(): UseCommentsReturn {
   }, []);
 
   const startAIReply = useCallback((commentId: string): string => {
-    const replyId = uuidv4();
+    const replyId = crypto.randomUUID();
     const reply: Reply = {
       id: replyId,
       author: 'Claude',
