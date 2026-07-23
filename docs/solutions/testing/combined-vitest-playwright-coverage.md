@@ -68,14 +68,13 @@ decrease fails the job. Using the latest green run lets a fix recover even if a
 bad `main` run exists; successful combined artifacts are retained for 90 days
 so subsequent changes have an auditable baseline.
 
-Three identical-code CI runs exposed timing-dependent executed ranges in
-`CommentLayer`: up to two lines and one statement/branch differed as animation
-and measurement effects completed around test teardown. The ratchet allows
-only those measured `CommentLayer` variances, and only when all source paths
-and denominators are identical and no other file loses coverage. A source
-change receives no allowance, function coverage is exact, and the two
-shell-file line checks are exact. This keeps the gate sensitive to source
-growth and unrelated regressions without making unchanged commits flaky.
+Later identical-tree runs exposed two teardown races behind the remaining
+coverage variance. The comment-history test stopped before `CommentLayer`'s
+700 ms panel-scroll timer completed, and an active tab's passive chrome effect
+could run after a rapid tab switch. The test now waits for the timer's
+observable `data-scrolling` lifecycle, while the active-only chrome snapshot
+uses a layout effect so it commits before another tab can activate. The old
+same-tree jitter allowance was removed; coverage regressions are exact again.
 
 The Vitest coverage command deliberately uses one worker. Coverage processing
 can keep a resource-constrained CI runner's main process busy long enough for

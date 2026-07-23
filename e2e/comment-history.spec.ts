@@ -106,6 +106,8 @@ test('Open and Resolved are document-ordered lists with isolated scrolling and a
   await expect.poll(() => editorScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await expect(activeTab.locator('[data-active]')).toHaveCount(1);
   await expect.poll(() => panelList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(panelList).toHaveAttribute('data-scrolling', 'true');
+  await expect(panelList).not.toHaveAttribute('data-scrolling', 'true', { timeout: 2000 });
 
   await resolvedFilter.click();
   const history = activeTab.locator('[data-resolved-list]');
