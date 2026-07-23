@@ -75,6 +75,9 @@ could run after a rapid tab switch. The test now waits for the timer's
 observable `data-scrolling` lifecycle, while the active-only chrome snapshot
 uses a layout effect so it commits before another tab can activate. The old
 same-tree jitter allowance was removed; coverage regressions are exact again.
+The only excluded path is `CommentLayer`'s zero-height fallback while its editor
+DOM is mounting or detaching: racing teardown to execute it is not application
+behavior and was itself the remaining source of variance.
 
 The Vitest coverage command deliberately uses one worker. Coverage processing
 can keep a resource-constrained CI runner's main process busy long enough for
