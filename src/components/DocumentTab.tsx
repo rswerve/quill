@@ -146,6 +146,26 @@ type ObservationRecord = {
   effortObservedAt?: string;
 };
 
+/**
+ * What became of ONE inline change in the freeze-constrained Accept All path.
+ * `skipped-frozen` is the change itself refusing to resolve (its transaction
+ * would write inside a locked union). An `accepted` change carries the comment
+ * ids whose marks had to be left in place — ids, not a count, because two
+ * changes can share one origin comment and one change can name several, so only
+ * the union across the whole pass is a truthful "threads left open" number.
+ */
+type InlineAcceptOutcome =
+  | { kind: 'skipped-frozen' }
+  | { kind: 'accepted'; deferredCommentIds: readonly string[] };
+
+/** Tally of one bulk Accept/Reject All pass, so the gesture can report itself. */
+interface BulkInlineOutcome {
+  attempted: number;
+  skipped: number;
+  /** DISTINCT comment threads left open across the pass — not a change count. */
+  deferredComments: number;
+}
+
 function newestObserved(
   comments: Comment[],
   thread: DocumentChatThread | undefined,
@@ -1842,16 +1862,21 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     [editor, setComments, clearActiveIf],
   );
 
-  // Accept ONE inline id in the freeze-constrained fallback: skip it entirely,
-  // BEFORE any React update, if either its resolution transaction OR its
-  // provenance-comment removal (a second mutation path `prepareCommentsForAccept`
-  // takes) would touch a remaining frozen union — never queue a comment
-  // resolution that the freeze guard then vetoes.
+  // Accept ONE inline id in the freeze-constrained fallback.
+  //
+  // Two guards, deliberately asymmetric. The change's own RESOLUTION is a hard
+  // stop: if its transaction would write inside a frozen union there is no safe
+  // way to honor it, so it is skipped — but the caller is told, because an
+  // "Accept All" that quietly does less than all is a lie. Its provenance-COMMENT
+  // cleanup is merely deferrable: stripping that mark is a courtesy, not the
+  // edit the user asked for, so a blocked comment leaves the thread open instead
+  // of discarding a perfectly safe accept.
   const acceptInlineIdWithinFootprints = useCallback(
-    (id: string): void => {
-      if (!editor) return;
+    (id: string): InlineAcceptOutcome => {
+      if (!editor) return { kind: 'skipped-frozen' };
       const state = editor.state;
-      if (firstFrozenViolation(resolveTrackedChanges(state, id, 'accept')) !== null) return;
+      if (firstFrozenViolation(resolveTrackedChanges(state, id, 'accept')) !== null)
+        return { kind: 'skipped-frozen' };
       // Footprints recomputed FRESH from the current doc: an earlier per-id
       // resolution in this loop shifted positions, so a snapshot captured before
       // the loop would compare this id's fresh comment ranges against stale union
@@ -1863,21 +1888,30 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         getTrackedChanges(editor),
         id,
       );
-      const provenanceBlocked = provenanceCommentIds.some((commentId) => {
-        const range = findAnnotationRange(state.doc, 'comment', commentId);
-        return range
-          ? footprints.some((footprint) => range.from < footprint.to && footprint.from < range.to)
-          : false;
-      });
-      if (provenanceBlocked) return;
-      if (captured.length > 0) {
-        setComments((current) => autoResolveCapturedComments(current, captured));
+      const blocked = new Set(
+        provenanceCommentIds.filter((commentId) => {
+          const range = findAnnotationRange(state.doc, 'comment', commentId);
+          return range
+            ? footprints.some((footprint) => range.from < footprint.to && footprint.from < range.to)
+            : false;
+        }),
+      );
+      // A geometry-consumed comment cannot also be blocked here: its complete
+      // range is inside this change's deletion range, so intersecting a footprint
+      // would make that deletion intersect too, and Guard 1 above would already
+      // have skipped the change. Therefore only provenance-only comments can be
+      // blocked, while every captured geometry comment remains resolvable.
+      const resolvable = captured.filter((anchor) => !blocked.has(anchor.id));
+      if (resolvable.length > 0) {
+        setComments((current) => autoResolveCapturedComments(current, resolvable));
       }
       for (const commentId of provenanceCommentIds) {
+        if (blocked.has(commentId)) continue;
         editor.commands.unsetComment(commentId);
         clearActiveIf('comment', commentId);
       }
       editor.view.dispatch(resolveTrackedChanges(editor.state, id, 'accept'));
+      return { kind: 'accepted', deferredCommentIds: [...blocked] };
     },
     [editor, setComments, clearActiveIf],
   );
@@ -1888,8 +1922,8 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
   // provenance-comment removal — would touch a remaining footprint. (Reject only
   // preflights the resolution tx; its comment capture is React-only.)
   const resolveInlineBulk = useCallback(
-    (action: 'accept' | 'reject'): void => {
-      if (!editor) return;
+    (action: 'accept' | 'reject'): BulkInlineOutcome => {
+      if (!editor) return { attempted: 0, skipped: 0, deferredComments: 0 };
       // Decide bulk-vs-per-id ONCE: a frozen union remains iff there are
       // footprints now (inline resolution never collapses a union, so this stays
       // true through the loop). The per-id path recomputes footprint POSITIONS
@@ -1898,18 +1932,30 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
         if (action === 'accept') prepareCommentsForAccept();
         else queueAutoResolveForTrackedRemoval('tracked_insert');
         editor.commands.resolveChange(null, action);
-        return;
+        return { attempted: 0, skipped: 0, deferredComments: 0 };
       }
+      let attempted = 0;
+      let skipped = 0;
+      // A SET, not a counter: two changes can name the same origin comment, and
+      // one change can name several. Only the distinct union is a true count.
+      const deferredComments = new Set<string>();
       for (const change of getTrackedChanges(editor).filter((c) => c.status === 'pending')) {
+        attempted += 1;
         if (action === 'accept') {
-          acceptInlineIdWithinFootprints(change.id);
+          const outcome = acceptInlineIdWithinFootprints(change.id);
+          if (outcome.kind === 'skipped-frozen') skipped += 1;
+          else for (const commentId of outcome.deferredCommentIds) deferredComments.add(commentId);
         } else {
           const rejectTr = resolveTrackedChanges(editor.state, change.id, 'reject');
-          if (firstFrozenViolation(rejectTr) !== null) continue;
+          if (firstFrozenViolation(rejectTr) !== null) {
+            skipped += 1;
+            continue;
+          }
           queueAutoResolveForTrackedRemoval('tracked_insert', change.id);
           editor.view.dispatch(rejectTr);
         }
       }
+      return { attempted, skipped, deferredComments: deferredComments.size };
     },
     [
       editor,
@@ -1928,21 +1974,69 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     });
   }, []);
 
+  // Accept/Reject All is best-effort, so it owes the user an account of what it
+  // could NOT do. Silence here is the actual defect being fixed: a frozen union
+  // could leave suggestions pending with no signal at all. Says nothing when
+  // everything succeeded.
+  const reportBulkInlineOutcome = useCallback(
+    (action: 'accept' | 'reject', { attempted, skipped, deferredComments }: BulkInlineOutcome) => {
+      if (skipped === 0 && deferredComments === 0) return;
+      const applied = attempted - skipped;
+      const noun = attempted === 1 ? 'change' : 'changes';
+      const sentences = [
+        `${action === 'accept' ? 'Accepted' : 'Rejected'} ${applied} of ${attempted} ${noun}.`,
+      ];
+      if (skipped > 0) {
+        sentences.push(
+          `${skipped} could not be ${action === 'accept' ? 'accepted' : 'rejected'} while a structure ` +
+            `change is unresolved. Resolve that change, then run ${action === 'accept' ? 'Accept' : 'Reject'} All again.`,
+        );
+      }
+      if (deferredComments > 0) {
+        sentences.push(
+          deferredComments === 1
+            ? 'One comment thread was left open because a structure change overlaps it — resolve the thread yourself once that change is settled.'
+            : `${deferredComments} comment threads were left open because a structure change overlaps them — resolve them yourself once that change is settled.`,
+        );
+      }
+      onNotice({
+        title:
+          skipped > 0 ? 'Some changes still need review' : 'Some comment threads were left open',
+        message: sentences.join(' '),
+      });
+    },
+    [onNotice],
+  );
+
   const handleAcceptAll = useCallback(() => {
     if (!editor) return;
     const attentionIds = resolveAllStructural('accept');
-    resolveInlineBulk('accept');
+    const outcome = resolveInlineBulk('accept');
     flagStructuralAttention(attentionIds);
     setActiveAnnotation(null);
-  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
+    reportBulkInlineOutcome('accept', outcome);
+  }, [
+    editor,
+    resolveAllStructural,
+    resolveInlineBulk,
+    flagStructuralAttention,
+    reportBulkInlineOutcome,
+  ]);
 
   const handleRejectAll = useCallback(() => {
     if (!editor) return;
     const attentionIds = resolveAllStructural('reject');
-    resolveInlineBulk('reject');
+    const outcome = resolveInlineBulk('reject');
     flagStructuralAttention(attentionIds);
     setActiveAnnotation(null);
-  }, [editor, resolveAllStructural, resolveInlineBulk, flagStructuralAttention]);
+    reportBulkInlineOutcome('reject', outcome);
+  }, [
+    editor,
+    resolveAllStructural,
+    resolveInlineBulk,
+    flagStructuralAttention,
+    reportBulkInlineOutcome,
+  ]);
 
   const handleAcceptChange = useCallback(
     (id: string) => {
