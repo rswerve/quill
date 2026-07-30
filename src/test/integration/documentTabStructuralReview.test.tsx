@@ -70,11 +70,14 @@ interface MountedTab {
   getHandle: () => DocumentTabHandle;
   container: HTMLElement;
   unmount: () => void;
+  /** Notices raised by the tab, so a gesture's self-reporting can be asserted. */
+  notices: { title?: string; message?: string }[];
 }
 
 async function mountTab(reads: Record<string, ReadValue>): Promise<MountedTab> {
   installRouter(reads);
   const ref = createRef<DocumentTabHandle>();
+  const notices: { title?: string; message?: string }[] = [];
   const onInitialFileLoaded = vi.fn();
   const result = render(
     <DocumentTab
@@ -89,7 +92,9 @@ async function mountTab(reads: Record<string, ReadValue>): Promise<MountedTab> {
       onInitialFileLoaded={onInitialFileLoaded}
       onInitialWorkspaceLoaded={() => {}}
       onOpenSessionPicker={() => {}}
-      onNotice={() => {}}
+      onNotice={(notice) => {
+        notices.push(notice);
+      }}
       onRecentFile={() => {}}
       onRequestSavePath={() => true}
       onClaimSession={() => ({ allowed: true })}
@@ -101,6 +106,7 @@ async function mountTab(reads: Record<string, ReadValue>): Promise<MountedTab> {
     getHandle: () => ref.current!,
     container: result.container,
     unmount: result.unmount,
+    notices,
   };
 }
 
@@ -289,6 +295,27 @@ function addForeignCommentInUnion(editor: Editor, changeId: string, commentId: s
     commentId,
     resolved: false,
     kind: 'note',
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .addMark(from, from + 1, mark)
+      .setMeta(STRUCTURAL_BYPASS_META, { kind: 'restore' })
+      .setMeta(SKIP_TRACKING_META, true)
+      .setMeta('addToHistory', false),
+  );
+}
+
+/** Seed a tracked mark INSIDE a union's frozen source branch, so the change's
+ *  OWN resolution transaction would write into the locked region — the hard-stop
+ *  guard, as opposed to a merely-deferrable provenance-comment block. */
+function seedTrackedMarkInUnion(editor: Editor, changeId: string, trackedId: string): void {
+  const change = getStructuralReviewState(editor.state).changes.find(
+    (candidate) => candidate.changeId === changeId,
+  );
+  if (!change) throw new Error(`no union ${changeId}`);
+  const from = change.source.from + 1;
+  const mark = editor.state.schema.marks.tracked_delete.create({
+    dataTracked: { id: trackedId, operation: 'delete', authorID: 'user', status: 'pending' },
   });
   editor.view.dispatch(
     editor.state.tr
@@ -709,8 +736,10 @@ describe('DocumentTab structural review wiring', () => {
     // stays AND becomes the inline insert's provenance comment.
     act(() => mintAt(live, 11, 'u-b'));
     act(() => addForeignCommentInUnion(live, 'u-b', 'prov-C'));
-    // Inline DELETE on "AAAAAAAA" [1,9) (before the union); inline INSERT on "BBBB"
-    // (after the union) whose origin comment is prov-C, inside the union.
+    // Inline DELETE on "AAAAAAAA" [1,9) (before the union); two inline INSERTS on
+    // "BBBB" (after the union) sharing the same origin comment prov-C, inside the
+    // union. The shared origin also proves the notice counts DISTINCT threads,
+    // not one deferral per accepted change.
     act(() =>
       seedTrackedMark(live, 1, 9, {
         id: 'inline-A',
@@ -720,8 +749,17 @@ describe('DocumentTab structural review wiring', () => {
       }),
     );
     act(() =>
-      seedTrackedMark(live, 23, 27, {
+      seedTrackedMark(live, 23, 25, {
         id: 'inline-B',
+        operation: 'insert',
+        authorID: 'user',
+        status: 'pending',
+        originCommentId: 'prov-C',
+      }),
+    );
+    act(() =>
+      seedTrackedMark(live, 25, 27, {
+        id: 'inline-C',
         operation: 'insert',
         authorID: 'user',
         status: 'pending',
@@ -738,14 +776,93 @@ describe('DocumentTab structural review wiring', () => {
       const pendingIds = getTrackedChanges(live)
         .filter((c) => c.status === 'pending')
         .map((c) => c.id);
-      // A resolved (deletion applied, shifting the union); B SKIPPED because its
-      // provenance comment sits inside the shifted union — fresh-footprint caught it.
-      expect(pendingIds).toContain('inline-B');
+      // ALL resolve. A applies its deletion (shifting the union). B and C used
+      // to be discarded here because their provenance comment sits inside the
+      // shifted union — but blocking the COMMENT cleanup is no reason to throw
+      // away edits whose own resolutions are safe.
       expect(pendingIds).not.toContain('inline-A');
+      expect(pendingIds).not.toContain('inline-B');
+      expect(pendingIds).not.toContain('inline-C');
     });
-    // The provenance comment's mark was never removed.
+    // ...and the deferral is exactly what the comment mark proves: B was accepted
+    // while prov-C's mark stayed put, leaving that thread open for the user.
     expect(findAnnotationRange(live.state.doc, 'comment', 'prov-C')).not.toBeNull();
     expect(mounted.container.querySelector(ATTENTION_BANNER)).toBeTruthy();
+    // Product contract: "Accept All" must not silently retain inline suggestions.
+    expect(getTrackedChanges(live).filter((change) => change.status === 'pending')).toEqual([]);
+    // The deferral is REPORTED, not silent — that silence was the bug.
+    await waitFor(() => {
+      const message = mounted.notices.find((notice) =>
+        /comment thread/i.test(notice.message ?? ''),
+      )?.message;
+      expect(message).toContain('Accepted 3 of 3 changes.');
+      expect(message).toContain('One comment thread was left open');
+      expect(message).not.toContain('2 comment threads');
+    });
+  });
+
+  it.each([
+    ['Accept All', (handle: DocumentTabHandle) => handle.acceptAll(), /could not be accepted/i],
+    ['Reject All', (handle: DocumentTabHandle) => handle.rejectAll(), /could not be rejected/i],
+  ])(
+    '%s reports a change it could not resolve instead of dropping it silently',
+    async (_label, run, expected) => {
+      const mounted = await mountTab(START);
+      const live = mounted.getHandle().getEditor()!;
+      act(() => setWorkingDoc(live));
+      act(() => mintHeadingUnion(live));
+      // Contaminate the union so it survives the structural pass and keeps its
+      // footprint, then put a tracked change INSIDE it: resolving that change is
+      // genuinely unsafe, so it must be skipped — but never in silence.
+      act(() => addForeignCommentInUnion(live, CHANGE_ID, 'prov-frozen'));
+      act(() => seedTrackedMarkInUnion(live, CHANGE_ID, 'inline-frozen'));
+      await waitFor(() => expect(structuralCard(mounted)).toBeTruthy());
+
+      act(() => run(mounted.getHandle()));
+
+      await waitFor(() => {
+        const pendingIds = getTrackedChanges(live)
+          .filter((change) => change.status === 'pending')
+          .map((change) => change.id);
+        expect(pendingIds).toContain('inline-frozen');
+      });
+      await waitFor(() =>
+        expect(mounted.notices.some((notice) => expected.test(notice.message ?? ''))).toBe(true),
+      );
+    },
+  );
+
+  it('Accept All resolves a comment consumed by a safe deletion outside a frozen union', async () => {
+    const mounted = await mountTab(START);
+    const live = mounted.getHandle().getEditor()!;
+    act(() => setWorkingDoc(live));
+    const commentId = await addCommentOn(mounted, 13, 17, 'Remove the body.');
+    act(() => mintHeadingUnion(live));
+    act(() => contaminateUnion(live));
+    const range = findAnnotationRange(live.state.doc, 'comment', commentId);
+    expect(range).not.toBeNull();
+    act(() =>
+      seedTrackedMark(live, range!.from, range!.to, {
+        id: 'inline-safe-delete',
+        operation: 'delete',
+        authorID: 'user',
+        status: 'pending',
+        originCommentId: commentId,
+      }),
+    );
+
+    act(() => mounted.getHandle().acceptAll());
+
+    await waitFor(() => {
+      expect(getTrackedChanges(live).some((change) => change.id === 'inline-safe-delete')).toBe(
+        false,
+      );
+      expect(mounted.getHandle().getWorkspaceSnapshot()?.comments[0].resolved).toBe(true);
+    });
+    expect(findAnnotationRange(live.state.doc, 'comment', commentId)).toBeNull();
+    expect(mounted.notices.some((notice) => /comment thread/i.test(notice.message ?? ''))).toBe(
+      false,
+    );
   });
 
   it('New clears a stale card and its attention state', async () => {
