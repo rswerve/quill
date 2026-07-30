@@ -5,6 +5,7 @@ import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { Markdown } from 'tiptap-markdown';
 import { describe, it, expect } from 'vitest';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
+import { MarkdownSoftBreak } from '../../extensions/MarkdownSoftBreak';
 import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 // Mirrors the Markdown-relevant extension set in components/Editor.tsx —
@@ -24,6 +25,7 @@ function buildEditor(md: string): Editor {
       TableHeader,
       TaskList,
       TaskItem.configure({ nested: true }),
+      MarkdownSoftBreak,
       Markdown.configure({ html: false, tightLists: true }),
     ],
     content: md,
@@ -144,5 +146,32 @@ describe('markdown round-trip fidelity', () => {
   it('core formatting round-trips exactly', () => {
     const md = '# Title\n\nSome **bold**, *italic*, ~~struck~~, and `code`.\n\n> A quote.';
     expect(roundTrip(md)).toBe(md);
+  });
+
+  it.each([
+    ['bold', '**bold:**\nnext', '**bold:** next'],
+    ['italic', '*italic:*\nnext', '*italic:* next'],
+    ['code', '`code`\nnext', '`code` next'],
+    ['strike', '~~strike~~\nnext', '~~strike~~ next'],
+    ['explicit trailing space', '**bold:** \nnext', '**bold:** next'],
+    ['plain text control', 'plain\nnext', 'plain next'],
+  ])('preserves a soft break after %s', (_name, md, expected) => {
+    expect(roundTrip(md)).toBe(expected);
+  });
+
+  it('keeps marked soft breaks stable across repeated saves', () => {
+    const once = roundTrip('**THE OPPORTUNITY:**\nA position with Truss.');
+    expect(once).toBe('**THE OPPORTUNITY:** A position with Truss.');
+    expect(roundTrip(once)).toBe(once);
+  });
+
+  it('does not turn hard breaks or block delimiters into spaces', () => {
+    expect(roundTrip('line one  \nline two')).toBe('line one\\\nline two');
+    expect(roundTrip('line one\\\nline two')).toBe('line one\\\nline two');
+    expect(roundTrip('- **bold:**\n  next')).toBe('- **bold:** next');
+    expect(roundTrip('> **bold:**\n> next')).toBe('> **bold:** next');
+    expect(roundTrip('| **bold** | next |\n| --- | --- |\n| one | two |')).toBe(
+      '| **bold** | next |\n| --- | --- |\n| one | two |\n',
+    );
   });
 });

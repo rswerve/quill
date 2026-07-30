@@ -15,6 +15,7 @@ import { CommentMark } from '../extensions/Comment';
 import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
 import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
+import { MarkdownSoftBreak } from '../extensions/MarkdownSoftBreak';
 import { ReviewableCode } from '../extensions/ReviewableCode';
 import { StrikeWithoutSaveShortcut } from '../extensions/StrikeWithoutSaveShortcut';
 import { BlockTrack } from '../extensions/BlockTrack';
@@ -196,6 +197,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         TableHeader,
         TaskList,
         TaskItem.configure({ nested: true }),
+        MarkdownSoftBreak,
         Markdown.configure({ html: false, tightLists: true }),
         Find,
         CommentMark,

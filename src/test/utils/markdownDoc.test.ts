@@ -8,6 +8,7 @@ import { ReviewableCode } from '../../extensions/ReviewableCode';
 import { CommentMark } from '../../extensions/Comment';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
 import { MarkdownLinkSyntax } from '../../extensions/MarkdownLinkSyntax';
+import { MarkdownSoftBreak } from '../../extensions/MarkdownSoftBreak';
 import { StrikeWithoutSaveShortcut } from '../../extensions/StrikeWithoutSaveShortcut';
 import {
   TrackChanges,
@@ -52,6 +53,7 @@ function makeEditor(): Editor {
       TrackedFormat,
       TrackChanges,
       CommentMark,
+      MarkdownSoftBreak,
       Markdown.configure({ html: false, tightLists: true }),
     ],
     content: '',
