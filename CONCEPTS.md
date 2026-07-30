@@ -21,6 +21,9 @@ the code. Grows as learnings surface new domain nouns.
   insertions and deletions (like Google Docs suggesting) instead of being applied
   directly to the document.
 
+- **Markdown soft break** — a single newline inside one block that CommonMark
+  renders as an ordinary space, unlike a two-space or backslash hard break.
+
 - **Sidecar** — the companion file saved alongside a document that holds its
   comments, suggestions, and linked-session metadata, keeping the Markdown file
   itself plain.
