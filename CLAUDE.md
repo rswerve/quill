@@ -15,6 +15,14 @@ Before starting work in a documented area, and when finishing a fix worth rememb
 
 ## Commands
 
+**Node 22 is required**, pinned in `.nvmrc` (the source of truth — CI reads it via
+`node-version-file`), mirrored in `mise.toml` for directory auto-switching, and enforced by
+`engines` + `engine-strict` in `.npmrc`, so `npm install`/`npm ci` **refuse** to run on anything
+else. `npm run` is unaffected, so day-to-day work and the pre-commit hook are not gated. This
+exists because a lockfile regenerated under Node 24 silently dropped a dependency and failed five
+CI checks at the install step. `src/test/utils/toolchainPins.test.ts` fails if the pins drift.
+Never bump a version by regenerating `package-lock.json` — edit its two `version` fields by hand.
+
 ```bash
 npm run dev            # Frontend dev server only (no Tauri window, no file I/O)
 npm run tauri dev      # Full desktop app (Tauri + frontend, hot-reload)
