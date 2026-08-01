@@ -1,6 +1,12 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolbarButton } from '../../components/Toolbar';
+import { toolbarSelectionStore } from '../../components/Editor';
+
+afterEach(() => {
+  toolbarSelectionStore.liveEditor = null;
+  toolbarSelectionStore.value = null;
+});
 
 // Contract for the shared button helper's stateClasses seam (added so Rail can
 // module-scope `.btn.active`/`.mixed`/`.disabled`). The safety net that matters
@@ -90,5 +96,30 @@ describe('ToolbarButton stateClasses contract', () => {
       </ToolbarButton>,
     );
     expect(screen.getByRole('button', { name: 'P' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clears a stale selection after restoration throws', () => {
+    const run = vi.fn(() => {
+      throw new RangeError('selection is outside the shortened document');
+    });
+    const setTextSelection = vi.fn(() => ({ run }));
+    const focus = vi.fn(() => ({ setTextSelection }));
+    const staleEditor = {
+      state: { selection: { from: 2, to: 20 } },
+      chain: vi.fn(() => ({ focus })),
+    } as unknown as NonNullable<typeof toolbarSelectionStore.liveEditor>;
+    const onClick = vi.fn();
+    toolbarSelectionStore.liveEditor = staleEditor;
+
+    render(
+      <ToolbarButton onClick={onClick} title="Bold" baseClassName="test-toolbar-button">
+        B
+      </ToolbarButton>,
+    );
+
+    expect(() => fireEvent.mouseDown(screen.getByRole('button', { name: 'Bold' }))).not.toThrow();
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(setTextSelection).toHaveBeenCalledWith({ from: 2, to: 20 });
+    expect(toolbarSelectionStore.value).toBeNull();
   });
 });

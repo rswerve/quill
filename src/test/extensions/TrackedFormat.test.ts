@@ -369,6 +369,53 @@ describe('tracked formatting (suggesting mode)', () => {
     expect(formatChanges(editor)).toHaveLength(1);
   });
 
+  it('editing-mode bold cancels the pending suggestion that removed the bold', () => {
+    // The mirror of the test above, and the half that had no coverage: a
+    // pending delta carrying `removes` reconciled by a manual ADD. Composing
+    // the delta must cancel the pending removal rather than accumulate an
+    // opposing add, otherwise the marker survives claiming "bold removed" over
+    // text that is visibly bold.
+    editor = makeEditor('<p><strong>Hello</strong> world</p>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(false);
+    expect(segmentShapes(formatChanges(editor)[0])).toEqual([
+      { text: 'Hello', adds: [], removes: ['bold'] },
+    ]);
+
+    editor.commands.setTrackChangesEnabled(false);
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(true);
+    expect(formatChanges(editor)).toHaveLength(0);
+
+    // One undo restores the manual re-bold AND the suggestion marker together.
+    editor.commands.undo();
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(false);
+    expect(formatChanges(editor)).toHaveLength(1);
+  });
+
+  it('re-adding a mark in suggesting mode cancels its own pending removal', () => {
+    // Composing a delta has four cases; this is the one with no test. The
+    // opposite order (suggest an add, then remove it) was covered, so an add
+    // that lands on a pending `removes` could have accumulated an opposing
+    // entry instead of cancelling — leaving a marker that claims both.
+    editor = makeEditor('<p><strong>Hello</strong> world</p>');
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+
+    expect(segmentShapes(formatChanges(editor)[0])).toEqual([
+      { text: 'Hello', adds: [], removes: ['bold'] },
+    ]);
+
+    // Still in suggesting mode — undoing your own pending change by hand.
+    editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
+
+    expect(textHasMark(editor, 'Hello', 'bold')).toBe(true);
+    // Net zero: no marker survives claiming a change that no longer exists.
+    expect(formatChanges(editor)).toHaveLength(0);
+    expect(getTrackedChanges(editor)).toHaveLength(0);
+  });
+
   it('an independent editing-mode mark change never enters the suggestion delta', () => {
     editor = makeEditor();
     editor.chain().setTextSelection({ from: 1, to: 6 }).toggleBold().run();
