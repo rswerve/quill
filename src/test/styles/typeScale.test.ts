@@ -43,6 +43,15 @@ describe('UI type scale', () => {
     expect(ruleFor(/\.previewMeta\s*\{[^}]*/s)).toContain('font-size: var(--text-meta)');
   });
 
+  it('keeps document chat prose readable without enlarging its metadata', () => {
+    const chat = readModuleSource('ChatPanel.module.css');
+    expect(chat).toMatch(/\.empty\s*\{[^}]*font-size: 14px;[^}]*line-height: 1\.6/s);
+    expect(chat).toMatch(/\.message\s*\{[^}]*font-size: 14px;[^}]*line-height: 1\.6/s);
+    expect(chat).toMatch(/\.box textarea\s*\{[^}]*font: 14px\/1\.6 var\(--font-sans\)/s);
+    expect(chat).toMatch(/\.streamingState,[^}]*font-size: 10\.5px/s);
+    expect(chat).toMatch(/\.boxFoot \.kbdHint\s*\{[^}]*font-size: 9px/s);
+  });
+
   it('keeps direct Studio component sizes within the handoff type scale', () => {
     // Scan the global layer AND every component module, so the scale invariant
     // holds everywhere as components migrate to Modules.
