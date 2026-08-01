@@ -488,6 +488,62 @@ describe('sanitizeDocumentChat', () => {
     });
   });
 
+  it('preserves valid terminal fields and omits absent or malformed ones', () => {
+    const thread = sanitizeDocumentChat(
+      JSON.parse(
+        JSON.stringify({
+          sessionId: 'session-1',
+          messages: [
+            {
+              id: 'terminal',
+              role: 'assistant',
+              text: 'Stopped',
+              createdAt: 'later',
+              pending: true,
+              error: 'Claude stopped unexpectedly',
+              cancelled: true,
+            },
+            {
+              id: 'malformed',
+              role: 'assistant',
+              text: 'Still here',
+              createdAt: 'later',
+              pending: 'true',
+              error: 42,
+              cancelled: 1,
+            },
+            { id: 'absent', role: 'user', text: 'Continue', createdAt: 'now' },
+          ],
+        }),
+      ),
+    );
+
+    // toStrictEqual, not toEqual: the point of the malformed case is that the
+    // key is ABSENT, and toEqual treats a key set to undefined as equal to no
+    // key at all.
+    expect(thread).toStrictEqual({
+      sessionId: 'session-1',
+      messages: [
+        {
+          id: 'terminal',
+          role: 'assistant',
+          text: 'Stopped',
+          createdAt: 'later',
+          pending: true,
+          error: 'Claude stopped unexpectedly',
+          cancelled: true,
+        },
+        {
+          id: 'malformed',
+          role: 'assistant',
+          text: 'Still here',
+          createdAt: 'later',
+        },
+        { id: 'absent', role: 'user', text: 'Continue', createdAt: 'now' },
+      ],
+    });
+  });
+
   it('rejects a thread without a session id or message array', () => {
     expect(sanitizeDocumentChat({ sessionId: '', messages: [] })).toBeUndefined();
     expect(sanitizeDocumentChat({ sessionId: 'session-1' })).toBeUndefined();
