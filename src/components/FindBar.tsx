@@ -7,6 +7,22 @@ interface FindBarProps {
   onClose: () => void;
 }
 
+/**
+ * Scroll the current match into view.
+ *
+ * ProseMirror's own `scrollIntoView()` cannot do this from here: it walks up
+ * from the node holding the DOM selection, which is this bar's input, and the
+ * bar is absolutely positioned outside `.editor-scroll-area` — so the editor's
+ * scroll container is never in that ancestor chain and nothing moves. Reveal
+ * the active decoration directly instead. Decorations are applied
+ * synchronously on dispatch, so this runs right after the chain.
+ */
+function revealActiveMatch(editor: TiptapEditor) {
+  editor.view.dom
+    .querySelector('.find-match-active')
+    ?.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
+
 export default function FindBar({ editor, onClose }: FindBarProps) {
   const [query, setQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
@@ -27,6 +43,9 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     editor.commands.setFindQuery(query);
+    // Typing a query jumps the active match to the first hit at/after the
+    // cursor, which is off-screen as often as not.
+    revealActiveMatch(editor);
   }, [editor, query]);
 
   // Clear the highlights when the bar goes away, however that happens.
@@ -58,7 +77,8 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     if (!editor || count === 0) return;
     const i = ((index % count) + count) % count;
     const match = getFindState(editor.state).matches[i];
-    editor.chain().setActiveFindMatch(i).setTextSelection(match).scrollIntoView().run();
+    editor.chain().setActiveFindMatch(i).setTextSelection(match).run();
+    revealActiveMatch(editor);
   };
 
   const next = () => goTo(activeIndex + 1);
@@ -78,7 +98,8 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     // match.from — in suggesting mode TrackChanges keeps the original after
     // it as a pending deletion, which search already excludes.
     const insertionEnd = match.from + replaceText.length;
-    chain.setActiveFindMatchAfter(insertionEnd).scrollIntoView().run();
+    chain.setActiveFindMatchAfter(insertionEnd).run();
+    revealActiveMatch(editor);
   };
 
   const replaceAll = () => {
