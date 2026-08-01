@@ -71,6 +71,40 @@ test.describe('Find & replace', () => {
     await expect(page.locator('.find-bar-count')).toHaveText('3 of 3');
   });
 
+  test('stepping to a match scrolls it into view', async ({ page }) => {
+    const { editor } = await setup(page);
+    // One paragraph long enough to wrap past the viewport, so the second
+    // match starts off-screen and only a real scroll can reveal it.
+    await page.keyboard.insertText(`needle ${'lorem ipsum dolor sit amet '.repeat(300)}needle`);
+    const scroller = page.locator('.editor-scroll-area').first();
+    const scrollTop = () => scroller.evaluate((el) => el.scrollTop);
+    // Typing left the view parked at the cursor, far below the first match.
+    const afterTyping = await scrollTop();
+    expect(afterTyping).toBeGreaterThan(0);
+
+    await openFindBar(page);
+    const input = page.locator('.find-bar-input').first();
+    await input.fill('needle');
+
+    // The reason this test exists: ProseMirror's own scrollIntoView walks up
+    // from the find input, which sits outside the editor's scroll container,
+    // so the pane never moved and the match stayed off-screen.
+    await expect(page.locator('.find-bar-count')).toHaveText('1 of 2');
+    await expect(activeEditor(page).locator('.find-match-active')).toBeInViewport();
+    expect(await scrollTop()).toBeLessThan(afterTyping);
+
+    await input.press('Enter');
+    await expect(page.locator('.find-bar-count')).toHaveText('2 of 2');
+    await expect(activeEditor(page).locator('.find-match-active')).toBeInViewport();
+    expect(await scrollTop()).toBeGreaterThan(0);
+
+    // ...and stepping back brings the first one into view again.
+    await input.press('Shift+Enter');
+    await expect(page.locator('.find-bar-count')).toHaveText('1 of 2');
+    await expect(activeEditor(page).locator('.find-match-active')).toBeInViewport();
+    await expect(editor).toContainText('needle');
+  });
+
   test('no results state', async ({ page }) => {
     const { editor } = await setup(page);
     await editor.pressSequentially('hello world');

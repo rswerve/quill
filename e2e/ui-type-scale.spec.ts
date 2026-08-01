@@ -252,16 +252,16 @@ test('document typography stays pinned while both themes keep chrome vertically 
   await page.emulateMedia({ media: 'screen' });
 });
 
-test('document chat uses the intended control and metadata scale', async ({ page }) => {
+test('document chat keeps readable composer text and compact metadata', async ({ page }) => {
   await openAuditDocument(page);
   const tab = activeTabHost(page);
   await tab.getByRole('tab', { name: 'Chat', exact: true }).click();
 
   const composer = tab.getByLabel('Ask Claude about this document');
-  await expectType(composer, '12.5px');
+  await expectType(composer, '14px');
   expect(
     await composer.evaluate((element) => getComputedStyle(element, '::placeholder').fontSize),
-  ).toBe('12.5px');
+  ).toBe('14px');
   await expectType(tab.getByRole('tab').first(), '12px');
   await expectType(tab.getByTitle(/^(Claude session|No Claude session)/), '10px', {
     checkUiFamily: false,
