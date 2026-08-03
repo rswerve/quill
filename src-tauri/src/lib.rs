@@ -10,6 +10,10 @@
 // Extension checks below operate on strings already normalized to lowercase.
 #![allow(clippy::case_sensitive_file_extension_comparisons)]
 
+mod drive_update;
+
+pub use drive_update::run_update_helper_if_requested;
+
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -24,6 +28,12 @@ use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
+
+static AUTOMATIC_UPDATE_CHECK_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn claim_automatic_update_check(started: &AtomicBool) -> bool {
+    !started.swap(true, Ordering::SeqCst)
+}
 
 /// Document-like paths Quill is allowed to touch through the general file
 /// commands. These commands are reachable from the frontend (and, via the
@@ -664,6 +674,13 @@ mod tests {
     use tempfile::tempdir;
 
     static HOME_ENV_LOCK: TestMutex<()> = TestMutex::new(());
+
+    #[test]
+    fn automatic_update_check_claim_is_single_use() {
+        let started = AtomicBool::new(false);
+        assert!(claim_automatic_update_check(&started));
+        assert!(!claim_automatic_update_check(&started));
+    }
 
     fn assert_no_quill_temp_files(directory: &Path) {
         let temporary_files = fs::read_dir(directory)
@@ -3496,6 +3513,31 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn check_for_update(app: tauri::AppHandle, automatic: bool) -> drive_update::UpdateCheckOutcome {
+    if automatic && !claim_automatic_update_check(&AUTOMATIC_UPDATE_CHECK_STARTED) {
+        return drive_update::UpdateCheckOutcome::AlreadyChecked;
+    }
+    let outcome = drive_update::check_for_update(&app.package_info().version.to_string());
+    match &outcome {
+        drive_update::UpdateCheckOutcome::Unavailable { reason } => {
+            log::info!("Local Drive update check unavailable: {reason}");
+        }
+        drive_update::UpdateCheckOutcome::RunningFromDrive { path } => {
+            log::info!("Local Drive update check blocked while running from {path}");
+        }
+        drive_update::UpdateCheckOutcome::AlreadyChecked
+        | drive_update::UpdateCheckOutcome::Current
+        | drive_update::UpdateCheckOutcome::Available { .. } => {}
+    }
+    outcome
+}
+
+#[tauri::command]
+fn install_update(app: tauri::AppHandle) -> drive_update::InstallUpdateOutcome {
+    drive_update::install_update(&app.package_info().version.to_string())
+}
+
 /// Route Rust panics into the log file (chaining the default hook so dev still
 /// gets the usual stderr output). Without this, a backend panic vanishes
 /// silently — there's no server to catch it. Installed before the builder so it
@@ -3571,6 +3613,7 @@ pub fn run() {
                         | "menu-export-pdf"
                         | "menu-quit"
                         | "menu-clear-recent"
+                        | "menu-check-for-updates"
                         | "menu-reveal-logs"
                         | "menu-copy-diagnostics"
                 ) {
@@ -3623,6 +3666,8 @@ pub fn run() {
             update_recent_menu,
             get_diagnostics,
             reveal_logs,
+            check_for_update,
+            install_update,
             exit_app,
         ])
         .run(tauri::generate_context!())
@@ -3743,9 +3788,15 @@ fn build_menu(app: &tauri::AppHandle, recent: &[String]) -> Result<(), Box<dyn s
         ],
     )?;
 
-    // Help: local diagnostics. "Copy Diagnostics" puts version/OS/log-path on
-    // the clipboard for pasting into a bug report; "Show Logs" reveals the log
-    // file. Both are frontend-handled (see the menu-event matcher).
+    // Help: local diagnostics and the on-demand local Drive update check. All
+    // are frontend-handled (see the menu-event matcher).
+    let check_for_updates_item = MenuItem::with_id(
+        app,
+        "menu-check-for-updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let copy_diagnostics_item = MenuItem::with_id(
         app,
         "menu-copy-diagnostics",
@@ -3759,7 +3810,11 @@ fn build_menu(app: &tauri::AppHandle, recent: &[String]) -> Result<(), Box<dyn s
         app,
         "Help",
         true,
-        &[&copy_diagnostics_item, &reveal_logs_item],
+        &[
+            &check_for_updates_item,
+            &copy_diagnostics_item,
+            &reveal_logs_item,
+        ],
     )?;
 
     let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &help_menu])?;

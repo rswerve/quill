@@ -38,6 +38,9 @@
   max-height: 50vh;
   overflow-y: auto;
 }
+.content {
+  margin: -4px 0 16px;
+}
 .actions {
   display: flex;
   justify-content: flex-end;

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import styles from './AppModal.module.css';
 
 export interface AppModalButton {
@@ -13,6 +13,7 @@ interface AppModalProps {
   title: string;
   message: string;
   buttons: AppModalButton[];
+  children?: ReactNode;
 }
 
 const BUTTON_CLASS: Record<NonNullable<AppModalButton['kind']>, string> = {
@@ -26,7 +27,7 @@ const BUTTON_CLASS: Record<NonNullable<AppModalButton['kind']>, string> = {
  * window.alert/confirm, which are not reliably implemented in Tauri's
  * webviews.
  */
-export default function AppModal({ title, message, buttons }: AppModalProps) {
+export default function AppModal({ title, message, buttons, children }: AppModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const messageId = useId();
@@ -97,6 +98,7 @@ export default function AppModal({ title, message, buttons }: AppModalProps) {
         <p id={messageId} className={styles.message}>
           {message}
         </p>
+        {children && <div className={styles.content}>{children}</div>}
         <div className={styles.actions}>
           {buttons.map((b) => (
             <button

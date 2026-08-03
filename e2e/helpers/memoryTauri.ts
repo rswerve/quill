@@ -36,6 +36,14 @@ interface MemoryTauriOptions {
   diagnostics?: { version: string; os: string; arch: string; log_dir: string };
   /** Whether the frontend should yield file shortcuts to a real native menu. */
   hasNativeMenu?: boolean;
+  /** Typed outcome returned by the local Drive update check. */
+  updateCheckOutcome?: unknown;
+  /** Typed outcome returned after staging an update. */
+  installUpdateOutcome?: unknown;
+  /** Seed for the default-on launch update preference. */
+  automaticUpdateChecks?: boolean;
+  /** Seed for the version most recently dismissed with Later. */
+  dismissedUpdateVersion?: string;
 }
 
 interface SeededDocumentPermission {
@@ -148,6 +156,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       pendingDeepLink,
       diagnostics,
       hasNativeMenu,
+      updateCheckOutcome,
+      installUpdateOutcome,
+      automaticUpdateChecks,
+      dismissedUpdateVersion,
     }) => {
       type Call = { cmd: string; args: Record<string, unknown> };
       type Listener = { event: string; callback: (payload: unknown) => void };
@@ -191,6 +203,12 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
       globals.__quillCalls = calls;
       globals.__quillListeners = listeners;
       globals.__quillWriteFileBlocked = false;
+      if (automaticUpdateChecks !== undefined) {
+        localStorage.setItem('quill-update-check-automatic', String(automaticUpdateChecks));
+      }
+      if (dismissedUpdateVersion !== undefined) {
+        localStorage.setItem('quill-update-dismissed-version', dismissedUpdateVersion);
+      }
       if (Object.keys(sidecarPermissions).length > 0) {
         const key = 'quill-sidecar-permissions-v1';
         let existing: Record<string, SeededDocumentPermission> = {};
@@ -279,6 +297,8 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
           if (cmd === 'take_pending_deep_link') return pendingDeepLink ?? null;
           if (cmd === 'has_native_menu') return hasNativeMenu;
           if (cmd === 'get_diagnostics') return diagnostics;
+          if (cmd === 'check_for_update') return updateCheckOutcome;
+          if (cmd === 'install_update') return installUpdateOutcome;
           if (cmd === 'show_open_dialog') return openPath ?? null;
           if (cmd === 'show_save_dialog') return savePath ?? null;
           if (cmd === 'show_folder_dialog') return folderPath ?? null;
@@ -389,6 +409,10 @@ export async function setupMemoryTauri(page: Page, options: MemoryTauriOptions =
         log_dir: '/tmp/quill-logs',
       },
       hasNativeMenu: options.hasNativeMenu ?? false,
+      updateCheckOutcome: options.updateCheckOutcome ?? { state: 'current' },
+      installUpdateOutcome: options.installUpdateOutcome ?? { state: 'current' },
+      automaticUpdateChecks: options.automaticUpdateChecks,
+      dismissedUpdateVersion: options.dismissedUpdateVersion,
     },
   );
 
