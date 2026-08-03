@@ -3,5 +3,8 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 fn main() {
+    if quill_lib::run_update_helper_if_requested() {
+        return;
+    }
     quill_lib::run();
 }

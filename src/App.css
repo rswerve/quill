@@ -1026,6 +1026,19 @@ del.track-delete {
   display: none;
 }
 
+.update-auto-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink-mid);
+  font-size: var(--text-meta);
+  font-weight: 300;
+}
+
+.update-auto-check input {
+  accent-color: var(--accent);
+}
+
 /* ── Print / Export to PDF ──────────────────────────────────────────
    "Export to PDF" is print-to-PDF (handleExportPdf → window.print()). The
    printed artifact is the CLEAN-SOURCE document — pending suggestions ignored

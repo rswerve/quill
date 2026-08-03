@@ -6,7 +6,7 @@ A Mac Markdown editor where Claude is a collaborator inside the document — it 
 
 Quill is for writing and revising Markdown documents — briefs, memos, specs, docs drafted with Claude Code — when you want a second set of hands in the draft, not in a separate chat window. You select a passage, ask Claude to tighten or fact-check it, and its edits land as tracked changes in the margin. You keep the ones you like. Your files stay ordinary `.md` on disk, so anything else can still read them.
 
-It works like Google Docs' suggesting mode, but the reviewer is Claude, the file is plain Markdown on your own Mac, and Quill keeps to itself — no telemetry, no update checks, no account of its own to sign into. The requests you make to Claude run through your own Claude account.
+It works like Google Docs' suggesting mode, but the reviewer is Claude, the file is plain Markdown on your own Mac, and Quill keeps to itself — no telemetry, no update server, no account of its own to sign into. The requests you make to Claude run through your own Claude account.
 
 > **The one thing to know before you start:** Quill is an internal Trussworks build, installed by copying the app from the team's Google Drive (see [Installing Quill](#installing-quill)), and its AI features need the [Claude Code](https://claude.com/claude-code) command-line tool signed in on the same Mac (see [Turn on the Claude features](#turn-on-the-claude-features)). Everything except the Claude features works without it.
 
@@ -53,11 +53,15 @@ That's the whole install. Your documents are saved wherever you choose — never
 
 ### Updating
 
-There is no in-app updater. When a new build is posted to the same Drive folder, quit Quill, drag the new **Quill.app** into **Applications** (replacing the old one), and open it again. Your documents and settings carry over.
+After it opens, Quill checks once for a newer build in the synced Truss Drive folder. You can also choose **Help → Check for Updates…** at any time. Both checks are local: Quill reads a tiny `Quill.version` file beside the Drive app (or the app's own version as a fallback) and makes no network request to Google or any update server. If a newer build is available, **Install and Restart** copies it from Drive into the location where Quill is installed. Your documents and settings carry over.
+
+If you choose **Later**, Quill will not mention that version again; it will prompt when Drive contains something newer. Check **Stop checking automatically** in the update notice to turn off the launch check. The Help menu check keeps working.
+
+You can still update manually: quit Quill, drag the new **Quill.app** from the synced Drive folder into **Applications** (replacing the old one), and open it again. Do not use the Drive website's Download button; browser downloads are quarantined by macOS.
 
 ## Turn on the Claude features
 
-The Ask Claude and Chat features run Claude through the Claude Code CLI on your Mac, under **your own Claude account** — there are no API keys to set up, and the requests count toward that account's usage. Quill sends no telemetry and checks for no updates of its own.
+The Ask Claude and Chat features run Claude through the Claude Code CLI on your Mac, under **your own Claude account** — there are no API keys to set up, and the requests count toward that account's usage. Quill sends no telemetry. Its launch and on-demand update checks only read the Truss Drive folder already synced to your Mac; Quill makes no network request for them.
 
 1. **Install and sign into Claude Code.** Follow [claude.com/claude-code](https://claude.com/claude-code) to install the CLI, then run `claude` once in Terminal and complete the sign-in. Confirm it works: `claude --version` prints a version line. Quill finds the `claude` command automatically afterward, even when launched from the Dock.
 2. **Link the document to a session.** A **session** is one Claude Code conversation; linking it lets Claude answer with that conversation's memory. In Quill's status bar, click **✦ Link session**, then pick an existing session — or, for a document Claude didn't write, save it first and choose **Start new session** to give it a fresh conversation of its own. If Claude Code wrote the document's text, Quill usually suggests the right session the moment you open the file.

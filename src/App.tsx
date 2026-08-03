@@ -30,6 +30,13 @@ import {
   getRecentFiles,
   syncRecentMenu,
 } from './utils/recentFiles';
+import {
+  isVersionNewer,
+  loadAutomaticUpdateChecks,
+  loadDismissedUpdateVersion,
+  saveAutomaticUpdateChecks,
+  saveDismissedUpdateVersion,
+} from './utils/updatePreferences';
 import { clampZoom, loadZoomPreference, saveZoomPreference } from './utils/zoomPreference';
 import {
   buildDiscardedRecoveryWorkspaceFile,
@@ -52,6 +59,57 @@ import type { TabAction, TabMeta } from './hooks/tabsReducer';
 interface DiscardGuard {
   tabIds: string[];
   run: () => void;
+}
+
+type UpdateCheckOutcome =
+  | { state: 'already-checked' }
+  | { state: 'current' }
+  | { state: 'available'; version: string; path: string }
+  | { state: 'running-from-drive'; path: string }
+  | { state: 'unavailable'; reason: string };
+
+type InstallUpdateOutcome =
+  | { state: 'ready-to-restart'; version: string }
+  | { state: 'current' }
+  | { state: 'running-from-drive'; path: string }
+  | { state: 'unavailable'; reason: string }
+  | { state: 'failed'; reason: string };
+
+type AvailableUpdate = Extract<UpdateCheckOutcome, { state: 'available' }>;
+
+let automaticUpdateCheckStarted = false;
+
+function updateUnavailableMessage(reason: string): string {
+  const messages: Record<string, string> = {
+    'drive-folder-not-found':
+      'The Truss Drive folder is not available on this Mac. Make sure Google Drive for desktop is running and the shared drive is synced.',
+    'drive-folder-unreadable':
+      'Quill found Google Drive, but could not read the Truss Tools folder.',
+    'privacy-denied':
+      'macOS did not allow Quill to read the Truss Drive folder. Check Quill’s Files and Folders permission in System Settings.',
+    'update-bundle-missing': 'The Truss Tools folder does not currently contain Quill.app.',
+    'update-bundle-unreadable': 'Quill.app in the Truss Tools folder could not be read.',
+    'version-missing': 'The Drive copy of Quill does not contain readable version information.',
+    'version-unreadable': 'The Drive copy has invalid or unreadable version information.',
+    'not-installed-app':
+      'Update installation is available only when Quill is running from an app bundle.',
+    'running-app-unavailable': 'Quill could not determine where the running app is installed.',
+    'unsupported-platform': 'Drive updates are available only in the macOS app.',
+    'current-version-invalid': 'Quill could not read its own version number.',
+  };
+  return messages[reason] ?? `The update check could not finish (${reason}).`;
+}
+
+function updateInstallFailureMessage(reason: string): string {
+  const messages: Record<string, string> = {
+    'target-not-writable':
+      'Quill cannot replace the installed app at its current location. Move it to a folder you can write to, then try again.',
+    'copy-failed': 'The Drive copy could not be copied into a local staging folder.',
+    'staged-version-unreadable': 'The copied update did not contain readable version information.',
+    'staged-version-mismatch': 'The copied update did not match the version offered by Drive.',
+    'helper-start-failed': 'Quill could not start the local installer helper.',
+  };
+  return messages[reason] ?? updateUnavailableMessage(reason);
 }
 
 let nextTabNumber = 1;
@@ -149,6 +207,9 @@ export default function App() {
     message: string;
     actions?: Array<{ label: string; onClick: () => void | Promise<void> }>;
   } | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const [automaticUpdateChecksEnabled, setAutomaticUpdateChecksEnabled] =
+    useState(loadAutomaticUpdateChecks);
   const [discardGuard, setDiscardGuard] = useState<DiscardGuard | null>(null);
   const [closeGuardTabId, setCloseGuardTabId] = useState<string | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -675,6 +736,137 @@ export default function App() {
     }
   }, []);
 
+  const revealAvailableUpdate = useCallback(async (update: AvailableUpdate) => {
+    setAvailableUpdate(null);
+    try {
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+      await revealItemInDir(update.path);
+    } catch {
+      setNotice({
+        title: 'Could not open Drive folder',
+        message: 'Quill could not reveal the Drive copy in Finder.',
+      });
+    }
+  }, []);
+
+  const installAvailableUpdate = useCallback(() => {
+    setAvailableUpdate(null);
+    guardDirtyTabs(() => {
+      void (async () => {
+        try {
+          await writeWorkspace();
+          const { invoke } = await import('@tauri-apps/api/core');
+          const outcome = await invoke<InstallUpdateOutcome>('install_update');
+          if (outcome.state === 'ready-to-restart') {
+            await invoke('exit_app');
+            return;
+          }
+          if (outcome.state === 'current') {
+            setNotice({
+              title: 'Quill is up to date',
+              message: 'You already have the latest Drive build.',
+            });
+            return;
+          }
+          if (outcome.state === 'running-from-drive') {
+            setNotice({
+              title: 'Install blocked',
+              message:
+                'This copy of Quill is running from the shared Drive folder. Move it to Applications before installing updates so the shared master is never overwritten.',
+            });
+            return;
+          }
+          setNotice({
+            title: 'Could not install update',
+            message:
+              outcome.state === 'failed'
+                ? updateInstallFailureMessage(outcome.reason)
+                : updateUnavailableMessage(outcome.reason),
+          });
+        } catch (error) {
+          setNotice({ title: 'Could not install update', message: String(error) });
+        }
+      })();
+    });
+  }, [guardDirtyTabs, writeWorkspace]);
+
+  const performUpdateCheck = useCallback(async (automatic: boolean) => {
+    if (!automatic) {
+      setAvailableUpdate(null);
+      setNotice(null);
+    }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const outcome = await invoke<UpdateCheckOutcome>('check_for_update', { automatic });
+      if (outcome.state === 'available') {
+        const dismissed = loadDismissedUpdateVersion();
+        if (automatic && dismissed && !isVersionNewer(outcome.version, dismissed)) return;
+        setAvailableUpdate(outcome);
+      } else if (automatic || outcome.state === 'already-checked') {
+        // Automatic checks are deliberately quiet. The Rust command logs every
+        // unavailable/blocked outcome to Quill's local log.
+        return;
+      } else if (outcome.state === 'current') {
+        setNotice({
+          title: 'Quill is up to date',
+          message: 'You already have the latest Drive build.',
+        });
+      } else if (outcome.state === 'running-from-drive') {
+        setNotice({
+          title: 'Update check blocked',
+          message:
+            'This copy of Quill is running from the shared Drive folder. Move it to Applications so Quill can update without touching the shared master.',
+        });
+      } else {
+        setNotice({
+          title: 'Could not check for updates',
+          message: updateUnavailableMessage(outcome.reason),
+        });
+      }
+    } catch (error) {
+      if (automatic) console.info('Automatic update check could not finish:', error);
+      else setNotice({ title: 'Could not check for updates', message: String(error) });
+    }
+  }, []);
+
+  const handleCheckForUpdates = useCallback(() => {
+    // If the user asks before the deferred launch check runs, this manual check
+    // satisfies the launch check too and avoids a duplicate request/modal.
+    automaticUpdateCheckStarted = true;
+    return performUpdateCheck(false);
+  }, [performUpdateCheck]);
+
+  useEffect(() => {
+    if (
+      automaticUpdateCheckStarted ||
+      !workspaceReady ||
+      pendingRecovery ||
+      invalidWorkspace ||
+      recoveryGuard.degraded ||
+      notice ||
+      discardGuard ||
+      closeGuardTabId
+    ) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      if (automaticUpdateCheckStarted) return;
+      automaticUpdateCheckStarted = true;
+      if (automaticUpdateChecksEnabled) void performUpdateCheck(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [
+    automaticUpdateChecksEnabled,
+    closeGuardTabId,
+    discardGuard,
+    invalidWorkspace,
+    notice,
+    pendingRecovery,
+    performUpdateCheck,
+    recoveryGuard.degraded,
+    workspaceReady,
+  ]);
+
   const menuHandlersRef = useRef({
     addNewTab,
     addOrFocusPath,
@@ -683,6 +875,7 @@ export default function App() {
     handleSaveAs,
     handleExportPdf,
     handleQuit,
+    handleCheckForUpdates,
     handleCopyDiagnostics,
     handleRevealLogs,
   });
@@ -694,6 +887,7 @@ export default function App() {
     handleSaveAs,
     handleExportPdf,
     handleQuit,
+    handleCheckForUpdates,
     handleCopyDiagnostics,
     handleRevealLogs,
   };
@@ -769,6 +963,9 @@ export default function App() {
         await wire('menu-save-as', () => void menuHandlersRef.current.handleSaveAs());
         await wire('menu-export-pdf', () => menuHandlersRef.current.handleExportPdf());
         await wire('menu-quit', () => menuHandlersRef.current.handleQuit());
+        await wire('menu-check-for-updates', () => {
+          void menuHandlersRef.current.handleCheckForUpdates();
+        });
         await wire('menu-clear-recent', () => void syncRecentMenu(clearRecentFiles()));
         await wire(
           'menu-copy-diagnostics',
@@ -1163,6 +1360,47 @@ export default function App() {
                 ]
           }
         />
+      )}
+
+      {availableUpdate && (
+        <AppModal
+          title="Update available"
+          message={`Quill ${availableUpdate.version} is available in the Truss Drive folder.`}
+          buttons={[
+            {
+              label: 'Install and Restart',
+              kind: 'primary',
+              onClick: installAvailableUpdate,
+            },
+            {
+              label: 'Open Drive Folder',
+              kind: 'ghost',
+              onClick: () => revealAvailableUpdate(availableUpdate),
+            },
+            {
+              label: 'Later',
+              kind: 'ghost',
+              isCancel: true,
+              onClick: () => {
+                saveDismissedUpdateVersion(availableUpdate.version);
+                setAvailableUpdate(null);
+              },
+            },
+          ]}
+        >
+          <label className="update-auto-check">
+            <input
+              type="checkbox"
+              checked={!automaticUpdateChecksEnabled}
+              onChange={(event) => {
+                const enabled = !event.target.checked;
+                setAutomaticUpdateChecksEnabled(enabled);
+                saveAutomaticUpdateChecks(enabled);
+              }}
+            />
+            Stop checking automatically
+          </label>
+        </AppModal>
       )}
     </div>
   );
