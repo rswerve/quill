@@ -39,7 +39,11 @@ cd src-tauri && cargo test && cargo clippy -- -D warnings && cargo fmt --check
 
 CI (`.github/workflows/ci.yml`) runs the frontend checks (typecheck, eslint, prettier, vitest) and the Rust checks (fmt, clippy, test) on every push and PR to `main`. Match that bar before pushing.
 
-Releases: pushing a `v*` tag triggers `.github/workflows/release.yml` (tauri-action), which builds macOS installers (aarch64 + x86_64) and attaches them to a **draft** GitHub Release. Releases are macOS-only by decision: the `claude` CLI and its session discovery are Unix-path-based, and we don't ship builds that can't deliver the full experience. A maintainer fills in the notes (drafts live in `docs/release-notes/`) and publishes manually. Tags are pushed by the maintainer, not by automation. Keep `version` in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` in sync when bumping.
+Releases: **`docs/deployment.md` is the deploy procedure. Read it before any release build or publish.** It is local and untracked by decision, so it is absent from fresh clones _and invisible to content search_ — a gitignore-aware `grep -r` returns nothing for it. Check for the file directly (`ls docs/deployment.md`); if it is there, follow it rather than improvising a build. It is intricate, every step carries a verification, and the obvious commands are the wrong ones: a bare `npm run tauri build` produces a per-architecture, effectively unsigned bundle and fails on a DMG that nothing ships.
+
+Do **not** release by pushing a `v*` tag. `.github/workflows/release.yml` is dormant — `workflow_dispatch` only, per its own header — and its unsigned per-arch GitHub Release artifacts are not what Quill ships. The live path is a local universal build, a full bundle-level ad-hoc signature, and manual publication to Google Drive. Releases are macOS-only by decision: the `claude` CLI and its session discovery are Unix-path-based, and we don't ship builds that can't deliver the full experience. A maintainer fills in the notes (drafts live in `docs/release-notes/`) and publishes manually.
+
+When bumping, the version lives in **five** places, not three: `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus the two generated lockfiles — `package-lock.json` (both the top-level `version` and `packages[""].version`) and `src-tauri/Cargo.lock` (the `name = "quill"` entry). Edit the `package-lock.json` strings by hand; regenerating it under this workstation's default Node rewrites dependency metadata and breaks `npm ci` in CI.
 
 ## Contributing
 
