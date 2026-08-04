@@ -1241,21 +1241,27 @@ test('double-clicking the zoom label resets to 100%', async ({ page }) => {
   ).toHaveText('100%');
 });
 
-test('zoom scales document text and reflows inside a fixed-width page', async ({ page }) => {
+test('zoom scales document text and reflows without changing the page width', async ({ page }) => {
   const { editor } = await setup(page);
   await editor.fill(`${'A readable line of prose wraps naturally. '.repeat(28)}`);
 
   const metrics = async () => {
     const pageBox = (await page.locator('.editor-page').boundingBox())!;
+    const areaBox = (await page.locator('.editor-scroll-area').boundingBox())!;
     return activeEditor(page)
       .evaluate((element) => {
         const paragraph = element.querySelector('p')!;
         return {
           fontSize: parseFloat(getComputedStyle(element).fontSize),
-          paragraphHeight: paragraph.getBoundingClientRect().height,
+          // Lines, not height. Height alone proves nothing about reflow: line-height
+          // scales with font-size, so 4× type gives ~4× height at the same line count.
+          lineCount: Math.round(
+            paragraph.getBoundingClientRect().height /
+              parseFloat(getComputedStyle(paragraph).lineHeight),
+          ),
         };
       })
-      .then((text) => ({ ...text, pageWidth: pageBox.width }));
+      .then((text) => ({ ...text, pageWidth: pageBox.width, areaWidth: areaBox.width }));
   };
 
   await setZoom(page, 0.6);
@@ -1264,9 +1270,11 @@ test('zoom scales document text and reflows inside a fixed-width page', async ({
   const large = await metrics();
 
   expect(Math.abs(large.pageWidth - small.pageWidth)).toBeLessThan(1);
-  expect(large.pageWidth).toBeCloseTo(640, 0);
+  // Fluid, not capped: the page fills its scroll area at every zoom level.
+  expect(Math.abs(large.pageWidth - large.areaWidth)).toBeLessThan(2);
   expect(large.fontSize / small.fontSize).toBeCloseTo(4, 1);
-  expect(large.paragraphHeight).toBeGreaterThan(small.paragraphHeight * 3);
+  // Reflow: bigger type in a same-width column must wrap onto more lines.
+  expect(large.lineCount).toBeGreaterThan(small.lineCount);
 });
 
 test('add-comment button stays aligned with the selection across zoom levels', async ({ page }) => {

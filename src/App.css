@@ -174,19 +174,20 @@ select {
 /* ── Page surface ───────────────────────────────────────────────── */
 .editor-page-zoom-wrapper {
   /* App sets a percentage here. Unlike CSS zoom/transform, inherited
-     font-size changes only document typography: the 816px page stays fixed
-     and text reflows naturally inside it. */
+     font-size changes only document typography: the page's own width is
+     untouched, so text reflows inside whatever width the window gives it. */
   font-size: 100%;
 }
 
+/* Width and padding live on the .studio-body rules below — .studio-body wraps
+   every mount of this element (DocumentTab.tsx), so anything set here that
+   Studio also sets can never win. Keep only what Studio does not restate. */
 .editor-page {
   position: relative;
-  width: var(--page-max-width);
   flex-shrink: 0;
   background: var(--color-page);
   border: 0.5px solid var(--color-border-light);
   border-radius: var(--radius-sm);
-  padding: var(--page-padding-y) var(--page-padding-x);
 }
 
 /* ── TipTap / ProseMirror ───────────────────────────────────────── */
@@ -210,7 +211,16 @@ select {
   font-weight: 400;
   line-height: 1.8;
   color: var(--color-ink);
-  word-break: break-word;
+  /* NOT `word-break: break-word` (legacy alias for overflow-wrap: anywhere).
+     `anywhere` shrinks an element's min-content width, so a table column could
+     collapse narrower than its longest word and stack it one letter per line.
+     Deleting that is the load-bearing half. The declaration below is explicit
+     rather than effective: TipTap injects its own overflow-wrap:break-word rule
+     on .ProseMirror after this file, so this can never be observed failing —
+     word-break is the property a regression actually moves, and it is what the
+     browser-level guard asserts. (No braces in this comment: the style tests
+     parse rules by brace matching, so a brace here forges a rule.) */
+  overflow-wrap: break-word;
 }
 
 .ProseMirror p {
@@ -339,7 +349,15 @@ select {
   border-collapse: collapse;
   width: 100%;
   margin-bottom: 14px;
-  table-layout: fixed;
+  /* Columns sized by content: a cell holding "1.00" stops claiming the width of
+     one holding two sentences. `fixed` splits evenly and cannot tell them apart.
+     The cost is that under `auto` a long unbreakable token or code block sets
+     the table's minimum width and can push it wider than the window, which the
+     editor absorbs as scroll. Paper cannot absorb it, so the print block at the
+     end of this file pins `fixed` there. Do not "fix" that divergence by making
+     cells break anywhere: that shrinks min-content to a single character and a
+     label column collapses to ~50px with its text stacked a few letters a line. */
+  table-layout: auto;
 }
 .ProseMirror th,
 .ProseMirror td {
@@ -393,8 +411,6 @@ select {
 
 .editor-empty-state {
   position: absolute;
-  top: var(--page-padding-y);
-  left: var(--page-padding-x);
   z-index: 1;
   pointer-events: none;
 }
@@ -859,8 +875,10 @@ del.track-delete {
   background: var(--bg-app);
 }
 .studio-body .editor-page-zoom-wrapper {
-  width: 640px;
-  max-width: 100%;
+  /* Fluid, uncapped. A too-wide measure the reader can fix by narrowing the
+     window or raising zoom; a capped one leaves them no move at all, and the
+     tables are what suffer. Print is unaffected — it renders .print-doc. */
+  width: 100%;
   /* Fill the scroll area's height so an empty doc reaches the viewport bottom
      (no phantom scrollbar). Grow to fill, never shrink, so a long document
      overflows into a real scroll. Fill flows down: wrapper → page → content →
@@ -870,9 +888,8 @@ del.track-delete {
   flex-direction: column;
 }
 .studio-body .editor-page {
-  width: 640px;
-  max-width: 100%;
-  padding: 56px 24px 96px;
+  width: 100%;
+  padding: 56px var(--studio-page-padding-x) 96px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -882,7 +899,9 @@ del.track-delete {
 }
 .studio-body .editor-empty-state {
   top: 56px;
-  left: 24px;
+  /* Must track .studio-body .editor-page's padding-left, or the placeholder
+     drifts off the text edge as the window widens. */
+  left: var(--studio-page-padding-x);
 }
 
 .comment-layer {
@@ -1133,5 +1152,13 @@ del.track-delete {
   .ProseMirror blockquote,
   .ProseMirror table {
     break-inside: avoid;
+  }
+  /* Screen sizes table columns by content; paper cannot. Under `auto` the
+     table's minimum width is the widest unbreakable token in any cell, so one
+     long token or code block expands it past the sheet — measured 981px against
+     a 600px page — and print allows visible overflow, so that excess is simply
+     lost. `fixed` ignores content, so the table always fits the page. */
+  .ProseMirror table {
+    table-layout: fixed;
   }
 }

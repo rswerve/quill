@@ -238,10 +238,9 @@
   --comment-panel-width: 320px;
   --comment-panel-header-height: 44px;
   --annotation-gutter-width: 22px;
-  --page-max-width: 640px;
-  /* Studio fixes the document column at 640px; print flattens this shell so
-     exported PDFs retain their independent US-Letter layout. */
-  --page-padding-x: 64px;
-  --page-padding-y: 72px;
+  /* The document column is fluid; its side margin grows with the window. Shared
+     so the empty-state placeholder starts exactly where the first character
+     will — they must move together or the prompt sits off the text edge. */
+  --studio-page-padding-x: clamp(24px, 5vw, 96px);
   --editor-scroll-gap: 40px;
 }

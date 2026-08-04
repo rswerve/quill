@@ -107,18 +107,65 @@ describe('page surface (spec 10 — no faux page-break indicator)', () => {
 });
 
 describe('reading measure (spec 12 — wider surface)', () => {
-  function readToken(name: string): number {
-    const m = css.match(new RegExp(`${name}:\\s*(\\d+)px`));
-    if (!m) throw new Error(`token ${name} not found in App.css`);
-    return Number(m[1]);
-  }
-
-  it('keeps the widened side padding (≤ 72px)', () => {
-    expect(readToken('--page-padding-x')).toBeLessThanOrEqual(72);
+  it('keeps the Studio column fluid instead of pinning a fixed width', () => {
+    // Regression: .studio-body pinned width:640px on both the zoom wrapper and
+    // the page, so a wide window was mostly dead space and tables wrapped hard.
+    // A cap is the one dimension a reader cannot override — narrowing the window
+    // or raising zoom both shorten the measure, nothing widens past a cap.
+    const wrapper = ruleBody(css, '.studio-body .editor-page-zoom-wrapper');
+    const page = ruleBody(css, '.studio-body .editor-page');
+    expect(wrapper).toMatch(/width:\s*100%/);
+    expect(page).toMatch(/width:\s*100%/);
+    expect(wrapper).not.toMatch(/width:\s*\d+px/);
+    expect(page).not.toMatch(/width:\s*\d+px/);
   });
 
-  it('uses the Studio handoff document width (640px)', () => {
-    expect(readToken('--page-max-width')).toBe(640);
+  it('negative control: a pinned pixel width would fail the fluid guard', () => {
+    expect('width: 640px;').toMatch(/width:\s*\d+px/);
+  });
+
+  it('sizes table columns by content on screen and pins them for print', () => {
+    // Screen wants `auto` so a "1.00" column stops claiming the width of one
+    // holding two sentences. Paper cannot have it: under `auto` the table's
+    // minimum width is the widest unbreakable token in any cell, so one long
+    // token or code block expands the table past the sheet (measured 981px
+    // against a 600px page) and print allows visible overflow, losing the
+    // excess. Both halves are load-bearing — assert them together so removing
+    // the print pin while leaving `auto` cannot pass.
+    // Comments are stripped first: ruleBody treats everything since the previous
+    // `}` as the selector list, so a comment above a rule hides its first entry.
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const print = bare.slice(bare.indexOf('@media print'));
+    expect(ruleBody(bare, '.ProseMirror table')).toMatch(/table-layout:\s*auto/);
+    expect(ruleBody(print, '.ProseMirror table')).toMatch(/table-layout:\s*fixed/);
+  });
+
+  it('negative control: dropping the print pin fails the guard', () => {
+    const withoutPin = '@media print { .ProseMirror table { break-inside: avoid; } }';
+    expect(ruleBody(withoutPin, '.ProseMirror table')).not.toMatch(/table-layout:\s*fixed/);
+  });
+
+  it('never lets document text break below its longest word', () => {
+    // `word-break: break-word` is a legacy alias for `overflow-wrap: anywhere`,
+    // and `anywhere` reduces min-content width — which let a table column shrink
+    // narrower than a single word and stack it one letter per line.
+    // Strip comments — this rule's own comment names the value it forbids.
+    const body = ruleBody(css, '.ProseMirror').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(body).toMatch(/overflow-wrap:\s*break-word/);
+    expect(body).not.toMatch(/word-break:\s*break-word/);
+    expect(body).not.toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('starts the empty-state placeholder at the page text inset', () => {
+    // Both must read the same token. The placeholder sits where the first
+    // character will, so a hardcoded offset drifts off the text edge as the
+    // fluid side padding grows with the window.
+    expect(ruleBody(css, '.studio-body .editor-page')).toContain(
+      'padding: 56px var(--studio-page-padding-x) 96px',
+    );
+    expect(ruleBody(css, '.studio-body .editor-empty-state')).toContain(
+      'left: var(--studio-page-padding-x)',
+    );
   });
 
   it('negative control: the old cramped 96px padding would fail the guard', () => {
