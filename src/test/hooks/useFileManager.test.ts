@@ -18,6 +18,7 @@ import type {
   Reply,
   StructuralSuggestionRecord,
 } from '../../types';
+import { REVIEW_ANCHOR_VERSION } from '../../utils/reviewAnchorMap';
 
 const SAMPLE_STRUCTURAL: StructuralSuggestionRecord = {
   changeId: 'sc1',
@@ -142,7 +143,10 @@ describe('useFileManager', () => {
       // readHash('# Hello') is the .md's hash; a matching sidecar is authoritative.
       const res = await openWithSidecar(
         '# Hello',
-        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }),
+        sidecarWith({
+          reviewSourceHash: readHash('# Hello'),
+          reviewAnchorVersion: REVIEW_ANCHOR_VERSION,
+        }),
       );
       expect(res.reviewMode).toBe('bound');
       expect(res.reviewUnboundReason).toBeUndefined();
@@ -157,13 +161,25 @@ describe('useFileManager', () => {
     it('unbound + source-mismatch when the .md was edited externally (hash mismatch)', async () => {
       const res = await openWithSidecar(
         '# Hello edited',
-        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }), // stale hash
+        sidecarWith({
+          reviewSourceHash: readHash('# Hello'),
+          reviewAnchorVersion: REVIEW_ANCHOR_VERSION,
+        }), // stale hash
       );
       expect(res.reviewMode).toBe('unbound');
       expect(res.reviewUnboundReason).toBe('source-mismatch');
     });
 
-    it('unbound + version-mismatch when the anchor version does not match', async () => {
+    it('unbound + version-mismatch for a sidecar from the previous anchor scheme', async () => {
+      const res = await openWithSidecar(
+        '# Hello',
+        sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 1 }),
+      );
+      expect(res.reviewMode).toBe('unbound');
+      expect(res.reviewUnboundReason).toBe('version-mismatch');
+    });
+
+    it('unbound + version-mismatch for a sidecar from a future anchor scheme', async () => {
       const res = await openWithSidecar(
         '# Hello',
         sidecarWith({ reviewSourceHash: readHash('# Hello'), reviewAnchorVersion: 999 }),
@@ -396,7 +412,7 @@ describe('useFileManager', () => {
       });
       const written = writtenSidecar();
       expect(written.reviewSourceHash).toBe(HASH_DOC);
-      expect(written.reviewAnchorVersion).toBe(1);
+      expect(written.reviewAnchorVersion).toBe(REVIEW_ANCHOR_VERSION);
     });
 
     it('does NOT stamp anchor provenance for a review-free sidecar (byte-compatible)', async () => {

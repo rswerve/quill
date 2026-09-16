@@ -46,7 +46,7 @@ import { isReviewMarkName } from './canonicalDocument';
  * to conservative relocation. Bump this whenever a change to the capture/mapping
  * alters the coordinates a given document would produce.
  */
-export const REVIEW_ANCHOR_VERSION = 1;
+export const REVIEW_ANCHOR_VERSION = 2;
 
 type AnchorSource = 'text' | 'hardBreak' | 'blockBoundary' | 'otherLeaf';
 

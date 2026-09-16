@@ -141,7 +141,7 @@ export type SaveOutcome =
 /**
  * Why a sidecar's coordinates are only hints. `legacy` — no provenance (a pre-anchor-
  * versioning sidecar); `source-mismatch` — the `.md` changed since Quill wrote it (an
- * external / partial `.md`-only edit); `version-mismatch` — a newer anchor scheme wrote it.
+ * external / partial `.md`-only edit); `version-mismatch` — a different anchor scheme wrote it.
  * Used to tailor the recovery notice.
  */
 export type ReviewUnboundReason = 'legacy' | 'source-mismatch' | 'version-mismatch';
@@ -150,7 +150,7 @@ export type ReviewUnboundReason = 'legacy' | 'source-mismatch' | 'version-mismat
  * Why a sidecar's coordinates are only hints for the `.md` on disk, or undefined when they
  * are authoritative (bound). Checked most-specific first: no provenance is legacy; a hash
  * that no longer matches is an external/partial `.md` edit; a matching hash under a
- * different anchor version is a newer scheme.
+ * different anchor version was written by an older or newer Quill.
  */
 function reviewProvenanceReason(
   sidecar: SidecarFile,
