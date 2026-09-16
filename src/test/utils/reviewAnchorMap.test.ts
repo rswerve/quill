@@ -455,12 +455,7 @@ describe('reviewAnchorMap: boundary-identity attacks (independent verification)'
     expect(mapper.map(inside + 1, inside + 1)).toBeNull(); // after the space
   });
 
-  it('an NBSP-only block that the round-trip empties fails forward (safe, not mismapped)', () => {
-    // A lone NBSP is a paragraph-level blank to the Markdown serializer: the block
-    // reopens EMPTY, dropping the NBSP. Live content [a, NBSP, b] vs canonical [a, b]
-    // is a genuine content-count divergence, so the deterministic mapper refuses to
-    // map anything after it rather than guessing — the load-side relocation net
-    // recovers `b` by unique text. Broad failure beats a plausible wrong anchor.
+  it('an NBSP-only block survives the round-trip and preserves later anchors', () => {
     const live = liveDoc({
       type: 'doc',
       content: [
@@ -470,9 +465,9 @@ describe('reviewAnchorMap: boundary-identity attacks (independent verification)'
       ],
     });
     const canon = canonicalOf(live);
-    expect(canon.child(1).content.size).toBe(0); // the middle block reopened empty
+    expect(canon.child(1).textContent).toBe(' ');
     const b = nthPos(live, 'b');
-    expect(buildAnchorMapper(live, canon).map(b, b + 1)).toBeNull(); // fails forward
+    expect(buildAnchorMapper(live, canon).map(b, b + 1)).toEqual({ from: b, to: b + 1 });
   });
 
   it('leading whitespace trim adjacent to surviving content maps the content', () => {
