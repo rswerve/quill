@@ -81,7 +81,18 @@ command -v rustup    # must print a path
 rustup toolchain install "$RUST_VERSION"
 rustup target add --toolchain "$RUST_VERSION" aarch64-apple-darwin x86_64-apple-darwin
 rustup target list --toolchain "$RUST_VERSION" --installed   # must list both targets
+rustup component add --toolchain "$RUST_VERSION" llvm-tools
+rustup component list --toolchain "$RUST_VERSION" --installed   # must list llvm-tools
 ```
+
+The `llvm-tools` component lets a release build strip its debug info when the toolchain's binaries
+run directly. Cargo strips debug info from a release build by default, using the toolchain's
+`rust-objcopy`. On Apple silicon, the official Rust 1.99.1 `rust-objcopy` looks for
+`libLLVM.dylib` in `lib/rustlib/aarch64-apple-darwin/lib/`, which the `rustc` component does not
+ship ([rust-lang/rust#164063](https://github.com/rust-lang/rust/issues/164063)). rustup's proxies
+normally hide the gap, but step 4 bypasses them. Without the component, that strip fails with a
+warning and the build still succeeds. `llvm-tools` ships `libLLVM.dylib` at that path. Step 4
+stops if the warning appears.
 
 ## 2. Prepare the release commit
 
@@ -201,7 +212,8 @@ rustc --version --verbose > "$WORK/rustc.txt"
 cargo --version --verbose > "$WORK/cargo.txt"
 grep -Fx "release: $RUST_VERSION" "$WORK/rustc.txt"   # must match the green run's compiler
 grep -Fx "release: $RUST_VERSION" "$WORK/cargo.txt"
-npm run tauri build -- --target universal-apple-darwin --bundles app
+npm run tauri build -- --target universal-apple-darwin --bundles app 2>&1 | tee "$WORK/build.log"
+test "$(grep -c -F 'stripping debug info with' "$WORK/build.log")" = 0   # no failed strip
 test -d "$APP"
 git status --porcelain   # must still print nothing
 ```
@@ -213,6 +225,12 @@ Bundling Quill.app (.../release/bundle/macos/Quill.app)
 Finished 1 bundle at:
     .../release/bundle/macos/Quill.app
 ```
+
+The build output is also kept in `$WORK/build.log`. A failed debug-info strip prints a warning
+such as ``warning: stripping debug info with `rust-objcopy` failed`` but does not fail the build,
+so the `grep` check stops the shell when that warning appears. If it stops there, check that step
+1's `llvm-tools` component is installed for `$RUST_VERSION`. A failing build still stops the shell
+before the check, because `pipefail` passes `npm`'s failure through `tee`.
 
 Without `--bundles app`, Tauri also tries every other bundle target in `tauri.conf.json`, and the
 DMG step fails locally after the app is built. Truss ships `Quill.app`, not a DMG, and a build that
