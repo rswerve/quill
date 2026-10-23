@@ -111,9 +111,13 @@ grep -m1 '"version"' package.json src-tauri/tauri.conf.json
 grep -m1 '^version' src-tauri/Cargo.toml
 grep -n "\"version\": \"$VERSION\"" package-lock.json   # exactly 2 hits, both yours
 grep -A1 '^name = "quill"$' src-tauri/Cargo.lock
-npm ci --dry-run                                        # must succeed; EUSAGE means a bad lockfile
+npm ci --dry-run --ignore-scripts                       # must succeed; EUSAGE means a bad lockfile
 (cd src-tauri && cargo metadata --locked --format-version 1 >/dev/null)   # must exit 0
 ```
+
+`--ignore-scripts` keeps the dry run from running the `prepare` script. That script calls `husky`
+from `node_modules`, so before dependencies are installed it fails with exit 127, even with
+`HUSKY=0`. The full `npm ci` in step 3 still runs it.
 
 Add a release note at `docs/release-notes/vX.Y.Z.md`, following the latest note's layout. Land
 the bump and the note through a pull request, then wait for the gate.
@@ -149,7 +153,7 @@ export RUSTUP_TOOLCHAIN="$RUST_VERSION" RUSTC="$TOOLCHAIN_BIN/rustc" PATH="$TOOL
 TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/src-tauri/target}"
 case "$TARGET_DIR" in /*) ;; *) echo 'CARGO_TARGET_DIR must be absolute' >&2; exit 1 ;; esac
 APP="$TARGET_DIR/universal-apple-darwin/release/bundle/macos/Quill.app"
-WORK="$(mktemp -d)"   # this release's manifests and copies
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/quill-release.XXXXXX")"   # this release's manifests and copies
 printf 'WORK=%s\n' "$WORK"
 manifest() { (cd "$1" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256); }
 bundle_facts() {
@@ -183,6 +187,10 @@ updater_check() {
 The build goes to `CARGO_TARGET_DIR` when it is set, and to `src-tauri/target` otherwise. A
 relative `CARGO_TARGET_DIR` stops the block, because which folder it names depends on the directory
 `cargo` runs in.
+
+`WORK` goes under `TMPDIR` when it is set, and under `/tmp` otherwise. The `mktemp` template names
+that folder explicitly because macOS `mktemp` without a template ignores `TMPDIR` and uses the
+per-user temporary folder. Step 9's `RBWORK` uses the same form.
 
 Check and record the toolchain, then build only the app bundle:
 
@@ -398,7 +406,7 @@ step 7 first:
 ```bash
 ROLLBACK="$TOOLS/.Quill.previous-<STAMP>.app"   # the backup to restore
 BAD="$TOOLS/.Quill.bad-$(date +%Y%m%d-%H%M%S).app"
-RBWORK="$(mktemp -d)"
+RBWORK="$(mktemp -d "${TMPDIR:-/tmp}/quill-rollback.XXXXXX")"
 printf 'RBWORK=%s\n' "$RBWORK"
 
 manifest "$ROLLBACK" > "$RBWORK/rollback-source.sha256"
