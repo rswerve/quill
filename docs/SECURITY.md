@@ -248,13 +248,18 @@ shared copy is never overwritten.
 
 **Install and Restart** makes its checks while Quill is still open. It refuses
 when the previous-build backup described below can't be matched to its receipt,
-then confirms it can write beside the installed app, copies the Drive bundle
-with `ditto` into a hidden `.Quill.update-<uuid>.app` beside it, and requires
-that copy to carry the version Drive offered, the bundle identifier
-`com.trussworks.quill`, and a signature that passes
-`/usr/bin/codesign --verify --deep --strict`. Any failure leaves Quill open,
-tries to remove the staged copy if one was made (a removal failure is not
-reported), and shows **Could not install update**
+then confirms it can write beside the installed app and copies the Drive bundle
+with `/usr/bin/ditto` into a hidden `.Quill.update-<uuid>.app` beside it.
+`ditto` carries the Drive bundle's extended attributes into that copy, and
+`codesign --strict` can reject two of them as detritus even on an intact
+bundle. Quill therefore removes `com.apple.FinderInfo` and
+`com.apple.ResourceFork` from every item in the copy, without following
+symlinks, and leaves every other attribute, such as quarantine and provenance,
+as copied. It then requires the copy to carry the version Drive offered, the
+bundle identifier `com.trussworks.quill`, and a signature that passes
+`/usr/bin/codesign --verify --deep --strict`. Any failure, including a failed
+attribute removal, leaves Quill open, tries to remove the staged copy if one was
+made (a removal failure is not reported), and shows **Could not install update**
 with the reason. For the backup check that reads "The previous update backup
 could not be verified. Quill will stay open. Ask IT to inspect the managed
 backup and receipt before trying again." The signature check shows that the
@@ -332,7 +337,10 @@ The local Drive updater leaves these risks open:
   that is manual.
 - An update interrupted by a crash can leave state, such as a receipt without
   its backup, that blocks later updates until someone inspects it.
-- Before relying on in-app updates, verify that the synced distribution copy in
-  the Tools folder passes `codesign --verify --deep --strict`. This assessment
-  ran the check only on constructed fixtures. A bundle that fails it is
-  refused, so it would never install.
+- Where Drive for desktop puts `com.apple.FinderInfo` on the published bundle
+  is unverified. Its effect on the strict check was measured only on constructed
+  fixtures, on macOS 27.0.1. Before relying on in-app updates, copy the synced
+  bundle in the Tools folder to a local folder the way Quill stages it, and
+  check that local copy with `codesign --verify --deep --strict`, as the
+  [release guide](releasing.md#7-publish-to-google-drive) describes. A bundle
+  whose staged copy fails is refused, so it would never install.

@@ -187,6 +187,52 @@ fn verify_code_signature(bundle: &Path) -> bool {
     )
 }
 
+/// Removes the two attributes that `codesign --strict` rejects as detritus and
+/// that Drive can attach to the published bundle. Other attributes, such as
+/// quarantine and provenance, must reach the swapped app unchanged.
+#[cfg(target_os = "macos")]
+fn remove_finder_detritus(path: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())?;
+    for name in [c"com.apple.FinderInfo", c"com.apple.ResourceFork"] {
+        // XATTR_NOFOLLOW keeps a staged symlink from redirecting either call to
+        // a file outside the stage.
+        // SAFETY: both strings are NUL-terminated and outlive the call; a null
+        // buffer with size 0 only queries whether the attribute exists.
+        let size = unsafe {
+            libc::getxattr(
+                c_path.as_ptr(),
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                0,
+                libc::XATTR_NOFOLLOW,
+            )
+        };
+        if size < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENOATTR) {
+                continue;
+            }
+            return Err(error);
+        }
+        // removexattr needs write access even when the attribute is absent, so
+        // a read-only file without detritus is never passed to it.
+        // SAFETY: as above.
+        if unsafe { libc::removexattr(c_path.as_ptr(), name.as_ptr(), libc::XATTR_NOFOLLOW) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    if fs::symlink_metadata(path)?.is_dir() {
+        for entry in fs::read_dir(path)? {
+            remove_finder_detritus(&entry?.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn find_update(
     current_version: &str,
     running_bundle: &Path,
@@ -358,6 +404,17 @@ where
         }
         return InstallUpdateOutcome::Failed {
             reason: "copy-failed".to_string(),
+        };
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = remove_finder_detritus(&staged) {
+        log::warn!(
+            "Could not remove Finder metadata from update stage {}: {error}",
+            staged.display()
+        );
+        remove_staged_bundle(&staged);
+        return InstallUpdateOutcome::Failed {
+            reason: "stage-metadata-cleanup-failed".to_string(),
         };
     }
     let Ok(staged_version) = read_bundle_version(&staged) else {
@@ -1475,11 +1532,8 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[test]
-    fn real_macos_signature_verification_rejects_unsigned_and_corrupt_fixtures() {
-        let temp = TempDir::new().unwrap();
-        let bundle = temp.path().join("Quill.app");
-        write_bundle_plist(&bundle, "1.2.0");
+    fn write_unsigned_executable_bundle(bundle: &Path) {
+        write_bundle_plist(bundle, "1.2.0");
         let plist_path = bundle.join("Contents/Info.plist");
         let mut plist = plist::Value::from_file(&plist_path).unwrap();
         plist.as_dictionary_mut().unwrap().insert(
@@ -1487,7 +1541,7 @@ mod tests {
             plist::Value::String("quill".to_string()),
         );
         plist.to_file_xml(plist_path).unwrap();
-        let source = temp.path().join("fixture.c");
+        let source = bundle.with_extension("c");
         fs::write(&source, "int main(void) { return 0; }\n").unwrap();
         assert!(Command::new("/usr/bin/clang")
             .arg(&source)
@@ -1499,19 +1553,385 @@ mod tests {
         let resource = bundle.join("Contents/Resources/payload.txt");
         fs::create_dir_all(resource.parent().unwrap()).unwrap();
         fs::write(&resource, "original").unwrap();
-        assert!(!verify_code_signature(&bundle));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sign_bundle(bundle: &Path) {
         assert!(Command::new("/usr/bin/codesign")
             .args(["--force", "--sign", "-"])
-            .arg(&bundle)
+            .arg(bundle)
             .status()
             .unwrap()
             .success());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_macos_signature_verification_rejects_unsigned_and_corrupt_fixtures() {
+        let temp = TempDir::new().unwrap();
+        let bundle = temp.path().join("Quill.app");
+        write_unsigned_executable_bundle(&bundle);
+        let resource = bundle.join("Contents/Resources/payload.txt");
+        assert!(!verify_code_signature(&bundle));
+        sign_bundle(&bundle);
         assert_eq!(verify_staged_bundle(&bundle, verify_code_signature), Ok(()));
         fs::write(&resource, "corrupted").unwrap();
         assert_eq!(
             verify_staged_bundle(&bundle, verify_code_signature),
             Err("staged-signature-invalid".to_string())
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    mod stage_metadata {
+        use std::cell::RefCell;
+        use std::collections::BTreeMap;
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        use super::*;
+
+        const FINDER_INFO: &str = "com.apple.FinderInfo";
+        const RESOURCE_FORK: &str = "com.apple.ResourceFork";
+        const QUARANTINE: &str = "com.apple.quarantine";
+        const DRIVE_ITEM_ID: &str = "com.google.drivefs.item-id#S";
+        // macOS does not store an all-zero FinderInfo, so set Finder flag 0x0400.
+        const FINDER_FLAGS: [u8; 32] = {
+            let mut info = [0; 32];
+            info[8] = 0x04;
+            info
+        };
+        const FORK: &[u8] = b"constructed resource fork";
+
+        /// Relative path -> (extended attributes, file bytes or symlink target).
+        type TreeState = BTreeMap<PathBuf, (BTreeMap<String, Vec<u8>>, Vec<u8>)>;
+
+        fn c_path(path: &Path) -> CString {
+            CString::new(path.as_os_str().as_bytes()).unwrap()
+        }
+
+        fn set_xattr(path: &Path, name: &str, value: &[u8]) {
+            let name = CString::new(name).unwrap();
+            // SAFETY: both strings are NUL-terminated and value is valid for its length.
+            let result = unsafe {
+                libc::setxattr(
+                    c_path(path).as_ptr(),
+                    name.as_ptr(),
+                    value.as_ptr().cast(),
+                    value.len(),
+                    0,
+                    libc::XATTR_NOFOLLOW,
+                )
+            };
+            assert_eq!(result, 0, "{}", io::Error::last_os_error());
+        }
+
+        /// macOS reports ERANGE for a non-null empty buffer instead of the size.
+        fn size_query_or(buffer: &mut [u8]) -> *mut libc::c_void {
+            if buffer.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                buffer.as_mut_ptr().cast()
+            }
+        }
+
+        fn xattrs(path: &Path) -> BTreeMap<String, Vec<u8>> {
+            let path = c_path(path);
+            let list = |buffer: &mut Vec<u8>| {
+                // SAFETY: the buffer is valid for its length; a null buffer only queries the size.
+                let size = unsafe {
+                    libc::listxattr(
+                        path.as_ptr(),
+                        size_query_or(buffer).cast(),
+                        buffer.len(),
+                        libc::XATTR_NOFOLLOW,
+                    )
+                };
+                usize::try_from(size).unwrap()
+            };
+            let mut names = Vec::new();
+            let size = list(&mut names);
+            names.resize(size, 0);
+            let size = list(&mut names);
+            names.truncate(size);
+            names
+                .split(|&byte| byte == 0)
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    let c_name = CString::new(name).unwrap();
+                    let get = |buffer: &mut Vec<u8>| {
+                        // SAFETY: as for listxattr above.
+                        let size = unsafe {
+                            libc::getxattr(
+                                path.as_ptr(),
+                                c_name.as_ptr(),
+                                size_query_or(buffer),
+                                buffer.len(),
+                                0,
+                                libc::XATTR_NOFOLLOW,
+                            )
+                        };
+                        usize::try_from(size).unwrap()
+                    };
+                    let mut value = Vec::new();
+                    let size = get(&mut value);
+                    value.resize(size, 0);
+                    let size = get(&mut value);
+                    value.truncate(size);
+                    (String::from_utf8(name.to_vec()).unwrap(), value)
+                })
+                .collect()
+        }
+
+        fn tree_state(root: &Path) -> TreeState {
+            let mut state = TreeState::new();
+            let mut pending = vec![root.to_path_buf()];
+            while let Some(path) = pending.pop() {
+                let metadata = fs::symlink_metadata(&path).unwrap();
+                let contents = if metadata.is_symlink() {
+                    fs::read_link(&path)
+                        .unwrap()
+                        .as_os_str()
+                        .as_bytes()
+                        .to_vec()
+                } else if metadata.is_dir() {
+                    pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+                    Vec::new()
+                } else {
+                    fs::read(&path).unwrap()
+                };
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                state.insert(relative, (xattrs(&path), contents));
+            }
+            state
+        }
+
+        fn without_finder_detritus(mut state: TreeState) -> TreeState {
+            for (attributes, _) in state.values_mut() {
+                attributes.remove(FINDER_INFO);
+                attributes.remove(RESOURCE_FORK);
+            }
+            state
+        }
+
+        fn assert_no_finder_detritus(stage: &Path) {
+            let tree = tree_state(stage);
+            assert_eq!(without_finder_detritus(tree.clone()), tree);
+        }
+
+        fn ditto(source: &Path, staged: &Path) -> bool {
+            Command::new("/usr/bin/ditto")
+                .arg(source)
+                .arg(staged)
+                .status()
+                .unwrap()
+                .success()
+        }
+
+        fn stage_parent_entries(running: &Path) -> usize {
+            fs::read_dir(running.parent().unwrap()).unwrap().count()
+        }
+
+        /// A signed Drive bundle whose every item carries quarantine and a Drive item id.
+        fn drive_with_signed_bundle() -> (TempDir, PathBuf, PathBuf, PathBuf) {
+            let (temp, cloud, running) = fixture();
+            let bundle =
+                tools_folder(&cloud.join("GoogleDrive-test@truss.works")).join("Quill.app");
+            write_unsigned_executable_bundle(&bundle);
+            sign_bundle(&bundle);
+            for item in tree_state(&bundle).keys() {
+                set_xattr(
+                    &bundle.join(item),
+                    QUARANTINE,
+                    b"0083;671f2a00;Google Drive;",
+                );
+                set_xattr(
+                    &bundle.join(item),
+                    DRIVE_ITEM_ID,
+                    b"1QuillFixtureDriveItemId0",
+                );
+            }
+            (temp, cloud, running, bundle)
+        }
+
+        #[test]
+        fn real_macos_signed_bundle_with_finder_metadata_installs_with_other_attrs_kept() {
+            for (item, name, value) in [
+                ("", FINDER_INFO, &FINDER_FLAGS[..]),
+                ("Contents/MacOS/quill", FINDER_INFO, &FINDER_FLAGS[..]),
+                (
+                    "Contents/Resources/payload.txt",
+                    FINDER_INFO,
+                    &FINDER_FLAGS[..],
+                ),
+                ("Contents/MacOS/quill", RESOURCE_FORK, FORK),
+                ("Contents/Resources/payload.txt", RESOURCE_FORK, FORK),
+            ] {
+                let (_temp, cloud, running, source) = drive_with_signed_bundle();
+                set_xattr(&source.join(item), name, value);
+                let source_before = tree_state(&source);
+                let copied = RefCell::new(None);
+                let cleaned = RefCell::new(None);
+                assert_eq!(
+                    prepare_install(
+                        "1.1.19",
+                        &running,
+                        &cloud,
+                        |source, staged| {
+                            let copied_ok = ditto(source, staged);
+                            copied.replace(Some(tree_state(staged)));
+                            copied_ok
+                        },
+                        verify_code_signature,
+                        |_, staged| {
+                            cleaned.replace(Some(tree_state(staged)));
+                            true
+                        },
+                    ),
+                    InstallUpdateOutcome::ReadyToRestart {
+                        version: "1.2.0".to_string()
+                    },
+                    "{name} on {item:?}"
+                );
+                let copied = copied.into_inner().unwrap();
+                assert_eq!(
+                    copied[Path::new(item)].0.get(name).map(Vec::as_slice),
+                    Some(value),
+                    "ditto must carry {name} on {item:?} into the stage"
+                );
+                assert!(copied.values().all(|(attributes, _)| {
+                    attributes.contains_key(QUARANTINE) && attributes.contains_key(DRIVE_ITEM_ID)
+                }));
+                let cleaned = cleaned.into_inner().unwrap();
+                assert_eq!(cleaned, without_finder_detritus(copied));
+                assert_eq!(
+                    cleaned
+                        .iter()
+                        .map(|(path, (_, bytes))| (path, bytes))
+                        .collect::<Vec<_>>(),
+                    source_before
+                        .iter()
+                        .map(|(path, (_, bytes))| (path, bytes))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(tree_state(&source), source_before);
+            }
+        }
+
+        #[test]
+        fn real_macos_finder_metadata_cleanup_keeps_tampered_bundles_rejected() {
+            for tamper_executable in [false, true] {
+                let (_temp, cloud, running, source) = drive_with_signed_bundle();
+                let executable = source.join("Contents/MacOS/quill");
+                let resource = source.join("Contents/Resources/payload.txt");
+                set_xattr(&source, FINDER_INFO, &FINDER_FLAGS);
+                set_xattr(&executable, FINDER_INFO, &FINDER_FLAGS);
+                set_xattr(&resource, RESOURCE_FORK, FORK);
+                if tamper_executable {
+                    let mut bytes = fs::read(&executable).unwrap();
+                    bytes[4096] ^= 0xFF;
+                    fs::write(&executable, bytes).unwrap();
+                } else {
+                    fs::write(&resource, "corrupted").unwrap();
+                }
+                assert_eq!(
+                    prepare_install(
+                        "1.1.19",
+                        &running,
+                        &cloud,
+                        ditto,
+                        |staged| {
+                            assert_no_finder_detritus(staged);
+                            verify_code_signature(staged)
+                        },
+                        |_, _| panic!("helper started for a tampered bundle"),
+                    ),
+                    InstallUpdateOutcome::Failed {
+                        reason: "staged-signature-invalid".to_string()
+                    },
+                    "tamper_executable={tamper_executable}"
+                );
+                assert_eq!(stage_parent_entries(&running), 1);
+            }
+        }
+
+        #[test]
+        fn real_macos_finder_metadata_cleanup_never_follows_stage_symlinks() {
+            let (temp, cloud, running) = fixture();
+            let source = write_bundle(
+                &tools_folder(&cloud.join("GoogleDrive-test@truss.works")),
+                "1.2.0",
+            );
+            let resources = source.join("Contents/Resources");
+            fs::create_dir_all(&resources).unwrap();
+            fs::write(resources.join("inside.txt"), "inside").unwrap();
+            set_xattr(&resources.join("inside.txt"), FINDER_INFO, &FINDER_FLAGS);
+            // removexattr needs write access even when the attribute is absent.
+            let read_only = resources.join("read-only.txt");
+            fs::write(&read_only, "read only").unwrap();
+            fs::set_permissions(&read_only, fs::Permissions::from_mode(0o444)).unwrap();
+            let outside = temp.path().join("outside");
+            let outside_file = outside.join("file.txt");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(&outside_file, "outside").unwrap();
+            set_xattr(&outside, FINDER_INFO, &FINDER_FLAGS);
+            set_xattr(&outside_file, FINDER_INFO, &FINDER_FLAGS);
+            set_xattr(&outside_file, RESOURCE_FORK, FORK);
+            symlink(&outside, resources.join("outside-dir")).unwrap();
+            symlink(&outside_file, resources.join("outside-file")).unwrap();
+            let outside_before = tree_state(&outside);
+            assert_eq!(
+                prepare_install(
+                    "1.1.19",
+                    &running,
+                    &cloud,
+                    ditto,
+                    |staged| {
+                        for link in ["outside-dir", "outside-file"] {
+                            let link = staged.join("Contents/Resources").join(link);
+                            assert!(fs::symlink_metadata(link).unwrap().is_symlink());
+                        }
+                        assert_no_finder_detritus(staged);
+                        true
+                    },
+                    |_, _| true,
+                ),
+                InstallUpdateOutcome::ReadyToRestart {
+                    version: "1.2.0".to_string()
+                }
+            );
+            assert_eq!(tree_state(&outside), outside_before);
+        }
+
+        #[test]
+        fn real_macos_finder_metadata_cleanup_failure_fails_before_verify_and_removes_stage() {
+            let (_temp, cloud, running) = fixture();
+            let source = write_bundle(
+                &tools_folder(&cloud.join("GoogleDrive-test@truss.works")),
+                "1.2.0",
+            );
+            let locked = source.join("Contents/MacOS/locked");
+            fs::write(&locked, "locked").unwrap();
+            set_xattr(&locked, FINDER_INFO, &FINDER_FLAGS);
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o444)).unwrap();
+            let source_before = tree_state(&source);
+            assert_eq!(
+                prepare_install(
+                    "1.1.19",
+                    &running,
+                    &cloud,
+                    ditto,
+                    |_| panic!("a stage whose cleanup failed must not be verified"),
+                    |_, _| panic!("helper started after a cleanup failure"),
+                ),
+                InstallUpdateOutcome::Failed {
+                    reason: "stage-metadata-cleanup-failed".to_string()
+                }
+            );
+            assert_eq!(stage_parent_entries(&running), 1);
+            assert_eq!(tree_state(&source), source_before);
+        }
     }
 
     #[test]
