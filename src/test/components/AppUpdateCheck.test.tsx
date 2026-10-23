@@ -250,6 +250,11 @@ describe('App update orchestration', () => {
       'previous update backup could not be verified',
     ],
     [
+      { state: 'failed', reason: 'stage-metadata-cleanup-failed' },
+      'Could not install update',
+      'Quill could not prepare the local copy of the update. Quill will stay open. Try again, or ask IT for help installing the update manually.',
+    ],
+    [
       { state: 'failed', reason: 'staged-identifier-invalid' },
       'Could not install update',
       'expected Quill app identifier',

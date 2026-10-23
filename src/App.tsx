@@ -105,6 +105,8 @@ function updateInstallFailureMessage(reason: string): string {
     'target-not-writable':
       'Quill cannot replace the installed app at its current location. Move it to a folder you can write to, then try again.',
     'copy-failed': 'The Drive copy could not be copied into a local staging folder.',
+    'stage-metadata-cleanup-failed':
+      'Quill could not prepare the local copy of the update. Quill will stay open. Try again, or ask IT for help installing the update manually.',
     'staged-version-unreadable': 'The copied update did not contain readable version information.',
     'staged-version-mismatch': 'The copied update did not match the version offered by Drive.',
     'staged-identifier-invalid':
