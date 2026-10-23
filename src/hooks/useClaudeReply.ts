@@ -15,6 +15,7 @@ import { clip } from '../utils/format';
 import { stripTrailingNewlines } from '../utils/trackedEdits';
 import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
 import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
+import { constrainSessionBinding } from '../utils/sidecarPermissions';
 import { QUILL_EDITS_FENCE, useClaudeResumeStream } from './useClaudeResumeStream';
 import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocumentAIGate';
 
@@ -52,6 +53,8 @@ interface UseClaudeReplyOptions {
   ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   /** The document's linked context folder, if any (read at ask time). */
   getContextFolder: () => string | null;
+  /** Live path, including a successful Save As since this request was cached. */
+  getDocumentPath?: () => string | null;
   /** Pending tracked changes, read at ask time so the prompt can tell Claude
    *  what is already proposed and awaiting review. */
   getPendingSuggestions: () => TrackedChangeInfo[];
@@ -466,11 +469,15 @@ export function useClaudeReply(opts: UseClaudeReplyOptions): UseClaudeReplyRetur
         // Read after asynchronous preflight work so a just-changed footer choice
         // governs the child we are about to spawn.
         const runOptions = opts.getRunOptions?.() ?? { model: null, effort: null };
+        const currentBinding = opts.getDocumentPath
+          ? constrainSessionBinding(binding, opts.getDocumentPath())
+          : binding;
+        if (!currentBinding) throw new Error('Save the document before starting a session.');
         await stream.run(
           replyId,
           {
             sessionId: binding.sessionId,
-            cwd: binding.cwd,
+            cwd: currentBinding.cwd,
             prompt,
             addDir: contextFolder,
             allowCreate: fresh,

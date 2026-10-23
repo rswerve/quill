@@ -181,7 +181,8 @@ export default function SessionPicker({
             {!sessions && !loadError && <div className={styles.loading}>Loading…</div>}
             {sessions?.length === 0 && (
               <div className={styles.empty}>
-                No Claude Code sessions found under <code>~/.claude/projects/</code> — you can still
+                No Claude Code sessions found under <code>~/.claude/projects/</code> (or{' '}
+                <code>$CLAUDE_CONFIG_DIR/projects/</code> if that variable is set) — you can still
                 give this document a fresh one with “Start new session” below.
               </div>
             )}

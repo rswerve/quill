@@ -245,6 +245,21 @@ describe('App update orchestration', () => {
       'cannot replace',
     ],
     [
+      { state: 'failed', reason: 'backup-ownership-ambiguous' },
+      'Could not install update',
+      'previous update backup could not be verified',
+    ],
+    [
+      { state: 'failed', reason: 'staged-identifier-invalid' },
+      'Could not install update',
+      'expected Quill app identifier',
+    ],
+    [
+      { state: 'failed', reason: 'staged-signature-invalid' },
+      'Could not install update',
+      'code-signature integrity check',
+    ],
+    [
       { state: 'failed', reason: 'unexpected-install-reason' },
       'Could not install update',
       'unexpected-install-reason',

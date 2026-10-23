@@ -30,8 +30,10 @@
 import console from 'node:console';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import {
+  chmodSync,
   existsSync,
   readFileSync,
   renameSync,
@@ -80,6 +82,11 @@ if (!/\.(md|markdown)$/i.test(target)) {
 
 /* ---------- 2. Work out which session we are ---------- */
 
+const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+if (!isAbsolute(configDir)) {
+  die('CLAUDE_CONFIG_DIR must be unset or an absolute path; unset it or use an absolute path.');
+}
+
 /**
  * Claude Code stores one JSONL transcript per session under a project
  * directory named for the cwd with `/` replaced by `-`. The live session is
@@ -90,7 +97,7 @@ function detectSessionId() {
   if (values.session !== undefined) return values.session;
   if (process.env.QUILL_SESSION_ID) return process.env.QUILL_SESSION_ID;
 
-  const projectDir = join(homedir(), '.claude', 'projects', process.cwd().replaceAll('/', '-'));
+  const projectDir = join(configDir, 'projects', process.cwd().replaceAll('/', '-'));
   if (!existsSync(projectDir)) {
     die(
       `no Claude Code transcripts for this directory (${projectDir}).\n` +
@@ -111,7 +118,7 @@ const sessionId = detectSessionId();
 
 /* ---------- 3. Write the binding into the sidecar ---------- */
 
-const sidecarPath = target.replace(/\.(md|markdown)$/i, '.comments.json');
+const sidecarPath = `${target.replace(/\.md$/i, '')}.comments.json`;
 
 let sidecar = { version: 2, comments: [], suggestions: [] };
 let existed = false;
@@ -155,8 +162,14 @@ if (!unchanged) {
   sidecar.suggestions ??= [];
 
   // Temp-file + rename, so Quill can never observe a half-written sidecar.
-  const tmp = join(dirname(sidecarPath), `.${Date.now()}.open-in-quill.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
+  const mode = existed ? statSync(sidecarPath).mode & 0o7777 : 0o600;
+  const tmp = join(dirname(sidecarPath), `.${randomUUID()}.open-in-quill.tmp`);
+  writeFileSync(tmp, `${JSON.stringify(sidecar, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
+  chmodSync(tmp, mode);
   renameSync(tmp, sidecarPath);
 }
 

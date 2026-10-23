@@ -107,6 +107,11 @@ function updateInstallFailureMessage(reason: string): string {
     'copy-failed': 'The Drive copy could not be copied into a local staging folder.',
     'staged-version-unreadable': 'The copied update did not contain readable version information.',
     'staged-version-mismatch': 'The copied update did not match the version offered by Drive.',
+    'staged-identifier-invalid':
+      'The copied update does not have the expected Quill app identifier.',
+    'staged-signature-invalid': 'The copied update failed its code-signature integrity check.',
+    'backup-ownership-ambiguous':
+      'The previous update backup could not be verified. Quill will stay open. Ask IT to inspect the managed backup and receipt before trying again.',
     'helper-start-failed': 'Quill could not start the local installer helper.',
   };
   return messages[reason] ?? updateUnavailableMessage(reason);

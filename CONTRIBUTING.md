@@ -4,7 +4,7 @@ Thanks for your interest! Quill is a Tauri 2 + React 19 desktop Markdown editor 
 
 ## Development setup
 
-Prerequisites: Node.js 22+, a Rust toolchain, and the [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform.
+Prerequisites: Node.js 22.23.4 or later in major 22, a Rust toolchain, and the [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform.
 
 ```bash
 npm install

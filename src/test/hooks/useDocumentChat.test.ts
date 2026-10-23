@@ -8,6 +8,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }));
 
+import { invoke } from '@tauri-apps/api/core';
 import { buildChatPrompt, useDocumentChat } from '../../hooks/useDocumentChat';
 import type { ChunkEvent } from '../../hooks/useClaudeResumeStream';
 import type { AISessionBinding, QuillEdit } from '../../types';
@@ -276,6 +277,83 @@ describe('useDocumentChat', () => {
     await act(async () => result.current.send('Keep working', BINDING));
     unmount();
     expect(mock.cancelled).toContain('chat-1');
+  });
+
+  it('cancels a token returned after unmount without running delayed handlers', async () => {
+    delete window.__quillMock;
+    let resolveSpawn!: (token: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    let dispatch!: (event: ChunkEvent) => void;
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockImplementation((command, args) => {
+      if (command === 'list_context_files') return Promise.resolve([]);
+      if (command === 'spawn_claude_resume') {
+        dispatch = (args as { onEvent: { onmessage: typeof dispatch } }).onEvent.onmessage;
+        return pending;
+      }
+      return Promise.resolve();
+    });
+    const { options, applyTrackedEdits } = makeOptions();
+    const { result, unmount } = renderHook(() => useDocumentChat(options));
+    let finished!: Promise<void>;
+    await act(async () => {
+      finished = result.current.send('review', BINDING);
+    });
+    expect(dispatch).toBeTypeOf('function');
+    unmount();
+    options.onChanged.mockClear();
+    await act(async () => {
+      dispatch({ kind: 'delta', text: 'late before token' });
+      resolveSpawn('unmounted-chat-token');
+      await finished;
+      dispatch({ kind: 'model', model: 'late-model' });
+      dispatch({
+        kind: 'delta',
+        text: '```quill-edits\n{"edits":[{"find":"Current","replace":"Changed"}]}\n```',
+      });
+      dispatch({ kind: 'done' });
+      dispatch({ kind: 'error', message: 'late error' });
+      dispatch({ kind: 'cancelled' });
+    });
+    expect(invokeMock).toHaveBeenCalledWith('cancel_claude_resume', {
+      cancelToken: 'unmounted-chat-token',
+    });
+    expect(options.onModelObserved).not.toHaveBeenCalled();
+    expect(options.onChanged).not.toHaveBeenCalled();
+    expect(options.onTerminal).not.toHaveBeenCalled();
+    expect(applyTrackedEdits).not.toHaveBeenCalled();
+  });
+
+  it('does not spawn after an unmounted context preflight completes', async () => {
+    delete window.__quillMock;
+    let resolvePreflight!: (files: string[]) => void;
+    const pending = new Promise<string[]>((resolve) => {
+      resolvePreflight = resolve;
+    });
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockImplementation((command) => {
+      if (command === 'list_context_files') return pending;
+      if (command === 'spawn_claude_resume') return Promise.resolve('unexpected-chat-token');
+      return Promise.resolve();
+    });
+    const { options } = makeOptions();
+    const { result, unmount } = renderHook(() => useDocumentChat(options));
+    let finished!: Promise<void>;
+    act(() => {
+      finished = result.current.send('review', BINDING);
+    });
+    expect(invokeMock).toHaveBeenCalledWith('list_context_files', { folder: '/refs' });
+    unmount();
+    options.onChanged.mockClear();
+    await act(async () => {
+      resolvePreflight(['constructed.md']);
+      await finished;
+    });
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('spawn_claude_resume');
+    expect(options.onChanged).not.toHaveBeenCalled();
+    expect(options.onTerminal).not.toHaveBeenCalled();
   });
 
   it('getThread snapshots a mid-stream turn as cancelled without disturbing live state', async () => {

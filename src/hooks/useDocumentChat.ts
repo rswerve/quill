@@ -21,6 +21,7 @@ import { DOCUMENT_AI_BUSY_MESSAGE, type DocumentAIRequestGate } from './useDocum
 import { reconcileBatchReplyText } from '../utils/structuralBatchNotice';
 import type { BatchResultEntry } from '../utils/structuralBatchDispatch';
 import { stripTransientChatState } from '../utils/chatThread';
+import { constrainSessionBinding } from '../utils/sidecarPermissions';
 
 export interface ChatCursorContext {
   selectedText: string | null;
@@ -35,6 +36,8 @@ interface UseDocumentChatOptions {
     originChatMessageId: string,
   ) => { results: BatchResultEntry[]; suggestionIds?: string[] };
   getContextFolder: () => string | null;
+  /** Read at spawn time so retries follow a successfully adopted Save As path. */
+  getDocumentPath?: () => string | null;
   getPendingSuggestions: () => TrackedChangeInfo[];
   /** Pending structural (block-union) changes, flattened for the manifest. */
   getStructuralPending: () => StructuralPromptEntry[];
@@ -173,11 +176,15 @@ export function useDocumentChat(opts: UseDocumentChatOptions): UseDocumentChatRe
         );
         if (!opts.aiGate.owns(requestId)) return;
         const runOptions = opts.getRunOptions();
+        const binding = opts.getDocumentPath
+          ? constrainSessionBinding(inputs.binding, opts.getDocumentPath())
+          : inputs.binding;
+        if (!binding) throw new Error('Save the document before starting a session.');
         await stream.run(
           assistantId,
           {
             sessionId: inputs.binding.sessionId,
-            cwd: inputs.binding.cwd,
+            cwd: binding.cwd,
             prompt,
             addDir: contextFolder,
             allowCreate: inputs.binding.createdByQuill === true,

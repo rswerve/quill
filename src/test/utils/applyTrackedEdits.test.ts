@@ -1,6 +1,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
+import { Markdown } from 'tiptap-markdown';
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   TrackChanges,
@@ -27,7 +28,7 @@ import type { QuillEdit } from '../../types';
  * never the planner's claim alone.
  */
 
-function makeEditor(content: string) {
+function makeEditor(content: string, markdown = false) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   return new Editor({
@@ -39,6 +40,7 @@ function makeEditor(content: string) {
       TrackedDelete,
       TrackedFormat,
       TrackChanges,
+      ...(markdown ? [Markdown.configure({ html: false, tightLists: true })] : []),
     ],
     content,
   });
@@ -110,6 +112,51 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
     expect(suggestionIds).toEqual([changes[0].id]);
   });
 
+  describe('literal replacement text', () => {
+    it.each([
+      '<strong>literal</strong>',
+      'A &amp; B &#60; C',
+      '<em>italic</em> <code>code</code>',
+      '<img src="constructed-local.png" alt="literal">',
+      '<a href="javascript:alert(1)">literal</a>',
+      '',
+    ])('preserves %j through review, accept, and reject', (replace) => {
+      editor = makeEditor('<p>old</p>');
+      const before = editor.state.doc;
+      const edit = { find: 'old', replace };
+      const { results, suggestionIds } = apply(editor, [edit], { chatMessageId: 'literal-test' });
+
+      expect(results).toEqual([{ edit, status: 'applied' }]);
+      const changes = getTrackedChanges(editor);
+      expect(changes).toHaveLength(1);
+      expect(suggestionIds).toEqual([changes[0].id]);
+      expect(changes[0].originChatMessageId).toBe('literal-test');
+      expect
+        .soft(
+          changes[0].segments
+            .filter((segment) => segment.kind === 'insert')
+            .map((s) => s.text)
+            .join(''),
+        )
+        .toBe(replace);
+
+      editor.commands.acceptAllChanges();
+      expect.soft(editor.getJSON()).toEqual({
+        type: 'doc',
+        content: [
+          { type: 'paragraph', ...(replace ? { content: [{ type: 'text', text: replace }] } : {}) },
+        ],
+      });
+      expect(getTrackedChanges(editor)).toEqual([]);
+
+      editor.commands.setContent(before.toJSON());
+      apply(editor, [edit]);
+      editor.commands.rejectAllChanges();
+      expect(editor.state.doc.eq(before)).toBe(true);
+      expect(getTrackedChanges(editor)).toEqual([]);
+    });
+  });
+
   it('stamps a chat origin and does not cross-report between origins', () => {
     editor = makeEditor('<p>alpha beta gamma</p>');
     // A pre-existing suggestion from a DIFFERENT origin must never leak into
@@ -142,6 +189,21 @@ describe('applyTrackedEditsToEditor (plan→apply seam)', () => {
       if (link) insertedHref = link.attrs.href as string;
     });
     expect(insertedHref).toBe('https://new.example/');
+  });
+
+  it('preserves literal HTML-shaped text after accepting, serializing Markdown, and reopening', () => {
+    editor = makeEditor('old', true);
+    const replace = '<strong>literal</strong>';
+    apply(editor, [{ find: 'old', replace }]);
+    editor.commands.acceptAllChanges();
+    const accepted = editor.state.doc;
+    const markdown = (
+      editor.storage as unknown as { markdown: { getMarkdown: () => string } }
+    ).markdown.getMarkdown();
+
+    editor.commands.setContent(markdown);
+    expect(docText(editor)).toBe(replace);
+    expect(editor.state.doc.eq(accepted)).toBe(true);
   });
 
   it('applies multiple edits back-to-front so earlier offsets stay valid', () => {

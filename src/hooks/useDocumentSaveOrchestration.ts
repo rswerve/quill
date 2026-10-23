@@ -3,6 +3,7 @@ import { useSaveCoordinator } from './useSaveCoordinator';
 import { setImageBaseDir } from '../extensions/MarkdownImage';
 import { dirname } from '../utils/path';
 import {
+  constrainSessionBinding,
   rememberContextFolderPermission,
   rememberSessionPermission,
 } from '../utils/sidecarPermissions';
@@ -81,6 +82,8 @@ export interface DocumentSaveOrchestrationDeps {
   setLastSavedAt: (value: number | null) => void;
   onRecentFile: (path: string) => void;
   onRequestSavePath: (tabId: string, path: string) => boolean;
+  /** Reconcile live session state only after Save As has adopted its new path. */
+  onSaveAs?: (path: string) => void;
   /** Injected presentation callbacks — the hook is not a presentation controller. */
   showError: (title: string, message: string) => void;
   focusAnnotation: (annotation: { kind: AnnotationKind; id: string }) => void;
@@ -117,6 +120,7 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
     setLastSavedAt,
     onRecentFile,
     onRequestSavePath,
+    onSaveAs,
     showError,
     focusAnnotation,
   } = deps;
@@ -245,7 +249,11 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
       state.structural,
     );
     if (outcome.status === 'saved') {
-      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      rememberSessionPermission(
+        window.localStorage,
+        outcome.path,
+        constrainSessionBinding(aiSession, outcome.path),
+      );
       rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
       setLastSavedAt(Date.now());
     }
@@ -296,17 +304,21 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
       state.structural,
     );
     if (outcome.status === 'saved') {
-      // The document gained (or moved) a directory — relative image paths now
-      // resolve against it for anything drawn from here on.
-      const liveEditor = editorRef.current?.getEditor();
-      if (liveEditor) setImageBaseDir(liveEditor, dirname(outcome.path));
-      rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+      if (outcome.adopted !== false) {
+        // A completed old write must not change a replacement document's state.
+        const liveEditor = editorRef.current?.getEditor();
+        if (liveEditor) setImageBaseDir(liveEditor, dirname(outcome.path));
+        onSaveAs?.(outcome.path);
+        setLastSavedAt(Date.now());
+        lastGoodWorkspaceSnapshotRef.current = null;
+      }
+      rememberSessionPermission(
+        window.localStorage,
+        outcome.path,
+        constrainSessionBinding(aiSession, outcome.path),
+      );
       rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
       onRecentFile(outcome.path);
-      setLastSavedAt(Date.now());
-      // Save As changed the path/baselines — drop the last-good snapshot (captured
-      // under the OLD path) so a payload failure right after can't return it.
-      lastGoodWorkspaceSnapshotRef.current = null;
     }
     notifySaveOutcome(outcome);
     return outcome;
@@ -319,6 +331,7 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
     documentChat,
     onRecentFile,
     onRequestSavePath,
+    onSaveAs,
     tabId,
     notifySaveOutcome,
     editorRef,
@@ -386,7 +399,11 @@ export function useDocumentSaveOrchestration(deps: DocumentSaveOrchestrationDeps
       if (outcome.status === 'saved') {
         setSaveConflict(null);
         bumpSchedulerGen(); // reconciled: clear the scheduler's latch, drop stale epochs
-        rememberSessionPermission(window.localStorage, outcome.path, aiSession);
+        rememberSessionPermission(
+          window.localStorage,
+          outcome.path,
+          constrainSessionBinding(aiSession, outcome.path),
+        );
         rememberContextFolderPermission(window.localStorage, outcome.path, contextFolder);
         setLastSavedAt(Date.now());
       } else {

@@ -101,22 +101,13 @@ export function applyTrackedEditsToEditor(input: ApplyTrackedEditsInput): ApplyT
         }
         chain.run();
       } else {
-        // A newline-bearing replacement builds real hardBreak nodes (the
-        // planner has already guaranteed one textblock, a break-admitting
-        // schema, and no link href on this edit). Otherwise the plain string
-        // (or link fragment) inserts as before.
-        let content:
-          | ReturnType<typeof buildLinkReplacementContent>
-          | InlineReplacementNode[]
-          | null = null;
-        if (e.linkHref) {
-          content = buildLinkReplacementContent(ed, e, e.linkHref, e.replace);
-        } else if (e.replace.includes('\n')) {
-          content = buildInlineReplacementContent(e.replace);
-        }
+        // Explicit text nodes keep model text out of Tiptap's HTML parser.
+        const content = e.linkHref
+          ? buildLinkReplacementContent(ed, e, e.linkHref, e.replace)
+          : null;
         ed.chain()
           .setTextSelection({ from: e.from, to: e.to })
-          .insertContent(content ?? e.replace)
+          .insertContent(content ?? buildInlineReplacementContent(e.replace))
           .run();
       }
       if (engineVetoed) {

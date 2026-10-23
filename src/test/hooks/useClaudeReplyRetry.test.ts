@@ -443,10 +443,11 @@ describe('useClaudeReply cancel during the spawn-await window', () => {
     // Fire the ask but DON'T await it — runSpawn is now parked awaiting the
     // deferred spawn, before any token is tracked.
     let askDone!: Promise<void>;
-    act(() => {
+    await act(async () => {
       askDone = result.current.ask(comment, 'fix this', BINDING);
     });
     expect(spies.startAIReply).toHaveBeenCalled();
+    expect(invokeMock.mock.calls.map(([command]) => command)).toContain('spawn_claude_resume');
 
     // The user hits Cancel mid-spawn — somewhere in the async prelude
     // (compaction check → spawn await), before any token is tracked. The reply
@@ -465,6 +466,86 @@ describe('useClaudeReply cancel during the spawn-await window', () => {
     });
     expect(invokeMock).toHaveBeenCalledWith('cancel_claude_resume', { cancelToken: 'late-token' });
     expect(spies.finishAIReply).not.toHaveBeenCalled();
+  });
+});
+
+describe('useClaudeReply unmount during asynchronous work', () => {
+  afterEach(() => {
+    invokeMock.mockReset().mockRejectedValue(new Error('no tauri in test'));
+  });
+
+  it('cancels a token returned after unmount and ignores delayed events', async () => {
+    let resolveSpawn!: (token: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    let dispatch!: (event: ChunkEvent) => void;
+    invokeMock.mockImplementation((command, args) => {
+      if (command === 'check_session_compacted') return Promise.resolve({ compacted: false });
+      if (command === 'spawn_claude_resume') {
+        dispatch = (args as { onEvent: { onmessage: typeof dispatch } }).onEvent.onmessage;
+        return pending;
+      }
+      if (command === 'cancel_claude_resume') return Promise.resolve();
+      return Promise.reject(new Error(`unexpected invoke: ${command}`));
+    });
+    const { opts, spies } = makeOpts(new MockClaude());
+    const { result, unmount } = renderHook(() => useClaudeReply(opts));
+    let finished!: Promise<void>;
+    await act(async () => {
+      finished = result.current.ask(makeComment(), 'review', BINDING);
+    });
+    expect(dispatch).toBeTypeOf('function');
+    unmount();
+    await act(async () => {
+      dispatch({ kind: 'delta', text: 'late before token' });
+      resolveSpawn('unmounted-reply-token');
+      await finished;
+      dispatch({ kind: 'model', model: 'late-model' });
+      dispatch({
+        kind: 'delta',
+        text: '```quill-edits\n{"edits":[{"find":"doc","replace":"changed"}]}\n```',
+      });
+      dispatch({ kind: 'done' });
+      dispatch({ kind: 'error', message: 'late error' });
+      dispatch({ kind: 'cancelled' });
+    });
+    expect(invokeMock).toHaveBeenCalledWith('cancel_claude_resume', {
+      cancelToken: 'unmounted-reply-token',
+    });
+    expect(spies.appendAIReplyChunk).not.toHaveBeenCalled();
+    expect(spies.setAIReplyModel).not.toHaveBeenCalled();
+    expect(spies.finishAIReply).not.toHaveBeenCalled();
+    expect(spies.failAIReply).not.toHaveBeenCalled();
+    expect(spies.cancelAIReply).not.toHaveBeenCalled();
+    expect(opts.applyTrackedEdits).not.toHaveBeenCalled();
+  });
+
+  it('does not spawn after an unmounted compaction preflight completes', async () => {
+    let resolvePreflight!: (value: { compacted: boolean }) => void;
+    const pending = new Promise<{ compacted: boolean }>((resolve) => {
+      resolvePreflight = resolve;
+    });
+    invokeMock.mockImplementation((command) => {
+      if (command === 'check_session_compacted') return pending;
+      if (command === 'spawn_claude_resume') return Promise.resolve('unexpected-reply-token');
+      return Promise.resolve();
+    });
+    const { opts, spies } = makeOpts(new MockClaude());
+    const { result, unmount } = renderHook(() => useClaudeReply(opts));
+    let finished!: Promise<void>;
+    act(() => {
+      finished = result.current.ask(makeComment(), 'review', BINDING);
+    });
+    expect(invokeMock).toHaveBeenCalledWith('check_session_compacted', { sessionId: 's1' });
+    unmount();
+    await act(async () => {
+      resolvePreflight({ compacted: false });
+      await finished;
+    });
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('spawn_claude_resume');
+    expect(spies.finishAIReply).not.toHaveBeenCalled();
+    expect(spies.failAIReply).not.toHaveBeenCalled();
   });
 });
 

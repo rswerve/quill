@@ -71,11 +71,17 @@ node scripts/open-in-quill.mjs "<resolved absolute path>"
 
 **Run it from the directory this Claude session is working in — do not `cd`
 first.** The script works out which session to bind by looking up
-`~/.claude/projects/<cwd with / replaced by ->` and taking the newest
+`<projects root>/<cwd with / replaced by ->` and taking the newest
 transcript. Run from anywhere else and it silently binds the document to a
 different session: the document opens, nothing errors, and replies never reach
 the session that asked. If you ever invoke the script from outside its own
 project directory, pass `--session=<id>` rather than relying on detection.
+
+The projects root is `$CLAUDE_CONFIG_DIR/projects` when `CLAUDE_CONFIG_DIR` is
+set to an absolute path, and `~/.claude/projects` when it is unset. When
+`CLAUDE_CONFIG_DIR` is set but not absolute, including empty, the script
+refuses before changing anything and tells you to unset it or use an absolute
+path; report what it said.
 
 Report the path that was opened. Then, **only** when the script says it
 _created_ a sidecar or _linked_ a session into an existing one, add this once:
