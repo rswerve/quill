@@ -6,6 +6,7 @@ import { Markdown } from 'tiptap-markdown';
 import { describe, it, expect } from 'vitest';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
 import { MarkdownSoftBreak } from '../../extensions/MarkdownSoftBreak';
+import { MarkdownText } from '../../extensions/MarkdownText';
 import { LINK_OPTIONS } from '../../utils/linkEditing';
 
 // Mirrors the Markdown-relevant extension set in components/Editor.tsx —
@@ -17,6 +18,7 @@ function buildEditor(md: string): Editor {
         trailingNode: false,
         link: LINK_OPTIONS,
         underline: false,
+        text: false,
       }),
       MarkdownImage,
       Table,
@@ -26,6 +28,7 @@ function buildEditor(md: string): Editor {
       TaskList,
       TaskItem.configure({ nested: true }),
       MarkdownSoftBreak,
+      MarkdownText,
       Markdown.configure({ html: false, tightLists: true }),
     ],
     content: md,
@@ -65,6 +68,107 @@ function expectStable(md: string, mustContain: string[]) {
 }
 
 describe('markdown round-trip fidelity', () => {
+  it.each(['A & B', 'R&D', 'AT&T', 'A & B, R&D and AT&T', '&copy &a; &#12345678; &#x1234567;'])(
+    'preserves ordinary ampersands byte-for-byte in %s',
+    (markdown) => {
+      let current = markdown;
+      for (let cycle = 0; cycle < 3; cycle++) {
+        current = roundTrip(current);
+        expect(current).toBe(markdown);
+      }
+    },
+  );
+
+  it.each([
+    ['&amp;', '&amp;amp;'],
+    ['&copy;', '&amp;copy;'],
+    ['&#60;', '&amp;#60;'],
+    ['&#x3c;', '&amp;#x3c;'],
+    ['&#X3C;', '&amp;#X3C;'],
+    ['&amp;amp;', '&amp;amp;amp;'],
+    ['&unknown;', '&amp;unknown;'],
+    ['A & B &amp; R&D &#60; AT&T', 'A & B &amp;amp; R&D &amp;#60; AT&T'],
+  ])('serializes literal entity text %s without repeated escaping', (text, expected) => {
+    const editor = buildEditor('');
+    try {
+      editor.commands.setContent({
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+      });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const markdown = (
+          editor.storage as unknown as { markdown: { getMarkdown: () => string } }
+        ).markdown.getMarkdown();
+        expect(markdown).toBe(expected);
+        editor.commands.setContent(markdown);
+        expect(editor.state.doc.textContent).toBe(text);
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each(['&amp;', '&copy;', '&#60;', '&#x3c;', '&unknown;', 'A & B', '<tag> &amp;'])(
+    'preserves literal editor text %s through repeated saves',
+    (text) => {
+      const editor = buildEditor('');
+      try {
+        editor.commands.setContent({
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+        });
+        const original = editor.state.doc;
+        for (let cycle = 0; cycle < 3; cycle++) {
+          const markdown = (
+            editor.storage as unknown as { markdown: { getMarkdown: () => string } }
+          ).markdown.getMarkdown();
+          editor.commands.setContent(markdown);
+          expect(editor.state.doc.eq(original)).toBe(true);
+        }
+      } finally {
+        editor.destroy();
+      }
+    },
+  );
+
+  it('still decodes authored Markdown entities once', () => {
+    const editor = buildEditor('&amp; &copy; &#60; &#x3e; &amp;amp;');
+    expect(editor.state.doc.textContent).toBe('& © < > &amp;');
+    editor.destroy();
+    expectStable('&amp; &copy; &#60; &#x3e; &amp;amp;', [
+      '&amp;',
+      '©',
+      '&lt;',
+      '&gt;',
+      '&amp;amp;',
+    ]);
+  });
+
+  it.each([
+    '`&amp; <tag> &#60;`',
+    '```\n&amp; <tag> &#60;\n```',
+    '**&amp;amp;** and *&#38;amp;*',
+    '| &amp;amp; | &#38;copy; |\n| --- | --- |\n| A &amp; B | &amp;unknown; |',
+    '[&amp;amp;](https://example.com/?a=1&b=2)',
+    '<https://example.com/?a=1&b=2>',
+    '<https://example.com/?a=&amp;>',
+    '&amp;amp;\\\n&amp;copy;',
+  ])('preserves entity reading text and marks in %s', (markdown) => {
+    const editor = buildEditor(markdown);
+    const original = editor.state.doc;
+    try {
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const out = (
+          editor.storage as unknown as { markdown: { getMarkdown: () => string } }
+        ).markdown.getMarkdown();
+        editor.commands.setContent(out);
+        expect(editor.state.doc.eq(original)).toBe(true);
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('block images survive with their original src', () => {
     expectStable('Before\n\n![alt text](./pic.png)\n\nAfter', [
       '![alt text](./pic.png)',

@@ -18,6 +18,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+          check-latest: true
           cache: 'npm'
 
       - name: Install dependencies
@@ -53,7 +54,7 @@ jobs:
   e2e-chromium:
     name: End-to-end (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -62,6 +63,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+          check-latest: true
           cache: 'npm'
 
       - name: Install dependencies
@@ -103,7 +105,7 @@ jobs:
   # is the only platform Quill ships on.
   e2e-visual:
     name: End-to-end (Visual)
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     timeout-minutes: 15
 
     steps:
@@ -113,6 +115,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+          check-latest: true
           cache: 'npm'
 
       - name: Install dependencies
@@ -193,6 +196,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+          check-latest: true
           cache: 'npm'
 
       - name: Install dependencies

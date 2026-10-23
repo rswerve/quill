@@ -89,7 +89,7 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     const match = getFindState(editor.state).matches[activeIndex];
     const chain = editor.chain().setTextSelection(match);
     if (replaceText) {
-      chain.insertContent(replaceText);
+      chain.insertContent({ type: 'text', text: replaceText });
     } else {
       chain.deleteSelection();
     }
@@ -111,7 +111,7 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     for (let i = matches.length - 1; i >= 0; i--) {
       chain.setTextSelection(matches[i]);
       if (replaceText) {
-        chain.insertContent(replaceText);
+        chain.insertContent({ type: 'text', text: replaceText });
       } else {
         chain.deleteSelection();
       }

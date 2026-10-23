@@ -12,6 +12,7 @@ import type {
 import { sidecarPath } from '../utils/sidecarPath';
 import { parseStructuralEnvelope } from '../utils/structuralEnvelope';
 import { basename } from '../utils/path';
+import { constrainSessionBinding } from '../utils/sidecarPermissions';
 import {
   sanitizeComments,
   sanitizeSuggestions,
@@ -106,6 +107,8 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 Carries the document hash and the sidecar's fingerprint (present with
  *                 its hash, or absent when an empty sidecar was removed) so callers can
  *                 track expected on-disk state for external-conflict detection.
+ *                 `adopted: false` means Open/New/restore replaced the document during
+ *                 the write: the bytes were saved, but no current tab state was adopted.
  * - `blocked`   — a deliberate, non-error refusal to complete the save. `sidecar-protected`:
  *                 the `.md` was written but the sidecar was NOT, because the on-disk sidecar
  *                 is unreadable and we won't clobber recoverable comments. `structural-protected`:
@@ -131,7 +134,7 @@ function normalizeSidecar(raw: unknown): SidecarFile {
  *                 BEFORE `saveFile` — `saveFile` itself never returns it.
  */
 export type SaveOutcome =
-  | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint }
+  | { status: 'saved'; path: string; docHash: string; sidecar: Fingerprint; adopted?: boolean }
   | { status: 'blocked'; reason: 'sidecar-protected' | 'structural-protected' | 'baseline-unknown' }
   | { status: 'conflict'; path: string; which: 'doc' | 'sidecar'; actual: Fingerprint }
   | { status: 'cancelled' }
@@ -667,7 +670,7 @@ export function useFileManager(
           targetPath,
           comments,
           suggestions,
-          aiSession,
+          constrainSessionBinding(aiSession, targetPath),
           contextFolder,
           chat,
           structural ?? [],
@@ -699,7 +702,8 @@ export function useFileManager(
         //    its new path even if the user typed during the write.
         //  - CONTENT (changeRevision): also unchanged → nothing was edited during
         //    the write, so it's safe to clear dirty. A concurrent edit keeps dirty.
-        if (sameDocument()) {
+        const adopted = sameDocument();
+        if (adopted) {
           updateFilePath(targetPath);
           setProtected(false);
           if (!isCurrentTarget) {
@@ -718,6 +722,7 @@ export function useFileManager(
           path: targetPath,
           docHash: docResult.hash,
           sidecar: newSidecarFingerprint,
+          ...(!adopted ? { adopted: false } : {}),
         };
       } catch (e) {
         console.error('Failed to save file:', e);

@@ -467,6 +467,14 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getIsDirty,
   } = useFileManager(showError);
 
+  const documentPathRef = useRef(filePath);
+  documentPathRef.current = filePath;
+  const getDocumentPath = useCallback(() => documentPathRef.current, []);
+  const reconcileSavedSession = useCallback((path: string) => {
+    documentPathRef.current = path;
+    setAISession((current) => constrainSessionBinding(current, path));
+  }, []);
+
   // markDirty is the single change choke point — it bumps the change-revision and
   // marks the tab dirty at every mutation site (edits, accept/reject, comments, chat).
   // Piggyback the autosave debounce signal here so every edit path notifies through one
@@ -846,6 +854,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     getRangeTexts,
     applyTrackedEdits,
     getContextFolder: useCallback(() => contextFolderRef.current, []),
+    getDocumentPath,
     // Read live at ask time (not from the trackedChanges state mirror) so the
     // prompt's pending-suggestions section can't lag a just-applied edit.
     getPendingSuggestions: useCallback(
@@ -879,6 +888,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
       [applyTrackedEdits],
     ),
     getContextFolder: useCallback(() => contextFolderRef.current, []),
+    getDocumentPath,
     getPendingSuggestions: useCallback(
       () =>
         editor ? getTrackedChanges(editor).filter((change) => change.status === 'pending') : [],
@@ -1059,6 +1069,7 @@ const DocumentTab = forwardRef<DocumentTabHandle, DocumentTabProps>(function Doc
     setLastSavedAt,
     onRecentFile,
     onRequestSavePath,
+    onSaveAs: reconcileSavedSession,
     showError,
     focusAnnotation: setActiveAnnotation,
   });

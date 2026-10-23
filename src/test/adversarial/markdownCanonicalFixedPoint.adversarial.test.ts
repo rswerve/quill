@@ -6,6 +6,7 @@ import { Markdown } from 'tiptap-markdown';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CommentMark } from '../../extensions/Comment';
 import { MarkdownImage } from '../../extensions/MarkdownImage';
+import { MarkdownText } from '../../extensions/MarkdownText';
 import { MarkdownLinkSyntax } from '../../extensions/MarkdownLinkSyntax';
 import { ReviewableCode } from '../../extensions/ReviewableCode';
 import { StrikeWithoutSaveShortcut } from '../../extensions/StrikeWithoutSaveShortcut';
@@ -39,12 +40,14 @@ function makeEditor(): Editor {
         trailingNode: false,
         link: LINK_OPTIONS,
         code: false,
+        text: false,
         underline: false,
         strike: false,
       }),
       StrikeWithoutSaveShortcut,
       ReviewableCode,
       MarkdownImage,
+      MarkdownText,
       Table,
       TableRow,
       TableCell,

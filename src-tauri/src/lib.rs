@@ -18,9 +18,10 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,8 +42,11 @@ fn claim_automatic_update_check(started: &AtomicBool) -> bool {
 /// be general-purpose filesystem primitives. Every legitimate caller operates
 /// on a Markdown document or its `<name>.comments.json` sidecar; confining the
 /// commands to those suffixes means a crafted path can never coax Quill into
-/// reading `/etc/passwd` or overwriting an arbitrary file. The native open/save
-/// dialogs already restrict the user to `.md`, so this loses no real capability.
+/// reading `/etc/passwd` or overwriting a file of any other type. Any file with
+/// an allowed suffix stays reachable wherever it is, and some Markdown files
+/// (Claude Code skills, commands and agents) are executable configuration for
+/// other tools. The native open/save dialogs already restrict the user to
+/// `.md`, so this loses no real capability.
 fn ensure_allowed_path(path: &str) -> Result<(), String> {
     let lower = path.to_ascii_lowercase();
     let allowed =
@@ -251,13 +255,18 @@ fn unique_temporary_file(path: &Path) -> Result<TemporaryFile, String> {
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
         .ok_or_else(|| "File path has no valid filename".to_string())?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Owner-only from creation: an open descriptor keeps its read access
+        // after a later chmod, so narrowing the mode after creation is too late.
+        options.mode(0o600);
+    }
     for _ in 0..16 {
         let temporary_path = parent.join(format!(".{name}.quill-{}.tmp", uuid::Uuid::new_v4()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-        {
+        match options.open(&temporary_path) {
             Ok(file) => {
                 return Ok(TemporaryFile {
                     path: Some(temporary_path),
@@ -293,6 +302,36 @@ fn preserve_replaced_file_metadata(
     temporary
         .set_permissions(metadata.permissions())
         .map_err(|error| format!("Could not preserve file permissions: {error}"))
+}
+
+/// Gives a newly created file the mode `File::create` would, replacing the
+/// temporary file's owner-only mode.
+#[cfg(unix)]
+fn apply_new_file_permissions(temporary: &File) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    static NEW_FILE_MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let mode = *NEW_FILE_MODE.get_or_init(|| {
+        // SAFETY: umask(2) cannot fail. It can only be read by replacing it, so
+        // the stand-in is restrictive: a file another thread creates meanwhile
+        // gets fewer permissions, never more.
+        let umask = unsafe {
+            let umask = libc::umask(0o077);
+            libc::umask(umask);
+            umask
+        };
+        #[allow(clippy::useless_conversion)] // mode_t is u16 on macOS and u32 on Linux.
+        let umask = u32::from(umask);
+        0o666 & !umask
+    });
+    temporary
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .map_err(|error| format!("Could not set file permissions: {error}"))
+}
+
+#[cfg(not(unix))]
+fn apply_new_file_permissions(_temporary: &File) -> Result<(), String> {
+    Ok(())
 }
 
 fn sync_containing_directory(path: &Path) -> Result<(), String> {
@@ -370,13 +409,14 @@ where
             actual: before_rename.fingerprint,
         });
     }
-    if let Some(metadata) = &before_rename.metadata {
-        preserve_replaced_file_metadata(&temporary.file, metadata)?;
-        temporary
-            .file
-            .sync_all()
-            .map_err(|error| error.to_string())?;
+    match &before_rename.metadata {
+        Some(metadata) => preserve_replaced_file_metadata(&temporary.file, metadata)?,
+        None => apply_new_file_permissions(&temporary.file)?,
     }
+    temporary
+        .file
+        .sync_all()
+        .map_err(|error| error.to_string())?;
 
     // Applying metadata takes time too, so put the content check as close to
     // the rename as portable filesystems allow. The compare and rename cannot
@@ -696,22 +736,36 @@ mod tests {
         tauri::Url::parse(url).unwrap()
     }
 
-    struct HomeEnvGuard(Option<OsString>);
+    /// Points `HOME` at a test folder and clears `CLAUDE_CONFIG_DIR`, so the
+    /// Claude projects root is under that folder unless the test sets
+    /// `CLAUDE_CONFIG_DIR` itself. Both are restored on drop.
+    struct HomeEnvGuard {
+        home: Option<OsString>,
+        config_dir: Option<OsString>,
+    }
 
     impl HomeEnvGuard {
         fn set(path: &Path) -> Self {
-            let previous = std::env::var_os("HOME");
+            let guard = Self {
+                home: std::env::var_os("HOME"),
+                config_dir: std::env::var_os("CLAUDE_CONFIG_DIR"),
+            };
             std::env::set_var("HOME", path);
-            Self(previous)
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+            guard
         }
     }
 
     impl Drop for HomeEnvGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.0.take() {
-                std::env::set_var("HOME", previous);
-            } else {
-                std::env::remove_var("HOME");
+            for (name, previous) in [
+                ("HOME", self.home.take()),
+                ("CLAUDE_CONFIG_DIR", self.config_dir.take()),
+            ] {
+                match previous {
+                    Some(previous) => std::env::set_var(name, previous),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
@@ -1316,6 +1370,94 @@ mod tests {
         assert_eq!(after.gid(), before.gid());
     }
 
+    #[cfg(unix)]
+    fn assert_owner_only_temp_holds(directory: &Path, content: &[u8]) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary_files = fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.contains(".quill-") && name.ends_with(".tmp")
+            })
+            .collect::<Vec<_>>();
+        let [temporary] = temporary_files.as_slice() else {
+            panic!("expected one Quill temp file, found {temporary_files:?}");
+        };
+        assert_eq!(fs::read(temporary).unwrap(), content);
+        assert_eq!(
+            fs::metadata(temporary).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_file_is_owner_only_before_any_content_is_written() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let temporary = unique_temporary_file(&dir.path().join("private.md")).unwrap();
+
+        let metadata = fs::metadata(temporary.path()).unwrap();
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replace_writes_an_owner_only_temp_and_keeps_the_original_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for original_mode in [0o600, 0o644] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("private.md");
+            fs::write(&path, "old").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(original_mode)).unwrap();
+            let expected = ExpectedFileState::Match {
+                hash: sha256_hex(b"old"),
+            };
+
+            write_file_atomic_at(&path, b"new", &expected, || {
+                assert_owner_only_temp_holds(dir.path(), b"new");
+                Ok(())
+            })
+            .unwrap();
+
+            assert_eq!(fs::read(&path).unwrap(), b"new");
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                original_mode
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_create_writes_an_owner_only_temp_and_keeps_the_default_new_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("new.md");
+
+        write_file_atomic_at(&path, b"new", &ExpectedFileState::Absent, || {
+            assert_owner_only_temp_holds(dir.path(), b"new");
+            Ok(())
+        })
+        .unwrap();
+
+        // Created after the write so Quill's one-time umask read cannot race it.
+        let reference = dir.path().join("reference.md");
+        fs::File::create(&reference).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode(),
+            fs::metadata(&reference).unwrap().permissions().mode()
+        );
+    }
+
     #[test]
     fn atomic_write_rejects_invalid_expected_hash_instead_of_calling_it_a_conflict() {
         let dir = tempdir().unwrap();
@@ -1796,6 +1938,11 @@ mod tests {
 
     #[test]
     fn claude_resume_args_terminate_variadic_add_dir_before_the_prompt() {
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
         let args = claude_resume_args(
             "session-123",
             "prompt text",
@@ -1825,6 +1972,11 @@ mod tests {
 
     #[test]
     fn claude_resume_args_protect_a_prompt_without_an_additional_directory() {
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
         let args = claude_resume_args("session-123", "--prompt-like-text", None, false, None, None)
             .unwrap();
         assert_eq!(
@@ -1905,7 +2057,58 @@ fi
     }
 
     #[test]
+    fn only_quill_created_sessions_skip_project_setting_sources() {
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        // Assert only after releasing HOME_ENV_LOCK so a failure here cannot
+        // poison it for the other HOME-dependent tests.
+        let (create, resume, linked) = {
+            let _lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = tempdir().unwrap();
+            let _home = HomeEnvGuard::set(home.path());
+            let project = home.path().join(".claude/projects/-tmp-quill-doc");
+            fs::create_dir_all(&project).unwrap();
+            let create = claude_resume_args(session_id, "prompt", Some("/refs"), true, None, None);
+            fs::write(project.join(format!("{session_id}.jsonl")), "{}\n").unwrap();
+            let resume = claude_resume_args(session_id, "prompt", Some("/refs"), true, None, None);
+            let linked = [None, Some("/refs")].map(|add_dir| {
+                claude_resume_args(session_id, "prompt", add_dir, false, None, None)
+            });
+            (create.unwrap(), resume.unwrap(), linked)
+        };
+        let restricted = |args: &[String]| {
+            let term = args.iter().position(|arg| arg == "--").unwrap();
+            args[..term]
+                .windows(2)
+                .any(|pair| pair == ["--setting-sources", "user"])
+        };
+
+        assert_eq!(&create[..2], ["--session-id", session_id]);
+        assert!(restricted(&create), "{create:?}");
+        let spawned = with_effort_hook(create, "{\"hooks\":{}}".to_string());
+        assert!(restricted(&spawned), "{spawned:?}");
+        assert!(spawned.windows(2).any(|pair| pair[0] == "--settings"));
+
+        assert_eq!(&resume[..2], ["--resume", session_id]);
+        assert!(restricted(&resume), "{resume:?}");
+
+        for linked in linked {
+            let linked = linked.unwrap();
+            assert!(
+                !linked.iter().any(|arg| arg == "--setting-sources"),
+                "{linked:?}"
+            );
+        }
+    }
+
+    #[test]
     fn claude_resume_args_include_curated_model_and_effort_before_the_prompt() {
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
         let args = claude_resume_args(
             "session-123",
             "prompt text",
@@ -1932,6 +2135,11 @@ fi
 
     #[test]
     fn claude_resume_args_reject_unsupported_model_or_effort() {
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
         let bad_model =
             claude_resume_args("session-123", "prompt", None, false, Some("latest"), None)
                 .unwrap_err();
@@ -1945,6 +2153,11 @@ fi
 
     #[test]
     fn claude_resume_args_accept_every_picker_value() {
+        let _lock = HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempdir().unwrap();
+        let _home = HomeEnvGuard::set(home.path());
         for model in ["fable", "opus", "sonnet", "haiku"] {
             let args = claude_resume_args("session-123", "prompt", None, false, Some(model), None)
                 .unwrap();
@@ -2005,6 +2218,234 @@ fi
         symlink(&outside, &link).unwrap();
 
         assert!(read_claude_session_preview(link.to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn claude_config_dir_moves_session_lookup_resume_and_preview_to_its_projects() {
+        let session_id = "33333333-4444-4555-8666-777777777777";
+        let document = format!(
+            "# Plan\n\n{}",
+            "A paragraph long enough to bind. ".repeat(4)
+        );
+        // Assert only after releasing HOME_ENV_LOCK so a failure here cannot
+        // poison it for the other HOME-dependent tests.
+        let (root, transcript, found, resume, preview, bound) = {
+            let _lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = tempdir().unwrap();
+            let config = tempdir().unwrap();
+            let _home = HomeEnvGuard::set(home.path());
+            std::env::set_var("CLAUDE_CONFIG_DIR", config.path());
+            let project = config.path().join("projects/-tmp-quill-doc");
+            fs::create_dir_all(&project).unwrap();
+            let transcript = project.join(format!("{session_id}.jsonl"));
+            fs::write(
+                &transcript,
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "type": "assistant",
+                        "sessionId": session_id,
+                        "cwd": "/tmp/quill-doc",
+                        "message": {"content": [{"type": "text", "text": document}]},
+                    })
+                ),
+            )
+            .unwrap();
+            (
+                claude_projects_dir().map(|root| root == config.path().join("projects")),
+                transcript.clone(),
+                find_session_jsonl(session_id),
+                claude_resume_args(session_id, "prompt", None, true, None, None),
+                read_claude_session_preview(transcript.to_string_lossy().into_owned())
+                    .map(|preview| preview.session_id),
+                find_session_for_markdown(document)
+                    .map(|bound| bound.map(|bound| bound.session_id)),
+            )
+        };
+
+        assert_eq!(
+            (root, found, resume.unwrap()[0].clone(), preview, bound),
+            (
+                Ok(true),
+                Ok(Some(transcript)),
+                "--resume".to_string(),
+                Ok(session_id.to_string()),
+                Ok(Some(session_id.to_string())),
+            )
+        );
+    }
+
+    #[test]
+    fn session_preview_with_claude_config_dir_refuses_the_default_projects_root() {
+        let (default_root, escaping_link) = {
+            let _lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = tempdir().unwrap();
+            let config = tempdir().unwrap();
+            let _home = HomeEnvGuard::set(home.path());
+            std::env::set_var("CLAUDE_CONFIG_DIR", config.path());
+            let default_project = home.path().join(".claude/projects/-tmp");
+            fs::create_dir_all(&default_project).unwrap();
+            let default_transcript = default_project.join("old.jsonl");
+            fs::write(
+                &default_transcript,
+                r#"{"type":"assistant","sessionId":"old"}"#,
+            )
+            .unwrap();
+            let project = config.path().join("projects/-tmp");
+            fs::create_dir_all(&project).unwrap();
+            #[cfg(unix)]
+            let escaping_link = {
+                let link = project.join("linked.jsonl");
+                std::os::unix::fs::symlink(&default_transcript, &link).unwrap();
+                read_claude_session_preview(link.to_string_lossy().into_owned()).is_err()
+            };
+            #[cfg(not(unix))]
+            let escaping_link = true;
+            (
+                read_claude_session_preview(default_transcript.to_string_lossy().into_owned())
+                    .is_err(),
+                escaping_link,
+            )
+        };
+
+        assert!(
+            default_root,
+            "transcript outside CLAUDE_CONFIG_DIR was previewed"
+        );
+        assert!(
+            escaping_link,
+            "symlink escaping CLAUDE_CONFIG_DIR was previewed"
+        );
+    }
+
+    #[test]
+    fn claude_projects_dir_keeps_the_home_default_when_config_dir_is_unset() {
+        let (root, expected) = {
+            let _lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = tempdir().unwrap();
+            let _home = HomeEnvGuard::set(home.path());
+            (
+                claude_projects_dir(),
+                home.path().join(".claude").join("projects"),
+            )
+        };
+
+        assert_eq!(root, Ok(expected));
+    }
+
+    #[test]
+    fn empty_or_relative_claude_config_dir_refuses_every_read_and_the_spawn() {
+        let session_id = "55555555-6666-4777-8888-999999999999";
+        let document = format!(
+            "# Plan\n\n{}",
+            "A paragraph long enough to bind. ".repeat(4)
+        );
+        // Assert only after releasing HOME_ENV_LOCK so a failure here cannot
+        // poison it for the other HOME-dependent tests.
+        let results = {
+            let _lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = tempdir().unwrap();
+            let _home = HomeEnvGuard::set(home.path());
+            // A transcript in the default root shows whether a reader fell back to it.
+            let project = home.path().join(".claude/projects/-tmp-quill-doc");
+            fs::create_dir_all(&project).unwrap();
+            let transcript = project.join(format!("{session_id}.jsonl"));
+            fs::write(
+                &transcript,
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "type": "assistant",
+                        "sessionId": session_id,
+                        "cwd": "/tmp/quill-doc",
+                        "message": {"content": [{"type": "text", "text": document}]},
+                    })
+                ),
+            )
+            .unwrap();
+            let mut results = Vec::new();
+            for value in ["", "rel-config"] {
+                std::env::set_var("CLAUDE_CONFIG_DIR", value);
+                results.push((
+                    value,
+                    [
+                        (
+                            "root",
+                            claude_projects_dir().map(|root| root.display().to_string()),
+                        ),
+                        (
+                            "lookup",
+                            find_session_jsonl(session_id).map(|found| format!("{found:?}")),
+                        ),
+                        (
+                            "compaction",
+                            check_session_compacted(session_id.to_string())
+                                .map(|_| "read".to_string()),
+                        ),
+                        (
+                            "preview",
+                            read_claude_session_preview(transcript.to_string_lossy().into_owned())
+                                .map(|preview| preview.session_id),
+                        ),
+                        (
+                            "auto-bind",
+                            find_session_for_markdown(document.clone())
+                                .map(|bound| format!("{:?}", bound.map(|bound| bound.session_id))),
+                        ),
+                        (
+                            "spawn create",
+                            claude_resume_args(session_id, "prompt", None, true, None, None)
+                                .map(|args| args.join(" ")),
+                        ),
+                        (
+                            "spawn resume",
+                            claude_resume_args(session_id, "prompt", None, false, None, None)
+                                .map(|args| args.join(" ")),
+                        ),
+                    ],
+                ));
+            }
+            results
+        };
+
+        let not_refused: Vec<String> = results
+            .into_iter()
+            .flat_map(|(value, outcomes)| {
+                outcomes
+                    .into_iter()
+                    .filter_map(move |(reader, outcome)| match outcome {
+                        Err(error)
+                            if error.contains(
+                                "unset CLAUDE_CONFIG_DIR or set it to an absolute path",
+                            ) =>
+                        {
+                            None
+                        }
+                        other => Some(format!("{reader} with {value:?}: {other:?}")),
+                    })
+            })
+            .collect();
+        assert_eq!(not_refused, Vec::<String>::new());
+        // spawn_claude_resume needs an AppHandle, so check that its argument
+        // builder, which refuses above, runs before the child is started.
+        let source = include_str!("lib.rs");
+        let signature = ["\nfn spawn_claude", "_resume("].concat();
+        let body = source.split_once(&signature).unwrap().1;
+        let args_at = body
+            .find(["claude_resume", "_args("].concat().as_str())
+            .unwrap();
+        let spawn_at = body
+            .find(["spawn_registered", "_child("].concat().as_str())
+            .unwrap();
+        assert!(args_at < spawn_at);
     }
 
     #[test]
@@ -2116,10 +2557,418 @@ fi
         assert!(err.contains("without producing a reply"));
     }
 
+    // --- Claude child cleanup ---
+
+    /// Polls until `pid` no longer exists. A process killed with its parent is
+    /// reaped by init, so this can take a moment after the signal.
+    #[cfg(unix)]
+    fn process_is_gone(pid: i32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            // SAFETY: signal 0 only checks whether the PID exists.
+            if unsafe { libc::kill(pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    /// Waits, bounded, for a fixture process the test does not own to end by
+    /// itself. Its PID could be reused once it exits, so it is never signalled;
+    /// every such fixture is a `sleep 30`.
+    #[cfg(unix)]
+    fn wait_for_unowned_fixture_exit(pid: i32) {
+        let deadline = Instant::now() + Duration::from_secs(35);
+        while Instant::now() < deadline && !process_is_gone(pid) {}
+    }
+
+    /// Spawns, the way `spawn_claude_resume` does, a script that starts a
+    /// grandchild, registers it under `token`, and returns the grandchild's PID.
+    #[cfg(unix)]
+    fn register_child_with_grandchild(
+        registry: &ChildRegistry,
+        token: &str,
+    ) -> (Arc<ChildHandle>, i32) {
+        let mut child = spawn_in_own_session(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("sleep 30 & echo $!; wait")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped()),
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let grandchild: i32 = line.trim().parse().unwrap();
+        let handle = Arc::new(ChildHandle {
+            child: Mutex::new(Some(child)),
+            cancelled: AtomicBool::new(false),
+        });
+        lock_recover(&registry.0)
+            .handles
+            .insert(token.to_string(), handle.clone());
+        (handle, grandchild)
+    }
+
+    /// Reports whether the registered child and its grandchild both stopped.
+    /// On a failing run it kills and reaps the child it owns, then waits for
+    /// the grandchild to end by itself.
+    #[cfg(unix)]
+    fn stopped_then_reap(handle: &ChildHandle, grandchild: i32) -> bool {
+        let mut child = lock_recover(&handle.child).take().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let child_stopped = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break true,
+                _ if Instant::now() >= deadline => break false,
+                _ => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        let grandchild_gone = process_is_gone(grandchild);
+        if !child_stopped {
+            // `Child::kill` sends nothing once `try_wait` has reaped the child.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if !grandchild_gone {
+            wait_for_unowned_fixture_exit(grandchild);
+        }
+        child_stopped && grandchild_gone
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_stops_the_claude_childs_descendants() {
+        let registry = ChildRegistry::default();
+        let (handle, grandchild) = register_child_with_grandchild(&registry, "run");
+
+        cancel_child(&registry, "run");
+
+        assert!(stopped_then_reap(&handle, grandchild));
+        assert!(handle.cancelled.load(Ordering::SeqCst));
+        assert!(lock_recover(&registry.0).handles.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_cleanup_stops_every_registered_claude_child() {
+        let registry = ChildRegistry::default();
+        let (first, first_grandchild) = register_child_with_grandchild(&registry, "first");
+        let (second, second_grandchild) = register_child_with_grandchild(&registry, "second");
+
+        stop_all_children(&registry);
+
+        let first_stopped = stopped_then_reap(&first, first_grandchild);
+        let second_stopped = stopped_then_reap(&second, second_grandchild);
+        assert!(first_stopped && second_stopped);
+        assert!(lock_recover(&registry.0).handles.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reaping_a_claude_child_forgets_it_so_its_pid_is_never_signalled() {
+        let child = spawn_in_own_session(Command::new("true").stdin(Stdio::null())).unwrap();
+        let handle = ChildHandle {
+            child: Mutex::new(Some(child)),
+            cancelled: AtomicBool::new(false),
+        };
+
+        assert!(reap_child(&handle).is_some_and(|status| status.success()));
+        assert!(lock_recover(&handle.child).is_none());
+    }
+
+    /// A child started through `spawn_registered_child` whose pipes are read
+    /// and which is then reaped by `read_child_pipes` and `reap_child`, in the
+    /// order `spawn_claude_resume`'s reader thread calls them.
+    #[cfg(unix)]
+    struct WatchedChild {
+        handle: Arc<ChildHandle>,
+        group: i32,
+        pipes_closed: std::sync::mpsc::Receiver<()>,
+        reaped: std::sync::mpsc::Receiver<Option<std::process::ExitStatus>>,
+    }
+
+    #[cfg(unix)]
+    fn spawn_watched_child(
+        registry: &ChildRegistry,
+        token: &str,
+        script: &str,
+    ) -> Result<WatchedChild, String> {
+        let (handle, stdout, stderr) = spawn_registered_child(
+            registry,
+            token,
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )?;
+        let group = lock_recover(&handle.child)
+            .as_ref()
+            .unwrap()
+            .id()
+            .cast_signed();
+        let (pipes_sender, pipes_closed) = std::sync::mpsc::channel();
+        let (reaped_sender, reaped) = std::sync::mpsc::channel();
+        let reaper_handle = handle.clone();
+        std::thread::spawn(move || {
+            read_child_pipes(stdout, stderr, |_| {});
+            let _ = pipes_sender.send(());
+            let _ = reaped_sender.send(reap_child(&reaper_handle));
+        });
+        Ok(WatchedChild {
+            handle,
+            group,
+            pipes_closed,
+            reaped,
+        })
+    }
+
+    /// Reports whether the reader thread reaped the child and its whole group
+    /// is gone. A failing run's group is killed first so nothing is left; the
+    /// reaper has not returned then, so the group is still the child's.
+    #[cfg(unix)]
+    fn reaped_and_group_gone(watched: &WatchedChild) -> bool {
+        let bound = Duration::from_secs(5);
+        let reaped_in_time = watched.reaped.recv_timeout(bound).is_ok();
+        if !reaped_in_time {
+            // The reaper may have cleared the slot just after the timeout, so
+            // signal only under the slot's guard while it still holds the child.
+            // A reaper stuck holding the guard is left alone; the fixture's
+            // `sleep 30` then ends by itself within the second wait.
+            let mut guard = match watched.handle.child.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+            };
+            if let Some(child) = guard.as_mut().and_then(|slot| slot.as_mut()) {
+                kill_process_group(child);
+            }
+            drop(guard);
+            let _ = watched.reaped.recv_timeout(Duration::from_secs(35));
+        }
+        // A negative PID names the process group.
+        let group_gone = process_is_gone(-watched.group);
+        reaped_in_time && group_gone && lock_recover(&watched.handle.child).is_none()
+    }
+
+    /// Starts a child that closes stdout and stderr and keeps running with a
+    /// grandchild in its group, and waits until the reader has seen both
+    /// pipes close, so the reaper is waiting for the child.
+    #[cfg(unix)]
+    fn spawn_child_that_closes_its_pipes(registry: &ChildRegistry) -> WatchedChild {
+        let watched =
+            spawn_watched_child(registry, "run", "exec >&- 2>&-; sleep 30 & wait").unwrap();
+        watched
+            .pipes_closed
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        watched
+    }
+
+    /// Runs `cleanup` on another thread and reports whether it returned
+    /// within a short bound.
+    #[cfg(unix)]
+    fn finishes_promptly(cleanup: impl FnOnce() + Send + 'static) -> bool {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            cleanup();
+            let _ = sender.send(());
+        });
+        receiver.recv_timeout(Duration::from_secs(2)).is_ok()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_finishes_when_the_child_closed_its_pipes_and_kept_running() {
+        let registry = Arc::new(ChildRegistry::default());
+        let watched = spawn_child_that_closes_its_pipes(&registry);
+
+        let cancelled = finishes_promptly(move || cancel_child(&registry, "run"));
+
+        let stopped = reaped_and_group_gone(&watched);
+        assert!(cancelled, "cancel did not finish within 2 s");
+        assert!(stopped, "the child or its group was left running");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_cleanup_finishes_when_the_child_closed_its_pipes_and_kept_running() {
+        let registry = Arc::new(ChildRegistry::default());
+        let watched = spawn_child_that_closes_its_pipes(&registry);
+
+        let exiting = registry.clone();
+        let cleaned_up = finishes_promptly(move || stop_all_children(&exiting));
+
+        let stopped = reaped_and_group_gone(&watched);
+        assert!(cleaned_up, "exit cleanup did not finish within 2 s");
+        assert!(stopped, "the child or its group was left running");
+        assert!(lock_recover(&registry.0).handles.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_spawn_after_exit_cleanup_began_starts_and_registers_nothing() {
+        let dir = tempdir().unwrap();
+        let started = dir.path().join("started");
+        let registry = ChildRegistry::default();
+        stop_all_children(&registry);
+
+        let spawned = spawn_watched_child(
+            &registry,
+            "late",
+            &format!("echo > '{}'; sleep 30", started.display()),
+        );
+        let registered = !lock_recover(&registry.0).handles.is_empty();
+        if let Ok(watched) = &spawned {
+            stop_child(&watched.handle);
+            assert!(reaped_and_group_gone(watched));
+        }
+        // A child that was started writes the marker at once.
+        std::thread::sleep(Duration::from_millis(300));
+
+        assert!(spawned.is_err(), "a child was spawned after exit cleanup");
+        assert!(!registered, "a child was registered after exit cleanup");
+        assert!(!started.exists(), "a child ran after exit cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_cleanup_stops_a_spawn_that_registered_just_before_it() {
+        let registry = ChildRegistry::default();
+        let watched = spawn_watched_child(&registry, "run", "sleep 30 & wait").unwrap();
+
+        stop_all_children(&registry);
+
+        assert!(reaped_and_group_gone(&watched));
+        assert!(lock_recover(&registry.0).handles.is_empty());
+        assert!(
+            spawn_watched_child(&registry, "next", "true").is_err(),
+            "exit cleanup did not stop later spawns"
+        );
+    }
+
+    // --- login-shell probe ---
+
+    static SHELL_ENV_LOCK: TestMutex<()> = TestMutex::new(());
+
+    struct ShellEnvGuard(Option<OsString>);
+
+    impl ShellEnvGuard {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::var_os("SHELL");
+            std::env::set_var("SHELL", path);
+            Self(previous)
+        }
+    }
+
+    impl Drop for ShellEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                std::env::set_var("SHELL", previous);
+            } else {
+                std::env::remove_var("SHELL");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_fake_shell(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_path_comes_from_the_interactive_login_shell() {
+        let _lock = SHELL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempdir().unwrap();
+        let shell = dir.path().join("fake-shell");
+        // Only an interactive login invocation adds the rc file's directory.
+        write_fake_shell(
+            &shell,
+            "[ \"$1\" = -ilc ] || exit 64\necho 'rc banner'\nPATH=/from/rc:/usr/bin:/bin\neval \"$2\"\n",
+        );
+        let _shell = ShellEnvGuard::set(&shell);
+
+        assert_eq!(
+            login_shell_path().as_deref(),
+            Some("/from/rc:/usr/bin:/bin")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_probe_kills_a_hanging_shell_and_what_it_started() {
+        let _lock = SHELL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempdir().unwrap();
+        let shell = dir.path().join("fake-shell");
+        let pids = dir.path().join("pids");
+        write_fake_shell(
+            &shell,
+            &format!("sleep 30 &\necho \"$$ $!\" > '{}'\nwait\n", pids.display()),
+        );
+        let _shell = ShellEnvGuard::set(&shell);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(login_shell_stdout("true", Duration::from_millis(300)));
+        });
+        let result = receiver.recv_timeout(Duration::from_secs(5));
+
+        let pids = fs::read_to_string(&pids).unwrap();
+        let mut pids = pids
+            .split_whitespace()
+            .map(|pid| pid.parse::<i32>().unwrap());
+        let (shell_pid, started_pid) = (pids.next().unwrap(), pids.next().unwrap());
+        let shell_gone = process_is_gone(shell_pid);
+        let started_gone = process_is_gone(started_pid);
+        for (pid, gone) in [(shell_pid, shell_gone), (started_pid, started_gone)] {
+            if !gone {
+                wait_for_unowned_fixture_exit(pid);
+            }
+        }
+        assert_eq!(result, Ok(None), "the probe was not bounded");
+        assert!(
+            shell_gone && started_gone,
+            "the probe left processes running"
+        );
+    }
+
+    #[test]
+    fn spawn_claude_resume_runs_off_the_main_thread() {
+        // Tauri runs a command without `async` on the main thread, and this one
+        // can block on login-shell probes. Built by concat so this test's own
+        // text is not a match.
+        let source = include_str!("lib.rs");
+        let signature = ["\nfn spawn_claude", "_resume("].concat();
+        let (before, _) = source.split_once(&signature).unwrap();
+        let attributes = before.rsplit_once("\n\n").unwrap().1;
+        assert!(
+            attributes.contains("#[tauri::command(async)]"),
+            "{attributes}"
+        );
+    }
+
     // --- resolve_claude_binary ---
 
     #[test]
     fn resolve_claude_binary_returns_path_or_actionable_error() {
+        let _lock = SHELL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Environment-dependent: on a dev machine with claude installed this
         // resolves to an absolute path; in a bare CI image it returns an error
         // that tells the user how to fix it. Either way it must never panic and
@@ -2193,6 +3042,33 @@ fi
             !dirs.iter().any(|d| d.is_empty()),
             "empty segment in {path}"
         );
+    }
+
+    #[test]
+    fn nvm_node_bin_dirs_are_newest_version_first_with_non_versions_last() {
+        let home = tempdir().unwrap();
+        let node = home.path().join(".nvm/versions/node");
+        for name in [
+            "v22.9.0",
+            "not-a-version",
+            "v22.23.4",
+            "v9.11.2",
+            "v10.24.1",
+        ] {
+            fs::create_dir_all(node.join(name).join("bin")).unwrap();
+        }
+
+        let ordered = nvm_node_bin_dirs(home.path().to_str().unwrap());
+
+        let expected = [
+            "v22.23.4",
+            "v22.9.0",
+            "v10.24.1",
+            "v9.11.2",
+            "not-a-version",
+        ]
+        .map(|name| node.join(name).join("bin"));
+        assert_eq!(ordered, expected);
     }
 
     // --- collect_context_files ---
@@ -2323,7 +3199,91 @@ struct ChildHandle {
 }
 
 #[derive(Default)]
-struct ChildRegistry(Mutex<HashMap<String, Arc<ChildHandle>>>);
+struct ChildRegistry(Mutex<RegisteredChildren>);
+
+#[derive(Default)]
+struct RegisteredChildren {
+    handles: HashMap<String, Arc<ChildHandle>>,
+    /// Set when exit cleanup begins. No child may be spawned after that.
+    exiting: bool,
+}
+
+/// Spawns `command`, which must pipe stdout and stderr, in its own session and
+/// registers it under `token`, unless exit cleanup has begun. Spawning under
+/// the registry lock means exit cleanup either finds the child registered or
+/// keeps it from starting.
+fn spawn_registered_child(
+    registry: &ChildRegistry,
+    token: &str,
+    command: &mut Command,
+) -> Result<(Arc<ChildHandle>, ChildStdout, ChildStderr), String> {
+    let mut children = lock_recover(&registry.0);
+    if children.exiting {
+        return Err("Quill is quitting".to_string());
+    }
+    let mut child =
+        spawn_in_own_session(command).map_err(|e| format!("Failed to spawn claude: {e}"))?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        kill_process_group(&mut child);
+        let _ = child.wait();
+        return Err("claude was spawned without piped output".to_string());
+    };
+    let handle = Arc::new(ChildHandle {
+        child: Mutex::new(Some(child)),
+        cancelled: AtomicBool::new(false),
+    });
+    children.handles.insert(token.to_string(), handle.clone());
+    drop(children);
+    Ok((handle, stdout, stderr))
+}
+
+/// Waits for a Claude child to exit and forgets it. Once reaped, its PID, and so
+/// its process-group ID, can be reused by an unrelated process, so nothing may
+/// signal it afterwards. Polling, not a blocking `wait`, lets the lock go
+/// between polls, so `stop_child` can still stop a child that closed its pipes
+/// but kept running. A poll that reaps clears the handle before releasing the
+/// lock `stop_child` signals under.
+fn reap_child(handle: &ChildHandle) -> Option<std::process::ExitStatus> {
+    loop {
+        let mut child = lock_recover(&handle.child);
+        match child.as_mut().map(std::process::Child::try_wait) {
+            Some(Ok(None)) => {}
+            polled => {
+                *child = None;
+                return polled.and_then(Result::ok).flatten();
+            }
+        }
+        drop(child);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn stop_child(handle: &ChildHandle) {
+    handle.cancelled.store(true, Ordering::SeqCst);
+    if let Some(child) = lock_recover(&handle.child).as_mut() {
+        kill_process_group(child);
+    }
+}
+
+fn cancel_child(registry: &ChildRegistry, token: &str) {
+    let entry = lock_recover(&registry.0).handles.remove(token);
+    if let Some(handle) = entry {
+        stop_child(&handle);
+    }
+}
+
+/// Stops every Claude run that is still registered, and every later spawn.
+/// Called when the app exits.
+fn stop_all_children(registry: &ChildRegistry) {
+    let handles: Vec<_> = {
+        let mut children = lock_recover(&registry.0);
+        children.exiting = true;
+        children.handles.drain().map(|(_, handle)| handle).collect()
+    };
+    for handle in handles {
+        stop_child(&handle);
+    }
+}
 
 /// Serializes the session-document index's read/modify/write cycle. Atomic
 /// rename prevents torn files; this lock also prevents concurrent tab binds
@@ -2351,7 +3311,22 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The spawned CLI inherits Quill's environment, so it keeps transcripts under
+/// `CLAUDE_CONFIG_DIR` when that is set. The CLI resolves an empty or relative
+/// value against its working directory, which is the document's folder, so
+/// such a value is refused rather than trusted as a per-document root.
 fn claude_projects_dir() -> Result<PathBuf, String> {
+    if let Some(config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        if !config_dir.is_absolute() {
+            return Err(format!(
+                "CLAUDE_CONFIG_DIR is set to \"{}\", which is not an absolute path. Claude Code \
+                 would resolve it inside each document's folder. Quit Quill, then unset \
+                 CLAUDE_CONFIG_DIR or set it to an absolute path.",
+                config_dir.display()
+            ));
+        }
+        return Ok(config_dir.join("projects"));
+    }
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
     Ok(home.join(".claude").join("projects"))
 }
@@ -2940,6 +3915,10 @@ fn read_claude_session_preview(jsonl_path: String) -> Result<SessionPreview, Str
 /// when an interactive shell interleaves profile/rc banners around our output.
 const QUILL_PATH_SENTINEL: &str = "___QUILL_PATH___";
 
+/// How long one login-shell probe may run before it is killed and treated as
+/// failed. Ordinary rc files finish well inside this.
+const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Run a script in the user's interactive login shell and return captured
 /// stdout on success.
 ///
@@ -2947,14 +3926,79 @@ const QUILL_PATH_SENTINEL: &str = "___QUILL_PATH___";
 /// fnm, Homebrew, and Volta commonly put their PATH lines there, and a
 /// non-interactive login shell skips those files entirely), **login** so profile
 /// files are sourced too, and `-c` to run exactly the one script we pass. A
-/// shell that errors or can't be spawned yields `None` so callers fall through.
-fn login_shell_stdout(script: &str) -> Option<String> {
+/// shell that errors, can't be spawned, or is still running after `timeout`
+/// yields `None` so callers fall through; on timeout the shell and everything
+/// still in its process group are killed.
+fn login_shell_stdout(script: &str, timeout: Duration) -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let output = Command::new(&shell).arg("-ilc").arg(script).output().ok()?;
-    if !output.status.success() {
-        return None;
+    let mut child = spawn_in_own_session(
+        Command::new(&shell)
+            .arg("-ilc")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
+    let deadline = Instant::now() + timeout;
+    // Read on another thread: something the rc files started can hold stdout
+    // open after the shell exits, and that must not outlast the bound.
+    let stdout = child.stdout.take();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_end(&mut bytes);
+        }
+        let _ = sender.send(String::from_utf8_lossy(&bytes).into_owned());
+    });
+    let output = receiver.recv_timeout(timeout).ok();
+    while output.is_some() && Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return output.filter(|_| status.success());
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    kill_process_group(&mut child);
+    let _ = child.wait();
+    None
+}
+
+/// Spawns `command` as the leader of a new session, which gives it a new
+/// process group that holds only it and its descendants, and no controlling
+/// terminal, as in a Finder launch. Without a terminal an interactive shell
+/// cannot move its jobs into other groups or take over the terminal of a
+/// `tauri dev` launch.
+fn spawn_in_own_session(command: &mut Command) -> std::io::Result<std::process::Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure runs between fork and exec and only calls
+        // setsid, which is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+    command.spawn()
+}
+
+/// Kills `child` and everything still in its process group. `child` must have
+/// come from `spawn_in_own_session` and must not have been reaped: until it is
+/// reaped its PID cannot be reused, so the group is still the one Quill made.
+fn kill_process_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    // SAFETY: killpg only sends a signal.
+    unsafe {
+        libc::killpg(child.id().cast_signed(), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
 }
 
 /// Ask the interactive login shell where `claude` resolves. Returns the file if
@@ -2963,7 +4007,7 @@ fn claude_from_login_shell() -> Option<PathBuf> {
     // A login shell may print profile banners; take the *last* non-empty line,
     // which is `command -v`'s output, then only trust a real file — never an
     // arbitrary line of shell output handed to Command::new.
-    let stdout = login_shell_stdout("command -v claude")?;
+    let stdout = login_shell_stdout("command -v claude", LOGIN_SHELL_TIMEOUT)?;
     let path = stdout
         .lines()
         .map(str::trim)
@@ -2978,7 +4022,7 @@ fn claude_from_login_shell() -> Option<PathBuf> {
 /// (a plain `echo $PATH` would be ambiguous against interleaved output).
 fn login_shell_path() -> Option<String> {
     let script = format!("printf '{QUILL_PATH_SENTINEL}%s\\n' \"$PATH\"");
-    let stdout = login_shell_stdout(&script)?;
+    let stdout = login_shell_stdout(&script, LOGIN_SHELL_TIMEOUT)?;
     stdout
         .lines()
         .find_map(|l| l.strip_prefix(QUILL_PATH_SENTINEL))
@@ -2995,8 +4039,15 @@ fn nvm_node_bin_dirs(home: &str) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path().join("bin"))
         .collect();
-    dirs.sort();
-    dirs.reverse(); // newest version first
+    // Folders whose names are not versions sort after every version.
+    dirs.sort_by_cached_key(|bin| {
+        let version = bin
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(|name| semver::Version::parse(name.strip_prefix('v').unwrap_or(name)).ok());
+        std::cmp::Reverse((version, bin.clone()))
+    });
     dirs
 }
 
@@ -3199,6 +4250,9 @@ fn claude_resume_args(
     model: Option<&str>,
     effort: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    // Refuse before spawning when the CLI would keep this session under a
+    // root Quill cannot search; a linked session skips the lookup below.
+    claude_projects_dir()?;
     let create_new = allow_create && find_session_jsonl(session_id)?.is_none();
     let mut args = vec![
         if create_new {
@@ -3213,6 +4267,15 @@ fn claude_resume_args(
         "--include-partial-messages".to_string(),
         "--verbose".to_string(),
     ];
+    if allow_create {
+        // A Quill-created session runs in the document's folder, which nobody
+        // vetted as a Claude project, and `--print` never asks for workspace
+        // trust. Excluding the project and local sources keeps that folder's
+        // hooks, `env`, `.mcp.json` servers, skills, commands and agents from
+        // loading. Sessions the user linked keep their project's configuration.
+        args.push("--setting-sources".to_string());
+        args.push("user".to_string());
+    }
     if let Some(model) = model {
         if !matches!(model, "fable" | "opus" | "sonnet" | "haiku") {
             return Err(format!("unsupported Claude model alias: {model}"));
@@ -3260,7 +4323,9 @@ fn with_effort_hook(mut args: Vec<String>, settings: String) -> Vec<String> {
     args
 }
 
-#[tauri::command]
+// `async` runs this on Tauri's worker pool instead of the main thread, which
+// the login-shell probes would otherwise block.
+#[tauri::command(async)]
 // Tauri exposes these as named IPC fields. Keeping the flat command contract
 // makes the mock seam and production invocation identical; grouping only to
 // satisfy this lint would add a wrapper object at every caller.
@@ -3328,27 +4393,9 @@ fn spawn_claude_resume(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "no stdout handle".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "no stderr handle".to_string())?;
-
     let token = uuid::Uuid::new_v4().to_string();
-    let handle = Arc::new(ChildHandle {
-        child: Mutex::new(Some(child)),
-        cancelled: AtomicBool::new(false),
-    });
-    {
-        let registry = app.state::<ChildRegistry>();
-        lock_recover(&registry.0).insert(token.clone(), handle.clone());
-    }
+    let (handle, stdout, stderr) =
+        spawn_registered_child(&app.state::<ChildRegistry>(), &token, &mut cmd)?;
 
     let token_for_thread = token.clone();
     let app_for_thread = app;
@@ -3428,10 +4475,7 @@ fn spawn_claude_resume(
             }
         });
 
-        let status = {
-            let mut child_lock = lock_recover(&handle.child);
-            child_lock.as_mut().and_then(|c| c.wait().ok())
-        };
+        let status = reap_child(&handle);
 
         let cancelled = handle.cancelled.load(Ordering::SeqCst);
         let exit_code = status.and_then(|s| s.code());
@@ -3458,7 +4502,7 @@ fn spawn_claude_resume(
 
         // Remove from registry on natural completion.
         let registry = app_for_thread.state::<ChildRegistry>();
-        lock_recover(&registry.0).remove(&token_for_thread);
+        lock_recover(&registry.0).handles.remove(&token_for_thread);
     });
 
     Ok(token)
@@ -3469,13 +4513,7 @@ fn cancel_claude_resume(
     cancel_token: String,
     registry: State<'_, ChildRegistry>,
 ) -> Result<(), String> {
-    let entry = lock_recover(&registry.0).remove(&cancel_token);
-    if let Some(handle) = entry {
-        handle.cancelled.store(true, Ordering::SeqCst);
-        if let Some(child) = lock_recover(&handle.child).as_mut() {
-            let _ = child.kill();
-        }
-    }
+    cancel_child(&registry, &cancel_token);
     Ok(())
 }
 
@@ -3670,8 +4708,18 @@ pub fn run() {
             install_update,
             exit_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Orderly exits end here: `exit_app`, closing the last window, and
+            // macOS Quit from the Dock or at logout. A crash, a kill signal or
+            // Tauri's fallback `std::process::exit` skips this.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(registry) = app.try_state::<ChildRegistry>() {
+                    stop_all_children(&registry);
+                }
+            }
+        });
 }
 
 /// Label for an Open Recent entry: the file name, falling back to the full

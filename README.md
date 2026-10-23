@@ -33,7 +33,7 @@ Alongside the Claude features, Quill is a capable Markdown editor in its own rig
 | ---------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------- | ----------------------------------------------------- |
 | A Mac                                          | Apple Silicon or Intel; built and tested on macOS 26 (older macOS is untested) | Apple menu → **About This Mac**        | Your Mac model and macOS version                      |
 | Google Drive for Desktop                       | Any current version, signed into your Truss account                            | Finder sidebar under **Locations**     | A **Google Drive** entry that opens the shared drives |
-| Claude Code CLI — only for the Claude features | Any current version                                                            | Run `claude --version` in **Terminal** | A version line, e.g. `2.1.208 (Claude Code)`          |
+| Claude Code CLI — only for the Claude features | Checked with 2.1.302; no minimum version is known                              | Run `claude --version` in **Terminal** | A version line, e.g. `2.1.302 (Claude Code)`          |
 
 Google Drive for Desktop is at [google.com/drive/download](https://www.google.com/drive/download/); the Claude Code CLI is at [claude.com/claude-code](https://claude.com/claude-code). You can install Quill and edit Markdown without Claude Code — you just won't have the Ask Claude or Chat features until it's installed and signed in.
 
@@ -53,7 +53,7 @@ That's the whole install. Your documents are saved wherever you choose — never
 
 ### Updating
 
-After it opens, Quill checks once for a newer build in the synced Truss Drive folder. You can also choose **Help → Check for Updates…** at any time. Both checks are local: Quill reads a tiny `Quill.version` file beside the Drive app (or the app's own version as a fallback) and makes no network request to Google or any update server. If a newer build is available, **Install and Restart** copies it from Drive into the location where Quill is installed. Your documents and settings carry over.
+After it opens, Quill checks once for a newer build in the synced Truss Drive folder. You can also choose **Help → Check for Updates…** at any time. Both checks are local: Quill reads a tiny `Quill.version` file beside the Drive app (or the app's own version as a fallback) and makes no network request to Google or any update server. Only Google Drive accounts ending in `@truss.works` count. If a newer build is available, **Install and Restart** copies it from Drive next to your installed Quill and checks that the copy is the version offered, carries Quill's app identifier, and hasn't changed since it was signed. If a check fails, Quill stays open and tells you why. Otherwise Quill quits, swaps in the new version and opens it, keeping the version it replaced beside the app as a hidden `.Quill.previous-update-managed.app` folder (press ⌘⇧. in Finder to show hidden files). If the update can't finish, Quill tries to put the old version back, reopen it, and show a **Quill update did not finish** alert saying what happened and what to do. To go back to the previous version yourself, quit Quill, move **Quill.app** out of the way, rename the hidden folder to **Quill.app**, and open it. Your documents and settings carry over. Going back this way leaves the hidden `.Quill.previous-update-managed.json` file without its backup, so later **Install and Restart** attempts stop with a message asking you to have IT inspect the backup and receipt. Until then you can still update manually as described below.
 
 If you choose **Later**, Quill will not mention that version again; it will prompt when Drive contains something newer. Check **Stop checking automatically** in the update notice to turn off the launch check. The Help menu check keeps working.
 
@@ -68,6 +68,8 @@ The Ask Claude and Chat features run Claude through the Claude Code CLI on your 
 3. **Ask.** Select text, click **+**, type a request, and press **Ask Claude** (⌘↩).
 
 **Check it worked:** the reply streams into the comment thread within a few seconds. Ask for an edit (_"tighten this sentence"_) and a tracked change with **Accept** / **Reject** appears in the document. If the reply fails instantly, see [Troubleshooting](#troubleshooting).
+
+**What a new session leaves out.** A session made with **Start new session** runs in your document's folder but doesn't load the Claude Code project setup kept there — hooks, environment settings, MCP servers, skills, commands, agents, or `CLAUDE.md` instructions — or the skills, commands, and agents in a linked reference folder. That way a folder you got from someone else can't make Claude Code run its hooks or servers. Your own Claude Code settings still apply, and an existing session you link keeps its project's setup. This was checked with Claude Code 2.1.302.
 
 ## Everyday use
 
@@ -120,7 +122,7 @@ For anything else, open an issue on the [trussworks/quill](https://github.com/tr
 
 You only need this if you're developing Quill; to just use it, follow [Installing Quill](#installing-quill) above.
 
-Quill is a [Tauri 2](https://v2.tauri.app/) desktop app — a React 19 + TypeScript frontend (built with Vite, edited through [Tiptap](https://tiptap.dev/)) over a thin Rust backend. Building needs Node.js 22+, a Rust toolchain, and Tauri's [system prerequisites](https://v2.tauri.app/start/prerequisites/).
+Quill is a [Tauri 2](https://v2.tauri.app/) desktop app — a React 19 + TypeScript frontend (built with Vite, edited through [Tiptap](https://tiptap.dev/)) over a thin Rust backend. Building needs Node.js 22.23.4 or later in major 22, a Rust toolchain, and Tauri's [system prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 git clone https://github.com/trussworks/quill.git

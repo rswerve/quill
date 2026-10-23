@@ -101,6 +101,7 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
     ) => {
       const generation = claimedGeneration ?? begin(streamId);
       const isCurrent = () => generationsRef.current.get(streamId) === generation;
+      if (!isCurrent()) return;
 
       let rawText = '';
       let visibleEmitted = 0;
@@ -206,8 +207,10 @@ export function useClaudeResumeStream(): ClaudeResumeStream {
 
   useEffect(
     () => () => {
-      for (const [streamId, token] of tokensRef.current) {
-        generationsRef.current.set(streamId, (generationsRef.current.get(streamId) ?? 0) + 1);
+      for (const [streamId, generation] of generationsRef.current) {
+        generationsRef.current.set(streamId, generation + 1);
+      }
+      for (const token of tokensRef.current.values()) {
         void cancelTokenOnce(token).catch(() => {});
       }
       tokensRef.current.clear();

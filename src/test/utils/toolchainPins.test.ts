@@ -32,6 +32,9 @@ describe('Node toolchain pins', () => {
     expect(engines).toBeDefined();
     // Lower bound inside the pinned major, upper bound excluding the next one.
     expect(engines).toMatch(new RegExp(`>=${MAJOR}\\.\\d+\\.\\d+ <${Number(MAJOR) + 1}$`));
+    const [major, minor, patch] = engines.match(/\d+/g).map(Number);
+    expect([major, minor, patch]).toEqual([22, expect.any(Number), expect.any(Number)]);
+    expect(minor > 23 || (minor === 23 && patch >= 4)).toBe(true);
   });
 
   it('mirrors engines into the lockfile, or npm ci desyncs', () => {
@@ -43,15 +46,26 @@ describe('Node toolchain pins', () => {
     expect(read('.npmrc')).toMatch(/^engine-strict\s*=\s*true$/m);
   });
 
-  it('makes every workflow read .nvmrc rather than hardcoding a version', () => {
-    const dir = path.join(root, '.github/workflows');
-    const workflows = fs.readdirSync(dir).filter((f) => f.endsWith('.yml'));
-    expect(workflows.length).toBeGreaterThan(0);
-    for (const file of workflows) {
-      const yaml = fs.readFileSync(path.join(dir, file), 'utf8');
-      if (!yaml.includes('setup-node')) continue;
-      expect(yaml, `${file} hardcodes a Node version`).not.toMatch(/node-version:\s*['"]?\d/);
-      expect(yaml, `${file} does not read .nvmrc`).toContain("node-version-file: '.nvmrc'");
-    }
+  const workflows = fs
+    .readdirSync(path.join(root, '.github/workflows'))
+    .filter((f) => f.endsWith('.yml'));
+  const nodeSteps = workflows.flatMap((file) =>
+    read(`.github/workflows/${file}`)
+      .split(/(?=^[ \t]*- )/m)
+      .filter((step) => /uses:\s*actions\/setup-node@/.test(step))
+      .map((step, index) => ({ file, step, index: index + 1 })),
+  );
+
+  it('finds the workflow Node selections', () => {
+    expect(nodeSteps.length).toBeGreaterThan(0);
   });
+
+  it.each(nodeSteps)(
+    '$file setup-node step $index selects the latest .nvmrc version',
+    ({ step }) => {
+      expect(step).not.toMatch(/node-version:\s*['"]?\d/);
+      expect(step).toMatch(/^[ \t]+node-version-file:\s*['"]?\.nvmrc['"]?\s*$/m);
+      expect(step).toMatch(/^[ \t]+check-latest:\s*true\s*$/m);
+    },
+  );
 });

@@ -10,6 +10,10 @@ describe('sidecarPath', () => {
     expect(sidecarPath('/foo/bar.MD')).toBe('/foo/bar.comments.json');
   });
 
+  it.each(['markdown', 'MARKDOWN'])('preserves the .%s extension', (extension) => {
+    expect(sidecarPath(`/foo/bar.${extension}`)).toBe(`/foo/bar.${extension}.comments.json`);
+  });
+
   it('appends .comments.json when no .md extension is present', () => {
     expect(sidecarPath('/foo/bar')).toBe('/foo/bar.comments.json');
   });

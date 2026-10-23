@@ -16,6 +16,7 @@ import { PendingComment } from '../extensions/PendingComment';
 import { AnnotationFocus } from '../extensions/AnnotationFocus';
 import { MarkdownLinkSyntax } from '../extensions/MarkdownLinkSyntax';
 import { MarkdownSoftBreak } from '../extensions/MarkdownSoftBreak';
+import { MarkdownText } from '../extensions/MarkdownText';
 import { ReviewableCode } from '../extensions/ReviewableCode';
 import { StrikeWithoutSaveShortcut } from '../extensions/StrikeWithoutSaveShortcut';
 import { BlockTrack } from '../extensions/BlockTrack';
@@ -178,6 +179,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
           // Markdown cannot preserve it, so Quill must not create the mark.
           link: LINK_OPTIONS,
           code: false,
+          text: false,
           underline: false,
           // Disable StarterKit's bundled Strike and re-add it below without its
           // Mod-Shift-s keyboard shortcut: that chord is Quill's Save As, and a
@@ -198,6 +200,7 @@ const QuillEditor = forwardRef<EditorRef, EditorProps>(
         TaskList,
         TaskItem.configure({ nested: true }),
         MarkdownSoftBreak,
+        MarkdownText,
         Markdown.configure({ html: false, tightLists: true }),
         Find,
         CommentMark,

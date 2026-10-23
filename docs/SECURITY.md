@@ -69,10 +69,11 @@ The hardening below is organized around closing that gap.
 | Boundary         | Input                                    | Trust before                    | Trust after                                         |
 | ---------------- | ---------------------------------------- | ------------------------------- | --------------------------------------------------- |
 | Webview render   | Link `href`, image `src` in the document | Rendered as authored            | Scheme-allowlisted; remote `img` constrained by CSP |
-| IPC → filesystem | Atomic file command path                 | Any path the webview passed     | Extension-confined to documents Quill manages       |
+| IPC → filesystem | Atomic file command path                 | Any path the webview passed     | Extension-confined to Markdown files and sidecars   |
 | OS → app         | `quill://open?file=…` target             | Decoded and opened              | Canonicalized, must be an existing regular `.md`    |
 | Disk → state     | `.comments.json` sidecar, `draft.json`   | Spread into state largely as-is | Sanitized to a known-valid shape before use         |
 | App → process    | `claude` binary resolution               | First matching string spawned   | Must resolve to a real file                         |
+| Disk → process   | Document folder's Claude Code config     | Loaded with no trust prompt     | Not loaded for sessions Quill creates               |
 
 ## Hardening measures (all merged to `main`)
 
@@ -81,21 +82,28 @@ The hardening below is organized around closing that gap.
 The atomic file commands (`read_file_with_fingerprint`, `write_file_atomic`, and
 `delete_file_if_match`) each call `ensure_allowed_path` before touching the disk. The backend legitimately serves
 _user-chosen arbitrary paths_ (the native open/save dialog can land anywhere), so
-confinement is by **extension allowlist**, not directory — Quill only ever reads
-or writes files it manages:
+confinement is by **extension allowlist**, not directory — these commands only
+ever read, write or delete files with a document or sidecar suffix:
 
 ```rust
 fn ensure_allowed_path(path: &str) -> Result<(), String> {
     let lower = path.to_ascii_lowercase();
     let allowed =
         lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".comments.json");
-    if allowed { Ok(()) } else { Err("Refusing to access a file Quill does not manage".to_string()) }
+    if !allowed {
+        return Err("Refusing to access a file Quill does not manage".to_string());
+    }
+    // …then refuses an existing symlink or other non-regular file at `path`.
 }
 ```
 
 This means a compromised or buggy webview can't use these commands to read
-`~/.ssh/id_rsa` or write an executable into a launch directory — the command
-refuses anything that isn't a document or its sidecar. (Crash-recovery uses
+`~/.ssh/id_rsa` or write a file of any other type — the command refuses
+anything without a document or sidecar suffix. It can still read, overwrite or
+delete any `.md`, `.markdown` or `.comments.json` file the user can, anywhere
+on disk, and some Markdown files are executable configuration for other tools:
+Claude Code, for example, loads skills, commands and agents from `.md` files
+under `.claude/` folders. (Crash-recovery uses
 separate workspace commands scoped to the app-data recovery files, so they
 aren't — and don't need to be — covered by this allowlist.)
 
@@ -151,8 +159,41 @@ and returns empty for everything else.
 locations, and a login shell. Every path now gates on `candidate.is_file()`
 before returning, so a stray line of `which` output or a profile banner printed
 by the login shell can never be handed to `Command::new`. The login-shell probe
-uses `-lc` (non-interactive login) rather than `-lic`: we want the profile's
-PATH, not the side effects of interactive-only rc blocks.
+uses `-ilc` (interactive login), because nvm, fnm, Homebrew and Volta often put
+their PATH lines in `.zshrc` / `.bashrc`, so the user's interactive rc blocks
+and their side effects run on every Claude request. The probe runs off the main
+thread, and a probe still running after 10 seconds is killed with its process
+group and treated as a failed lookup.
+
+### 5. Sessions Quill creates don't load the folder's Claude Code configuration
+
+**Start new session** runs `claude --print` in the document's folder, which
+nobody vetted as a Claude Code project, and `--print` never asks for workspace
+trust. A document someone sent may sit in a folder whose `.claude/settings.json`
+defines hooks or an `env` block, or whose `.mcp.json` starts a server, and the
+CLI would otherwise load all of them. So when `allow_create` is set (the
+frontend sets it exactly for `createdByQuill` bindings), `claude_resume_args`
+adds `--setting-sources user`, on the first `--session-id` spawn and on every
+later `--resume`. The document folder's project and local configuration is not
+loaded: hooks, `env`, `.mcp.json` servers, skills, commands, agents, and
+`CLAUDE.md` / `.claude/rules` instructions. Skills, commands and agents in a
+linked reference folder (`--add-dir`) are not loaded either.
+
+User-level configuration still applies, and so does Quill's own effort hook,
+which `with_effort_hook` passes inline as a command-line `--settings` layer
+rather than a setting source. Sessions Quill did not create, such as one the
+user linked from the picker, keep their project's configuration. Treat the flag
+as a trust boundary: keep it in `claude_resume_args`, which builds every spawn
+argv, where `only_quill_created_sessions_skip_project_setting_sources` pins it.
+
+This behaviour, and what follows a Save As, were verified only on Claude Code
+CLI 2.1.302; Quill does not check the CLI version. After a Save As to another
+folder, a Quill-created binding's cwd follows the document, so later requests
+`--resume` from the new folder with the same restricted argv. They continue the
+same conversation, and the transcript stays under the original folder's project
+directory. The CLI keeps naming the original folder as its primary working
+directory in the system prompt and adds an environment-update message naming
+the new folder, so the model is told about both.
 
 ## Deliberate non-fixes (judgment calls, documented on purpose)
 
@@ -167,12 +208,16 @@ and loaded through Tauri's asset protocol, whose scope is `$HOME/**`
 (`tauri.conf.json`). A narrower scope would be tempting, but **Quill is a
 general-purpose editor: a user can open a Markdown file anywhere under their home
 directory, and its images must load.** There is no narrower scope that doesn't
-break the core feature. The scope grants the webview _read access for display_ to
-files under `$HOME` via the asset protocol — but an `<img>` can render a file's
-bytes, it cannot read them back into script and exfiltrate them, and the CSP
-forbids the kind of scripting that would be needed to try. The exposure is
-"display an image the user's own document points at," which is the feature
-working as intended. We keep `$HOME/**` knowingly.
+break the core feature. The scope grants the webview read access to files
+under `$HOME` via the asset protocol, except paths with a component that starts
+with a dot (`~/.ssh`, `~/.aws`, `~/.claude`), which Tauri's scope matching
+excludes. Asset responses carry a CORS header for the app's own origin, so
+script running in the webview can read an _image_ file's pixels back through a
+canvas and send them out in `https:` image requests; it cannot decode other
+file types this way, and `connect-src` blocks `fetch` of asset URLs. The CSP
+confines scripting to the bundle, so this needs a compromised webview. Without
+one, the exposure is "display an image the user's own document points at,"
+which is the feature working as intended. We keep `$HOME/**` knowingly.
 
 ### Remote image `src` is a tracking beacon
 
@@ -187,12 +232,107 @@ load-images-on-click gate that no comparable editor ships. A privacy-conscious
 user editing untrusted documents should be aware that opening one may load remote
 images — the same caution that applies to opening an HTML email.
 
+## The local Drive updater
+
+Quill updates itself only from the Google Drive for desktop folder already
+synced to the Mac; it makes no network request for this. Under
+`~/Library/CloudStorage` it considers only account folders named
+`GoogleDrive-<name>@truss.works` (one `@`, a non-empty name with no `/` or `\`,
+the domain matched without regard to case) and skips every other account before
+reading anything inside it. In each Truss account it looks for
+`Shared drives/Truss/Engineering/Tools/Quill.app`, takes the version from a
+`Quill.version` file beside the bundle or else from the bundle's
+`CFBundleShortVersionString`, and offers the highest SemVer newer than the
+running app. A Quill running from inside a Tools folder is refused, so the
+shared copy is never overwritten.
+
+**Install and Restart** makes its checks while Quill is still open. It refuses
+when the previous-build backup described below can't be matched to its receipt,
+then confirms it can write beside the installed app, copies the Drive bundle
+with `ditto` into a hidden `.Quill.update-<uuid>.app` beside it, and requires
+that copy to carry the version Drive offered, the bundle identifier
+`com.trussworks.quill`, and a signature that passes
+`/usr/bin/codesign --verify --deep --strict`. Any failure leaves Quill open,
+tries to remove the staged copy if one was made (a removal failure is not
+reported), and shows **Could not install update**
+with the reason. For the backup check that reads "The previous update backup
+could not be verified. Quill will stay open. Ask IT to inspect the managed
+backup and receipt before trying again." The signature check shows that the
+copy's signed contents haven't changed since signing, so a bundle damaged in
+sync or in the copy is refused. It does not show who signed the bundle.
+
+Quill then quits, and its own executable runs again as a helper
+(`--drive-update-helper`, which `main.rs` checks before Tauri starts). The
+helper accepts only its own installed bundle as the target and a sibling
+`.Quill.update-*.app` as the stage, and waits up to two minutes for the old
+process to exit. If either check fails, the helper stops: nothing is swapped
+or reopened, no alert is shown, and the staged copy stays. Otherwise it repeats
+the identifier and signature checks, moves `Quill.app` to
+`.Quill.previous-update-managed.app`, moves the staged copy into its place, and
+runs `/usr/bin/open -n` on it. If `open` exits non-zero, the helper moves both
+bundles back. After any failure from this point, if the previous app is back at
+its original path, the helper tries to remove the staged copy (adding any
+removal failure to its message) and reopens that app. It
+then tries to show a critical alert, "Quill update did not finish", giving the
+reason and either the reopen result or, when the previous app is not back in
+place, where it is and how to restore it (or that its location couldn't be
+confirmed and needs inspecting). The message reaches `osascript` as an
+argument, never as script text. The helper also writes the reason to its
+standard error. It doesn't wait for the alert, so whether the alert appeared is
+unconfirmed.
+
+After a successful swap the replaced build stays at
+`.Quill.previous-update-managed.app` beside the app, and Quill keeps only that
+one. Before moving anything, the helper writes
+`.Quill.previous-update-managed.json`, a receipt holding the device and inode
+numbers of the folder that becomes the backup. The next in-app update deletes
+the old backup only when the receipt is a regular file and the backup is a real
+directory (neither a symlink) with the recorded identity. When neither name
+exists there is nothing to retire; any other state at those two names stops the
+update before Quill quits. Nothing is removed by name pattern, so other
+`.Quill.previous-update-*` folders beside the app are left alone. Because the
+receipt records only the backup, replacing `Quill.app` by hand from Drive stays
+compatible: the next in-app update retires the old backup and keeps the
+hand-installed build as the new one.
+
+To go back by hand, quit Quill, rename or move `Quill.app` aside, rename
+`.Quill.previous-update-managed.app` to `Quill.app`, and open it. This is the
+step the alert gives when the helper could not put the previous build back.
+The receipt then has no backup to match, so in-app updates stop with the backup
+message while that receipt remains. Updating by hand from Drive, as the README
+describes, keeps working.
+
 ## What this posture does not cover
 
 To be honest about the boundary: Quill does not defend against an attacker who
 _already_ has code execution on the machine or write access to the user's home
 directory — at that point the deep link and sidecar are the least of the user's
-problems. It is not code-signed or notarized beyond the standard release path,
-and there is no auto-updater or in-app update check. The threat model is "a normal user opens documents, some of which they
+problems. It is not code-signed or notarized beyond the standard release path.
+Quill checks a locally synced Google Drive folder for a newer build at launch
+(unless the user turns that off) and from **Help → Check for Updates…**, and on
+request installs that build in place of the current app and relaunches. The threat model is "a normal user opens documents, some of which they
 didn't author, and visits web pages that might fire a deep link" — and within
-that model, the four fixes above close the gaps the audits found.
+that model, the five fixes above close the gaps the audits found.
+
+The local Drive updater leaves these risks open:
+
+- Trust rests on the Truss Google account and the Tools folder's access list.
+  Anyone who can write to the Tools folder can publish a build, and the checks
+  above don't identify who published it.
+- Quill checks only the folder path, not which organization owns the shared
+  drive. Whether a shared drive owned by another organization and also named
+  "Truss" can appear under a Truss account depends on Truss's Google Workspace
+  policy. That is unverified.
+- An ad-hoc signature proves integrity, not who published the build. Anyone can
+  ad-hoc sign a bundle that carries Quill's identifier.
+- The kept previous build is a launchable older Quill with the same bundle
+  identifier and `quill` URL scheme. Which copy macOS hands `quill://` links to
+  is unknown.
+- A successful `open` exit does not prove the new app works. Recovery after
+  that is manual.
+- An update interrupted by a crash can leave state, such as a receipt without
+  its backup, that blocks later updates until someone inspects it.
+- Before relying on in-app updates, verify that the synced distribution copy in
+  the Tools folder passes `codesign --verify --deep --strict`. This assessment
+  ran the check only on constructed fixtures. A bundle that fails it is
+  refused, so it would never install.
